@@ -5,7 +5,7 @@
   "description": "Talebook HarmonyOS native app",
   "main": "",
   "author": "",
-  "license": "",
+  "license": "MIT",
   "dependencies": {},
   "devDependencies": {
     "@ohos/hypium": "1.0.6"
