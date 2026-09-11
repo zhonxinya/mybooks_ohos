@@ -1,0 +1,68 @@
+name: HarmonyOS Release
+
+# 触发条件：推送 v* 标签、手动触发
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要发布的标签（如 v1.0.0，需已存在于仓库）
+        required: true
+
+# 创建 Release 需要写权限
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 构建并发布 Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Build HAP
+        id: build
+        uses: ./.github/actions/build-hap
+        with:
+          build-mode: release
+
+      - name: Package Artifact
+        id: package
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "${{ steps.build.outputs.hap-path }}" "dist/mybooks_ohos-${TAG}.hap"
+          ls -lh dist/
+
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          HAP="dist/mybooks_ohos-${TAG}.hap"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，更新产物"
+            gh release upload "$TAG" "$HAP" --clobber
+          else
+            echo "创建 Release $TAG"
+            gh release create "$TAG" "$HAP" \
+              --title "mybooks_ohos $TAG" \
+              --verify-tag \
+              --generate-notes
+          fi
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: harmony-app-release
+          path: dist/*.hap
+          if-no-files-found: error

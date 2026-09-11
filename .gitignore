@@ -38,7 +38,9 @@ ohos_packages/harmony_flutter_plugin/flutter_readkit/ohos/oh_modules/
 ohos/entry/src/main/resources/rawfile/flutter_assets/
 ohos/.hvigor/
 ohos/.idea/
-ohos/hvigor/
+ohos/hvigor/*
+# hvigor 引擎配置是项目必需文件，需随仓库提交
+!ohos/hvigor/hvigor-config.json5
 ohos/node_modules/
 ohos/oh_modules/
 ohos/build/

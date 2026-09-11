@@ -1,0 +1,99 @@
+name: Build HarmonyOS HAP
+description: 准备鸿蒙命令行工具链与构建配置，执行无签名构建并输出 HAP 路径
+
+inputs:
+  build-mode:
+    description: 构建模式（debug 或 release）
+    required: false
+    default: debug
+  tools-version:
+    description: 鸿蒙命令行工具链版本
+    required: false
+    default: '6.1.0.816'
+
+outputs:
+  hap-path:
+    description: 构建产出的 HAP 文件绝对路径
+    value: ${{ steps.build.outputs.hap-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    # 工具链约 2GB，缓存命中可省去大量下载时间
+    - name: Cache Command Line Tools
+      id: cache-tools
+      uses: actions/cache@v4
+      with:
+        path: ./command-line-tools
+        key: ${{ runner.os }}-harmony-tools-${{ inputs.tools-version }}
+
+    - name: Download Command Line Tools
+      if: steps.cache-tools.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        VER="${{ inputs.tools-version }}"
+        URL="https://github.com/Okysu/harmony-auto-build/releases/download/commandline-tools-linux-x64-${VER}/commandline-tools-linux-x64-${VER}.zip"
+        echo "下载鸿蒙命令行工具链: $URL"
+        curl -fL --retry 3 --retry-delay 5 -o tools.zip "$URL"
+        unzip -q tools.zip
+        rm -f tools.zip
+
+    - name: Setup Build Environment
+      shell: bash
+      run: |
+        set -euo pipefail
+        TOOLS_DIR="$(pwd)/command-line-tools"
+
+        # hvigor 通过 ohos/local.properties 的 hwsdk.dir 定位 SDK（该文件含机器相关路径，不入库）
+        echo "hwsdk.dir=$TOOLS_DIR/sdk" > ohos/local.properties
+
+        echo "$TOOLS_DIR/bin" >> "$GITHUB_PATH"
+        echo "OHPM_HOME=$TOOLS_DIR/ohpm" >> "$GITHUB_ENV"
+        echo "HOS_SDK_HOME=$TOOLS_DIR/sdk" >> "$GITHUB_ENV"
+        echo "DEVECO_SDK_HOME=$TOOLS_DIR/sdk" >> "$GITHUB_ENV"
+
+        # 工具链自带 JDK（如有）
+        if [ -d "$TOOLS_DIR/jbr" ]; then
+          echo "JAVA_HOME=$TOOLS_DIR/jbr" >> "$GITHUB_ENV"
+        fi
+
+        chmod -R +x "$TOOLS_DIR/bin"
+
+    # 仓库不保存任何签名材料，CI 固定使用无签名配置
+    - name: Apply CI Build Profile
+      shell: bash
+      run: |
+        set -euo pipefail
+        cp ohos/build-profile.ci.json5 ohos/build-profile.json5
+        echo "已生成无签名 build-profile.json5"
+
+    - name: Install Dependencies
+      shell: bash
+      working-directory: ohos
+      run: ohpm install
+
+    - name: Build HAP
+      id: build
+      shell: bash
+      working-directory: ohos
+      run: |
+        set -euo pipefail
+        hvigorw assembleHap \
+          -p product=default \
+          -p buildMode=${{ inputs.build-mode }} \
+          --no-daemon
+
+        HAP=$(find . -path '*/outputs/*' -name '*.hap' -type f | head -n 1)
+        if [ -z "$HAP" ]; then
+          echo "::error::未找到构建产物 HAP"
+          find . -name '*.hap' -type f || true
+          exit 1
+        fi
+        echo "构建产物: $HAP"
+        echo "hap-path=$(realpath "$HAP")" >> "$GITHUB_OUTPUT"

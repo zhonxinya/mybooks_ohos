@@ -1,0 +1,40 @@
+name: HarmonyOS App Build
+
+# 触发条件：代码推送、PR 提交、手动触发
+on:
+  push:
+    branches: ["main", "master", "dev", "develop"]
+  pull_request:
+    branches: ["main", "master", "dev", "develop"]
+  workflow_dispatch:
+
+# 同一分支的重复推送取消上一次未完成的构建
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 编译校验（debug）
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build HAP
+        id: build
+        uses: ./.github/actions/build-hap
+        with:
+          build-mode: debug
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: harmony-app-debug
+          path: |
+            **/build/**/outputs/**/*.hap
+            **/build/**/outputs/**/*.app
+            **/build/**/outputs/**/*.hsp
+            **/build/**/outputs/**/*.har
+          if-no-files-found: error
