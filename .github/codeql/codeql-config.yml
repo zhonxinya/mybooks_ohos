@@ -1,0 +1,9 @@
+# CodeQL 分析配置
+#
+# 排除 vendored 第三方源码：`ohos/third_party/` 下的 cJSON / libcurl / mbedTLS /
+# SQLite / miniz 为上游原样引入（见 ohos/third_party/README.md），其中的告警
+# 属上游项目维护范围，本仓库的修复方式是升级上游版本，不应计入本仓库扫描结果。
+# 若不排除，上游代码的既有问题会持续占用 PR 检查（例如 curl 的
+# docs/examples、src/tool_writeout.c、lib/curl_trc.c 中的既有告警）。
+paths-ignore:
+  - 'ohos/third_party'
