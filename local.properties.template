@@ -1,0 +1,7 @@
+# 签名配置 - 复制此文件为 local.properties 并填写实际值
+signing.certpath=
+signing.keyAlias=
+signing.keyPassword=
+signing.profile=
+signing.storeFile=
+signing.storePassword=

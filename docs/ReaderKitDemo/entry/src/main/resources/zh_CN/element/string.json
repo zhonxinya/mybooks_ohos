@@ -1,0 +1,72 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "模块描述"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "ReaderKitDemo"
+    },
+    {
+      "name": "import_successful_tips",
+      "value": "导入成功"
+    },
+    {
+      "name": "book_name",
+      "value": "书名："
+    },
+    {
+      "name": "import_book",
+      "value": "导入书籍"
+    },
+    {
+      "name": "continue_reading",
+      "value": "继续阅读"
+    },
+    {
+      "name": "go_to_reader",
+      "value": "去阅读器"
+    },
+    {
+      "name": "system_font",
+      "value": "系统字体"
+    },
+    {
+      "name": "source_han_serif_font",
+      "value": "思源宋体"
+    },
+    {
+      "name": "emulation_page",
+      "value": "仿真"
+    },
+    {
+      "name": "transversal_slip_page",
+      "value": "横滑"
+    },
+    {
+      "name": "font_size_placeholder",
+      "value": "请输入字体大小"
+    },
+    {
+      "name": "line_height_placeholder",
+      "value": "请输入行间距"
+    },
+    {
+      "name": "update_font_size_and_line_height",
+      "value": "更新字体大小及行间距"
+    },
+    {
+      "name": "catalog_list",
+      "value": "目录"
+    },
+    {
+      "name": "setting",
+      "value": "设置"
+    }
+  ]
+}

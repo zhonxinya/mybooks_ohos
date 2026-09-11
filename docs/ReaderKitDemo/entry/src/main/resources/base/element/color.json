@@ -1,0 +1,96 @@
+{
+  "color": [
+    {
+      "name": "start_window_background",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "window_background",
+      "value": "#08000000"
+    },
+    {
+      "name": "ic_white_theme_button_background",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "ic_yellow_theme_button_background",
+      "value": "#80BD9063"
+    },
+    {
+      "name": "ic_pink_theme_button_background",
+      "value": "#FFE4E5"
+    },
+    {
+      "name": "ic_green_theme_button_background",
+      "value": "#C5E7CE"
+    },
+    {
+      "name": "ic_dark_theme_button_background",
+      "value": "#202224"
+    },
+    {
+      "name": "ic_border_select_white",
+      "value": "#FFF34D4F"
+    },
+    {
+      "name": "ic_border_select_yellow",
+      "value": "#FFC59832"
+    },
+    {
+      "name": "ic_border_select_pink",
+      "value": "#FFE67474"
+    },
+    {
+      "name": "ic_border_select_green",
+      "value": "#FF5ABB73"
+    },
+    {
+      "name": "ic_border_select_dark",
+      "value": "#FFFFFFFF"
+    },
+    {
+      "name": "ic_border_unselect",
+      "value": "#1A000000"
+    },
+    {
+      "name": "color_transparent",
+      "value": "#00000000"
+    },
+    {
+      "name": "ohos_id_color_primary_light",
+      "value": "#E5000000"
+    },
+    {
+      "name": "blue",
+      "value": "#FF0A59F7"
+    },
+    {
+      "name": "ic_bg_grey",
+      "value": "#F7F7F7"
+    },
+    {
+      "name": "ic_bg_font_selected",
+      "value": "#FFF5F6"
+    },
+    {
+      "name": "ic_text_input_bg",
+      "value": "#F3F3F3"
+    },
+    {
+      "name": "black_60_opacity",
+      "value": "#99000000"
+    },
+    {
+      "name": "black_90_opacity",
+      "value": "#E6000000"
+    },
+    {
+      "name": "black_5_opacity",
+      "value": "#0D000000"
+    },
+    {
+      "name": "page_background",
+      "value": "#F1F3F5"
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+/node_modules
+/oh_modules
+tests/node_modules
+/local.properties
+/.idea
+**/build
+/.hvigor
+.cxx
+/.clangd
+/.clang-format
+/.clang-tidy
+**/.test
+/.appanalyzer
+tests/kavita-test-config.local.json
+tests/kavita-test-config.json
+tests/tachidesk-test-config.local.json
+tests/tachidesk-test-config.json
+
+# 签名密钥文件
+*.p12
+*.cer
+*.p7b
+build-profile.json5
+!ohos/entry/build-profile.json5
+!ohos/talebook_core/build-profile.json5
+!ohos_packages/harmony_flutter_plugin/flutter_readkit/ohos/build-profile.json5
+ohos_packages/harmony_flutter_plugin/flutter_readkit/ohos/oh_modules/
+
+.learnings/
+
+# Flutter SDK (CPF-Flutter 鸿蒙分支)
+.flutter_ohos/
+
+# Flutter 构建产物
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+ohos/entry/src/main/resources/rawfile/flutter_assets/
+ohos/.hvigor/
+ohos/.idea/
+ohos/hvigor/
+ohos/node_modules/
+ohos/oh_modules/
+ohos/build/
+
+# Flutter 构建日志
+flutter_*.log
+
+# Flutter IDE 配置
+talebook.iml
+
+# FVM Version Cache
+.fvm/
+
+# DevEco SDK wrapper for flutter-ohos detection
+.ohos-sdk-wrapper/
+*.log
+tmp_*
+
+# DevEco 本地签名材料目录（.cer / .p7b / .p12）
+.ohos/
+
+# 本地 Agent / 工具配置，不随仓库发布
+.reasonix/
+reasonix.toml
+.devin/
+.kilo/
+.kilocode/
+
+# 第三方项目引用仅作本地参考，不随仓库发布
+docs/mybooks/
+.github/skills/

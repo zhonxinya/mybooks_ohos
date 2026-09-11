@@ -1,0 +1,11 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "Talebook entry module",
+  "main": "",
+  "author": "",
+  "license": "",
+  "dependencies": {
+    "talebook_core": "file:../talebook_core"
+  }
+}

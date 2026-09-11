@@ -1,0 +1,28 @@
+{
+  "color": [
+    { "name": "start_window_background", "value": "#121212" },
+    { "name": "brand_primary", "value": "#4DA3FF" },
+    { "name": "brand_primary_light", "value": "#14324D" },
+    { "name": "brand_gradient_end", "value": "#121417" },
+    { "name": "page_background", "value": "#121417" },
+    { "name": "card_background", "value": "#1C1F24" },
+    { "name": "text_primary", "value": "#E8EAED" },
+    { "name": "text_secondary", "value": "#99E8EAED" },
+    { "name": "text_tertiary", "value": "#66E8EAED" },
+    { "name": "divider", "value": "#33E8EAED" },
+    { "name": "error", "value": "#FF6B54" },
+    { "name": "success", "value": "#7BD474" },
+    { "name": "cover_placeholder", "value": "#4DA3FF" },
+    { "name": "cover_placeholder_bg", "value": "#FF2A2D31" },
+    { "name": "on_brand", "value": "#0A0A0A" },
+    { "name": "unread_background", "value": "#14324D" },
+    { "name": "toolbar_overlay", "value": "#CC1C1F24" },
+    { "name": "error_light", "value": "#3A1B14" },
+    { "name": "button_shadow", "value": "#40000000" },
+    { "name": "brand_primary_pressed", "value": "#7AB8FF" },
+    { "name": "brand_primary_light_pressed", "value": "#0F2438" },
+    { "name": "error_light_pressed", "value": "#4A231A" },
+    { "name": "surface_pressed", "value": "#2A2E34" },
+    { "name": "chip_background_pressed", "value": "#22262B" }
+  ]
+}

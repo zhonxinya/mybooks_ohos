@@ -1,0 +1,8 @@
+{
+  "terminal.integrated.env.windows": {
+    "HOS_SDK_HOME": "C:\\Program Files\\Huawei\\DevEco Studio",
+    "OHOS_SDK_HOME": "C:\\Program Files\\Huawei\\DevEco Studio",
+    "OHOS_HOME": "C:\\Program Files\\Huawei\\DevEco Studio",
+    "PATH": "C:\\Program Files\\Huawei\\DevEco Studio\\bin;${env:PATH}"
+  }
+}

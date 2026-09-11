@@ -1,0 +1,429 @@
+import { bookParser } from '@kit.ReaderKit';
+import { ReaderTheme } from '../../models/ReaderTheme';
+import { ReaderThemeColors } from '../../theme/ReaderThemeColors';
+import { ReadKitBookmarkPayload } from '../../models/ReadKitTypes';
+import { ReaderFontCatalog, ReaderFontOption } from '../../models/ReaderFontCatalog';
+import { ReaderTtsState, ReaderTtsVoice } from '../../services/ReaderTtsService';
+import {
+  ReaderPanelSection, ReaderSegmentedControl, ReaderSliderBlock, ReaderSwitchRow, ReaderSelectRow,
+  ReaderChip,
+} from './ReaderPanelWidgets';
+import { TextButton } from '../TextButton';
+
+@Component
+export struct ReaderControlPanel {
+  @Prop sheetOnly: string = 'toc';
+  @Prop catalogItems: bookParser.CatalogItem[] = [];
+  @Prop bookmarks: ReadKitBookmarkPayload[] = [];
+  @Prop currentCatalogIndex: number = 0;
+  @Link fontSize: number;
+  @Link lineHeight: number;
+  @Link selectedFontId: string;
+  @Link theme: ReaderTheme;
+  @Link flipMode: string;
+  @Link keepScreenOn: boolean;
+  @Prop ttsState: ReaderTtsState = 'idle';
+  @Prop ttsChapterTitle: string = '';
+  @Link ttsSpeed: number;
+  @Prop ttsChunkIndex: number = 0;
+  @Prop ttsChunkTotal: number = 0;
+  @Prop ttsVoices: ReaderTtsVoice[] = [];
+  @Prop ttsPerson: number = 0;
+  @Prop ttsVoiceLoading: boolean = false;
+  @Prop fontDownloading: boolean = false;
+  onTtsPlay: () => void = () => {};
+  onTtsPause: () => void = () => {};
+  onTtsStop: () => void = () => {};
+  onSelectVoice: (person: number) => void = (_person: number) => {};
+  onReloadVoices: () => void = () => {};
+  onSelectCatalog: (item: bookParser.CatalogItem) => void = () => {};
+  onSelectBookmark: (bookmark: ReadKitBookmarkPayload) => void = () => {};
+  onRemoveBookmark: (bookmark: ReadKitBookmarkPayload) => void = () => {};
+  onSelectFont: (fontId: string) => void = () => {};
+  onRepaginate: () => void = () => {};
+  onClose: () => void = () => {};
+
+  private readonly themeLabels: string[] = ['浅色', '深色', '护眼'];
+  private readonly flipLabels: string[] = ['仿真翻页', '滚动阅读'];
+  private readonly fontOptions: ReaderFontOption[] = ReaderFontCatalog.listOptions();
+  private tocScroller: ListScroller = new ListScroller();
+
+  build() {
+    Column({ space: 8 }) {
+      this.panelHeader();
+      if (this.sheetOnly === 'toc') {
+        this.tocTab();
+      } else if (this.sheetOnly === 'appearance') {
+        this.appearanceTab();
+      } else if (this.sheetOnly === 'settings') {
+        this.settingsTab();
+      } else if (this.sheetOnly === 'bookmarks') {
+        this.bookmarkTab();
+      } else if (this.sheetOnly === 'aloud') {
+        this.aloudTab();
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(ReaderThemeColors.barBackground(this.theme))
+    .borderRadius({ topLeft: 20, topRight: 20 })
+    .clip(true)
+    .shadow({ radius: 24, color: '#40000000', offsetX: 0, offsetY: -8 })
+    .border({ width: { top: 0.5 }, color: ReaderThemeColors.divider(this.theme) })
+    .padding({ bottom: 12 })
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM]);
+  }
+
+  @Builder
+  panelHeader() {
+    Row() {
+      Text(this.sheetTitle())
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(ReaderThemeColors.textColor(this.theme))
+        .layoutWeight(1);
+      Text('完成')
+        .fontSize(15)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.brand_primary'))
+        .padding({ left: 12, right: 4, top: 6, bottom: 6 })
+        .onClick(() => this.onClose());
+    }
+    .width('100%')
+    .padding({ left: 16, right: 12, top: 12 });
+  }
+
+  @Builder
+  tocTab() {
+    if (this.catalogItems.length === 0) {
+      Column() {
+        Text('暂无章节目录')
+          .fontSize(14)
+          .fontColor(ReaderThemeColors.textHint(this.theme));
+      }
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Center);
+    } else {
+      List({
+        scroller: this.tocScroller,
+        initialIndex: this.currentCatalogIndex,
+      }) {
+        ForEach(this.catalogItems, (item: bookParser.CatalogItem, index: number) => {
+          ListItem() {
+            ReaderSelectRow({
+              theme: this.theme,
+              leading: `${index + 1}`,
+              title: item.catalogName,
+              selected: index === this.currentCatalogIndex,
+              showDivider: index < this.catalogItems.length - 1,
+              onTap: () => {
+                this.onSelectCatalog(item);
+                this.onClose();
+              },
+            });
+          }
+          .padding({
+            left: item.catalogLevel ? item.catalogLevel * 12 : 0,
+          });
+        }, (item: bookParser.CatalogItem) => item.href ?? item.catalogName);
+      }
+      .layoutWeight(1)
+      .padding({ left: 8, right: 8, bottom: 8 })
+      .scrollBar(BarState.Auto)
+      .onAppear(() => {
+        this.scrollTocToCurrentChapter();
+      });
+    }
+  }
+
+  @Builder
+  appearanceTab() {
+    Scroll() {
+      Column({ space: 12 }) {
+        ReaderPanelSection({ theme: this.theme, title: '文字' }) {
+          Column({ space: 12 }) {
+            Column({ space: 8 }) {
+              Row({ space: 8 }) {
+                Text('字体')
+                  .fontSize(14)
+                  .fontColor(ReaderThemeColors.textColor(this.theme))
+                  .layoutWeight(1);
+                if (this.fontDownloading) {
+                  LoadingProgress()
+                    .width(16)
+                    .height(16)
+                    .color($r('app.color.brand_primary'));
+                  Text('下载中…')
+                    .fontSize(12)
+                    .fontColor(ReaderThemeColors.textHint(this.theme));
+                }
+              }
+              .width('100%');
+              Scroll() {
+                Flex({ wrap: FlexWrap.Wrap }) {
+                  ForEach(this.fontOptions, (option: ReaderFontOption) => {
+                    ReaderChip({
+                      theme: this.theme,
+                      label: option.name,
+                      selected: this.selectedFontId === option.id,
+                      onTap: () => {
+                        if (this.fontDownloading) {
+                          return;
+                        }
+                        this.onSelectFont(option.id);
+                      },
+                    })
+                      .margin({ right: 8, bottom: 8 });
+                  }, (option: ReaderFontOption) => option.id);
+                }
+                .width('100%');
+              }
+              .width('100%')
+              .constraintSize({ maxHeight: 220 })
+              .scrollBar(BarState.Auto);
+            }
+            ReaderSliderBlock({
+              theme: this.theme,
+              label: `字号: ${this.fontSize.toFixed(0)}`,
+              value: this.fontSize,
+              min: 12,
+              max: 40,
+              step: 1,
+              onChange: (value: number) => {
+                this.fontSize = value;
+                this.onRepaginate();
+              },
+            });
+            ReaderSliderBlock({
+              theme: this.theme,
+              label: `行距: ${this.lineHeight.toFixed(1)}`,
+              value: this.lineHeight,
+              min: 1.2,
+              max: 3.0,
+              step: 0.1,
+              onChange: (value: number) => {
+                this.lineHeight = value;
+                this.onRepaginate();
+              },
+            });
+          }
+        }
+        ReaderPanelSection({ theme: this.theme, title: '主题' }) {
+          ReaderSegmentedControl({
+            theme: this.theme,
+            labels: this.themeLabels,
+            selectedIndex: this.theme,
+            onSelect: (index: number) => {
+              this.theme = index as ReaderTheme;
+              this.onRepaginate();
+            },
+          });
+        }
+        ReaderPanelSection({ theme: this.theme, title: '翻页' }) {
+          ReaderSegmentedControl({
+            theme: this.theme,
+            labels: this.flipLabels,
+            selectedIndex: this.flipMode === '0' ? 0 : 1,
+            onSelect: (index: number) => {
+              this.flipMode = index === 0 ? '0' : '1';
+              this.onRepaginate();
+            },
+          });
+        }
+      }
+      .padding({ left: 16, right: 16, top: 8, bottom: 16 });
+    }
+    .layoutWeight(1);
+  }
+
+  @Builder
+  settingsTab() {
+    Scroll() {
+      Column({ space: 12 }) {
+        ReaderPanelSection({ theme: this.theme, title: '阅读行为' }) {
+          ReaderSwitchRow({
+            theme: this.theme,
+            title: '阅读时常亮',
+            subtitle: '阅读页保持屏幕不息屏',
+            isOn: this.keepScreenOn,
+            onChange: (value: boolean) => {
+              this.keepScreenOn = value;
+            },
+          });
+        }
+      }
+      .padding({ left: 16, right: 16, top: 8, bottom: 16 });
+    }
+    .layoutWeight(1);
+  }
+
+  @Builder
+  bookmarkTab() {
+    if (this.bookmarks.length === 0) {
+      Column() {
+        Text('暂无书签')
+          .fontSize(14)
+          .fontColor(ReaderThemeColors.textHint(this.theme));
+      }
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Center);
+    } else {
+      List() {
+        ForEach(this.bookmarks, (bookmark: ReadKitBookmarkPayload) => {
+          ListItem() {
+            Row() {
+              Text(bookmark.title)
+                .fontSize(15)
+                .fontColor(ReaderThemeColors.textColor(this.theme))
+                .layoutWeight(1)
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
+              TextButton({
+                label: '删除',
+                tone: 'danger',
+                onTap: () => this.onRemoveBookmark(bookmark),
+              });
+            }
+            .width('100%')
+            .padding({ top: 12, bottom: 12 })
+            .onClick(() => {
+              this.onSelectBookmark(bookmark);
+              this.onClose();
+            });
+          }
+        }, (bookmark: ReadKitBookmarkPayload) => bookmark.id);
+      }
+      .layoutWeight(1)
+      .padding({ left: 16, right: 16, bottom: 8 });
+    }
+  }
+
+  @Builder
+  aloudTab() {
+    Scroll() {
+      Column({ space: 12 }) {
+        ReaderPanelSection({ theme: this.theme, title: '朗读状态' }) {
+          Text(this.ttsStatusText())
+            .fontSize(14)
+            .fontColor(ReaderThemeColors.textColor(this.theme))
+            .width('100%');
+          if (this.ttsChunkTotal > 0) {
+            Progress({ value: this.ttsChunkIndex, total: this.ttsChunkTotal, type: ProgressType.Linear })
+              .width('100%')
+              .height(4)
+              .color($r('app.color.brand_primary'));
+          }
+        }
+        ReaderPanelSection({ theme: this.theme, title: '控制' }) {
+          Row({ space: 8 }) {
+            TextButton({
+              label: this.ttsState === 'paused' ? '继续' : '开始',
+              onTap: () => this.onTtsPlay(),
+            });
+            TextButton({
+              label: '暂停',
+              onTap: () => this.onTtsPause(),
+            });
+            TextButton({
+              label: '停止',
+              tone: 'danger',
+              onTap: () => this.onTtsStop(),
+            });
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.SpaceAround);
+        }
+        ReaderPanelSection({ theme: this.theme, title: '语速' }) {
+          ReaderSliderBlock({
+            theme: this.theme,
+            label: `语速: ${this.ttsSpeed.toFixed(1)}`,
+            value: this.ttsSpeed,
+            min: 0.5,
+            max: 2.0,
+            step: 0.1,
+            onChange: (value: number) => {
+              this.ttsSpeed = value;
+            },
+          });
+        }
+        ReaderPanelSection({ theme: this.theme, title: '发音人' }) {
+          if (this.ttsVoices.length > 0) {
+            Flex({ wrap: FlexWrap.Wrap }) {
+              ForEach(this.ttsVoices, (voice: ReaderTtsVoice) => {
+                ReaderChip({
+                  theme: this.theme,
+                  label: voice.label,
+                  selected: voice.person === this.ttsPerson,
+                  onTap: () => this.onSelectVoice(voice.person),
+                })
+                  .margin({ right: 8, bottom: 8 });
+              }, (voice: ReaderTtsVoice) => `voice-${voice.person}`);
+            }
+            .width('100%');
+          } else {
+            Text(this.ttsVoiceLoading ? '正在获取音色列表...' : '未获取到可用音色，使用系统默认发音人')
+              .fontSize(12)
+              .fontColor(ReaderThemeColors.textHint(this.theme))
+              .width('100%')
+              .margin({ bottom: 8 });
+          }
+          TextButton({
+            label: this.ttsVoiceLoading ? '刷新中...' : '刷新音色列表',
+            onTap: () => this.onReloadVoices(),
+          });
+        }
+      }
+      .padding({ left: 16, right: 16, top: 8, bottom: 16 });
+    }
+    .layoutWeight(1);
+  }
+
+  private ttsStatusText(): string {
+    if (this.ttsState === 'playing') {
+      const title = this.ttsChapterTitle.length > 0 ? this.ttsChapterTitle : '当前章节';
+      return `正在朗读：${title}${this.ttsProgressText()}`;
+    }
+    if (this.ttsState === 'paused') {
+      return `已暂停，点击继续${this.ttsProgressText()}`;
+    }
+    return '点击开始朗读当前页，读完自动翻页续读';
+  }
+
+  private ttsProgressText(): string {
+    if (this.ttsChunkTotal <= 0) {
+      return '';
+    }
+    const current = Math.min(this.ttsChunkIndex + 1, this.ttsChunkTotal);
+    const percent = Math.round((this.ttsChunkIndex / this.ttsChunkTotal) * 100);
+    return ` · 第 ${current}/${this.ttsChunkTotal} 段（${percent}%）`;
+  }
+
+  private scrollTocToCurrentChapter(): void {
+    const index = this.currentCatalogIndex;
+    if (index <= 0 || this.catalogItems.length === 0) {
+      return;
+    }
+    const maxIndex = this.catalogItems.length - 1;
+    const target = index > maxIndex ? maxIndex : index;
+    this.tocScroller.scrollToIndex(target, false, ScrollAlign.CENTER);
+  }
+
+  private sheetTitle(): string {
+    if (this.sheetOnly === 'toc') {
+      return '目录';
+    }
+    if (this.sheetOnly === 'appearance') {
+      return '界面';
+    }
+    if (this.sheetOnly === 'settings') {
+      return '设置';
+    }
+    if (this.sheetOnly === 'bookmarks') {
+      return '书签';
+    }
+    if (this.sheetOnly === 'aloud') {
+      return '朗读';
+    }
+    return '阅读';
+  }
+}

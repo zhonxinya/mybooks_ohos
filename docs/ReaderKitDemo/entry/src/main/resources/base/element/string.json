@@ -1,0 +1,72 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "ReaderKitDemo"
+    },
+    {
+      "name": "import_successful_tips",
+      "value": "Import successful"
+    },
+    {
+      "name": "book_name",
+      "value": "Book name: "
+    },
+    {
+      "name": "import_book",
+      "value": "Import book"
+    },
+    {
+      "name": "continue_reading",
+      "value": "Continue reading"
+    },
+    {
+      "name": "go_to_reader",
+      "value": "Go to reader"
+    },
+    {
+      "name": "system_font",
+      "value": "System font"
+    },
+    {
+      "name": "source_han_serif_font",
+      "value": "Source Han Serif"
+    },
+    {
+      "name": "emulation_page",
+      "value": "Emulated"
+    },
+    {
+      "name": "transversal_slip_page",
+      "value": "Swipe"
+    },
+    {
+      "name": "font_size_placeholder",
+      "value": "Please enter font size"
+    },
+    {
+      "name": "line_height_placeholder",
+      "value": "Please enter line height"
+    },
+    {
+      "name": "update_font_size_and_line_height",
+      "value": "Update font size and line height"
+    },
+    {
+      "name": "catalog_list",
+      "value": "Catalog"
+    },
+    {
+      "name": "setting",
+      "value": "Settings"
+    }
+  ]
+}

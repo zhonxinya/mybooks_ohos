@@ -1,0 +1,56 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "talebook"
+    },
+    {
+      "name": "ReaderKitAbility_desc",
+      "value": "ReaderKit 阅读器"
+    },
+    {
+      "name": "ReaderKitAbility_label",
+      "value": "ReaderKit 阅读器"
+    },
+    {
+      "name": "loading_hint",
+      "value": "加载中..."
+    },
+    {
+      "name": "empty_books",
+      "value": "暂无书籍"
+    },
+    {
+      "name": "retry",
+      "value": "重试"
+    },
+    {
+      "name": "go_settings",
+      "value": "去设置"
+    },
+    {
+      "name": "search_hint",
+      "value": "搜索书名或作者"
+    },
+    {
+      "name": "login",
+      "value": "登录"
+    },
+    {
+      "name": "save",
+      "value": "保存"
+    },
+    {
+      "name": "feature_coming_soon",
+      "value": "功能开发中"
+    }
+  ]
+}

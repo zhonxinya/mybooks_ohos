@@ -1,0 +1,12 @@
+{
+  "module": {
+    "name": "talebook_core",
+    "type": "har",
+    "description": "Talebook C++ core with NAPI bindings",
+    "deviceTypes": [
+      "default",
+      "tablet",
+      "2in1"
+    ]
+  }
+}

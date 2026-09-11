@@ -1,0 +1,16 @@
+{
+  "float": [
+    { "name": "page_padding", "value": "16vp" },
+    { "name": "card_padding", "value": "12vp" },
+    { "name": "card_radius", "value": "12vp" },
+    { "name": "cover_radius", "value": "8vp" },
+    { "name": "chip_radius", "value": "16vp" },
+    { "name": "top_bar_height", "value": "56vp" },
+    { "name": "list_item_height", "value": "108vp" },
+    { "name": "cover_tile_width", "value": "100vp" },
+    { "name": "cover_tile_height", "value": "140vp" },
+    { "name": "button_height", "value": "48vp" },
+    { "name": "button_height_compact", "value": "40vp" },
+    { "name": "icon_button_size", "value": "40vp" }
+  ]
+}
