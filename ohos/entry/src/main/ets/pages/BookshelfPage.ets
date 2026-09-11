@@ -2,7 +2,7 @@ import { router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import {
   HarmonyTopBar, BookListItemData, FilterChips, FilterChipItem,
-  EmptyState, LoadingState, IconCircleButton, BookCatalogView,
+  EmptyState, LoadingState, IconCircleButton, BookCatalogView, AuthImage,
 } from '../components';
 import { DownloadRecord, ReadingHistoryItem, TalebookService, ApiEnvelope } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
@@ -22,6 +22,13 @@ export struct BookshelfPage {
   @State importing: boolean = false;
   @State isListMode: boolean = false;
   @State @Watch('onSelectedTabChanged') selectedTab: number = 0;
+  /** 长按书籍弹出的管理面板（详情 / 阅读 / 删除）。 */
+  @State showManage: boolean = false;
+  @State manageId: string = '';
+  @State manageTitle: string = '';
+  @State manageSubtitle: string = '';
+  @State manageCover: string = '';
+  @State manageReadLabel: string = '开始阅读';
   @State audioItems: BookListItemData[] = [];
   @State audioLoading: boolean = false;
   @State audioLoadingMore: boolean = false;
@@ -291,11 +298,60 @@ export struct BookshelfPage {
     this.getUIContext().getPromptAction().showToast({ message: '已删除' });
   }
 
-  private deleteByCatalogItem(item: BookListItemData): void {
-    const record = this.displayRecords.find((r: DownloadRecord) => r.bookId === item.id);
+  private findRecord(bookId: string): DownloadRecord | undefined {
+    return this.displayRecords.find((item: DownloadRecord) => item.bookId === bookId);
+  }
+
+  private openManagePanel(item: BookListItemData): void {
+    const record = this.findRecord(item.id);
+    this.manageId = item.id;
+    this.manageTitle = item.title;
+    this.manageSubtitle = item.subtitle ?? '';
+    this.manageCover = item.cover ?? '';
+    this.manageReadLabel = record !== undefined && this.progressText(record).length > 0 ?
+      '继续阅读' : '开始阅读';
+    this.showManage = true;
+  }
+
+  private closeManagePanel(): void {
+    this.showManage = false;
+  }
+
+  /** 服务端书库图书（数字 bookId）按 bookId 远程取详情；本地导入书 bookId 为 `local_<uuid>`，只能看本地信息。 */
+  private openManageDetail(): void {
+    const record = this.findRecord(this.manageId);
+    this.closeManagePanel();
     if (record === undefined) {
       return;
     }
+    const remoteId = Number(record.bookId);
+    if (remoteId > 0) {
+      router.pushUrl({
+        url: 'pages/BookDetailPage',
+        params: { bookId: remoteId },
+      });
+      return;
+    }
+    this.openDetail(record);
+  }
+
+  private openManageReader(): void {
+    const record = this.findRecord(this.manageId);
+    this.closeManagePanel();
+    if (record !== undefined) {
+      this.openReader(record);
+    }
+  }
+
+  private deleteFromManagePanel(): void {
+    const record = this.findRecord(this.manageId);
+    this.closeManagePanel();
+    if (record !== undefined) {
+      this.confirmDeleteRecord(record);
+    }
+  }
+
+  private confirmDeleteRecord(record: DownloadRecord): void {
     this.getUIContext().showAlertDialog({
       title: '删除书籍',
       message: `确定删除「${record.title}」？`,
@@ -404,6 +460,109 @@ export struct BookshelfPage {
   }
 
   @Builder
+  managePanelHeader() {
+    Row({ space: 12 }) {
+      if (this.manageCover.length > 0) {
+        Column() {
+          AuthImage({
+            url: this.manageCover,
+            imageWidth: 48,
+            imageHeight: 68,
+          });
+        }
+        .borderRadius(6)
+        .clip(true);
+      } else {
+        Column() {
+          SymbolGlyph($r('sys.symbol.book'))
+            .fontSize(24)
+            .fontColor([$r('app.color.text_tertiary')]);
+        }
+        .width(48)
+        .height(68)
+        .borderRadius(6)
+        .backgroundColor($r('app.color.page_background'))
+        .justifyContent(FlexAlign.Center);
+      }
+      Column({ space: 4 }) {
+        Text(this.manageTitle.length > 0 ? this.manageTitle : '未知书名')
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+        if (this.manageSubtitle.length > 0) {
+          Text(this.manageSubtitle)
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        }
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1);
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Top);
+  }
+
+  @Builder
+  manageRow(icon: Resource, label: string, color: ResourceColor, onTap: () => void) {
+    Row({ space: 12 }) {
+      SymbolGlyph(icon)
+        .fontSize(20)
+        .fontColor([color]);
+      Text(label)
+        .fontSize(15)
+        .fontColor(color)
+        .layoutWeight(1);
+      SymbolGlyph($r('sys.symbol.chevron_right'))
+        .fontSize(14)
+        .fontColor([$r('app.color.text_tertiary')]);
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 14, bottom: 14 })
+    .alignItems(VerticalAlign.Center)
+    .stateStyles({
+      pressed: {
+        .backgroundColor($r('app.color.surface_pressed'))
+      },
+    })
+    .onClick(onTap);
+  }
+
+  @Builder
+  manageDivider() {
+    Divider()
+      .color($r('app.color.divider'))
+      .strokeWidth(0.5)
+      .margin({ left: 48 });
+  }
+
+  @Builder
+  manageSheet() {
+    Column({ space: 16 }) {
+      this.managePanelHeader();
+      Column() {
+        this.manageRow($r('sys.symbol.doc_text'), '书籍详情', $r('app.color.brand_primary'),
+          () => this.openManageDetail());
+        this.manageDivider();
+        this.manageRow($r('sys.symbol.play_circle'), this.manageReadLabel, $r('app.color.brand_primary'),
+          () => this.openManageReader());
+        this.manageDivider();
+        this.manageRow($r('sys.symbol.trash'), '删除本地书籍', $r('app.color.error'),
+          () => this.deleteFromManagePanel());
+      }
+      .width('100%')
+      .borderRadius($r('app.float.card_radius'))
+      .backgroundColor($r('app.color.card_background'))
+      .clip(true);
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, bottom: 8 });
+  }
+
+  @Builder
   contentArea() {
     if (this.selectedTab === 2) {
       this.audiobookContent();
@@ -421,7 +580,7 @@ export struct BookshelfPage {
         items: this.catalogItems,
         isListMode: this.isListMode,
         onItemTap: (item: BookListItemData) => this.openByCatalogItem(item),
-        onItemLongPress: (item: BookListItemData) => this.deleteByCatalogItem(item),
+        onItemLongPress: (item: BookListItemData) => this.openManagePanel(item),
       });
     }
   }
@@ -471,6 +630,12 @@ export struct BookshelfPage {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.page_background'));
+    .backgroundColor($r('app.color.page_background'))
+    .bindSheet($$this.showManage, this.manageSheet(), {
+      height: SheetSize.FIT_CONTENT,
+      dragBar: true,
+      showClose: true,
+      title: { title: '书籍管理' },
+    });
   }
 }
