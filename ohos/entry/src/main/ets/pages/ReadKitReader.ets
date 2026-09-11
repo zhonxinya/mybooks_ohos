@@ -1049,7 +1049,31 @@ struct ReadKitReader {
       } catch (_error) {
       }
     }
+    // 兜底读文件仅限应用沙箱内：book 内容可携带 ../../ 或绝对路径形式的资源引用，
+    // 若无约束则可越权读取沙箱内任意文件并把内容交给渲染引擎。
+    if (!this.isInsideSandbox(filePath, context)) {
+      return new ArrayBuffer(0);
+    }
     return this.loadFileFromPath(filePath);
+  }
+
+  /** 仅允许读取应用自身 filesDir 下、且不含 .. 的路径。 */
+  private isInsideSandbox(filePath: string, context: common.UIAbilityContext): boolean {
+    const root = context.filesDir;
+    if (root.length === 0) {
+      return false;
+    }
+    const normalized = filePath.replace(/\\/g, '/');
+    if (!normalized.startsWith(`${root}/`)) {
+      return false;
+    }
+    const segments = normalized.split('/');
+    for (let i = 0; i < segments.length; i++) {
+      if (segments[i] === '..') {
+        return false;
+      }
+    }
+    return true;
   }
 
   private isFontPath(filePath: string): boolean {

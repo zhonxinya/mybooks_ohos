@@ -27,7 +27,8 @@ bool CoreEngine::init(const std::string &filesDir, const std::string &prefsDir) 
     filesDir_ = filesDir;
     if (!Database::instance().open(filesDir)) return false;
     const std::string cookieDir = filesDir + "/.cookies";
-    mkdir(cookieDir.c_str(), 0755);
+    // 会话 Cookie 属敏感数据，目录仅限应用自身访问
+    mkdir(cookieDir.c_str(), 0700);
     HttpClient::instance().setCookieDir(cookieDir);
     if (!prefsDir.empty()) {
         Database::instance().migrateFromLegacyPreferences(prefsDir);

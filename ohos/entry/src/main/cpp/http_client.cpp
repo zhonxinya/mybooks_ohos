@@ -110,13 +110,13 @@ std::string cookiePath(const std::string &cookieDir)
 std::string formatCurlError(CURLcode code, const char *message)
 {
     if (code == CURLE_PEER_FAILED_VERIFICATION) {
-        return "SSL 证书验证失败，自签名证书请开启「跳过 SSL 验证」";
+        return "SSL 证书验证失败，请为服务器配置受信任证书；仅自签名/局域网环境可开启「跳过 SSL 验证」";
     }
     if (code == CURLE_SSL_CONNECT_ERROR) {
         return "SSL 连接失败，请检查服务器地址与证书";
     }
     if (code == CURLE_SSL_CACERT) {
-        return "无法验证 SSL 证书，请开启「跳过 SSL 验证」或使用有效证书";
+        return "无法验证 SSL 证书，请使用受信任证书；仅自签名/局域网环境可开启「跳过 SSL 验证」";
     }
     return message != nullptr ? std::string(message) : "网络请求失败";
 }
@@ -150,6 +150,10 @@ HttpResponse performCurlRequest(const std::string &url, const std::string &metho
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, sslVerify ? 1L : 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, sslVerify ? 2L : 0L);
+    // 仅允许 http/https：阻断 file:// 等本地协议被恶意服务端数据或
+    // 重定向到本地协议所利用（curl 支持 file://，可读出本地文件）。
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
     applySharedCurlOptions(curl);
 
     const std::string cookieFile = cookiePath(cookieDir);
@@ -228,6 +232,9 @@ HttpResponse performCurlDownload(const std::string &url, const std::string &dest
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, sslVerify ? 1L : 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, sslVerify ? 2L : 0L);
+    // 仅允许 http/https（含重定向），避免本地协议被利用
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
     applySharedCurlOptions(curl);
 
     const std::string cookieFile = cookiePath(cookieDir);
@@ -291,7 +298,8 @@ void HttpClient::setCookieDir(const std::string &dir)
 {
     cookieDir_ = dir;
     if (!cookieDir_.empty()) {
-        mkdir(cookieDir_.c_str(), 0755);
+        // 会话 Cookie 属敏感数据，目录仅限应用自身访问
+        mkdir(cookieDir_.c_str(), 0700);
     }
     loadCookies();
 }

@@ -831,22 +831,26 @@ export class TalebookApi {
     return JSON.parse(raw) as InstallStatusResponse;
   }
 
-  /** 执行首次安装（POST /api/admin/install，服务端读 query/form 参数）。 */
+  /**
+   * 执行首次安装（POST /api/admin/install，服务端读 query/form 参数）。
+   * 管理员密码等凭据必须走请求体，不得拼入 URL——URL 会被服务端/代理访问日志、
+   * 浏览器 Referer 等渠道记录。其余凭据接口（sign_in/sign_up/new）同样使用 form 体。
+   */
   static async runInstall(opts: InstallRequest): Promise<ApiMessageResult> {
-    let path = '/api/admin/install?username=' + encodeURIComponent(opts.username)
+    let form = 'username=' + encodeURIComponent(opts.username)
       + '&password=' + encodeURIComponent(opts.password)
       + '&email=' + encodeURIComponent(opts.email)
       + '&title=' + encodeURIComponent(opts.title);
     if (opts.language !== undefined && opts.language.length > 0) {
-      path += '&language=' + encodeURIComponent(opts.language);
+      form += '&language=' + encodeURIComponent(opts.language);
     }
     if (opts.invite !== undefined && opts.invite.length > 0) {
-      path += '&invite=' + encodeURIComponent(opts.invite);
+      form += '&invite=' + encodeURIComponent(opts.invite);
     }
     if (opts.code !== undefined && opts.code.length > 0) {
-      path += '&code=' + encodeURIComponent(opts.code);
+      form += '&code=' + encodeURIComponent(opts.code);
     }
-    const raw = await TalebookCoreService.talebookPost(path, '{}');
+    const raw = await TalebookCoreService.talebookPostForm('/api/admin/install', form);
     return JSON.parse(raw) as ApiMessageResult;
   }
 

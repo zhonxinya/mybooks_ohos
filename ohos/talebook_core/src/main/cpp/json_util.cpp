@@ -101,7 +101,11 @@ std::optional<int> jsonGetInt(const std::string &json, const std::string &key) {
     size_t end = pos;
     while (end < json.size() && (std::isdigit(json[end]) || json[end] == '-')) ++end;
     if (end == pos) return std::nullopt;
-    return std::stoi(json.substr(pos, end - pos));
+    try {
+        return std::stoi(json.substr(pos, end - pos));
+    } catch (...) {
+        return std::nullopt;
+    }
 }
 
 std::optional<double> jsonGetDouble(const std::string &json, const std::string &key) {
@@ -117,7 +121,11 @@ std::optional<double> jsonGetDouble(const std::string &json, const std::string &
     while (end < json.size() &&
            (std::isdigit(json[end]) || json[end] == '-' || json[end] == '.')) ++end;
     if (end == pos) return std::nullopt;
-    return std::stod(json.substr(pos, end - pos));
+    try {
+        return std::stod(json.substr(pos, end - pos));
+    } catch (...) {
+        return std::nullopt;
+    }
 }
 
 std::optional<bool> jsonGetBool(const std::string &json, const std::string &key) {

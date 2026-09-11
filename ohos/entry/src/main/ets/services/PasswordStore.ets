@@ -1,6 +1,9 @@
 import { asset } from '@kit.AssetStoreKit';
 import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG: string = 'PasswordStore';
 
 /**
  * 基于 Asset Store Kit（关键资产存储服务）保存密码类敏感数据。
@@ -33,7 +36,7 @@ export class PasswordStore {
       asset.addSync(attr);
     } catch (error) {
       const err = error as BusinessError;
-      console.error(`PasswordStore.set failed, code: ${err.code}, message: ${err.message}`);
+      hilog.error(0x0000, TAG, 'set failed, code: %{public}d, message: %{public}s', err.code, err.message);
     }
   }
 
@@ -52,7 +55,7 @@ export class PasswordStore {
     } catch (error) {
       const err = error as BusinessError;
       if (err.code !== asset.ErrorCode.NOT_FOUND) {
-        console.error(`PasswordStore.get failed, code: ${err.code}, message: ${err.message}`);
+        hilog.error(0x0000, TAG, 'get failed, code: %{public}d, message: %{public}s', err.code, err.message);
       }
       return '';
     }
@@ -66,7 +69,7 @@ export class PasswordStore {
     } catch (error) {
       const err = error as BusinessError;
       if (err.code !== asset.ErrorCode.NOT_FOUND) {
-        console.error(`PasswordStore.remove failed, code: ${err.code}, message: ${err.message}`);
+        hilog.error(0x0000, TAG, 'remove failed, code: %{public}d, message: %{public}s', err.code, err.message);
       }
     }
   }

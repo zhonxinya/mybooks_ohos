@@ -25,6 +25,10 @@ interface SseAbortHandle {
 
 export class SoNovelService {
   private static currentSseAbort: SseAbortHandle | null = null;
+  /** SSE 行缓冲上限（字符数）：防御异常/恶意服务端持续发送无换行数据导致内存无界增长 */
+  private static readonly SSE_BUFFER_MAX_CHARS: number = 1024 * 1024;
+  /** 单行长度上限：超长行直接丢弃，避免解析开销与内存占用 */
+  private static readonly SSE_LINE_MAX_CHARS: number = 64 * 1024;
 
   private static encodeKeyword(keyword: string): string {
     return encodeURIComponent(keyword);
@@ -175,10 +179,19 @@ export class SoNovelService {
           return;
         }
         buffer += SoNovelService.decodeChunk(data);
+        if (buffer.length > SoNovelService.SSE_BUFFER_MAX_CHARS) {
+          // 无换行数据堆积超限：视为异常流，中止以免内存耗尽
+          finish(new Error('进度流数据异常'));
+          return;
+        }
         let newline = buffer.indexOf('\n');
         while (newline >= 0) {
           const line = buffer.substring(0, newline).trim();
           buffer = buffer.substring(newline + 1);
+          if (line.length > SoNovelService.SSE_LINE_MAX_CHARS) {
+            newline = buffer.indexOf('\n');
+            continue;
+          }
           if (line.startsWith('data:')) {
             const payload = line.substring(5).trim();
             if (payload.length > 0) {
@@ -368,7 +381,9 @@ export class SoNovelService {
         return { status: 0, body: null, error: '搜索超时，请稍后重试' };
       }
       if (message.includes('SSL') || message.includes('certificate')) {
-        return { status: 0, body: null, error: 'SSL 证书验证失败，可在登录页开启「跳过 SSL 验证」' };
+        // 该通道走 NetworkKit，始终校验证书；「跳过 SSL 验证」仅作用于自建服务端通道，
+        // 故此处引导用户改用受信任证书或局域网 http 地址，避免误关全局校验。
+        return { status: 0, body: null, error: 'SSL 证书验证失败，请为服务端配置受信任证书，或改用 http:// 局域网地址' };
       }
       return { status: 0, body: null, error: message.length > 0 ? message : '网络请求失败' };
     } finally {

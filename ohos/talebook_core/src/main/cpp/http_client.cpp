@@ -79,6 +79,7 @@ void HttpClient::clearAuth() {
     basicAuthHeader_.clear();
 }
 void HttpClient::setCookieDir(const std::string &dir) { cookieDir_ = dir; }
+void HttpClient::setSslVerify(bool verify) { sslVerify_ = verify; }
 
 std::string HttpClient::resolveUrl(const std::string &pathOrUrl) const {
     if (pathOrUrl.rfind("http://", 0) == 0 || pathOrUrl.rfind("https://", 0) == 0) {
@@ -105,9 +106,12 @@ HttpResponse HttpClient::request(const HttpRequestOptions &options) {
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, options.readTimeoutMs);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, options.followRedirects ? 1L : 0L);
 
-    // HTTPS without SSL backend will fail clearly; callers can fall back to http URLs.
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    // 默认校验证书链与主机名；仅当用户在设置中显式开启「跳过 SSL 验证」时才关闭。
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, sslVerify_ ? 1L : 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, sslVerify_ ? 2L : 0L);
+    // 仅允许 http/https（含重定向），阻断 file:// 等本地协议被利用
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
 
     struct curl_slist *headers = nullptr;
     headers = curl_slist_append(headers, "Accept: application/json, text/plain, */*");
@@ -245,8 +249,11 @@ HttpResponse HttpClient::uploadFiles(const std::string &pathOrUrl,
     // 批量图书上传可能更大，读超时放宽到 20 分钟
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1200000L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, sslVerify_ ? 1L : 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, sslVerify_ ? 2L : 0L);
+    // 仅允许 http/https（含重定向），阻断本地协议被利用
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
 
     struct curl_slist *headers = nullptr;
     headers = curl_slist_append(headers, "Accept: application/json, text/plain, */*");
@@ -325,6 +332,11 @@ HttpResponse HttpClient::downloadToFile(const std::string &pathOrUrl, const std:
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeFileCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, sslVerify_ ? 1L : 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, sslVerify_ ? 2L : 0L);
+    // 仅允许 http/https（含重定向），阻断本地协议被利用
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
     curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progressCallback);
     curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progressData);
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);

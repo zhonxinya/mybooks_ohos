@@ -1,6 +1,7 @@
 import entry from 'libentry.so';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { taskpool } from '@kit.ArkTS';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { parseApiEnvelopeTask, parseJsonArrayTask } from './TalebookJsonParser';
 import { TalebookCoreService } from './TalebookCoreService';
@@ -99,6 +100,8 @@ export interface DownloadTask {
   talebookPayload?: TalebookDownloadPayload;
 }
 
+const TAG: string = 'TalebookService';
+
 export class TalebookService {
   private static initialized: boolean = false;
   private static downloadsCache: DownloadRecord[] | null = null;
@@ -118,7 +121,7 @@ export class TalebookService {
       entry.init(dataDir);
       TalebookService.initialized = true;
     } catch (error) {
-      console.error(`TalebookService.init failed: ${error}`);
+      hilog.error(0x0000, TAG, 'init failed: %{public}s', String(error));
     }
   }
 
@@ -305,10 +308,17 @@ export class TalebookService {
 
   static prefSet(key: string, value: string): void {
     entry.prefSet(key, value);
+    if (key === 'allow_insecure_ssl') {
+      TalebookCoreService.setSslVerify(value === 'true');
+    }
   }
 
   static prefSetBatch(values: Record<string, string>): void {
     entry.prefSetBatch(JSON.stringify(values));
+    const allowInsecure = values['allow_insecure_ssl'];
+    if (allowInsecure !== undefined) {
+      TalebookCoreService.setSslVerify(allowInsecure === 'true');
+    }
   }
 
   static getDownloads(): DownloadRecord[] {

@@ -1,5 +1,6 @@
 #include "core_engine.h"
 #include "database.h"
+#include "http_client.h"
 
 #include <napi/native_api.h>
 #include <hilog/log.h>
@@ -360,6 +361,20 @@ static napi_value SetBaseUrl(napi_env env, napi_callback_info info) {
     return CreateString(env, "true");
 }
 
+static napi_value SetSslVerify(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    bool verify = true;
+    if (argc >= 1) {
+        napi_get_value_bool(env, args[0], &verify);
+    }
+    talebook::HttpClient::instance().setSslVerify(verify);
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
 static napi_value RegisterCallback(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -442,6 +457,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"adminMemoDelete", nullptr, AdminMemoDelete, nullptr, nullptr, nullptr, napi_default,
          nullptr},
         {"setBaseUrl", nullptr, SetBaseUrl, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setSslVerify", nullptr, SetSslVerify, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"registerProgressCallback", nullptr, RegisterCallback, nullptr, nullptr, nullptr,
          napi_default, nullptr},
     };
