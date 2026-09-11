@@ -8,6 +8,10 @@ on:
     branches: ["main", "master", "dev", "develop"]
   workflow_dispatch:
 
+# 最小权限：构建仅需读取仓库内容，上传产物使用 Actions 内置机制而非 GITHUB_TOKEN
+permissions:
+  contents: read
+
 # 同一分支的重复推送取消上一次未完成的构建
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
