@@ -75,9 +75,13 @@ volumes:
 
 构建产物：`ohos/entry/build/default/outputs/default/` 下的 `entry-default-*.hap`
 
-依赖：需存在 `ohos/entry/libs/arm64-v8a/libcurl.so`（见 `third_party/README.md`）。
+依赖：需存在 `ohos/entry/libs/arm64-v8a/libcurl.so`（见 `third_party/README.md`），
+且首次构建前需在 `ohos/` 目录执行 `ohpm install --all` 生成 `oh_modules`。
 
 或在 DevEco Studio 中打开 `ohos/` 目录构建。
+
+> `ohos/build-profile.json5` 为本地工程配置（已被 `.gitignore` 排除）。若缺失，hvigor 会报
+> `0304035 Not Found`，可参照 `ohos/build-profile.ci.json5` 重建。
 
 ## 签名
 

@@ -104,16 +104,22 @@ if (-not $SkipClean) {
 
 Write-Step "Building HAP ($Mode)..."
 Push-Location $paths.Ohos
+# hvigor 会把 CMake/ninja 的 WARN 写到 stderr，避免 PowerShell 将其视为终止错误
+$previousErrorAction = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 try {
   & $paths.Hvigor assembleHap -p product=default -p "buildMode=$Mode" --no-daemon
-  if ($LASTEXITCODE -ne 0) {
-    Write-Host ""
-    Write-Host "Build failed" -ForegroundColor Red
-    exit 1
-  }
+  $buildExitCode = $LASTEXITCODE
 }
 finally {
+  $ErrorActionPreference = $previousErrorAction
   Pop-Location
+}
+
+if ($buildExitCode -ne 0) {
+  Write-Host ""
+  Write-Host "Build failed" -ForegroundColor Red
+  exit 1
 }
 
 $hapFile = Find-LatestHap -HapDir $paths.HapDir
