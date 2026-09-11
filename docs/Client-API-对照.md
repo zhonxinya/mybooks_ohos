@@ -1,10 +1,83 @@
-# 鸿蒙客户端 API 对照（MyBooks WebAPI）
+# 鸿蒙客户端 API 对照（MyBooks / Talebook WebAPI）
 
-> 对照来源：`docs/mybooks/document/WebAPI.md` + `webserver/handlers` 路由；鸿蒙端 `TalebookApi.ets` / `BookListApi.ets` / `BookUploadService.ets` / `TalebookService.ets` + C++ NAPI（`talebook_core`）。
+> 对照来源：`docs/mybooks/document/WebAPI.md` + `docs/mybooks/webserver/handlers` 路由，与上游 `docs/talebook/webserver/handlers` 路由；鸿蒙端 `TalebookApi.ets` / `BookListApi.ets` / `BookUploadService.ets` / `TalebookService.ets` + `ServerProfile.ets` + C++ NAPI（`mybooks_core`）。
 >
-> 生成日期：2026-09-06
+> 生成日期：2026-09-06（2026-09-12 补充服务端兼容层；同日补充原生核心与 talebook 专有功能 UI）
 >
 > 状态：`已实现` = 有封装；`未实现` = 服务端有、客户端未见；`非移动端优先` / `资源路径` = 通常不必在鸿蒙 JSON API 层封装。
+
+## 服务端兼容层（2026-09-12）
+
+客户端同时支持两套服务端，差异集中在 `ohos/entry/src/main/ets/services/ServerProfile.ets`（抽象类 + 两套子类），其余 ArkTS 代码只依赖抽象名，新增服务端 = 新增一个 `ServerProfile` 子类。
+
+| 服务端 | 参考源码 | 全部书籍端点 | 元数据末位键 | 有声书端点 |
+|---|---|---|---|---|
+| MyBooks（PoxenStudio/mybooks） | `docs/mybooks/` | `/api/all` | `language` | `/api/audiobooks` |
+| Talebook（talebook/talebook） | `docs/talebook/` | `/api/library` | `format` | `/api/audios` |
+
+两套服务端共用同一个 native 模块 `ohos/mybooks_core`（`libmybooks_core.so`）的 HTTP 通道：
+`talebookGet` / `talebookPost` / `talebookPostForm` / `talebookPatch` / `talebookPut` / `talebookDelete` / `talebookDeleteWithBody` / `talebookUpload*`。
+
+> `talebookPatch` 用于 talebook 回收站（`PATCH /api/admin/trash`）；`talebookPut` 用于标注更新
+> （`PUT /api/book/{id}/annotations/{aid}`）与书源编辑（`PUT /api/admin/booksource`）。
+
+**选择方式**：设置 → 服务器配置 → 服务端类型下拉；持久化于偏好键 `server_kind`，启动时由 `TalebookService.applyLocalConfig()` 恢复为当前 `ServerProfile`。
+
+### 已适配差异
+
+| 差异项 | 处理方式 |
+|---|---|
+| 列表分页参数 | 两端 ListHandler 系只识别 `start`（偏移）+ `size`（每页），统一由 `ServerProfile.listQuery` 生成 |
+| 全部书籍列表 | `ServerProfile.allBooksPath`（/api/all ↔ /api/library） |
+| 管理端书籍列表 | `adminBooksPath` + `adminBooksQuery`（mybooks start/size；talebook page/num） |
+| 元数据键 | `metaTypes` + `resolveMetaType`（language ↔ format） |
+| 有声书列表 | `audiobooksPath` |
+| 回收站 | `trashBooksPath` / `trashRestore` / `trashPurge`（mybooks：POST + `book_ids`；talebook：PATCH/DELETE `/api/admin/trash` + `idlist` + `confirm`） |
+| 系统日志 | `adminSyslogPath`（`/api/admin/syslog` ↔ `/api/admin/log`） |
+| 能力门控 | `ServerFeature` 枚举 + `supports()`；页面入口按能力显隐（如 talebook 下不显示工具箱/资源导航/评论审核/管理概览/求书期望/我的留言，实体书列表给出不支持提示） |
+
+### 功能 UI 覆盖（2026-09-12 第二轮）
+
+本轮为「原生核心已封装但无页面」与「talebook 上游专有能力」补齐 UI。新增页面均按 `ServerFeature` 门控，
+不支持的服务端整页显示 `EmptyState` 且不发起请求。
+
+| 功能组 | 服务端 | 页面（路由） | API 服务文件 |
+|---|---|---|---|
+| 数据同步 | mybooks | `SyncPage` | `SyncApi` |
+| 批量添加实体书 | mybooks | `AdminBatchAddPage` | `AdminImportApi` |
+| 有声书导入 | mybooks | `AdminAudioImportPage` | `AdminImportApi` |
+| TXT 读取/解析/路径/位置 | mybooks | `TxtBookPage` | `AdminImportApi` |
+| 作者/出版商元数据 | mybooks | `AuthorMetaPage` | `AuthorMetaApi` |
+| 书内标注（全部 / 单书） | talebook | `AnnotationsPage`、`BookAnnotationsPage` | `AnnotationApi` |
+| 主题 | talebook | `ThemesPage` | `ThemeApi` |
+| 人机验证 | talebook | （登录/注册/重置表单内嵌） | `CaptchaApi` + `components/CaptchaField` |
+| 书架 | talebook | `ShelfPage` | `ShelfApi` |
+| 阅读进度/可见范围/媒体类型 | talebook | `ReadingProgressPage` | `ShelfApi` |
+| 在线书库 | talebook | `OnlineLibraryPage` | `ShelfApi` |
+| 漫画阅读 | talebook | `ComicReaderPage` | `ComicApi` |
+| 网络书库 | talebook | `NetworkLibraryPage`、`NetworkBookDetailPage` | `NetworkLibraryApi` |
+| 书源管理 | talebook | `BookSourceManagePage` | `BookSourceApi` |
+| 插件中心 | talebook | `AdminPluginsPage` | `AdminPluginsApi` |
+| 扫描与导入 | talebook | `AdminScanPage` | `AdminScanApi` |
+| OPDS 源 | talebook | `AdminOpdsPage` | `AdminOpdsApi` |
+| 服务端维护 | talebook | `AdminMaintenancePage` | `AdminMaintenanceApi` |
+
+入口位置：`数据同步/网络书库/我的书架/在线书库` 与各管理项在「附加服务」页；`服务端主题` 与 talebook 管理端扩展在「设置」页；
+`书内标注/TXT 工具/阅读进度与属性/漫画阅读` 在书籍详情的「更多」面板；`我的标注` 在个人中心。
+
+### 尚未适配
+
+- talebook 管理端 OPDS 源的**增/改/删**：上游为 `POST/PUT/DELETE /api/admin/opds/sources`，本轮仅实现列表浏览（`PUT` 通道已具备，如需要可补）。
+- talebook 极验（geetest）型验证码：需浏览器 JS SDK，`CaptchaApi.isEnabled` 仅对 `image` 型返回 true。
+- 在线书库「连载状态」写接口 `/api/network/status`（仅过渡命名空间存在），未封装。
+- 上游 `/api/annotations`（Delete）为按 `source_*` 清理外部来源，非通用删除，未实现。
+
+> ⚠️ 以上 talebook 分支均**未经运行期验证**（当前环境无可用的 talebook 服务端实例与 HarmonyOS 设备，
+> 仅完成编译级验证）；mybooks 分支行为保持既有实现。
+>
+> 标注更新与书源编辑已改用 native `talebookPut` 直发上游 `PUT` 端点（不再走等价绕过实现）。
+> 上游 `/api/author/{name}/update`、`/api/publisher/{name}/update` 的 handler 调用了不存在的 `do_book_update`，
+> 可能返回 HTTP 500（上游实现缺陷，非客户端问题）。
 
 ## 总览
 
