@@ -132,8 +132,8 @@ struct ExtraServicesPage {
 
       Column() {
         SettingCell({
-          title: '服务器配置',
-          subtitle: '配置书库地址与服务端类型',
+          title: '账号与服务器',
+          subtitle: '多账号管理：新增服务器、切换账号',
           showChevron: true,
           onTap: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
         });

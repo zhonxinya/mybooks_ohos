@@ -61,7 +61,8 @@ export class PasswordStore {
     }
   }
 
-  private static remove(alias: string): void {
+  /** 删除关键资产（账号被删除时需同步清理其密码）。 */
+  static remove(alias: string): void {
     const query: asset.AssetMap = new Map();
     query.set(asset.Tag.ALIAS, PasswordStore.stringToArray(alias));
     try {

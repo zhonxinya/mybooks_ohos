@@ -100,12 +100,32 @@ volumes:
 
 ## 配置
 
-1. 设置 → 附加服务 → 服务器配置：选择**服务端类型**（MyBooks / Talebook）并填写书库地址与账号
-2. 设置 → 附加服务 → 配置 SoNovel 服务器地址（可选）
+1. 设置 → 账号与服务器：**新增账号**（选择服务端类型 MyBooks / Talebook，填写书库地址与用户名密码）。
+   可保存多个账号，也可为同一服务器添加不同用户；列表内可**切换 / 编辑 / 删除**。
+2. 设置 → 附加服务 → 配置 SoNovel 服务器地址（可选，全局设置不随账号切换）
 3. 书架页查看本地下载书籍，点击阅读打开 Reader Kit
 
-客户端同时支持两套服务端，差异由 `ohos/entry/src/main/ets/services/ServerProfile.ets` 统一承载；
-切换服务端类型后需重新登录。详见 [API 对照文档](docs/Client-API-对照.md#服务端兼容层2026-09-12)。
+客户端同时支持两套服务端（差异由 `ohos/entry/src/main/ets/services/ServerProfile.ets` 统一承载）
+以及**多账号**（由 `ohos/entry/src/main/ets/services/AccountManager.ets` 承载）。
+
+### 多账号的数据隔离
+
+切换账号后会**自动重新登录**并重建整个界面（重启导航栈），使各页面按新账号重新加载。
+
+| 数据 | 是否随账号隔离 | 存放位置 |
+|---|---|---|
+| 登录会话（Cookie） | 是 | `<filesDir>/accounts/<id>/.cookies/` |
+| 服务端地址、用户名、密码 | 是 | 身份根 secure/Asset Store（密码按账号独立别名） |
+| 下载书籍文件、下载记录、阅读历史、书签 | 是 | `<filesDir>/accounts/<id>/`（默认账号沿用 `<filesDir>/`） |
+| 账号列表、当前账号 | 否（全局） | `<filesDir>/preferences.json` |
+| 主题、阅读器设置、SoNovel 地址 | 否（全局） | `<filesDir>/preferences.json` |
+| 已登录昵称与头像缓存 | 是 | 身份根 secure |
+
+> 升级自早期单账号版本时，原配置会自动成为第一个账号（默认账号），
+> 其数据目录就是原来的 `<filesDir>`，因此**不需要搬迁任何文件**，历史下载与阅读记录保持不变。
+> 删除账号不会删除其在磁盘上的数据目录。
+
+详见 [API 对照文档](docs/Client-API-对照.md#服务端兼容层2026-09-12)。
 
 ## 目录
 

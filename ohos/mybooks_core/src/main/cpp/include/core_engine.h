@@ -90,6 +90,11 @@ class CoreEngine {
 public:
     static CoreEngine &instance();
     bool init(const std::string &filesDir, const std::string &prefsDir = "");
+    /**
+     * 切换账号身份根目录：数据库（凭据/下载记录/历史/书签）、会话 Cookie 与下载目录一并切换，
+     * 同时更新 filesDir() 以便后续下载写入该账号目录。
+     */
+    void setIdentityDir(const std::string &dir);
     bool isInitialized() const { return initialized_; }
     const std::string &filesDir() const { return filesDir_; }
 

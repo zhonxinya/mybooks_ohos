@@ -34,6 +34,11 @@ export class NativeCore {
     return ok;
   }
 
+  /** 切换账号身份根目录（数据库/凭据/下载/历史/书签 + Cookie）。 */
+  static setIdentityDir(dir: string): void {
+    mybooksCore.setIdentityDir(dir);
+  }
+
   static isInitialized(): boolean {
     return NativeCore.initialized;
   }

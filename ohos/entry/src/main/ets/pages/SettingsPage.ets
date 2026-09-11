@@ -7,6 +7,7 @@ import { TalebookService } from '../services/TalebookService';
 import { NotificationService } from '../services/NotificationService';
 import { TalebookApi, LibraryStatsResponse, AdminRunningTasksResponse } from '../services/TalebookApi';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { AccountManager } from '../services/AccountManager';
 
 @Component
 export struct SettingsPage {
@@ -35,6 +36,16 @@ export struct SettingsPage {
   private refreshAccount(): void {
     const saved = TalebookService.getSavedUserProfile();
     this.isLoggedIn = saved !== null && TalebookService.hasAuthCredentials();
+  }
+
+  /** 当前账号摘要：账号数与当前账号名，便于在设置页一眼看出正在用哪个账号。 */
+  private accountSummary(): string {
+    const count = AccountManager.list().length;
+    const active = AccountManager.activeDisplayName();
+    if (count === 0) {
+      return '新增服务器与账号';
+    }
+    return active.length > 0 ? `共 ${count} 个账号 · 当前 ${active}` : `共 ${count} 个账号`;
   }
 
   private async loadAdminOverview(): Promise<void> {
@@ -192,8 +203,8 @@ export struct SettingsPage {
             .width('100%');
           Column() {
             SettingCell({
-              title: 'Talebook 服务器',
-              subtitle: '配置书库地址',
+              title: '账号与服务器',
+              subtitle: this.accountSummary(),
               showChevron: true,
               onTap: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
             });
@@ -203,6 +214,13 @@ export struct SettingsPage {
               subtitle: '配置 SoNovel 地址',
               showChevron: true,
               onTap: () => router.pushUrl({ url: 'pages/SoNovelConfigPage' }),
+            });
+            Divider().color($r('app.color.divider')).strokeWidth(0.5);
+            SettingCell({
+              title: '附加服务',
+              subtitle: '扩展功能入口：下载管理、网络书库、我的书架等',
+              showChevron: true,
+              onTap: () => router.pushUrl({ url: 'pages/ExtraServicesPage' }),
             });
           }
           .width('100%')

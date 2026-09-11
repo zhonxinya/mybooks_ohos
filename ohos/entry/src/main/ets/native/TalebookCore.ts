@@ -1,7 +1,12 @@
 declare namespace entry {
   function init(dataDir: string): void;
+  /** 切换账号身份根（凭据/下载记录/历史/书签 + Cookie）；全局偏好不受影响。 */
+  function setIdentityDir(identityDir: string): void;
   function setBaseUrl(service: string, url: string): void;
   function secureGet(key: string): string;
+  /** 全局凭据读写：不随账号身份根变化（SoNovel 等全局服务配置）。 */
+  function secureGetGlobal(key: string): string;
+  function secureSetGlobal(key: string, value: string): void;
   function secureSet(key: string, value: string): void;
   function prefGet(key: string): string;
   function prefSet(key: string, value: string): void;

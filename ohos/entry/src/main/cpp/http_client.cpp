@@ -1,6 +1,7 @@
 #include "http_client.h"
 
 #include "curl/curl.h"
+#include "path_util.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -98,14 +99,23 @@ bool ensureParentDir(const std::string &filePath)
     if (pos == std::string::npos) {
         return true;
     }
-    const std::string dir = filePath.substr(0, pos);
-    return mkdir(dir.c_str(), 0755) == 0 || errno == EEXIST;
+    // 目标目录可能是多层（如账号书籍目录），单层 mkdir 会失败
+    return makeDirs(filePath.substr(0, pos));
 }
 
 std::string cookiePath(const std::string &cookieDir)
 {
     return cookieDir.empty() ? "" : cookieDir + "/cookies.txt";
 }
+
+/** URL 是否已具备可请求的绝对形式；缺协议头说明服务器地址未配置。 */
+bool hasUsableBaseUrl(const std::string &url)
+{
+    return url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0;
+}
+
+/** 服务器地址未配置时的提示（取代 curl 晦涩的 malformed URL 报错）。 */
+const char *kMissingBaseUrlError = "未配置服务器地址，请在「账号与服务器」中填写";
 
 std::string formatCurlError(CURLcode code, const char *message)
 {
@@ -127,6 +137,10 @@ HttpResponse performCurlRequest(const std::string &url, const std::string &metho
                                 long connectTimeoutSec = 5, long timeoutSec = 10)
 {
     HttpResponse result;
+    if (!hasUsableBaseUrl(url)) {
+        result.error = kMissingBaseUrlError;
+        return result;
+    }
     CURL *curl = acquireEasyHandle();
     if (curl == nullptr) {
         result.error = "curl_easy_init failed";
@@ -200,6 +214,10 @@ HttpResponse performCurlDownload(const std::string &url, const std::string &dest
                                  long connectTimeoutSec, long timeoutSec)
 {
     HttpResponse result;
+    if (!hasUsableBaseUrl(url)) {
+        result.error = kMissingBaseUrlError;
+        return result;
+    }
     if (!ensureParentDir(destPath)) {
         result.error = "无法创建下载目录";
         return result;
@@ -282,6 +300,10 @@ void HttpClient::setBaseUrl(const std::string &service, const std::string &url)
     while (!normalized.empty() && normalized.back() == '/') {
         normalized.pop_back();
     }
+    // 允许用户只填 host:port；curl 需要协议头，缺失时补 http://
+    if (!normalized.empty() && normalized.find("://") == std::string::npos) {
+        normalized = "http://" + normalized;
+    }
     if (service == "sonovel") {
         sonovelBase_ = normalized;
     } else {
@@ -299,7 +321,7 @@ void HttpClient::setCookieDir(const std::string &dir)
     cookieDir_ = dir;
     if (!cookieDir_.empty()) {
         // 会话 Cookie 属敏感数据，目录仅限应用自身访问
-        mkdir(cookieDir_.c_str(), 0700);
+        makeDirs(cookieDir_, 0700);
     }
     loadCookies();
 }

@@ -3,6 +3,7 @@
 #include "http_client.h"
 #include "download_engine.h"
 #include "json_util.h"
+#include "path_util.h"
 #include <sstream>
 #include <ctime>
 #include <cstdio>
@@ -28,7 +29,7 @@ bool CoreEngine::init(const std::string &filesDir, const std::string &prefsDir) 
     if (!Database::instance().open(filesDir)) return false;
     const std::string cookieDir = filesDir + "/.cookies";
     // 会话 Cookie 属敏感数据，目录仅限应用自身访问
-    mkdir(cookieDir.c_str(), 0700);
+    makeDirs(cookieDir, 0700);
     HttpClient::instance().setCookieDir(cookieDir);
     if (!prefsDir.empty()) {
         Database::instance().migrateFromLegacyPreferences(prefsDir);
@@ -40,6 +41,21 @@ bool CoreEngine::init(const std::string &filesDir, const std::string &prefsDir) 
 ApiService &ApiService::instance() {
     static ApiService service;
     return service;
+}
+
+void CoreEngine::setIdentityDir(const std::string &dir) {
+    if (!initialized_ || dir.empty()) return;
+    // sqlite 不会创建父目录：账号目录（accounts/<id>，多层）必须递归先建好，
+    // 否则 mkdir 因父目录不存在失败、切库随之失败，会静默沿用上一个账号的数据
+    makeDirs(dir);
+    const std::string cookieDir = dir + "/.cookies";
+    // 会话 Cookie 属敏感数据，目录仅限应用自身访问
+    makeDirs(cookieDir, 0700);
+    if (!Database::instance().switchTo(dir)) return;
+    filesDir_ = dir;
+    HttpClient::instance().setCookieDir(cookieDir);
+    // 切换后立刻用新库里的地址刷新 HttpClient，避免请求打到上一个账号（或地址为空）
+    ApiService::instance().ensureTalebookBaseUrl();
 }
 
 std::string ApiService::wrapOk(const std::string &dataJson) {

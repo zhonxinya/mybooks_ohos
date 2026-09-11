@@ -13,6 +13,11 @@ public:
 
     bool open(const std::string &filesDir);
     void close();
+    /**
+     * 切换数据所在目录（关闭当前连接后重新打开），用于多账号身份数据隔离：
+     * KV / 凭据 / 下载记录 / 阅读历史 / 书签 / 阅读统计 均位于该目录下的 talebook.db。
+     */
+    bool switchTo(const std::string &filesDir);
 
     // KV store
     std::optional<std::string> kvGet(const std::string &key);

@@ -1,4 +1,6 @@
 export declare function initCore(filesDir: string, prefsDir?: string): boolean;
+/** 切换账号身份根（数据库/凭据/下载/历史/书签 + Cookie）。 */
+export declare function setIdentityDir(identityDir: string): void;
 
 export declare function talebookGet(path: string): Promise<string>;
 export declare function talebookPost(input: string): Promise<string>;

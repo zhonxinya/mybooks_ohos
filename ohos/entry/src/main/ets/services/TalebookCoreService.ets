@@ -22,6 +22,11 @@ export class TalebookCoreService {
     });
   }
 
+  /** 切换账号身份根（数据库/凭据/下载/历史/书签 + Cookie）。 */
+  static setIdentityDir(dir: string): void {
+    TalebookCoreService.getInstance().setIdentityDir(dir);
+  }
+
   static ensureInitialized(context: common.Context): Promise<boolean> {
     return TalebookCoreService.getInstance().init(context);
   }
@@ -239,10 +244,14 @@ export class TalebookCoreService {
     return ok;
   }
 
+  /** 切换账号身份根（数据库/凭据/下载/历史/书签 + Cookie）。 */
+  setIdentityDir(dir: string): void {
+    NativeCore.setIdentityDir(dir);
+  }
+
   talebookGet(path: string): Promise<string> {
     return NativeCore.talebookGet(path);
   }
-
   talebookPost(path: string, body: string): Promise<string> {
     return NativeCore.talebookPost(path, body);
   }

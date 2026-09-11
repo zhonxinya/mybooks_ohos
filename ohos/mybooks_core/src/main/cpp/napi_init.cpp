@@ -49,6 +49,17 @@ napi_value InitCore(napi_env env, napi_callback_info info) {
     return result;
 }
 
+napi_value SetIdentityDir(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    const std::string dir = argc >= 1 ? GetString(env, args[0]) : "";
+    mybooks::CoreEngine::instance().setIdentityDir(dir);
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
 struct AsyncContext {
     napi_env env = nullptr;
     napi_deferred deferred = nullptr;
@@ -404,6 +415,8 @@ static napi_value RegisterCallback(napi_env env, napi_callback_info info) {
 static napi_value Init(napi_env env, napi_value exports) {
     napi_property_descriptor desc[] = {
         {"initCore", nullptr, InitCore, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setIdentityDir", nullptr, SetIdentityDir, nullptr, nullptr, nullptr, napi_default,
+         nullptr},
         {"talebookGet", nullptr, TalebookGet, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"talebookPost", nullptr, TalebookPost, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"talebookPostForm", nullptr, TalebookPostForm, nullptr, nullptr, nullptr, napi_default,

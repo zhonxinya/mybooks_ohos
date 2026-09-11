@@ -5,6 +5,7 @@ import { PageScaffold, PrimaryButton, SecondaryButton, LoadingState, SettingCell
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, ApiMessageResult, apiErrorMessage } from '../services/TalebookApi';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { AccountManager } from '../services/AccountManager';
 import { BookListApi } from '../services/BookListApi';
 import { BookListQuickItem, booklistColorHex, parseBookListQuickItems } from '../models/BookListModels';
 import { BookReviewItem, BookSocialStats } from '../models/BookReviewModels';
@@ -349,7 +350,7 @@ struct BookDetailPage {
       return;
     }
     const context = getContext(this) as common.UIAbilityContext;
-    const booksDir = `${context.filesDir}/books`;
+    const booksDir = AccountManager.booksDir(context.filesDir);
     try {
       if (!fs.accessSync(booksDir)) {
         fs.mkdirSync(booksDir, true);

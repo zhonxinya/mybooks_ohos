@@ -32,6 +32,19 @@ void Database::close() {
     }
 }
 
+bool Database::switchTo(const std::string &filesDir) {
+    if (filesDir.empty()) {
+        return false;
+    }
+    if (db_ != nullptr && filesDir == filesDir_) {
+        return true;
+    }
+    // open() 在 db_ 非空时会短路，因此必须先关闭再重开
+    close();
+    filesDir_.clear();
+    return open(filesDir);
+}
+
 bool Database::execSql(const std::string &sql) {
     if (!db_) return false;
     char *err = nullptr;

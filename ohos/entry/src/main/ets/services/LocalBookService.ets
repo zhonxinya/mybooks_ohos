@@ -2,6 +2,7 @@ import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
 import { DownloadRecord, TalebookService } from './TalebookService';
+import { AccountManager } from './AccountManager';
 
 const SUPPORTED_SUFFIXES: string[] = ['.epub', '.txt', '.mobi', '.azw', '.azw3'];
 const MAX_FILE_SIZE: number = 300 * 1024 * 1024;
@@ -35,7 +36,7 @@ export class LocalBookService {
       throw new Error('文件超过 300MB');
     }
 
-    const booksDir = `${filesDir}/books`;
+    const booksDir = AccountManager.booksDir(filesDir);
     LocalBookService.ensureDir(booksDir);
 
     const bookId = `local_${util.generateRandomUUID(true)}`;

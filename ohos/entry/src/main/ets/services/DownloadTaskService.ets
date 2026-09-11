@@ -5,6 +5,8 @@ import {
   TalebookDownloadPayload, TalebookService,
 } from './TalebookService';
 import { SoNovelDownloadProgress, SoNovelService } from './SoNovelService';
+import { AccountStore } from './AccountStore';
+import { ACCOUNT_LEGACY_ID, isLegacyAccount } from '../models/AccountModels';
 import { ErrorFormat } from '../utils/ErrorFormat';
 
 const TASKS_KEY: string = 'download_tasks';
@@ -227,6 +229,7 @@ export class DownloadTaskService {
       message: '等待中',
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      accountId: AccountStore.activeId(),
       talebookPayload: payload,
     };
     tasks.unshift(task);
@@ -261,7 +264,39 @@ export class DownloadTaskService {
 
   static processQueue(): void {
     DownloadTaskService.recoverStaleTasks();
+    DownloadTaskService.failForeignAccountTasks();
     DownloadTaskService.pumpWorkers();
+  }
+
+  /**
+   * 把不属于当前账号的待下载 talebook 任务标记为失败。
+   *
+   * 任务队列存在全局偏好中（不随账号隔离），而 talebook 下载走当前账号的服务器地址；
+   * 若切换账号后仍执行旧任务，会向错误的服务器请求同 id 的书。SoNovel 任务不受影响（其服务为全局配置）。
+   * 空 accountId 视为历史默认账号（升级前入队的任务）。
+   */
+  private static failForeignAccountTasks(): void {
+    const rawActive = AccountStore.activeId();
+    const current = isLegacyAccount(rawActive) ? ACCOUNT_LEGACY_ID : rawActive;
+    const tasks = DownloadTaskService.getTasks();
+    let changed = false;
+    for (const task of tasks) {
+      if (task.status !== 'pending' || task.kind !== 'talebook') {
+        continue;
+      }
+      const rawOwner = task.accountId ?? '';
+      const owner = isLegacyAccount(rawOwner) ? ACCOUNT_LEGACY_ID : rawOwner;
+      if (owner !== current) {
+        task.status = 'failed';
+        task.error = '已切换账号，请重新下载';
+        task.message = '账号已切换';
+        task.updatedAt = Date.now();
+        changed = true;
+      }
+    }
+    if (changed) {
+      DownloadTaskService.saveTasks(tasks, true, true);
+    }
   }
 
   private static pumpWorkers(): void {

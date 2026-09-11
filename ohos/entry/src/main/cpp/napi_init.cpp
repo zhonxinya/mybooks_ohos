@@ -115,12 +115,49 @@ napi_value SetBaseUrl(napi_env env, napi_callback_info info)
     return undefined;
 }
 
+napi_value SetIdentityDir(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 1) {
+        napi_throw_error(env, nullptr, "identityDir required");
+        return nullptr;
+    }
+    talebook::TalebookCore::instance().setIdentityDir(GetStringArg(env, args[0]));
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
 napi_value SecureGet(napi_env env, napi_callback_info info)
 {
     size_t argc = 1;
     napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     return MakeString(env, talebook::TalebookCore::instance().store().readSecure(GetStringArg(env, args[0]), ""));
+}
+
+/** 全局凭据读取（不随账号身份根变化），用于 SoNovel 等全局服务配置。 */
+napi_value SecureGetGlobal(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    return MakeString(env, talebook::TalebookCore::instance().store().readSecureGlobal(GetStringArg(env, args[0]), ""));
+}
+
+/** 全局凭据写入（不随账号身份根变化）。 */
+napi_value SecureSetGlobal(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    talebook::TalebookCore::instance().store().writeSecureGlobal(GetStringArg(env, args[0]),
+                                                                 GetStringArg(env, args[1]));
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
 }
 
 napi_value SecureSet(napi_env env, napi_callback_info info)
@@ -689,7 +726,12 @@ napi_value RegisterFn(napi_env env, napi_value exports)
     napi_property_descriptor desc[] = {
         {"init", nullptr, Init, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setBaseUrl", nullptr, SetBaseUrl, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setIdentityDir", nullptr, SetIdentityDir, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"secureGet", nullptr, SecureGet, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"secureGetGlobal", nullptr, SecureGetGlobal, nullptr, nullptr, nullptr, napi_default,
+         nullptr},
+        {"secureSetGlobal", nullptr, SecureSetGlobal, nullptr, nullptr, nullptr, napi_default,
+         nullptr},
         {"secureSet", nullptr, SecureSet, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"prefGet", nullptr, PrefGet, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"prefSet", nullptr, PrefSet, nullptr, nullptr, nullptr, napi_default, nullptr},

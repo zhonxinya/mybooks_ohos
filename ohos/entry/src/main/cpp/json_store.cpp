@@ -1,6 +1,7 @@
 #include "json_store.h"
 
 #include "cjson/cJSON.h"
+#include "path_util.h"
 
 #include <cstdio>
 #include <fstream>
@@ -89,16 +90,27 @@ bool writeStringField(cJSON *object, const std::string &key, const std::string &
 
 } // namespace
 
-JsonStore::JsonStore(std::string rootDir) : rootDir_(std::move(rootDir))
+JsonStore::JsonStore(std::string rootDir) : rootDir_(std::move(rootDir)), identityDir_(rootDir_)
 {
-    mkdir(rootDir_.c_str(), 0755);
+    makeDirs(rootDir_);
     // secure 目录保存登录凭据等敏感数据，仅限应用自身访问
-    mkdir((rootDir_ + "/secure").c_str(), 0700);
+    makeDirs(rootDir_ + "/secure", 0700);
+}
+
+void JsonStore::setIdentityDir(const std::string &dir)
+{
+    // 空目录回退全局根，保证单账号场景行为不变
+    identityDir_ = dir.empty() ? rootDir_ : dir;
+    // 账号身份根是多层目录（accounts/<id>），必须递归创建：
+    // 单层 mkdir 会因父目录不存在而失败，导致凭据/下载记录/历史/书签全部静默无法读写
+    makeDirs(identityDir_);
+    // secure 目录保存登录凭据等敏感数据，仅限应用自身访问
+    makeDirs(identityDir_ + "/secure", 0700);
 }
 
 std::string JsonStore::pathFor(const std::string &name) const
 {
-    return rootDir_ + "/" + name + ".json";
+    return identityDir_ + "/" + name + ".json";
 }
 
 std::string JsonStore::prefPath() const
@@ -107,6 +119,11 @@ std::string JsonStore::prefPath() const
 }
 
 std::string JsonStore::securePath() const
+{
+    return identityDir_ + "/secure/storage.json";
+}
+
+std::string JsonStore::globalSecurePath() const
 {
     return rootDir_ + "/secure/storage.json";
 }
@@ -175,6 +192,23 @@ std::string JsonStore::readSecure(const std::string &key, const std::string &def
     const std::string value = readStringField(object, key, defaultValue);
     cJSON_Delete(object);
     return value;
+}
+
+std::string JsonStore::readSecureGlobal(const std::string &key, const std::string &defaultValue) const
+{
+    cJSON *object = loadObjectFromFile(globalSecurePath());
+    const std::string value = readStringField(object, key, defaultValue);
+    cJSON_Delete(object);
+    return value;
+}
+
+bool JsonStore::writeSecureGlobal(const std::string &key, const std::string &value) const
+{
+    cJSON *object = loadObjectFromFile(globalSecurePath());
+    const bool ok = writeStringField(object, key, value);
+    const bool saved = ok && saveObjectToFile(globalSecurePath(), object);
+    cJSON_Delete(object);
+    return saved;
 }
 
 bool JsonStore::writeSecure(const std::string &key, const std::string &value) const

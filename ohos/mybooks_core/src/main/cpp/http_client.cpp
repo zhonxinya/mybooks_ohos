@@ -65,9 +65,21 @@ HttpClient &HttpClient::instance() {
     return client;
 }
 
+/** URL 是否已具备可请求的绝对形式；缺协议头说明服务器地址未配置。 */
+static bool hasUsableBaseUrl(const std::string &url) {
+    return url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0;
+}
+
+/** 服务器地址未配置时的提示（取代 curl 晦涩的 malformed URL 报错）。 */
+static const char *kMissingBaseUrlError = "未配置服务器地址，请在「账号与服务器」中填写";
+
 void HttpClient::setBaseUrl(const std::string &url) {
     baseUrl_ = url;
     while (!baseUrl_.empty() && baseUrl_.back() == '/') baseUrl_.pop_back();
+    // 允许用户只填 host:port；curl 需要协议头，缺失时补 http://
+    if (!baseUrl_.empty() && baseUrl_.find("://") == std::string::npos) {
+        baseUrl_ = "http://" + baseUrl_;
+    }
 }
 
 void HttpClient::setBearerToken(const std::string &token) { bearerToken_ = token; }
@@ -99,6 +111,11 @@ HttpResponse HttpClient::request(const HttpRequestOptions &options) {
     }
 
     std::string url = resolveUrl(options.url);
+    if (!hasUsableBaseUrl(url)) {
+        curl_easy_cleanup(curl);
+        response.error = kMissingBaseUrlError;
+        return response;
+    }
     std::string responseBody;
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, options.method.c_str());
@@ -227,6 +244,11 @@ HttpResponse HttpClient::uploadFiles(const std::string &pathOrUrl,
     }
 
     std::string url = resolveUrl(pathOrUrl);
+    if (!hasUsableBaseUrl(url)) {
+        curl_easy_cleanup(curl);
+        response.error = kMissingBaseUrlError;
+        return response;
+    }
     std::string responseBody;
     curl_mime *mime = curl_mime_init(curl);
     for (const auto &file : files) {
@@ -320,6 +342,11 @@ HttpResponse HttpClient::downloadToFile(const std::string &pathOrUrl, const std:
     }
 
     std::string url = resolveUrl(pathOrUrl);
+    if (!hasUsableBaseUrl(url)) {
+        curl_easy_cleanup(curl);
+        response.error = kMissingBaseUrlError;
+        return response;
+    }
     FILE *file = std::fopen(savePath.c_str(), "wb");
     if (!file) {
         response.error = "cannot open save path";
