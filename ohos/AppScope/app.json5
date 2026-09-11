@@ -1,7 +1,7 @@
 {
   "app": {
     "bundleName": "com.zhonxinya.talebook",
-    "vendor": "example",
+    "vendor": "zhonxinya",
     "versionCode": 1000001,
     "versionName": "1.0.1",
     "icon": "$media:app_icon",
