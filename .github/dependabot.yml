@@ -1,0 +1,25 @@
+# Dependabot 配置
+#
+# 本仓库的 `ohos/third_party/` 是原样引入的上游第三方源码（cJSON / libcurl / mbedTLS /
+# SQLite / miniz，见 ohos/third_party/README.md），其中的 Python 依赖清单不属于本项目的依赖。
+#
+# 具体问题：`ohos/third_party/mbedtls/docs/requirements.txt` 是上游用 pip-compile 生成的
+# 锁定文件，头部注释声明了 Python 3.8，而 Dependabot 仅支持 3.10+，导致依赖图提交作业
+# （Graph Update: pip）每次在该目录变更时必然失败：
+#
+#     Dependabot detected the following Python requirement for your project: '3.8.*'
+#     tool_version_not_supported { detected-version: 3.8.*, supported: 3.10.* ... }
+#
+# 因此按官方 `exclude-paths` 选项（文档明确用途之一即“vendored code”）把该目录排除在
+# 扫描之外。vendored 依赖的升级由人工整体替换上游版本完成，不由 Dependabot 提交 PR，
+# 故用 `open-pull-requests-limit: 0` 关闭版本更新 PR。
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    # 本项目不维护 vendored 依赖的版本更新 PR
+    open-pull-requests-limit: 0
+    exclude-paths:
+      - "ohos/third_party"
