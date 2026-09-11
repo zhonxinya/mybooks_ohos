@@ -562,16 +562,32 @@ export class TalebookApi {
     const raw = await TalebookCoreService.talebookGet('/api/user/info');
     return JSON.parse(raw) as UserInfoResponse;
   }
-  /** 访问码状态（GET /api/access）。err=free 表示无需/已通过，ok 表示仍需输入。 */
+  /** 访问码状态（mybooks `GET /api/access`；talebook `GET /api/welcome`）。
+   * err=free 表示无需/已通过，ok 表示仍需输入。 */
   static async getAccessStatus(): Promise<AccessStatusResponse> {
-    const raw = await TalebookCoreService.talebookGet('/api/access');
+    const raw = await TalebookCoreService.talebookGet(ServerRegistry.profile().accessCodePath);
     return JSON.parse(raw) as AccessStatusResponse;
   }
 
-  /** 提交访问码（POST /api/access，JSON body: invite_code）。 */
-  static async submitAccessCode(inviteCode: string): Promise<ApiMessageResult> {
+  /**
+   * 提交访问码。
+   *
+   * mybooks 读 JSON body（`{invite_code}`）；talebook 用 `get_argument("invite_code")` 取值，
+   * 必须走 form 编码，并在启用验证码时附带 `captcha_code`（场景 `welcome`）。
+   */
+  static async submitAccessCode(inviteCode: string, captchaCode: string = ''):
+    Promise<ApiMessageResult> {
+    const profile = ServerRegistry.profile();
+    if (profile.accessCodeSubmitForm) {
+      let form = `invite_code=${encodeURIComponent(inviteCode)}`;
+      if (captchaCode.length > 0) {
+        form += `&captcha_code=${encodeURIComponent(captchaCode)}`;
+      }
+      const raw = await TalebookCoreService.talebookPostForm(profile.accessCodePath, form);
+      return JSON.parse(raw) as ApiMessageResult;
+    }
     const body: Record<string, Object> = { 'invite_code': inviteCode };
-    const raw = await TalebookCoreService.talebookPost('/api/access', JSON.stringify(body));
+    const raw = await TalebookCoreService.talebookPost(profile.accessCodePath, JSON.stringify(body));
     return JSON.parse(raw) as ApiMessageResult;
   }
 
@@ -1596,7 +1612,8 @@ export class TalebookApi {
 
   static async deleteAdminBooks(idlist: number[]): Promise<ApiMessageResult> {
     const body: Record<string, Object> = { 'idlist': idlist as Object };
-    const raw = await TalebookCoreService.talebookPost('/api/admin/books/delete', JSON.stringify(body));
+    const raw = await TalebookCoreService.talebookPost(
+      ServerRegistry.profile().adminBookDeletePath, JSON.stringify(body));
     return JSON.parse(raw) as ApiMessageResult;
   }
 
@@ -1956,9 +1973,9 @@ export class TalebookApi {
     return fetchStateList('/api/read-done', page, size);
   }
 
-  /** 私有书籍（/api/soledbooks，需登录）。 */
-  static async getSoledBooks(page: number, size: number): Promise<BookItem[]> {
-    return fetchStateList('/api/soledbooks', page, size);
+  /** 私有范围书籍（mybooks `/api/soledbooks`；talebook `/api/scopedbooks`，均需登录）。 */
+  static async getScopedBooks(page: number, size: number): Promise<BookItem[]> {
+    return fetchStateList(ServerRegistry.profile().scopedBooksPath, page, size);
   }
 
   /** 保存个人设置（POST /api/user/update）。 */

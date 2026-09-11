@@ -45,7 +45,7 @@ struct ReadingBooksPage {
       return ServerRegistry.supports(ServerFeature.BOOK_WANTS);
     }
     if (item.value === 4) {
-      return ServerRegistry.supports(ServerFeature.BOOK_SET_SOLE);
+      return ServerRegistry.supports(ServerFeature.SCOPED_BOOKS);
     }
     return true;
   });
@@ -86,7 +86,7 @@ struct ReadingBooksPage {
       } else if (this.activeTab === 3) {
         fetched = this.mapApiBooks(await TalebookApi.getReadDoneBooks(page, PaginationConstants.PAGE_SIZE));
       } else {
-        fetched = this.mapApiBooks(await TalebookApi.getSoledBooks(page, PaginationConstants.PAGE_SIZE));
+        fetched = this.mapApiBooks(await TalebookApi.getScopedBooks(page, PaginationConstants.PAGE_SIZE));
       }
       if (reset) {
         this.books = fetched;

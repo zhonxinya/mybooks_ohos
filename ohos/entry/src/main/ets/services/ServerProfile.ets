@@ -69,6 +69,11 @@ export enum ServerFeature {
   // 列表扩展
   PRINT_BOOKS = 'print_books',
   SOLED_BOOKS = 'soled_books',
+  /**
+   * 私有范围书籍列表：mybooks `/api/soledbooks`（sole 标记）、talebook `/api/scopedbooks`（scope=private）。
+   * 两端都有「私有书籍」列表，端点与语义来源不同，由 `scopedBooksPath` 承载差异。
+   */
+  SCOPED_BOOKS = 'scoped_books',
   STATE_BATCH_REMOVE = 'state_batch_remove',
   BATCH_UPLOAD = 'batch_upload',
   // 检索
@@ -122,6 +127,11 @@ export enum ServerFeature {
   ADMIN_USER_CREATE = 'admin_user_create',
   /** 管理端批量删除书籍（mybooks `/api/admin/books/delete`）。 */
   ADMIN_BOOK_DELETE = 'admin_book_delete',
+  /**
+   * 管理端批量刷新互联网元数据（`/api/admin/book/fill`，两端同名且请求体一致 `{idlist}` 或 `'all'`）。
+   * 与 ADMIN_BOOK_BATCH（mybooks 专有的整套书籍批处理）分开声明，使 talebook 也能用此单项。
+   */
+  ADMIN_BOOK_FILL = 'admin_book_fill',
   /**
    * 管理端书籍批量操作（删除/刷新元数据/AI 更新/EPUB 转换/类型互转/批量裁剪封面等）。
    * mybooks 提供全套 `/api/admin/books/*` 与 `/api/admin/book/*`；talebook 上游无对应接口，
@@ -192,6 +202,24 @@ export abstract class ServerProfile {
   /** 元数据列表/详情的类型键，对应服务端 `MetaList`/`MetaBooks` 的捕获组。 */
   abstract readonly metaTypes: string[];
 
+  /**
+   * 访问码（私人图书馆）端点：mybooks `/api/access`，talebook `/api/welcome`。
+   * 两端 GET 返回契约相同（`err=free` 无需/已通过；`err=ok` 时带 `welcome` 提示语）。
+   */
+  abstract readonly accessCodePath: string;
+
+  /**
+   * 访问码是否必须走 form 编码提交。
+   * mybooks 读 JSON body；talebook 用 `get_argument("invite_code")` 取值，JSON 体取不到。
+   */
+  abstract readonly accessCodeSubmitForm: boolean;
+
+  /** 私有范围书籍列表端点（mybooks `/api/soledbooks`；talebook `/api/scopedbooks`）。 */
+  abstract readonly scopedBooksPath: string;
+
+  /** 管理端批量删除书籍端点（mybooks `/api/admin/books/delete`；talebook `/api/admin/book/delete`）。 */
+  abstract readonly adminBookDeletePath: string;
+
   protected readonly features: Set<ServerFeature> = new Set<ServerFeature>();
 
   /**
@@ -245,6 +273,10 @@ export class MyBooksProfile extends ServerProfile {
   readonly adminBooksPath: string = '/api/admin/books';
   readonly adminSyslogPath: string = '/api/admin/syslog';
   readonly metaTypes: string[] = ['author', 'publisher', 'tag', 'rating', 'series', 'language'];
+  readonly accessCodePath: string = '/api/access';
+  readonly accessCodeSubmitForm: boolean = false;
+  readonly scopedBooksPath: string = '/api/soledbooks';
+  readonly adminBookDeletePath: string = '/api/admin/books/delete';
   readonly trashBooksPath: string = '/api/admin/trash/books';
   readonly trashRestore: ServerEndpoint = { method: 'POST', path: '/api/admin/trash/books/restore' };
   readonly trashPurge: ServerEndpoint = { method: 'POST', path: '/api/admin/trash/books/purge' };
@@ -287,6 +319,7 @@ export class MyBooksProfile extends ServerProfile {
       ServerFeature.DOWNLOAD_QUOTA,
       ServerFeature.PRINT_BOOKS,
       ServerFeature.SOLED_BOOKS,
+      ServerFeature.SCOPED_BOOKS,
       ServerFeature.STATE_BATCH_REMOVE,
       ServerFeature.BATCH_UPLOAD,
       ServerFeature.CATEGORIES,
@@ -318,6 +351,7 @@ export class MyBooksProfile extends ServerProfile {
       ServerFeature.ADMIN_USERS,
       ServerFeature.ADMIN_USER_CREATE,
       ServerFeature.ADMIN_BOOK_DELETE,
+      ServerFeature.ADMIN_BOOK_FILL,
       ServerFeature.ADMIN_BOOK_BATCH,
       ServerFeature.ADMIN_SETTINGS,
       ServerFeature.ADMIN_BOOKS,
@@ -335,6 +369,10 @@ export class TalebookProfile extends ServerProfile {
   readonly adminBooksPath: string = '/api/admin/book/list';
   readonly adminSyslogPath: string = '/api/admin/log';
   readonly metaTypes: string[] = ['author', 'publisher', 'tag', 'rating', 'series', 'format'];
+  readonly accessCodePath: string = '/api/welcome';
+  readonly accessCodeSubmitForm: boolean = true;
+  readonly scopedBooksPath: string = '/api/scopedbooks';
+  readonly adminBookDeletePath: string = '/api/admin/book/delete';
   readonly trashBooksPath: string = '/api/admin/trash';
   readonly trashRestore: ServerEndpoint = { method: 'PATCH', path: '/api/admin/trash' };
   readonly trashPurge: ServerEndpoint = { method: 'DELETE', path: '/api/admin/trash' };
@@ -368,6 +406,13 @@ export class TalebookProfile extends ServerProfile {
       ServerFeature.ADMIN_SCAN,
       ServerFeature.ADMIN_OPDS,
       ServerFeature.ADMIN_MAINTENANCE,
+      // 访问码：talebook 用 `/api/welcome` 实现私人图书馆模式（user.py::Welcome）
+      ServerFeature.ACCESS_CODE,
+      // 私有书籍列表：`/api/scopedbooks`（book.py::BookScoped，scope=private）
+      ServerFeature.SCOPED_BOOKS,
+      // 批量元数据填充 `/api/admin/book/fill` 与批量删除 `/api/admin/book/delete`
+      ServerFeature.ADMIN_BOOK_FILL,
+      ServerFeature.ADMIN_BOOK_DELETE,
     ]);
   }
 }
