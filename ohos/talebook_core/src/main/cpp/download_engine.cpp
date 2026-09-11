@@ -53,6 +53,21 @@ std::string DownloadEngine::validateDownloadedFile(const std::string &filePath,
     return "";
 }
 
+/** 清洗书名/扩展名派生的文件名，避免路径分隔符导致目录穿越或覆盖意外文件。 */
+static std::string sanitizeFileName(const std::string &name) {
+    std::string out;
+    out.reserve(name.size());
+    for (char c : name) {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if (c == '/' || c == '\\' || c == ':' || uc < 0x20) {
+            out.push_back('_');
+        } else {
+            out.push_back(c);
+        }
+    }
+    return out.empty() ? "book" : out;
+}
+
 std::vector<std::string> DownloadEngine::buildCandidateUrls(const std::string &downloadUrl,
                                                               const std::string &fileExtension) {
     std::vector<std::string> candidates;
@@ -92,7 +107,9 @@ DownloadResult DownloadEngine::downloadFile(
     DownloadResult result;
     HttpClient::instance().setBaseUrl(baseUrl);
 
-    std::string savePath = filesDir + "/" + fileName + "." + fileExtension;
+    const std::string safeName = sanitizeFileName(fileName);
+    const std::string safeExt = sanitizeFileName(fileExtension);
+    std::string savePath = filesDir + "/" + safeName + "." + safeExt;
 
     struct stat st {};
     if (stat(savePath.c_str(), &st) == 0) {

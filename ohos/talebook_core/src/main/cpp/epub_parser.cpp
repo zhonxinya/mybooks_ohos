@@ -87,20 +87,17 @@ bool findEocd(const std::vector<uint8_t> &data, EndOfCentralDir &eocd, size_t &e
     return false;
 }
 
+/** 单个 ZIP 条目解压上限，防止恶意 zip bomb 造成内存耗尽。 */
+constexpr size_t kMaxEntryBytes = 32 * 1024 * 1024;
+
 /** Inflate raw deflate (ZIP method 8) using miniz tinfl. */
 std::string inflateRaw(const uint8_t *src, size_t srcLen, size_t expectedUncompressed) {
-    size_t outLen = 0;
-    void *out = tinfl_decompress_mem_to_heap(
-        src, srcLen, &outLen,
-        TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
-    if (!out) return "";
-    if (expectedUncompressed > 0 && outLen != expectedUncompressed && outLen == 0) {
-        std::free(out);
-        return "";
-    }
-    std::string result(static_cast<char *>(out), outLen);
-    std::free(out);
-    return result;
+    // 中央目录声明的大小必须可信且在合理范围内，否则拒绝解压
+    if (expectedUncompressed == 0 || expectedUncompressed > kMaxEntryBytes) return "";
+    std::vector<uint8_t> out(expectedUncompressed);
+    size_t outLen = tinfl_decompress_mem_to_mem(out.data(), out.size(), src, srcLen, 0);
+    if (outLen == TINFL_DECOMPRESS_MEM_TO_MEM_FAILED) return "";
+    return std::string(reinterpret_cast<const char *>(out.data()), outLen);
 }
 
 std::string extractEntry(const std::vector<uint8_t> &data, const std::string &entryName) {
@@ -140,7 +137,10 @@ std::string extractEntry(const std::vector<uint8_t> &data, const std::string &en
         if (dataStart + compSize > data.size()) return "";
 
         if (method == 0) {
-            return std::string(reinterpret_cast<const char *>(data.data() + dataStart), uncompSize);
+            // 存储型条目按已校验的 compressedSize 读取，避免使用头中不可信的
+            // uncompressedSize 作为长度而越界读
+            if (compSize > kMaxEntryBytes) return "";
+            return std::string(reinterpret_cast<const char *>(data.data() + dataStart), compSize);
         }
         if (method == 8) {
             return inflateRaw(data.data() + dataStart, compSize, uncompSize);

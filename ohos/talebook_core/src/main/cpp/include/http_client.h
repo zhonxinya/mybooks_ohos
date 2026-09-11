@@ -44,6 +44,9 @@ public:
     void setBasicAuth(const std::string &username, const std::string &password);
     void clearAuth();
     void setCookieDir(const std::string &dir);
+    /** 是否校验 HTTPS 服务器证书：默认开启；仅当用户在设置中显式允许时才关闭。 */
+    void setSslVerify(bool verify);
+    bool sslVerify() const { return sslVerify_; }
 
     HttpResponse request(const HttpRequestOptions &options);
     HttpResponse get(const std::string &pathOrUrl,
@@ -70,6 +73,7 @@ private:
     std::string bearerToken_;
     std::string basicAuthHeader_;
     std::string cookieDir_;
+    bool sslVerify_ = true;
 };
 
 } // namespace talebook

@@ -7,6 +7,8 @@ export class TalebookCoreService {
   private initialized: boolean = false;
   /** native 尚未就绪时暂存的 base URL，init 成功后补发（避免其 HttpClient 的 baseUrl 一直为空） */
   private pendingBaseUrls: Map<string, string> = new Map();
+  /** native 尚未就绪时暂存的 TLS 校验开关，init 成功后补发 */
+  private pendingSslVerify: boolean | null = null;
 
   static getInstance(): TalebookCoreService {
     if (TalebookCoreService.instance === null) {
@@ -150,6 +152,16 @@ export class TalebookCoreService {
     TalebookNativeCore.setBaseUrl(`${name}|${url}`);
   }
 
+  /** 同步「跳过 SSL 验证」开关：allowInsecure=false 时默认校验证书 */
+  static setSslVerify(allowInsecure: boolean): void {
+    const instance = TalebookCoreService.getInstance();
+    if (!TalebookNativeCore.isInitialized()) {
+      instance.pendingSslVerify = allowInsecure;
+      return;
+    }
+    TalebookNativeCore.setSslVerify(!allowInsecure);
+  }
+
   static getDownloadRecords(): Promise<Array<Record<string, Object>>> {
     return TalebookCoreService.getInstance().getDownloadRecords();
   }
@@ -210,6 +222,11 @@ export class TalebookCoreService {
         TalebookNativeCore.setBaseUrl(`${name}|${url}`);
       });
       this.pendingBaseUrls.clear();
+    }
+    if (ok && this.pendingSslVerify !== null) {
+      // 补发 init 之前暂存的 TLS 校验开关，否则其 HttpClient 会一直使用默认值
+      TalebookNativeCore.setSslVerify(!this.pendingSslVerify);
+      this.pendingSslVerify = null;
     }
     return ok;
   }

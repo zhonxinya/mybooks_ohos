@@ -2,6 +2,7 @@
 
 #include "third_party/cjson/cJSON.h"
 
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <sys/stat.h>
@@ -25,6 +26,34 @@ cJSON *loadObjectFromFile(const std::string &path)
     return parsed != nullptr ? parsed : cJSON_CreateObject();
 }
 
+/**
+ * 原子写：先写临时文件再 rename 替换。
+ * 直接 trunc 原文件时，若写入中断或磁盘满，会让 preferences.json /
+ * secure/storage.json 变成空或截断，丢失服务端地址与凭据配置。
+ */
+bool writeFileAtomic(const std::string &path, const std::string &content)
+{
+    const std::string tmpPath = path + ".tmp";
+    {
+        std::ofstream out(tmpPath, std::ios::trunc);
+        if (!out.is_open()) {
+            return false;
+        }
+        out << content;
+        out.flush();
+        if (!out.good()) {
+            out.close();
+            std::remove(tmpPath.c_str());
+            return false;
+        }
+    }
+    if (std::rename(tmpPath.c_str(), path.c_str()) != 0) {
+        std::remove(tmpPath.c_str());
+        return false;
+    }
+    return true;
+}
+
 bool saveObjectToFile(const std::string &path, cJSON *object)
 {
     if (object == nullptr) {
@@ -34,14 +63,9 @@ bool saveObjectToFile(const std::string &path, cJSON *object)
     if (printed == nullptr) {
         return false;
     }
-    std::ofstream out(path, std::ios::trunc);
-    if (!out.is_open()) {
-        cJSON_free(printed);
-        return false;
-    }
-    out << printed;
+    const std::string content = printed;
     cJSON_free(printed);
-    return true;
+    return writeFileAtomic(path, content);
 }
 
 std::string readStringField(cJSON *object, const std::string &key, const std::string &defaultValue)
@@ -68,7 +92,8 @@ bool writeStringField(cJSON *object, const std::string &key, const std::string &
 JsonStore::JsonStore(std::string rootDir) : rootDir_(std::move(rootDir))
 {
     mkdir(rootDir_.c_str(), 0755);
-    mkdir((rootDir_ + "/secure").c_str(), 0755);
+    // secure 目录保存登录凭据等敏感数据，仅限应用自身访问
+    mkdir((rootDir_ + "/secure").c_str(), 0700);
 }
 
 std::string JsonStore::pathFor(const std::string &name) const
@@ -100,12 +125,7 @@ std::string JsonStore::read(const std::string &name, const std::string &defaultV
 
 bool JsonStore::write(const std::string &name, const std::string &json) const
 {
-    std::ofstream out(pathFor(name), std::ios::trunc);
-    if (!out.is_open()) {
-        return false;
-    }
-    out << json;
-    return true;
+    return writeFileAtomic(pathFor(name), json);
 }
 
 std::string JsonStore::readPref(const std::string &key, const std::string &defaultValue) const

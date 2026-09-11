@@ -11,7 +11,8 @@ export struct FriendsLinksRow {
   links: FriendLink[] = [];
 
   private openLink(href: string): void {
-    if (href.length === 0) {
+    // 链接来自服务端数据，仅允许 http/https，避免隐式 Want 被注入任意协议 URI
+    if (!(href.startsWith('http://') || href.startsWith('https://'))) {
       return;
     }
     const context = getContext(this) as common.UIAbilityContext;

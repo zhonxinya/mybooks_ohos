@@ -42,6 +42,11 @@ export class TalebookNativeCore {
     return talebookCore.setBaseUrl(input) as string;
   }
 
+  /** 是否校验证书：false 时跳过 TLS 校验（仅用于用户显式允许的自签名服务端） */
+  static setSslVerify(verify: boolean): void {
+    talebookCore.setSslVerify(verify);
+  }
+
   static async talebookGet(path: string): Promise<string> {
     const raw = await talebookCore.talebookGet(path) as string;
     const resp = parseCoreResponse(raw);

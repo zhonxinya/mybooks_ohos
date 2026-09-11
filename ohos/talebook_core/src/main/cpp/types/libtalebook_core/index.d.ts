@@ -26,6 +26,7 @@ export declare function adminImportDelete(hashlistJson: string): Promise<string>
 export declare function adminSyslog(): Promise<string>;
 
 export declare function setBaseUrl(input: string): string;
+export declare function setSslVerify(verify: boolean): void;
 
 export declare function adminResources(): Promise<string>;
 export declare function adminToolList(): Promise<string>;

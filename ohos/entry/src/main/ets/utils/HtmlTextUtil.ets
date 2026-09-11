@@ -34,6 +34,11 @@ export class HtmlTextUtil {
     return text.replace(WHITESPACE_PATTERN, ' ').trim();
   }
 
+  /** 转义正则元字符，使外部数据只能作为字面量参与匹配。 */
+  private static escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   static sliceFromDomPos(html: string, domPos: string): string | null {
     const index = HtmlTextUtil.indexOfDomPos(html, domPos);
     return index >= 0 ? html.substring(index) : null;
@@ -60,9 +65,12 @@ export class HtmlTextUtil {
     if (anchorId.length === 0) {
       return -1;
     }
+    // domPos 来自服务端同步的阅读进度（或路由参数），属外部可控数据：
+    // 必须转义后才能拼进 RegExp，否则可触发正则注入/回溯耗尽（ReDoS）或 SyntaxError。
+    const safeId = HtmlTextUtil.escapeRegExp(anchorId);
     const patterns: RegExp[] = [
-      new RegExp(`id=["']${anchorId}["']`, 'i'),
-      new RegExp(`name=["']${anchorId}["']`, 'i'),
+      new RegExp(`id=["']${safeId}["']`, 'i'),
+      new RegExp(`name=["']${safeId}["']`, 'i'),
     ];
     for (let i = 0; i < patterns.length; i++) {
       const match = patterns[i].exec(html);
