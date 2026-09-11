@@ -1222,6 +1222,96 @@ struct BookDetailPage {
                   });
                 }
               }
+              ListItem() {
+                this.menuItem($r('sys.symbol.square_and_pencil'), '编辑元数据', '', () => {
+                  this.closeSheet();
+                  router.pushUrl({
+                    url: 'pages/BookEditPage',
+                    params: { bookId: this.bookId },
+                  });
+                });
+              }
+              ListItem() {
+                this.menuItem($r('sys.symbol.doc_text'), '引用信息', '', () => {
+                  this.closeSheet();
+                  router.pushUrl({
+                    url: 'pages/ReferResultPage',
+                    params: {
+                      bookId: this.bookId,
+                      title: this.title,
+                      isbn: this.isbn,
+                      publisher: this.publisher,
+                    },
+                  });
+                });
+              }
+              ListItem() {
+                this.menuItem($r('sys.symbol.headphones'), '音频文件', '', () => {
+                  this.closeSheet();
+                  router.pushUrl({
+                    url: 'pages/AudioFilesPage',
+                    params: { bookId: this.bookId, title: this.title, author: this.author, cover: this.cover },
+                  });
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.COMIC)) {
+                ListItem() {
+                  this.menuItem($r('sys.symbol.square_grid_2x2'), '漫画阅读', '在线阅读', () => {
+                    this.closeSheet();
+                    router.pushUrl({ url: 'pages/ComicReaderPage', params: { bookId: this.bookId } });
+                  });
+                }
+              }
+            }
+            if (ServerRegistry.supports(ServerFeature.BOOK_TAGS_EDIT)) {
+              ListItem() {
+                this.menuItem($r('sys.symbol.paintbrush'), '更新标签', '', () => {
+                  this.closeSheet();
+                  void this.updateTags();
+                });
+              }
+            }
+            if (ServerRegistry.supports(ServerFeature.BOOK_AIFILL)) {
+              ListItem() {
+                this.menuItem($r('sys.symbol.wand_and_stars'),
+                  this.aiFilling ? 'AI 补全中…' : 'AI 补全元数据', '', () => {
+                    this.closeSheet();
+                    void this.aiFill();
+                  });
+              }
+            }
+            ListItem() {
+              this.menuItem($r('sys.symbol.plus_circle'), '上传新格式', '', () => {
+                this.closeSheet();
+                void this.pickAndUploadFormat();
+              });
+            }
+          }
+          .width('100%')
+          .height('100%')
+          .divider({ strokeWidth: 0.5, color: $r('app.color.divider') })
+          .scrollBar(BarState.Off);
+        }
+        .tabBar('常用')
+        TabContent() {
+          List() {
+            if (!this.localOnly && this.bookId > 0) {
+              if (ServerRegistry.supports(ServerFeature.BOOKLISTS)) {
+                ListItem() {
+                  this.menuItem($r('sys.symbol.folder'), '加入书单', '', () => {
+                    this.closeSheet();
+                    void this.openBooklistSheet();
+                  });
+                }
+              }
+              if (ServerRegistry.supports(ServerFeature.BOOK_SET_SOLE)) {
+                ListItem() {
+                  this.menuItem($r('sys.symbol.lock'), this.isSole ? '取消私藏' : '设为私藏', '', () => {
+                    this.closeSheet();
+                    void this.toggleSole();
+                  });
+                }
+              }
             }
           }
           .width('100%')
