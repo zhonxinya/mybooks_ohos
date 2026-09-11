@@ -4,7 +4,7 @@
   "description": "Talebook entry module",
   "main": "",
   "author": "",
-  "license": "",
+  "license": "BSD-2-Clause",
   "dependencies": {
     "talebook_core": "file:../talebook_core"
   }
