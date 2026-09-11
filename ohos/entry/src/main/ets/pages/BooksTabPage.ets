@@ -5,6 +5,7 @@ import {
 } from '../components';
 import { ApiEnvelope, TalebookService } from '../services/TalebookService';
 import { TalebookApi, IndexHomeData, LibraryStatsResponse, LibraryStatsData } from '../services/TalebookApi';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { HomeBook, ReadingDashboard, formatDuration } from '../models/HomeModels';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
@@ -208,14 +209,16 @@ export struct BooksTabPage {
         this.socialBooks = [];
         this.newBooks = [];
       });
-    TalebookApi.getLibraryStats()
-      .then((rsp: LibraryStatsResponse) => {
-        this.libraryStats = rsp.err === undefined || rsp.err === 'ok' ? (rsp.stats ?? null) : null;
-      })
-      .catch(() => {
-        this.libraryStats = null;
-      });
-    if (TalebookService.hasAuthCredentials()) {
+    if (ServerRegistry.supports(ServerFeature.ADMIN_LIBRARY_STATS)) {
+      TalebookApi.getLibraryStats()
+        .then((rsp: LibraryStatsResponse) => {
+          this.libraryStats = rsp.err === undefined || rsp.err === 'ok' ? (rsp.stats ?? null) : null;
+        })
+        .catch(() => {
+          this.libraryStats = null;
+        });
+    }
+    if (TalebookService.hasAuthCredentials() && ServerRegistry.supports(ServerFeature.READING_DASHBOARD)) {
       TalebookApi.getReadingDashboard()
         .then((stats: ReadingDashboard | null) => {
           this.readingStats = stats;

@@ -72,4 +72,6 @@ AGENTS.md
 
 # 第三方项目引用仅作本地参考，不随仓库发布
 docs/mybooks/
+docs/talebook/
+docs/202*-*.md
 .github/skills/

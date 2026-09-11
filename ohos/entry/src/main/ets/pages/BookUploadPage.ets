@@ -3,6 +3,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { PageScaffold, PrimaryButton, TextButton, SecondaryButton } from '../components';
 import { TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { TalebookApi, UploadBookResponse, UploadBatchStartResponse, UploadBatchStatusResponse,
   BatchUploadFile, AddIsbnResult, apiErrorMessage } from '../services/TalebookApi';
 import { BookUploadService, PickedBookFile } from '../services/BookUploadService';
@@ -505,7 +506,8 @@ struct BookUploadPage {
     const largeQueue: UploadItem[] = [];
     const smallQueue: UploadItem[] = [];
     for (const item of queue) {
-      if (item.size > CHUNK_THRESHOLD) {
+      // 当前服务端不支持批量上传时，全部改走分片上传通道
+      if (item.size > CHUNK_THRESHOLD || !ServerRegistry.supports(ServerFeature.BATCH_UPLOAD)) {
         largeQueue.push(item);
       } else {
         smallQueue.push(item);

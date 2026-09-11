@@ -1,6 +1,7 @@
 import { router } from '@kit.ArkUI';
 import { PageScaffold, SettingCell, LoadingState, DangerButton } from '../components';
 import { TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { NotificationService } from '../services/NotificationService';
 
 @Entry
@@ -128,6 +129,15 @@ struct ProfilePage {
               onTap: () => router.pushUrl({ url: 'pages/MyBooksPage' }),
             });
             if (this.isLogin) {
+              if (ServerRegistry.supports(ServerFeature.ANNOTATIONS)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '我的标注',
+                  subtitle: '查看与导出全部书内标注',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AnnotationsPage' }),
+                });
+              }
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
                 title: '消息通知',
@@ -141,18 +151,22 @@ struct ProfilePage {
                 showChevron: true,
                 onTap: () => router.pushUrl({ url: 'pages/UserSettingsPage' }),
               });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-              SettingCell({
-                title: '我的留言',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/UserMemosPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-              SettingCell({
-                title: '求书期望',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/ExpectedBooksPage' }),
-              });
+              if (ServerRegistry.supports(ServerFeature.USER_MEMO)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '我的留言',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/UserMemosPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.USER_EXPECTED)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '求书期望',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/ExpectedBooksPage' }),
+                });
+              }
             }
           }
         }

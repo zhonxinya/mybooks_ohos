@@ -52,7 +52,7 @@ function Test-NativeBuildPrerequisites {
   if (-not (Test-Path $Paths.LibCurl)) {
     Write-Host "ERROR: libcurl.so not found" -ForegroundColor Red
     Write-Host "  Expected: $($Paths.LibCurl)" -ForegroundColor Gray
-    Write-Host "  See: ohos/entry/src/main/cpp/third_party/README.md" -ForegroundColor Gray
+    Write-Host "  See: ohos/third_party/README.md" -ForegroundColor Gray
     exit 1
   }
 }

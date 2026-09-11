@@ -1,0 +1,12 @@
+{
+  "module": {
+    "name": "mybooks_core",
+    "type": "har",
+    "description": "MyBooks C++ core with NAPI bindings",
+    "deviceTypes": [
+      "default",
+      "tablet",
+      "2in1"
+    ]
+  }
+}

@@ -1,9 +1,15 @@
 import { router } from '@kit.ArkUI';
 import { PageScaffold, PrimaryButton, SecondaryButton, SettingCell, TextButton } from '../components';
+import { CaptchaField } from '../components/CaptchaField';
 import { TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { TalebookCoreService } from '../services/TalebookCoreService';
 import {
   TalebookApi, ApiMessageResult, AccessStatusResponse, WhoAmIResponse, apiErrorMessage
 } from '../services/TalebookApi';
+import {
+  CaptchaApi, CAPTCHA_SCENE_LOGIN, CAPTCHA_SCENE_REGISTER, CAPTCHA_SCENE_RESET, captchaErrorMessage
+} from '../services/CaptchaApi';
 
 const MODE_LOGIN: string = 'login';
 const MODE_REGISTER: string = 'register';
@@ -27,6 +33,11 @@ struct LoginPage {
   @State accessWelcome: string = '';
   @State whoAmIHint: string = '';
   @State needActivate: boolean = false;
+  /** 当前场景是否需要图形验证码（服务端支持 CAPTCHA 且该场景已启用）。 */
+  @State captchaRequired: boolean = false;
+  @State captchaCode: string = '';
+  /** 自增即要求 CaptchaField 换一张（切换场景、提交失败后）。 */
+  @State captchaRefreshToken: number = 0;
 
   aboutToAppear(): void {
     this.serverUrl = TalebookService.secureGet('talebook_url');
@@ -39,6 +50,7 @@ struct LoginPage {
     } else if (this.serverUrl.trim().length > 0) {
       void this.probeAccessQuiet();
     }
+    void this.refreshCaptchaRequirement();
   }
 
   private toast(msg: string): void {
@@ -52,8 +64,87 @@ struct LoginPage {
     this.mode = next;
     this.message = '';
     this.isError = false;
+    this.captchaCode = '';
+    this.captchaRefreshToken += 1;
     if (next === MODE_ACCESS) {
+      // 邀请码走 /api/access（无对应 captcha 场景）
+      this.captchaRequired = false;
       void this.probeAccessQuiet();
+    } else {
+      void this.refreshCaptchaRequirement();
+    }
+  }
+
+  /** 当前表单对应的上游验证码场景（CAPTCHA_ENABLE_FOR_{LOGIN,REGISTER,RESET}）。 */
+  private captchaScene(): string {
+    if (this.mode === MODE_REGISTER) {
+      return CAPTCHA_SCENE_REGISTER;
+    }
+    if (this.mode === MODE_RESET) {
+      return CAPTCHA_SCENE_RESET;
+    }
+    return CAPTCHA_SCENE_LOGIN;
+  }
+
+  /** 查询当前场景是否需要验证码；服务端不支持 CAPTCHA 时直接置 false，不发请求。 */
+  private async refreshCaptchaRequirement(): Promise<void> {
+    if (!ServerRegistry.supports(ServerFeature.CAPTCHA)) {
+      this.captchaRequired = false;
+      return;
+    }
+    this.captchaRequired = await CaptchaApi.isEnabled(this.captchaScene());
+  }
+
+  /**
+   * 校验验证码。
+   *
+   * 返回空串：服务端未要求验证码，走原有提交路径；
+   * 返回验证码：校验通过，可随表单一并提交（字段名 captcha_code）；
+   * 返回 null：已阻断提交，错误提示已写入 this.message。
+   */
+  private async resolveCaptcha(): Promise<string | null> {
+    if (!ServerRegistry.supports(ServerFeature.CAPTCHA)) {
+      this.captchaRequired = false;
+      return '';
+    }
+    const required = await CaptchaApi.isEnabled(this.captchaScene());
+    this.captchaRequired = required;
+    if (!required) {
+      return '';
+    }
+    const code = this.captchaCode.trim();
+    if (code.length === 0) {
+      this.message = '请填写验证码';
+      this.isError = true;
+      return null;
+    }
+    try {
+      // 与 Web 端一致：先校验，再把 captcha_code 随表单提交（服务端两次都比对同一个 cookie 答案）
+      await CaptchaApi.verify(code);
+      return code.toUpperCase();
+    } catch (error) {
+      this.message = captchaErrorMessage(error);
+      this.isError = true;
+      this.captchaRefreshToken += 1;
+      this.captchaCode = '';
+      return null;
+    }
+  }
+
+  /**
+   * 追加 captcha_code 后提交表单。
+   *
+   * 客户端服务层（TalebookApi/TalebookService）的注册/登录/重置表单没有 captcha_code 参数位，
+   * 因此这里按上游同一端点、同一 form 编码自行提交；上游以 get_argument("captcha_code") 取值。
+   */
+  private async postFormWithCaptcha(path: string, form: string,
+    captchaCode: string): Promise<ApiMessageResult> {
+    const body = `${form}&captcha_code=${encodeURIComponent(captchaCode)}`;
+    const raw = await TalebookCoreService.talebookPostForm(path, body);
+    try {
+      return JSON.parse(raw) as ApiMessageResult;
+    } catch (_error) {
+      return { err: 'response.invalid', msg: '服务端响应无法解析' } as ApiMessageResult;
     }
   }
 
@@ -107,7 +198,7 @@ struct LoginPage {
       return;
     }
     if (this.mode === MODE_LOGIN) {
-      this.handleLogin();
+      void this.handleLogin();
       return;
     }
     if (this.mode === MODE_REGISTER) {
@@ -121,7 +212,7 @@ struct LoginPage {
     void this.handleAccessSubmit();
   }
 
-  private handleLogin(): void {
+  private async handleLogin(): Promise<void> {
     if (!this.applyServerConfig()) {
       return;
     }
@@ -132,14 +223,36 @@ struct LoginPage {
       this.isError = true;
       return;
     }
-    void this.performLogin(user, pass);
+    const captcha = await this.resolveCaptcha();
+    if (captcha === null) {
+      return;
+    }
+    await this.performLogin(user, pass, captcha);
   }
 
-  private async performLogin(user: string, pass: string): Promise<void> {
+  private async performLogin(user: string, pass: string, captchaCode: string): Promise<void> {
     this.busy = true;
     this.message = '';
     try {
       TalebookService.saveLoginCredentials(user, pass);
+      if (captchaCode.length > 0) {
+        // 服务端要求验证码：signInAsync 的表单由原生层拼装，无法追加 captcha_code，
+        // 这里按上游同一端点（POST /api/user/sign_in，form）自行提交。
+        const rsp: ApiMessageResult = await this.postFormWithCaptcha('/api/user/sign_in',
+          `username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`, captchaCode);
+        if (rsp.err !== undefined && rsp.err !== 'ok') {
+          this.message = apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '登录失败';
+          this.isError = true;
+          // 服务端在通过验证码后即清除 cookie（例如密码错误），重试前必须换一张
+          this.captchaRefreshToken += 1;
+          this.captchaCode = '';
+          return;
+        }
+        await this.refreshWhoAmI(true);
+        this.toast('登录成功');
+        router.back();
+        return;
+      }
       const envelope = await TalebookService.signInAsync(user, pass);
       if (TalebookService.isApiSuccess(envelope)) {
         await this.refreshWhoAmI(true);
@@ -170,13 +283,23 @@ struct LoginPage {
       this.isError = true;
       return;
     }
+    const captcha = await this.resolveCaptcha();
+    if (captcha === null) {
+      return;
+    }
     this.busy = true;
     this.message = '';
     try {
-      const rsp: ApiMessageResult = await TalebookApi.signUp(user, nick, mail, pass);
+      const rsp: ApiMessageResult = captcha.length > 0
+        ? await this.postFormWithCaptcha('/api/user/sign_up',
+          `username=${encodeURIComponent(user)}&nickname=${encodeURIComponent(nick)}` +
+            `&email=${encodeURIComponent(mail)}&password=${encodeURIComponent(pass)}`, captcha)
+        : await TalebookApi.signUp(user, nick, mail, pass);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.message = apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '注册失败';
         this.isError = true;
+        this.captchaRefreshToken += 1;
+        this.captchaCode = '';
         return;
       }
       this.isError = false;
@@ -204,13 +327,22 @@ struct LoginPage {
       this.isError = true;
       return;
     }
+    const captcha = await this.resolveCaptcha();
+    if (captcha === null) {
+      return;
+    }
     this.busy = true;
     this.message = '';
     try {
-      const rsp: ApiMessageResult = await TalebookApi.resetPassword(user, mail);
+      const rsp: ApiMessageResult = captcha.length > 0
+        ? await this.postFormWithCaptcha('/api/user/reset',
+          `username=${encodeURIComponent(user)}&email=${encodeURIComponent(mail)}`, captcha)
+        : await TalebookApi.resetPassword(user, mail);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.message = apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '重置失败';
         this.isError = true;
+        this.captchaRefreshToken += 1;
+        this.captchaCode = '';
         return;
       }
       this.isError = false;
@@ -230,6 +362,11 @@ struct LoginPage {
       return;
     }
     if (!this.applyServerConfig()) {
+      return;
+    }
+    if (!ServerRegistry.supports(ServerFeature.ACCESS_CODE)) {
+      // 当前服务端无邀请码机制，不做探测也不显示错误
+      this.accessWelcome = '';
       return;
     }
     try {
@@ -441,6 +578,19 @@ struct LoginPage {
               .borderRadius(8)
               .backgroundColor($r('app.color.page_background'))
               .onChange((value: string) => this.password = value);
+          }
+
+          if (this.captchaRequired) {
+            CaptchaField({
+              refreshToken: this.captchaRefreshToken,
+              onCodeChange: (code: string) => {
+                this.captchaCode = code;
+              },
+              onMessage: (message: string) => {
+                this.message = message;
+                this.isError = true;
+              },
+            });
           }
         }
       }

@@ -188,7 +188,7 @@ HttpResponse performCurlRequest(const std::string &url, const std::string &metho
 
     curl_slist_free_all(headers);
     // 必须 cleanup：COOKIEJAR 仅在 cleanup 时落盘到 cookies.txt，
-    // 否则登录 cookie 只留在本线程 handle 内存，跨线程/跨模块（talebook_core）请求拿不到会话。
+    // 否则登录 cookie 只留在本线程 handle 内存，跨线程/跨模块（mybooks_core）请求拿不到会话。
     // DNS/TLS 缓存已通过 curl_share 共享，且已 FORBID_REUSE，cleanup 无性能损失。
     curl_easy_cleanup(curl);
     gTlsEasy = nullptr;

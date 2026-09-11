@@ -5,6 +5,7 @@ import {
   EmptyState, LoadingState, IconCircleButton, BookCatalogView,
 } from '../components';
 import { DownloadRecord, ReadingHistoryItem, TalebookService, ApiEnvelope } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { LocalBookService } from '../services/LocalBookService';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { DateFormat } from '../utils/DateFormat';
@@ -27,11 +28,14 @@ export struct BookshelfPage {
   @State audioHasMore: boolean = true;
   @State audioError: string = '';
   @StorageProp('bookshelfRefreshTick') @Watch('onRefreshTick') refreshTick: number = 0;
-  private filterItems: FilterChipItem[] = [
+  private baseFilters: FilterChipItem[] = [
     { label: '全部', value: 0 },
     { label: '小说', value: 1 },
-    { label: '有声书', value: 2 },
   ];
+  /** 「有声书」页签仅在服务端提供音频接口时显示（音频详情结构两端不同）。 */
+  private filterItems: FilterChipItem[] = ServerRegistry.supports(ServerFeature.AUDIOBOOKS)
+    ? this.baseFilters.concat([{ label: '有声书', value: 2 }])
+    : this.baseFilters;
   private audioPage: number = 1;
   private lastAudioLoadTime: number = 0;
   private audioBooksRaw: Record<string, Object>[] = [];
@@ -148,7 +152,7 @@ export struct BookshelfPage {
         await TalebookService.ensureAuthenticated();
       }
       const envelope: ApiEnvelope = await TalebookService.getServerBookListAsync(
-        '/api/audiobooks', page, PaginationConstants.PAGE_SIZE);
+        ServerRegistry.audiobooksPath(), page, PaginationConstants.PAGE_SIZE);
       if (!TalebookService.isApiSuccess(envelope)) {
         if (reset) {
           this.audioError = envelope.error.length > 0 ? envelope.error : '加载失败';
@@ -371,7 +375,13 @@ export struct BookshelfPage {
         router.pushUrl({ url: 'pages/SoNovelSearchPage' });
       });
       this.iconToolButton($r('sys.symbol.folder'), () => {
-        router.pushUrl({ url: 'pages/BookListsPage' });
+        if (ServerRegistry.supports(ServerFeature.BOOKLISTS)) {
+          router.pushUrl({ url: 'pages/BookListsPage' });
+          return;
+        }
+        this.getUIContext().getPromptAction().showToast({
+          message: `${ServerRegistry.profile().displayName} 服务端不支持书单`,
+        });
       });
       this.iconToolButton($r('sys.symbol.arrowshape_turn_up_right'), () => {
         router.pushUrl({ url: 'pages/BookUploadPage' });

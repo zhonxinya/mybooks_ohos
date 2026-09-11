@@ -16,8 +16,8 @@
   },
   "modules": [
     {
-      "name": "talebook_core",
-      "srcPath": "./talebook_core",
+      "name": "mybooks_core",
+      "srcPath": "./mybooks_core",
       "targets": [
         { "name": "default" }
       ]

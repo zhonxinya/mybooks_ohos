@@ -1,6 +1,6 @@
 #include "json_store.h"
 
-#include "third_party/cjson/cJSON.h"
+#include "cjson/cJSON.h"
 
 #include <cstdio>
 #include <fstream>

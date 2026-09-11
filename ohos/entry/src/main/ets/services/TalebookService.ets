@@ -6,6 +6,7 @@ import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { parseApiEnvelopeTask, parseJsonArrayTask } from './TalebookJsonParser';
 import { TalebookCoreService } from './TalebookCoreService';
 import { PasswordStore } from './PasswordStore';
+import { ServerRegistry, ServerKind } from './ServerProfile';
 
 export interface ApiEnvelope {
   status: number;
@@ -266,7 +267,7 @@ export class TalebookService {
       return false;
     }
     TalebookService.setBaseUrl('talebook', url);
-    // 同步到 talebook_core 模块（书单/书评等新 API 走此通道）
+    // 同步到 mybooks_core 模块（书单/书评等新 API 走此通道）
     TalebookCoreService.syncBaseUrl('talebook', url);
     return true;
   }
@@ -428,6 +429,9 @@ export class TalebookService {
   }
 
   static applyLocalConfig(): void {
+    // 先恢复服务端类型，后续端点/分页/能力判定均依赖它
+    const kind = TalebookService.prefGet(ServerRegistry.PREF_KEY, ServerKind.MYBOOKS);
+    ServerRegistry.setKind(ServerRegistry.parse(kind));
     const url = TalebookService.secureGet('talebook_url');
     if (url.length > 0) {
       TalebookService.setBaseUrl('talebook', url);
@@ -601,18 +605,16 @@ export class TalebookService {
   }
 
   static searchAsync(name: string, page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiSearchAsync(name, page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync('/api/search', page, limit,
+      `name=${encodeURIComponent(name)}`);
   }
 
   static getRecentAsync(page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetRecentAsync(page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync('/api/recent', page, limit);
   }
 
   static getHotAsync(page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetHotAsync(page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync('/api/hot', page, limit);
   }
 
   static search(name: string, page: number = 1, limit: number = 20): ApiEnvelope {
@@ -635,9 +637,9 @@ export class TalebookService {
     }
   }
 
+  /** 全部书籍（端点由当前 ServerProfile 决定：mybooks `/api/all`，talebook `/api/library`）。 */
   static getAllBooksAsync(page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetAllBooksAsync(page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync(ServerRegistry.allBooksPath(), page, limit);
   }
 
   static getBookNav(): ApiEnvelope {
@@ -680,8 +682,7 @@ export class TalebookService {
   }
 
   static getReadingListAsync(page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetReadingListAsync(page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync('/api/reading', page, limit);
   }
 
   static getFavorites(page: number = 1, limit: number = 20): ApiEnvelope {
@@ -689,8 +690,7 @@ export class TalebookService {
   }
 
   static getFavoritesAsync(page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetFavoritesAsync(page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync('/api/favorites', page, limit);
   }
 
   static getMessages(page: number = 1, limit: number = 20): ApiEnvelope {
@@ -706,29 +706,34 @@ export class TalebookService {
     return TalebookService.parseEnvelope(entry.apiGetMetaList(type, page, limit));
   }
 
+  /** 元数据列表（GET /api/{meta}，服务端不分页；meta 键按 ServerProfile 归一化）。 */
   static getMetaListAsync(type: string, page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetMetaListAsync(type, page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync(
+      `/api/${ServerRegistry.resolveMetaType(type)}`, page, limit);
   }
 
-  static getMetaBooks(type: string, name: string, page: number = 1, limit: number = 20): ApiEnvelope {
-    try {
-      return TalebookService.parseNative(entry.apiGetMetaBooks(type, name, page, limit));
-    } catch (error) {
-      return TalebookService.failedEnvelope(`${error}`);
-    }
-  }
-
+  /** 元数据下的书籍（GET /api/{meta}/{name}，start/size 分页）。 */
   static getMetaBooksAsync(type: string, name: string, page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetMetaBooksAsync(type, name, page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync(
+      `/api/${ServerRegistry.resolveMetaType(type)}/${encodeURIComponent(name)}`, page, limit);
+  }
+  static getAdminBooks(page: number = 1, limit: number = 20): ApiEnvelope {
+    return TalebookService.parseEnvelope(entry.apiGetAdminBooks(page, limit));
   }
 
-  /** 通用服务端书籍列表（start/size 分页，如 /api/audiobooks、/api/printbooks）。 */
-  static async getServerBookListAsync(path: string, page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
+  /** 管理端书籍列表（端点与分页由 ServerProfile 决定）。 */
+  static getAdminBooksAsync(page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
+    return TalebookService.getListAsync(ServerRegistry.adminBooksPath(),
+      ServerRegistry.adminBooksQuery(page, limit));
+  }
+
+  /**
+   * 通用服务端列表请求（query 已含分页）。
+   * 两端 ListHandler 系只识别 start(偏移)+size(每页)，均通过 `ServerProfile.listQuery` 生成。
+   */
+  private static async getListAsync(path: string, query: string): Promise<ApiEnvelope> {
     try {
-      const start = (page - 1) * limit;
-      const raw = await TalebookCoreService.talebookGet(`${path}?start=${start}&size=${limit}`);
+      const raw = await TalebookCoreService.talebookGet(`${path}?${query}`);
       const body = JSON.parse(raw) as Record<string, Object>;
       const envelope: ApiEnvelope = { status: 200, body: body, error: '' };
       envelope.error = TalebookService.apiMessage(envelope);
@@ -738,13 +743,11 @@ export class TalebookService {
     }
   }
 
-  static getAdminBooks(page: number = 1, limit: number = 20): ApiEnvelope {
-    return TalebookService.parseEnvelope(entry.apiGetAdminBooks(page, limit));
-  }
-
-  static getAdminBooksAsync(page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetAdminBooksAsync(page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+  /** 通用服务端书籍列表（分页由当前 ServerProfile 决定）。 */
+  static getServerBookListAsync(path: string, page: number = 1, limit: number = 20,
+    extraQuery: string = ''): Promise<ApiEnvelope> {
+    const query = ServerRegistry.listQuery(page, limit);
+    return TalebookService.getListAsync(path, extraQuery.length > 0 ? `${query}&${extraQuery}` : query);
   }
 
   static getAdminUsers(page: number = 1, limit: number = 20): ApiEnvelope {

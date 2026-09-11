@@ -1,6 +1,7 @@
 import { PageScaffold, PrimaryButton, SettingCell } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookCoreService } from '../services/TalebookCoreService';
+import { ServerKind, ServerRegistry } from '../services/ServerProfile';
 
 @Entry
 @Component
@@ -11,7 +12,17 @@ struct TalebookConfigPage {
   @State allowInsecureSsl: boolean = false;
   @State message: string = '';
   @State isError: boolean = false;
+  @State serverKind: string = ServerKind.MYBOOKS;
   @State busy: boolean = false;
+  /** 可选服务端；顺序与服务端枚举的解析保持一致。 */
+  private serverOptions: SelectOption[] = [
+    { value: 'MyBooks' },
+    { value: 'Talebook' },
+  ];
+
+  private serverIndex(): number {
+    return this.serverKind === ServerKind.TALEBOOK ? 1 : 0;
+  }
 
   aboutToAppear(): void {
     this.url = TalebookService.secureGet('talebook_url');
@@ -19,6 +30,7 @@ struct TalebookConfigPage {
     this.username = creds.username;
     this.password = creds.password;
     this.allowInsecureSsl = TalebookService.prefGet('allow_insecure_ssl', 'false') === 'true';
+    this.serverKind = TalebookService.prefGet(ServerRegistry.PREF_KEY, ServerKind.MYBOOKS);
   }
 
   private setAllowInsecureSsl(value: boolean): void {
@@ -50,6 +62,8 @@ struct TalebookConfigPage {
     this.message = '';
     try {
       TalebookService.prefSet('allow_insecure_ssl', this.allowInsecureSsl ? 'true' : 'false');
+      TalebookService.prefSet(ServerRegistry.PREF_KEY, this.serverKind);
+      ServerRegistry.setKind(ServerRegistry.parse(this.serverKind));
       TalebookService.setBaseUrl('talebook', server);
       TalebookService.secureSet('talebook_url', server);
       TalebookCoreService.syncBaseUrl('talebook', server);
@@ -86,6 +100,13 @@ struct TalebookConfigPage {
   configContent() {
     Column({ space: 16 }) {
       Column({ space: 12 }) {
+        Select(this.serverOptions)
+          .selected(this.serverIndex())
+          .value(this.serverKind === ServerKind.TALEBOOK ? 'Talebook' : 'MyBooks')
+          .width('100%')
+          .onSelect((index: number) => {
+            this.serverKind = index === 1 ? ServerKind.TALEBOOK : ServerKind.MYBOOKS;
+          });
         TextInput({ placeholder: 'https://your-talebook-server', text: this.url })
           .height(44)
           .borderRadius(8)

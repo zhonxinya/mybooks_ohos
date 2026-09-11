@@ -6,6 +6,7 @@ import { StorageKeys } from '../common/Constants';
 import { TalebookService } from '../services/TalebookService';
 import { NotificationService } from '../services/NotificationService';
 import { TalebookApi, LibraryStatsResponse, AdminRunningTasksResponse } from '../services/TalebookApi';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 
 @Component
 export struct SettingsPage {
@@ -37,6 +38,11 @@ export struct SettingsPage {
   }
 
   private async loadAdminOverview(): Promise<void> {
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_LIBRARY_STATS)) {
+      // 当前服务端无书库统计/后台任务接口，不发起必然失败的请求
+      this.adminOverviewLoading = false;
+      return;
+    }
     this.adminOverviewLoading = true;
     try {
       await TalebookService.ensureAuthenticated();
@@ -141,6 +147,15 @@ export struct SettingsPage {
               showChevron: true,
               onTap: () => this.showThemePicker(),
             });
+            if (ServerRegistry.supports(ServerFeature.THEMES)) {
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '服务端主题',
+                subtitle: '选择服务端界面主题',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/ThemesPage' }),
+              });
+            }
           }
           .width('100%')
           .borderRadius($r('app.float.card_radius'))
@@ -259,20 +274,69 @@ export struct SettingsPage {
               onTap: () => router.pushUrl({ url: 'pages/AdminTrashPage' }),
             });
             Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: '评论审核',
-              subtitle: '通过、屏蔽用户书评',
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/AdminBookReviewsPage' }),
-            });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: '导入管理',
-              subtitle: '扫描导入、状态轮询与记录维护',
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/AdminImportsPage' }),
-            });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
+            if (ServerRegistry.supports(ServerFeature.ADMIN_BOOK_REVIEWS)) {
+              SettingCell({
+                title: '评论审核',
+                subtitle: '通过、屏蔽用户书评',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/AdminBookReviewsPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+            }
+            if (ServerRegistry.supports(ServerFeature.ADMIN_IMPORT)) {
+              SettingCell({
+                title: '导入管理',
+                subtitle: '扫描导入、状态轮询与记录维护',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/AdminImportsPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+            }
+            if (ServerRegistry.supports(ServerFeature.BOOK_SOURCES)) {
+              SettingCell({
+                title: '书源管理',
+                subtitle: '书源导入导出、启停、测试与体检',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/BookSourceManagePage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+            }
+            if (ServerRegistry.supports(ServerFeature.ADMIN_SCAN)) {
+              SettingCell({
+                title: '扫描与导入',
+                subtitle: '扫描记录、目录监控与批量导入',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/AdminScanPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+            }
+            if (ServerRegistry.supports(ServerFeature.ADMIN_OPDS)) {
+              SettingCell({
+                title: 'OPDS 源',
+                subtitle: '浏览目录、导入与失败重试',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/AdminOpdsPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+            }
+            if (ServerRegistry.supports(ServerFeature.ADMIN_PLUGINS)) {
+              SettingCell({
+                title: '插件中心',
+                subtitle: '插件启停、连接与正文工具',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/AdminPluginsPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+            }
+            if (ServerRegistry.supports(ServerFeature.ADMIN_MAINTENANCE)) {
+              SettingCell({
+                title: '服务端维护',
+                subtitle: '更新、SSL、数据库与音频统计',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/AdminMaintenancePage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+            }
             SettingCell({
               title: '系统日志',
               subtitle: '查看服务端运行日志',
@@ -280,33 +344,41 @@ export struct SettingsPage {
               onTap: () => router.pushUrl({ url: 'pages/AdminSyslogPage' }),
             });
             Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: '资源导航',
-              subtitle: '站长推荐的外部资源',
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/AdminResourcesPage' }),
-            });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: '工具箱',
-              subtitle: '启停、卸载与商店安装',
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/AdminToolboxPage' }),
-            });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: '用户留言',
-              subtitle: '查看与处理用户反馈',
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/AdminMemosPage' }),
-            });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: '管理员设置',
-              subtitle: '站点、用户、邮件等服务端配置',
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/AdminSettingsPage' }),
-            });
+            if (ServerRegistry.supports(ServerFeature.ADMIN_RESOURCES)) {
+              SettingCell({
+                title: '资源导航',
+                subtitle: '站长推荐的外部资源',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/AdminResourcesPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+            }
+            if (ServerRegistry.supports(ServerFeature.ADMIN_TOOLBOX)) {
+              SettingCell({
+                title: '工具箱',
+                subtitle: '启停、卸载与商店安装',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/AdminToolboxPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+            }
+            if (ServerRegistry.supports(ServerFeature.ADMIN_MEMOS)) {
+              SettingCell({
+                title: '用户留言',
+                subtitle: '查看与处理用户反馈',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/AdminMemosPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+            }
+            if (ServerRegistry.supports(ServerFeature.ADMIN_SETTINGS)) {
+              SettingCell({
+                title: '管理员设置',
+                subtitle: '站点、用户、邮件等服务端配置',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/AdminSettingsPage' }),
+              });
+            }
           }
           .width('100%')
           .borderRadius($r('app.float.card_radius'))

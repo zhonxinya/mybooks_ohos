@@ -6,6 +6,7 @@ import {
 } from '../components';
 import { TalebookApi, AdminBookListResponse, ApiMessageResult, CropCoverResult } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { BookUploadService } from '../services/BookUploadService';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
@@ -203,6 +204,10 @@ struct AdminBookListPage {
   }
 
   private confirmDeleteSelected(): void {
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_BOOK_DELETE)) {
+      this.toast(`${ServerRegistry.profile().displayName} 服务端不支持批量删除书籍`);
+      return;
+    }
     this.getUIContext().showAlertDialog({
       title: '删除选中书籍',
       message: `确定删除选中的 ${this.selectedIds.length} 本书籍吗？此操作不可恢复。`,
@@ -226,6 +231,10 @@ struct AdminBookListPage {
   private showSelectionActions(): void {
     if (this.selectedIds.length === 0) {
       this.toast('请先选择书籍');
+      return;
+    }
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_BOOK_BATCH)) {
+      this.toast(`${ServerRegistry.profile().displayName} 服务端不支持批量操作`);
       return;
     }
     this.getUIContext().getPromptAction().showActionMenu({
@@ -303,6 +312,10 @@ struct AdminBookListPage {
           })
           .catch((e: Object) => this.toast(`操作失败：${e}`));
       } else if (result.index === 2) {
+        if (!ServerRegistry.supports(ServerFeature.BOOK_CROP_COVER)) {
+          this.toast(`${ServerRegistry.profile().displayName} 服务端不支持批量裁剪封面`);
+          return;
+        }
         TalebookApi.cropCovers(ids)
           .then((rsp: CropCoverResult) => {
             const data: Record<string, Object> = rsp.data ?? {};
@@ -457,12 +470,14 @@ struct AdminBookListPage {
   @Builder
   selectionBar() {
     Row({ space: 12 }) {
-      SecondaryButton({
-        label: '批量操作',
-        buttonEnabled: this.selectedIds.length > 0,
-        fullWidth: false,
-        onTap: () => this.showSelectionActions(),
-      }).layoutWeight(1);
+      if (ServerRegistry.supports(ServerFeature.ADMIN_BOOK_BATCH)) {
+        SecondaryButton({
+          label: '批量操作',
+          buttonEnabled: this.selectedIds.length > 0,
+          fullWidth: false,
+          onTap: () => this.showSelectionActions(),
+        }).layoutWeight(1);
+      }
     }
     .width('100%')
     .padding({ left: 16, right: 16, top: 8, bottom: 12 });

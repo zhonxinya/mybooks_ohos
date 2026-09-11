@@ -100,9 +100,12 @@ volumes:
 
 ## 配置
 
-1. 设置 → 附加服务 → 配置 Talebook / SoNovel 服务器地址
-2. 设置 → 登录 Talebook 账号
+1. 设置 → 附加服务 → 服务器配置：选择**服务端类型**（MyBooks / Talebook）并填写书库地址与账号
+2. 设置 → 附加服务 → 配置 SoNovel 服务器地址（可选）
 3. 书架页查看本地下载书籍，点击阅读打开 Reader Kit
+
+客户端同时支持两套服务端，差异由 `ohos/entry/src/main/ets/services/ServerProfile.ets` 统一承载；
+切换服务端类型后需重新登录。详见 [API 对照文档](docs/Client-API-对照.md#服务端兼容层2026-09-12)。
 
 ## 目录
 
@@ -144,7 +147,7 @@ ohos/entry/src/main/
 
 ### 四、第三方组件
 
-本项目在 `ohos/talebook_core/third_party/` 与 `ohos/entry/src/main/cpp/third_party/` 目录下以 vendoring 方式引入以下开源库，其著作权与许可证归各自作者所有，使用需遵守各自的许可条款：
+本项目在 `ohos/third_party/` 目录下以 vendoring 方式引入以下开源库（由 `entry` 与 `mybooks_core` 两个 native 模块共用），其著作权与许可证归各自作者所有，使用需遵守各自的许可条款：
 
 | 组件 | 许可证 | 用途 |
 |---|---|---|

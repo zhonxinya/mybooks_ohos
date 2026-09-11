@@ -11,5 +11,5 @@
 **/.test
 **/BuildProfile.ets
 **/oh-package-lock.json5
-**/src/main/cpp/third_party/curl_build
-**/src/main/cpp/third_party/mbedtls_build
+/third_party/curl_build
+/third_party/mbedtls_build
