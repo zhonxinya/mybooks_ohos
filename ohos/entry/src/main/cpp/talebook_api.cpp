@@ -224,7 +224,13 @@ std::string TalebookApi::getHot(int page, int limit) const
 std::string TalebookApi::getAllBooks(int page, int limit) const
 {
     ensureBaseUrl();
-    return wrapResponse(http_.get("talebook", "/api/all", buildPageQuery(page, limit)));
+    // /api/all 由服务端 ListHandler.get_book_list 处理：分页参数是 start（偏移量）+ size（每页条数），
+    // 不识别 page/num。若沿用 buildPageQuery，start 恒为 0，每次翻页返回同一批书导致列表重复。
+    const int pageSize = limit > 0 ? limit : 20;
+    const int offset = (page > 0 ? page - 1 : 0) * pageSize;
+    std::ostringstream query;
+    query << "start=" << offset << "&size=" << pageSize;
+    return wrapResponse(http_.get("talebook", "/api/all", query.str()));
 }
 
 std::string TalebookApi::getBookDetail(int bookId) const
