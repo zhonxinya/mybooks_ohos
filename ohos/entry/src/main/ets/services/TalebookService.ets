@@ -4,6 +4,7 @@ import { taskpool } from '@kit.ArkTS';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { parseApiEnvelopeTask, parseJsonArrayTask } from './TalebookJsonParser';
 import { TalebookCoreService } from './TalebookCoreService';
+import { PasswordStore } from './PasswordStore';
 
 export interface ApiEnvelope {
   status: number;
@@ -105,6 +106,9 @@ export class TalebookService {
   private static imageLoadTasks: Map<string, Promise<ApiEnvelope>> = new Map();
   private static localCacheWarmPromise: Promise<void> | null = null;
   private static readonly LARGE_JSON_THRESHOLD: number = 32768;
+  /** 由 Asset Store Kit 加密保存的密码类键，不再写入明文 JSON。 */
+  private static readonly PASSWORD_KEYS: string[] = ['talebook_password'];
+  private static passwordMigrated: boolean = false;
 
   static init(dataDir: string): void {
     if (TalebookService.initialized) {
@@ -265,11 +269,33 @@ export class TalebookService {
   }
 
   static secureGet(key: string): string {
+    if (TalebookService.PASSWORD_KEYS.indexOf(key) >= 0) {
+      return TalebookService.readPassword(key);
+    }
     return entry.secureGet(key);
   }
 
   static secureSet(key: string, value: string): void {
+    if (TalebookService.PASSWORD_KEYS.indexOf(key) >= 0) {
+      PasswordStore.set(key, value);
+      return;
+    }
     entry.secureSet(key, value);
+  }
+
+  /** 读取密码类关键资产；首次读取时把旧版明文存储迁移到 Asset Store Kit 并清除明文。 */
+  private static readPassword(key: string): string {
+    const secret = PasswordStore.get(key);
+    if (secret.length > 0 || TalebookService.passwordMigrated) {
+      return secret;
+    }
+    TalebookService.passwordMigrated = true;
+    const legacy: string = entry.secureGet(key);
+    if (legacy.length > 0) {
+      PasswordStore.set(key, legacy);
+      entry.secureSet(key, '');
+    }
+    return legacy;
   }
 
   static prefGet(key: string, defaultValue: string = ''): string {
