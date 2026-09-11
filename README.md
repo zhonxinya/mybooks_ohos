@@ -82,6 +82,8 @@ volumes:
 
 > `ohos/build-profile.json5` 为本地工程配置（已被 `.gitignore` 排除）。若缺失，hvigor 会报
 > `0304035 Not Found`，可参照 `ohos/build-profile.ci.json5` 重建。
+> 注意 `build-profile.ci.json5` 不含 `signingConfigs`，直接复制会产出未签名 HAP
+> （安装报 `9568320 no signature file`），真机安装前需按下节配置签名。
 
 ## 签名
 
