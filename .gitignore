@@ -68,6 +68,7 @@ reasonix.toml
 .devin/
 .kilo/
 .kilocode/
+AGENTS.md
 
 # 第三方项目引用仅作本地参考，不随仓库发布
 docs/mybooks/
