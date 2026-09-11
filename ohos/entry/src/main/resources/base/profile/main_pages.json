@@ -52,6 +52,25 @@
     "pages/UserSettingsPage",
     "pages/UserMemosPage",
     "pages/ExpectedBooksPage",
-    "pages/AudioPlayerPage"
+    "pages/AudioPlayerPage",
+    "pages/SyncPage",
+    "pages/AuthorMetaPage",
+    "pages/AnnotationsPage",
+    "pages/BookAnnotationsPage",
+    "pages/ThemesPage",
+    "pages/ShelfPage",
+    "pages/ReadingProgressPage",
+    "pages/OnlineLibraryPage",
+    "pages/ComicReaderPage",
+    "pages/NetworkLibraryPage",
+    "pages/NetworkBookDetailPage",
+    "pages/BookSourceManagePage",
+    "pages/AdminBatchAddPage",
+    "pages/AdminAudioImportPage",
+    "pages/TxtBookPage",
+    "pages/AdminPluginsPage",
+    "pages/AdminScanPage",
+    "pages/AdminOpdsPage",
+    "pages/AdminMaintenancePage"
   ]
 }

@@ -1,6 +1,8 @@
 import { router } from '@kit.ArkUI';
 import { PageScaffold, SettingCell, LoadingState, DangerButton } from '../components';
 import { TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { AccountManager } from '../services/AccountManager';
 import { NotificationService } from '../services/NotificationService';
 
 @Entry
@@ -51,6 +53,16 @@ struct ProfilePage {
     } finally {
       this.loading = false;
     }
+  }
+
+  /** 当前账号摘要（用于「账号与服务器」入口副标题）。 */
+  private accountSummary(): string {
+    const count = AccountManager.list().length;
+    const active = AccountManager.activeDisplayName();
+    if (count === 0) {
+      return '新增服务器与账号';
+    }
+    return active.length > 0 ? `共 ${count} 个账号 · 当前 ${active}` : `共 ${count} 个账号`;
   }
 
   private applyUser(user: Record<string, Object>): void {
@@ -127,7 +139,23 @@ struct ProfilePage {
               showChevron: true,
               onTap: () => router.pushUrl({ url: 'pages/MyBooksPage' }),
             });
+            Divider().color($r('app.color.divider')).strokeWidth(0.5);
+            SettingCell({
+              title: '账号与服务器',
+              subtitle: this.accountSummary(),
+              showChevron: true,
+              onTap: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
+            });
             if (this.isLogin) {
+              if (ServerRegistry.supports(ServerFeature.ANNOTATIONS)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '我的标注',
+                  subtitle: '查看与导出全部书内标注',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AnnotationsPage' }),
+                });
+              }
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
                 title: '消息通知',
@@ -141,18 +169,22 @@ struct ProfilePage {
                 showChevron: true,
                 onTap: () => router.pushUrl({ url: 'pages/UserSettingsPage' }),
               });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-              SettingCell({
-                title: '我的留言',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/UserMemosPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-              SettingCell({
-                title: '求书期望',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/ExpectedBooksPage' }),
-              });
+              if (ServerRegistry.supports(ServerFeature.USER_MEMO)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '我的留言',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/UserMemosPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.USER_EXPECTED)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '求书期望',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/ExpectedBooksPage' }),
+                });
+              }
             }
           }
         }

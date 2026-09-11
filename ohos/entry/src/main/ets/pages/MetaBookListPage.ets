@@ -2,6 +2,7 @@ import { router } from '@kit.ArkUI';
 import { PageScaffold, FilterChips, FilterChipItem, SettingCell, LoadingState, EmptyState, ChipButton, LazyDataSource } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, MetaNameCount } from '../services/TalebookApi';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 
 interface MetaItem {
@@ -21,16 +22,21 @@ struct MetaBookListPage {
   @State currentPage: number = 1;
   @State hasMore: boolean = true;
   @State errorMessage: string = '';
-  private filterItems: FilterChipItem[] = [
+  private baseFilters: FilterChipItem[] = [
     { label: '标签', value: 0 },
     { label: '作者', value: 1 },
     { label: '丛书', value: 2 },
     { label: '出版社', value: 3 },
     { label: '评分', value: 4 },
-    { label: '语言', value: 5 },
-    { label: '分类', value: 6 },
+    { label: ServerRegistry.resolveMetaType('language') === 'language' ? '语言' : '格式', value: 5 },
   ];
-  private metaTypes: string[] = ['tag', 'author', 'series', 'publisher', 'rating', 'language', 'category'];
+  /** 「分类」仅在服务端提供 /api/categories 时显示。 */
+  private filterItems: FilterChipItem[] = ServerRegistry.supports(ServerFeature.CATEGORIES)
+    ? this.baseFilters.concat([{ label: '分类', value: 6 }])
+    : this.baseFilters;
+  /** 末位元数据键按当前 ServerProfile 归一化（mybooks `language` ↔ talebook `format`）。 */
+  private metaTypes: string[] = ['tag', 'author', 'series', 'publisher', 'rating',
+    ServerRegistry.resolveMetaType('language'), 'category'];
   private scrollController: Scroller = new Scroller();
   private lastLoadTime: number = 0;
   private itemsSource: LazyDataSource<MetaItem> = new LazyDataSource<MetaItem>();
@@ -50,7 +56,8 @@ struct MetaBookListPage {
   }
 
   private canPin(): boolean {
-    return this.metaType === 'author' || this.metaType === 'tag';
+    return ServerRegistry.supports(ServerFeature.USER_PIN) &&
+      (this.metaType === 'author' || this.metaType === 'tag');
   }
 
   private parseMetaItems(list: Record<string, Object>[] | undefined): MetaItem[] {

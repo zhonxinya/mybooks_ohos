@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
-import { TalebookNativeCore } from 'talebook_core';
+import { NativeCore } from 'mybooks_core';
 
-/** Singleton wrapper around TalebookNativeCore. */
+/** Singleton wrapper around NativeCore. */
 export class TalebookCoreService {
   private static instance: TalebookCoreService | null = null;
   private initialized: boolean = false;
@@ -20,6 +20,11 @@ export class TalebookCoreService {
   static init(context: common.Context): void {
     TalebookCoreService.getInstance().init(context).catch(() => {
     });
+  }
+
+  /** 切换账号身份根（数据库/凭据/下载/历史/书签 + Cookie）。 */
+  static setIdentityDir(dir: string): void {
+    TalebookCoreService.getInstance().setIdentityDir(dir);
   }
 
   static ensureInitialized(context: common.Context): Promise<boolean> {
@@ -46,20 +51,28 @@ export class TalebookCoreService {
     return TalebookCoreService.getInstance().talebookDeleteWithBody(path, body);
   }
 
+  static talebookPatch(path: string, body: string): Promise<string> {
+    return TalebookCoreService.getInstance().talebookPatch(path, body);
+  }
+
+  static talebookPut(path: string, body: string): Promise<string> {
+    return TalebookCoreService.getInstance().talebookPut(path, body);
+  }
+
   static talebookUploadBook(filePath: string, fileName: string, bookId: string = ''): Promise<string> {
-    return TalebookNativeCore.talebookUploadBook(filePath, fileName, bookId);
+    return NativeCore.talebookUploadBook(filePath, fileName, bookId);
   }
 
   static talebookUploadFile(path: string, filePath: string, fieldName: string,
     fileName: string, fieldsJson: string = ''): Promise<string> {
-    return TalebookNativeCore.talebookUploadFile(path, filePath, fieldName, fileName, fieldsJson);
+    return NativeCore.talebookUploadFile(path, filePath, fieldName, fileName, fieldsJson);
   }
   static talebookUploadBookBatch(filesJson: string): Promise<string> {
-    return TalebookNativeCore.talebookUploadBookBatch(filesJson);
+    return NativeCore.talebookUploadBookBatch(filesJson);
   }
   static talebookUploadFiles(path: string, filesJson: string,
     fieldsJson: string = ''): Promise<string> {
-    return TalebookNativeCore.talebookUploadFiles(path, filesJson, fieldsJson);
+    return NativeCore.talebookUploadFiles(path, filesJson, fieldsJson);
   }
 
   static sonovelGet(path: string): Promise<string> {
@@ -67,99 +80,99 @@ export class TalebookCoreService {
   }
 
   static adminTrashBooks(): Promise<string> {
-    return TalebookNativeCore.adminTrashBooks();
+    return NativeCore.adminTrashBooks();
   }
 
   static adminTrashSize(): Promise<string> {
-    return TalebookNativeCore.adminTrashSize();
+    return NativeCore.adminTrashSize();
   }
 
   static adminTrashRestore(bookIdsJson: string): Promise<string> {
-    return TalebookNativeCore.adminTrashRestore(bookIdsJson);
+    return NativeCore.adminTrashRestore(bookIdsJson);
   }
 
   static adminTrashPurge(bookIdsJson: string): Promise<string> {
-    return TalebookNativeCore.adminTrashPurge(bookIdsJson);
+    return NativeCore.adminTrashPurge(bookIdsJson);
   }
 
   static adminTrashClear(): Promise<string> {
-    return TalebookNativeCore.adminTrashClear();
+    return NativeCore.adminTrashClear();
   }
 
   static adminBookReviews(status: string, page: number, pageSize: number): Promise<string> {
-    return TalebookNativeCore.adminBookReviews(status, page, pageSize);
+    return NativeCore.adminBookReviews(status, page, pageSize);
   }
 
   static adminBookReviewAction(reviewId: number, action: string): Promise<string> {
-    return TalebookNativeCore.adminBookReviewAction(reviewId, action);
+    return NativeCore.adminBookReviewAction(reviewId, action);
   }
 
   static adminImportList(page: number, num: number, filter: string): Promise<string> {
-    return TalebookNativeCore.adminImportList(page, num, filter);
+    return NativeCore.adminImportList(page, num, filter);
   }
 
   static adminImportRun(filelistJson: string, force: boolean): Promise<string> {
-    return TalebookNativeCore.adminImportRun(filelistJson, force);
+    return NativeCore.adminImportRun(filelistJson, force);
   }
 
   static adminImportCancel(): Promise<string> {
-    return TalebookNativeCore.adminImportCancel();
+    return NativeCore.adminImportCancel();
   }
 
   static adminImportDelete(hashlistJson: string): Promise<string> {
-    return TalebookNativeCore.adminImportDelete(hashlistJson);
+    return NativeCore.adminImportDelete(hashlistJson);
   }
 
   static adminSyslog(): Promise<string> {
-    return TalebookNativeCore.adminSyslog();
+    return NativeCore.adminSyslog();
   }
 
   static adminResources(): Promise<string> {
-    return TalebookNativeCore.adminResources();
+    return NativeCore.adminResources();
   }
 
   static adminToolList(): Promise<string> {
-    return TalebookNativeCore.adminToolList();
+    return NativeCore.adminToolList();
   }
 
   static adminToolAction(toolId: string, action: string): Promise<string> {
-    return TalebookNativeCore.adminToolAction(toolId, action);
+    return NativeCore.adminToolAction(toolId, action);
   }
 
   static adminMemoList(page: number, pageSize: number): Promise<string> {
-    return TalebookNativeCore.adminMemoList(page, pageSize);
+    return NativeCore.adminMemoList(page, pageSize);
   }
 
   static adminMemoAction(memoId: number, action: string, reply: string): Promise<string> {
-    return TalebookNativeCore.adminMemoAction(memoId, action, reply);
+    return NativeCore.adminMemoAction(memoId, action, reply);
   }
 
   static adminMemoDelete(memoId: number): Promise<string> {
-    return TalebookNativeCore.adminMemoDelete(memoId);
+    return NativeCore.adminMemoDelete(memoId);
   }
 
-  /** 将服务端地址写入 talebook_core 自身存储，供其 HttpClient 使用 */
+  /** 将服务端地址写入 mybooks_core 自身存储，供其 HttpClient 使用 */
   static syncBaseUrl(name: string, url: string): void {
     if (url.length === 0) {
       return;
     }
     const instance = TalebookCoreService.getInstance();
-    if (!TalebookNativeCore.isInitialized()) {
+    if (!NativeCore.isInitialized()) {
       // native 尚未就绪：先暂存，待 init 成功后补发
       instance.pendingBaseUrls.set(name, url);
       return;
     }
-    TalebookNativeCore.setBaseUrl(`${name}|${url}`);
+    NativeCore.setBaseUrl(`${name}|${url}`);
   }
 
   /** 同步「跳过 SSL 验证」开关：allowInsecure=false 时默认校验证书 */
   static setSslVerify(allowInsecure: boolean): void {
     const instance = TalebookCoreService.getInstance();
-    if (!TalebookNativeCore.isInitialized()) {
+    if (!NativeCore.isInitialized()) {
       instance.pendingSslVerify = allowInsecure;
       return;
     }
-    TalebookNativeCore.setSslVerify(!allowInsecure);
+    NativeCore.setSslVerify(!allowInsecure);
   }
 
   static getDownloadRecords(): Promise<Array<Record<string, Object>>> {
@@ -214,92 +227,104 @@ export class TalebookCoreService {
     if (this.initialized) {
       return true;
     }
-    const ok: boolean = TalebookNativeCore.initCore(context.filesDir as string);
+    const ok: boolean = NativeCore.initCore(context.filesDir as string);
     this.initialized = ok;
     if (ok && this.pendingBaseUrls.size > 0) {
       // 补发 init 之前暂存的服务端地址，否则其 HttpClient 的 baseUrl 会一直为空
       this.pendingBaseUrls.forEach((url: string, name: string) => {
-        TalebookNativeCore.setBaseUrl(`${name}|${url}`);
+        NativeCore.setBaseUrl(`${name}|${url}`);
       });
       this.pendingBaseUrls.clear();
     }
     if (ok && this.pendingSslVerify !== null) {
       // 补发 init 之前暂存的 TLS 校验开关，否则其 HttpClient 会一直使用默认值
-      TalebookNativeCore.setSslVerify(!this.pendingSslVerify);
+      NativeCore.setSslVerify(!this.pendingSslVerify);
       this.pendingSslVerify = null;
     }
     return ok;
   }
 
-  talebookGet(path: string): Promise<string> {
-    return TalebookNativeCore.talebookGet(path);
+  /** 切换账号身份根（数据库/凭据/下载/历史/书签 + Cookie）。 */
+  setIdentityDir(dir: string): void {
+    NativeCore.setIdentityDir(dir);
   }
 
+  talebookGet(path: string): Promise<string> {
+    return NativeCore.talebookGet(path);
+  }
   talebookPost(path: string, body: string): Promise<string> {
-    return TalebookNativeCore.talebookPost(path, body);
+    return NativeCore.talebookPost(path, body);
   }
 
   talebookPostForm(path: string, body: string): Promise<string> {
-    return TalebookNativeCore.talebookPostForm(path, body);
+    return NativeCore.talebookPostForm(path, body);
   }
 
   talebookDelete(path: string): Promise<string> {
-    return TalebookNativeCore.talebookDelete(path);
+    return NativeCore.talebookDelete(path);
   }
 
   talebookDeleteWithBody(path: string, body: string): Promise<string> {
-    return TalebookNativeCore.talebookDeleteWithBody(path, body);
+    return NativeCore.talebookDeleteWithBody(path, body);
+  }
+
+  talebookPatch(path: string, body: string): Promise<string> {
+    return NativeCore.talebookPatch(path, body);
+  }
+
+  talebookPut(path: string, body: string): Promise<string> {
+    return NativeCore.talebookPut(path, body);
   }
 
   sonovelGet(path: string): Promise<string> {
-    return TalebookNativeCore.sonovelGet(path);
+    return NativeCore.sonovelGet(path);
   }
 
   getDownloadRecords(): Promise<Array<Record<string, Object>>> {
-    return TalebookNativeCore.getDownloadRecords() as Promise<Array<Record<string, Object>>>;
+    return NativeCore.getDownloadRecords() as Promise<Array<Record<string, Object>>>;
   }
 
   addDownloadRecord(record: Record<string, Object>): Promise<void> {
-    return TalebookNativeCore.addDownloadRecord(record);
+    return NativeCore.addDownloadRecord(record);
   }
 
   deleteDownloadRecord(bookId: string): Promise<void> {
-    return TalebookNativeCore.deleteDownloadRecord(bookId);
+    return NativeCore.deleteDownloadRecord(bookId);
   }
 
   getReadingHistory(): Promise<Array<Record<string, Object>>> {
-    return TalebookNativeCore.getReadingHistory() as Promise<Array<Record<string, Object>>>;
+    return NativeCore.getReadingHistory() as Promise<Array<Record<string, Object>>>;
   }
 
   recordReadingHistory(item: Record<string, Object>): Promise<void> {
-    return TalebookNativeCore.recordReadingHistory(item);
+    return NativeCore.recordReadingHistory(item);
   }
 
   getReaderConfig(): Promise<Record<string, Object>> {
-    return TalebookNativeCore.getReaderConfig() as Promise<Record<string, Object>>;
+    return NativeCore.getReaderConfig() as Promise<Record<string, Object>>;
   }
 
   saveReaderConfig(config: Record<string, Object>): Promise<void> {
-    return TalebookNativeCore.saveReaderConfig(config);
+    return NativeCore.saveReaderConfig(config);
   }
 
   downloadBookLocal(options: Record<string, Object>): Promise<Record<string, Object>> {
-    return TalebookNativeCore.downloadBookLocal(options) as Promise<Record<string, Object>>;
+    return NativeCore.downloadBookLocal(options) as Promise<Record<string, Object>>;
   }
 
   secureSet(key: string, value: string): Promise<void> {
-    return TalebookNativeCore.secureSet(key, value);
+    return NativeCore.secureSet(key, value);
   }
 
   secureGet(key: string): Promise<string | null> {
-    return TalebookNativeCore.secureGet(key);
+    return NativeCore.secureGet(key);
   }
 
   kvSet(key: string, value: string): Promise<void> {
-    return TalebookNativeCore.kvSet(key, value);
+    return NativeCore.kvSet(key, value);
   }
 
   kvGet(key: string): Promise<string | null> {
-    return TalebookNativeCore.kvGet(key);
+    return NativeCore.kvGet(key);
   }
 }

@@ -1,0 +1,9 @@
+{
+  "name": "mybooks_core",
+  "version": "1.0.0",
+  "description": "MyBooks C++ core service layer",
+  "main": "Index.ets",
+  "author": "",
+  "license": "BSD-2-Clause",
+  "dependencies": {}
+}

@@ -4,6 +4,7 @@ import {
   SectionTitle, LazyDataSource, BookListItem, BookListItemData,
 } from '../components';
 import { DownloadRecord, ReadingHistoryItem, TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { TalebookApi } from '../services/TalebookApi';
 import { BookItem as ApiBookItem } from '../services/BookModels';
 import { ReadingStatsSummary } from '../models/HomeModels';
@@ -182,6 +183,12 @@ struct ReadingHistoryPage {
 
   private async loadOnlineData(): Promise<void> {
     if (!TalebookService.hasAuthCredentials()) {
+      return;
+    }
+    if (!ServerRegistry.supports(ServerFeature.USER_ONLINE_HISTORY)) {
+      // 当前服务端无在线阅读历史接口，不发起请求也不显示错误
+      this.onlineBooks = [];
+      this.loadingOnline = false;
       return;
     }
     this.loadingOnline = true;

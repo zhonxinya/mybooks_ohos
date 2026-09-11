@@ -52,9 +52,15 @@ jobs:
       security-events: write # for github/codeql-action/upload-sarif to upload SARIF results
       actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
     runs-on: ubuntu-latest
+    # 本仓库未注册 APIsec 项目，凭据缺失时该扫描必然失败（token is null / Invalid runid）。
+    # secrets 上下文不能用于 jobs.<job_id>.if，故经 env 传递后在步骤级判断。
+    env:
+      APISEC_USERNAME: ${{ secrets.apisec_username }}
 
     steps:
        - name: APIsec scan
+         # 未配置 APIsec 凭据时跳过（需先注册项目并写入 apisec_username / apisec_password 密钥）
+         if: ${{ env.APISEC_USERNAME != '' }}
          uses: apisec-inc/apisec-run-scan@025432089674a28ba8fb55f8ab06c10215e772ea
          with:
           # The APIsec username with which the scans will be executed
@@ -66,6 +72,7 @@ jobs:
           # The name of the sarif format result file The file is written only if this property is provided.
           sarif-result-file: "apisec-results.sarif"
        - name: Import results
+         if: ${{ env.APISEC_USERNAME != '' }}
          uses: github/codeql-action/upload-sarif@v3
          with:
           sarif_file: ./apisec-results.sarif

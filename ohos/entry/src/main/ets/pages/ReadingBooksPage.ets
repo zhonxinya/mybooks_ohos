@@ -5,6 +5,7 @@ import {
 } from '../components';
 import { ApiEnvelope, TalebookService } from '../services/TalebookService';
 import { TalebookApi } from '../services/TalebookApi';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { BookItem as ApiBookItem } from '../services/BookModels';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
@@ -31,13 +32,23 @@ struct ReadingBooksPage {
   @State manageMode: boolean = false;
   @State selectedIds: number[] = [];
   @State removing: boolean = false;
-  private filterItems: FilterChipItem[] = [
+  private allFilters: FilterChipItem[] = [
     { label: '在读', value: 0 },
     { label: '收藏', value: 1 },
     { label: '想读', value: 2 },
     { label: '读完', value: 3 },
     { label: '私有书', value: 4 },
   ];
+  /** value 保持逻辑索引不变，仅按服务端能力决定是否展示该页签。 */
+  private filterItems: FilterChipItem[] = this.allFilters.filter((item: FilterChipItem): boolean => {
+    if (item.value === 2) {
+      return ServerRegistry.supports(ServerFeature.BOOK_WANTS);
+    }
+    if (item.value === 4) {
+      return ServerRegistry.supports(ServerFeature.SCOPED_BOOKS);
+    }
+    return true;
+  });
   private lastLoadTime: number = 0;
 
   aboutToAppear(): void {
@@ -75,7 +86,7 @@ struct ReadingBooksPage {
       } else if (this.activeTab === 3) {
         fetched = this.mapApiBooks(await TalebookApi.getReadDoneBooks(page, PaginationConstants.PAGE_SIZE));
       } else {
-        fetched = this.mapApiBooks(await TalebookApi.getSoledBooks(page, PaginationConstants.PAGE_SIZE));
+        fetched = this.mapApiBooks(await TalebookApi.getScopedBooks(page, PaginationConstants.PAGE_SIZE));
       }
       if (reset) {
         this.books = fetched;

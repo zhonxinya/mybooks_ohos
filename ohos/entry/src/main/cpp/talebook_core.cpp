@@ -1,5 +1,7 @@
 #include "talebook_core.h"
 
+#include "path_util.h"
+
 namespace talebook {
 
 TalebookCore &TalebookCore::instance()
@@ -23,6 +25,29 @@ void TalebookCore::init(const std::string &dataDir)
     const std::string allowInsecure = store_->readPref("allow_insecure_ssl", "false");
     HttpClient::instance().setSslVerify(allowInsecure != "true");
     initialized_ = true;
+}
+
+void TalebookCore::setIdentityDir(const std::string &dir)
+{
+    if (store_ == nullptr || dir.empty()) {
+        return;
+    }
+    store_->setIdentityDir(dir);
+    const std::string cookieDir = dir + "/.cookies";
+    // 会话 Cookie 属敏感数据，目录仅限应用自身访问
+    // 账号目录是多层路径，必须递归创建，否则 Cookie 无法落盘（重启后又要手动登录）
+    makeDirs(cookieDir, 0700);
+    HttpClient::instance().setCookieDir(cookieDir);
+    // 切换身份根后立刻用新目录里的地址刷新 HttpClient，避免仍指向上一个账号
+    const std::string talebookUrl = store_->readSecure("talebook_url");
+    if (!talebookUrl.empty()) {
+        HttpClient::instance().setBaseUrl("talebook", talebookUrl);
+    }
+    // SoNovel 为全局服务，固定在全局根
+    const std::string sonovelUrl = store_->readSecureGlobal("sonovel_url");
+    if (!sonovelUrl.empty()) {
+        HttpClient::instance().setBaseUrl("sonovel", sonovelUrl);
+    }
 }
 
 HttpClient &TalebookCore::http()

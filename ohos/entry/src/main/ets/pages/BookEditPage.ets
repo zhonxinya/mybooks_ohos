@@ -1,6 +1,7 @@
 import { PageScaffold, PrimaryButton, LoadingState, ChipButton } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, MetaNameCount } from '../services/TalebookApi';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { router } from '@kit.ArkUI';
 
 @Entry
@@ -77,6 +78,11 @@ struct BookEditPage {
       return;
     }
     this.lastHintTime = now;
+    if (!ServerRegistry.supports(ServerFeature.AUTHOR_SEARCH)) {
+      this.authorHints = [];
+      this.showAuthorHints = false;
+      return;
+    }
     TalebookApi.searchAuthors(query)
       .then((hints: MetaNameCount[]) => {
         this.authorHints = hints.slice(0, 8);

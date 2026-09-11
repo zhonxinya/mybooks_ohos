@@ -1,6 +1,6 @@
 #include "talebook_api.h"
 
-#include "third_party/cjson/cJSON.h"
+#include "cjson/cJSON.h"
 
 #include <cctype>
 #include <iomanip>

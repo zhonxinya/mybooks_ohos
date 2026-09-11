@@ -4,6 +4,8 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { PageScaffold, PrimaryButton, SecondaryButton, LoadingState, SettingCell, AuthImage, ChipButton, StarRating, SectionTitle } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, ApiMessageResult, apiErrorMessage } from '../services/TalebookApi';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { AccountManager } from '../services/AccountManager';
 import { BookListApi } from '../services/BookListApi';
 import { BookListQuickItem, booklistColorHex, parseBookListQuickItems } from '../models/BookListModels';
 import { BookReviewItem, BookSocialStats } from '../models/BookReviewModels';
@@ -326,6 +328,10 @@ struct BookDetailPage {
     }
     // 立即置灰，避免重复入队
     this.downloading = true;
+    if (!ServerRegistry.supports(ServerFeature.DOWNLOAD_QUOTA)) {
+      this.doEnqueueDownload();
+      return;
+    }
     TalebookApi.getDownloadQuota()
       .then((quota) => {
         if (quota.allowed === false) {
@@ -344,7 +350,7 @@ struct BookDetailPage {
       return;
     }
     const context = getContext(this) as common.UIAbilityContext;
-    const booksDir = `${context.filesDir}/books`;
+    const booksDir = AccountManager.booksDir(context.filesDir);
     try {
       if (!fs.accessSync(booksDir)) {
         fs.mkdirSync(booksDir, true);
@@ -389,52 +395,60 @@ struct BookDetailPage {
     if (this.localOnly || this.bookId <= 0) {
       return;
     }
-    try {
-      const stats = await TalebookApi.getSocialStats(this.bookId);
-      this.socialStats = stats;
-    } catch (_error) {
-      this.socialStats = null;
+    if (ServerRegistry.supports(ServerFeature.BOOK_SOCIAL_STATS)) {
+      try {
+        const stats = await TalebookApi.getSocialStats(this.bookId);
+        this.socialStats = stats;
+      } catch (_error) {
+        this.socialStats = null;
+      }
     }
-    try {
-      this.reviews = await TalebookApi.getBookReviews(this.bookId);
-    } catch (_error) {
-      this.reviews = [];
+    if (ServerRegistry.supports(ServerFeature.BOOK_REVIEWS)) {
+      try {
+        this.reviews = await TalebookApi.getBookReviews(this.bookId);
+      } catch (_error) {
+        this.reviews = [];
+      }
     }
     this.loadExtraData();
   }
 
-  /** 每格式阅读统计 + 同类推荐/同名图书（失败静默）。 */
+  /** 每格式阅读统计 + 同类推荐/同名图书（服务端不支持的能力不发起请求，失败静默）。 */
   private loadExtraData(): void {
-    TalebookApi.getFormatReadingStats(this.bookId)
-      .then((stats: FormatReadingStat[]) => {
-        this.formatStats = stats;
-      })
-      .catch(() => {
-        this.formatStats = [];
-      });
-    TalebookApi.getBookSuggestions(this.bookId)
-      .then((items) => {
-        this.suggestions = items.slice(0, 12).map((item): BookDetailSuggestion => ({
-          id: item.id,
-          title: item.title,
-          cover: TalebookService.resolveCoverUrl(item.coverUrl),
-        }));
-      })
-      .catch(() => {
-        this.suggestions = [];
-      });
-    if (this.title.length > 0) {
-      TalebookApi.searchSameTitleBooks(this.title, this.bookId)
+    if (ServerRegistry.supports(ServerFeature.BOOK_FORMAT_STATS)) {
+      TalebookApi.getFormatReadingStats(this.bookId)
+        .then((stats: FormatReadingStat[]) => {
+          this.formatStats = stats;
+        })
+        .catch(() => {
+          this.formatStats = [];
+        });
+    }
+    if (ServerRegistry.supports(ServerFeature.BOOK_SUGGESTION)) {
+      TalebookApi.getBookSuggestions(this.bookId)
         .then((items) => {
-          this.sameTitleBooks = items.slice(0, 12).map((item): BookDetailSuggestion => ({
+          this.suggestions = items.slice(0, 12).map((item): BookDetailSuggestion => ({
             id: item.id,
             title: item.title,
             cover: TalebookService.resolveCoverUrl(item.coverUrl),
           }));
         })
         .catch(() => {
-          this.sameTitleBooks = [];
+          this.suggestions = [];
         });
+      if (this.title.length > 0) {
+        TalebookApi.searchSameTitleBooks(this.title, this.bookId)
+          .then((items) => {
+            this.sameTitleBooks = items.slice(0, 12).map((item): BookDetailSuggestion => ({
+              id: item.id,
+              title: item.title,
+              cover: TalebookService.resolveCoverUrl(item.coverUrl),
+            }));
+          })
+          .catch(() => {
+            this.sameTitleBooks = [];
+          });
+      }
     }
   }
 
@@ -1192,17 +1206,21 @@ struct BookDetailPage {
         TabContent() {
           List() {
             if (!this.localOnly && this.bookId > 0) {
-              ListItem() {
-                this.menuItem($r('sys.symbol.folder'), '加入书单', '', () => {
-                  this.closeSheet();
-                  void this.openBooklistSheet();
-                });
+              if (ServerRegistry.supports(ServerFeature.BOOKLISTS)) {
+                ListItem() {
+                  this.menuItem($r('sys.symbol.folder'), '加入书单', '', () => {
+                    this.closeSheet();
+                    void this.openBooklistSheet();
+                  });
+                }
               }
-              ListItem() {
-                this.menuItem($r('sys.symbol.lock'), this.isSole ? '取消私藏' : '设为私藏', '', () => {
-                  this.closeSheet();
-                  void this.toggleSole();
-                });
+              if (ServerRegistry.supports(ServerFeature.BOOK_SET_SOLE)) {
+                ListItem() {
+                  this.menuItem($r('sys.symbol.lock'), this.isSole ? '取消私藏' : '设为私藏', '', () => {
+                    this.closeSheet();
+                    void this.toggleSole();
+                  });
+                }
               }
             }
           }
@@ -1239,18 +1257,22 @@ struct BookDetailPage {
                 });
               }
             }
-            ListItem() {
-              this.menuItem($r('sys.symbol.paintbrush'), '更新标签', '', () => {
-                this.closeSheet();
-                void this.updateTags();
-              });
-            }
-            ListItem() {
-              this.menuItem($r('sys.symbol.wand_and_stars'),
-                this.aiFilling ? 'AI 补全中…' : 'AI 补全元数据', '', () => {
+            if (ServerRegistry.supports(ServerFeature.BOOK_TAGS_EDIT)) {
+              ListItem() {
+                this.menuItem($r('sys.symbol.paintbrush'), '更新标签', '', () => {
                   this.closeSheet();
-                  void this.aiFill();
+                  void this.updateTags();
                 });
+              }
+            }
+            if (ServerRegistry.supports(ServerFeature.BOOK_AIFILL)) {
+              ListItem() {
+                this.menuItem($r('sys.symbol.wand_and_stars'),
+                  this.aiFilling ? 'AI 补全中…' : 'AI 补全元数据', '', () => {
+                    this.closeSheet();
+                    void this.aiFill();
+                  });
+              }
             }
             ListItem() {
               this.menuItem($r('sys.symbol.archivebox_fill'), '保存元数据到文件', '', () => {
@@ -1275,6 +1297,33 @@ struct BookDetailPage {
                 this.openSheet('cover');
               });
             }
+            if (ServerRegistry.supports(ServerFeature.ANNOTATIONS)) {
+              ListItem() {
+                this.menuItem($r('sys.symbol.doc_text'), '书内标注', '高亮、笔记与书签', () => {
+                  this.closeSheet();
+                  router.pushUrl({
+                    url: 'pages/BookAnnotationsPage',
+                    params: { bookId: this.bookId, bookTitle: this.title },
+                  });
+                });
+              }
+            }
+            if (ServerRegistry.supports(ServerFeature.BOOK_TXT)) {
+              ListItem() {
+                this.menuItem($r('sys.symbol.doc_plaintext'), 'TXT 工具', '内容片段 / 目录解析 / 位置', () => {
+                  this.closeSheet();
+                  router.pushUrl({ url: 'pages/TxtBookPage', params: { bookId: this.bookId } });
+                });
+              }
+            }
+            if (ServerRegistry.supports(ServerFeature.BOOK_PROGRESS)) {
+              ListItem() {
+                this.menuItem($r('sys.symbol.clock'), '阅读进度与属性', '跨端进度、可见范围、媒体类型', () => {
+                  this.closeSheet();
+                  router.pushUrl({ url: 'pages/ReadingProgressPage', params: { bookId: this.bookId } });
+                });
+              }
+            }
           }
           .width('100%')
           .height('100%')
@@ -1293,6 +1342,14 @@ struct BookDetailPage {
                     params: { bookId: this.bookId, title: this.title, author: this.author, cover: this.cover },
                   });
                 });
+              }
+              if (ServerRegistry.supports(ServerFeature.COMIC)) {
+                ListItem() {
+                  this.menuItem($r('sys.symbol.square_grid_2x2'), '漫画阅读', '在线阅读', () => {
+                    this.closeSheet();
+                    router.pushUrl({ url: 'pages/ComicReaderPage', params: { bookId: this.bookId } });
+                  });
+                }
               }
             }
             .width('100%')
@@ -1390,27 +1447,31 @@ struct BookDetailPage {
           void this.pickAndUploadCover();
         },
       });
-      SecondaryButton({
-        label: '生成默认封面',
-        buttonEnabled: !this.coverBusy,
-        onTap: () => {
-          void this.runCoverAction(() => TalebookApi.generateDefaultCover(this.bookId), '已生成默认封面');
-        },
-      });
-      SecondaryButton({
-        label: '裁剪封面白边',
-        buttonEnabled: !this.coverBusy,
-        onTap: () => {
-          void this.runCoverAction(() => TalebookApi.cropCover(this.bookId), '封面已裁剪');
-        },
-      });
-      SecondaryButton({
-        label: '封面盖章',
-        buttonEnabled: !this.coverBusy,
-        onTap: () => {
-          void this.runCoverAction(() => TalebookApi.addStamp(this.bookId, 'bottom-right'), '图章已添加');
-        },
-      });
+      if (ServerRegistry.supports(ServerFeature.BOOK_CROP_COVER)) {
+        SecondaryButton({
+          label: '生成默认封面',
+          buttonEnabled: !this.coverBusy,
+          onTap: () => {
+            void this.runCoverAction(() => TalebookApi.generateDefaultCover(this.bookId), '已生成默认封面');
+          },
+        });
+        SecondaryButton({
+          label: '裁剪封面白边',
+          buttonEnabled: !this.coverBusy,
+          onTap: () => {
+            void this.runCoverAction(() => TalebookApi.cropCover(this.bookId), '封面已裁剪');
+          },
+        });
+      }
+      if (ServerRegistry.supports(ServerFeature.BOOK_ADD_STAMP)) {
+        SecondaryButton({
+          label: '封面盖章',
+          buttonEnabled: !this.coverBusy,
+          onTap: () => {
+            void this.runCoverAction(() => TalebookApi.addStamp(this.bookId, 'bottom-right'), '图章已添加');
+          },
+        });
+      }
     }
     .width('100%')
     .padding($r('app.float.page_padding'));
@@ -1892,7 +1953,7 @@ struct BookDetailPage {
               .backgroundColor($r('app.color.card_background'));
             }
 
-            if (!this.localOnly && this.bookId > 0) {
+            if (!this.localOnly && this.bookId > 0 && ServerRegistry.supports(ServerFeature.BOOK_REVIEWS)) {
               Column({ space: 10 }) {
                 Row({ space: 8 }) {
                   Text(`书评 ${this.reviews.length}`)
@@ -2118,10 +2179,12 @@ struct BookDetailPage {
           }
           .width('100%');
           Row({ space: 10 }) {
-            this.quickAction($r('sys.symbol.bookmark'), this.isWants ? '已想读' : '想读',
-              this.isWants, () => {
-                void this.toggleWants();
-              });
+            if (ServerRegistry.supports(ServerFeature.BOOK_WANTS)) {
+              this.quickAction($r('sys.symbol.bookmark'), this.isWants ? '已想读' : '想读',
+                this.isWants, () => {
+                  void this.toggleWants();
+                });
+            }
             this.quickAction($r('sys.symbol.paperplane'), '推送', false, () => {
               void this.openPushSheet();
             });

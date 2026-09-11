@@ -1,0 +1,64 @@
+# CodeQL 高级设置（advanced setup）
+#
+# 本仓库原使用默认设置（default setup），但默认设置无法排除路径（仓库级
+# 自定义属性 `github-codeql-config-file` 仅组织可用）。为把 vendored 第三方
+# 源码（`ohos/third_party/`）排除在分析之外，改为高级设置并引用
+# `.github/codeql/codeql-config.yml`。
+#
+# 语言与构建模式与默认设置保持一致：
+# - 四种语言均不构建（`build-mode: none`）；本项目为 HarmonyOS/hvigor 工程，
+#   并无 CodeQL 可识别的常规构建流程，默认设置同样采用 build-mode: none。
+name: "CodeQL Advanced"
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: '38 7 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      # 上传分析结果所需
+      security-events: write
+      # 私有仓库下 github/codeql-action/analyze 读取作业运行状态所需
+      actions: read
+      # 读取仓库内容
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: c-cpp
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"

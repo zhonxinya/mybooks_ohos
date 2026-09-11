@@ -1,4 +1,4 @@
-import { router } from '@kit.ArkUI';
+import { router, promptAction } from '@kit.ArkUI';
 import {
   PageScaffold, BookCatalogView, BookViewToggleButton, BookListItemData,
   LoadingState, EmptyState, SearchBar, TextButton, IconCircleButton,
@@ -6,6 +6,7 @@ import {
 } from '../components';
 import { TalebookApi, AdminBookListResponse, ApiMessageResult, CropCoverResult } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { BookUploadService } from '../services/BookUploadService';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
@@ -202,7 +203,18 @@ struct AdminBookListPage {
     }
   }
 
+  /** 服务端是否支持任意一项书籍批量操作（批量删除 / 刷新元数据 / 整套批处理）。 */
+  private supportsAnyBookBatch(): boolean {
+    return ServerRegistry.supports(ServerFeature.ADMIN_BOOK_DELETE)
+      || ServerRegistry.supports(ServerFeature.ADMIN_BOOK_FILL)
+      || ServerRegistry.supports(ServerFeature.ADMIN_BOOK_BATCH);
+  }
+
   private confirmDeleteSelected(): void {
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_BOOK_DELETE)) {
+      this.toast(`${ServerRegistry.profile().displayName} 服务端不支持批量删除书籍`);
+      return;
+    }
     this.getUIContext().showAlertDialog({
       title: '删除选中书籍',
       message: `确定删除选中的 ${this.selectedIds.length} 本书籍吗？此操作不可恢复。`,
@@ -228,42 +240,61 @@ struct AdminBookListPage {
       this.toast('请先选择书籍');
       return;
     }
+    if (!this.supportsAnyBookBatch()) {
+      this.toast(`${ServerRegistry.profile().displayName} 服务端不支持批量操作`);
+      return;
+    }
+    // 各服务端支持的批量操作不同：按能力动态组装按钮，并记录同序操作键用于分发（不依赖 index）
+    const buttons: promptAction.Button[] = [];
+    const actions: string[] = [];
+    if (ServerRegistry.supports(ServerFeature.ADMIN_BOOK_DELETE)) {
+      buttons.push({ text: '删除选中', color: '#E84026' });
+      actions.push('delete');
+    }
+    if (ServerRegistry.supports(ServerFeature.ADMIN_BOOK_FILL)) {
+      buttons.push({ text: '刷新互联网元数据', color: '#007DFF' });
+      actions.push('fill');
+    }
+    if (ServerRegistry.supports(ServerFeature.ADMIN_BOOK_BATCH)) {
+      buttons.push({ text: 'AI 更新选中', color: '#007DFF' });
+      actions.push('ai');
+      buttons.push({ text: 'EPUB 转换', color: '#007DFF' });
+      actions.push('epub');
+      buttons.push({ text: '类型互转（电子书/实体书）', color: '#007DFF' });
+      actions.push('exchange');
+      buttons.push({ text: '更多操作…', color: '#007DFF' });
+      actions.push('more');
+    }
     this.getUIContext().getPromptAction().showActionMenu({
       title: `批量操作（已选 ${this.selectedIds.length} 本）`,
-      buttons: [
-        { text: '删除选中', color: '#E84026' },
-        { text: '刷新互联网元数据', color: '#007DFF' },
-        { text: 'AI 更新选中', color: '#007DFF' },
-        { text: 'EPUB 转换', color: '#007DFF' },
-        { text: '类型互转（电子书/实体书）', color: '#007DFF' },
-        { text: '更多操作…', color: '#007DFF' },
-      ],
-    }).then((result) => {
+      buttons: buttons,
+    } as promptAction.ActionMenuOptions).then((result) => {
       const ids = this.selectedIds;
-      if (result.index === 0) {
+      const action: string = actions[result.index] ?? '';
+      if (action === 'delete') {
         this.confirmDeleteSelected();
-      } else if (result.index === 1) {
+      } else if (action === 'fill') {
         TalebookApi.fillAdminBooks(ids)
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '已启动刷新元数据任务');
             this.exitSelection();
           })
           .catch((e: Object) => this.toast(`操作失败：${e}`));
-      } else if (result.index === 2) {
+      } else if (action === 'ai') {
         TalebookApi.aiFillAdminBooks(ids)
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '已启动 AI 更新任务');
             this.exitSelection();
           })
           .catch((e: Object) => this.toast(`操作失败：${e}`));
-      } else if (result.index === 3) {
+      } else if (action === 'epub') {
         TalebookApi.epubConvertAdminBooks(ids)
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '已启动 EPUB 转换任务');
             this.exitSelection();
           })
           .catch((e: Object) => this.toast(`操作失败：${e}`));
-      } else if (result.index === 4) {
+      } else if (action === 'exchange') {
         TalebookApi.exchangeBookType(ids)
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '类型互转完成');
@@ -271,7 +302,7 @@ struct AdminBookListPage {
             void this.loadBooks(true);
           })
           .catch((e: Object) => this.toast(`操作失败：${e}`));
-      } else if (result.index === 5) {
+      } else if (action === 'more') {
         this.showMoreSelectionActions(ids);
       }
     }).catch(() => {});
@@ -303,6 +334,10 @@ struct AdminBookListPage {
           })
           .catch((e: Object) => this.toast(`操作失败：${e}`));
       } else if (result.index === 2) {
+        if (!ServerRegistry.supports(ServerFeature.BOOK_CROP_COVER)) {
+          this.toast(`${ServerRegistry.profile().displayName} 服务端不支持批量裁剪封面`);
+          return;
+        }
         TalebookApi.cropCovers(ids)
           .then((rsp: CropCoverResult) => {
             const data: Record<string, Object> = rsp.data ?? {};
@@ -317,44 +352,61 @@ struct AdminBookListPage {
 
   /** 全局批量工具菜单 */
   private showGlobalTools(): void {
+    // 各项工具归属不同能力（刷新元数据为单项，其余属整套批处理），按能力动态组装菜单
+    const buttons: promptAction.Button[] = [];
+    const actions: string[] = [];
+    if (ServerRegistry.supports(ServerFeature.ADMIN_BOOK_FILL)) {
+      buttons.push({ text: '刷新全部元数据', color: '#007DFF' });
+      actions.push('fill-all');
+    }
+    if (ServerRegistry.supports(ServerFeature.ADMIN_BOOK_BATCH)) {
+      buttons.push({ text: '更新全部元数据', color: '#007DFF' });
+      actions.push('update-all-meta');
+      buttons.push({ text: '全部更新标题排序', color: '#007DFF' });
+      actions.push('update-title-sort');
+      buttons.push({ text: '更新全部动态封面', color: '#007DFF' });
+      actions.push('update-dynamic-cover');
+      buttons.push({ text: '重置全部封面', color: '#007DFF' });
+      actions.push('reset-cover');
+      buttons.push({ text: '清理无效条目', color: '#E84026' });
+      actions.push('clear-invalid');
+    }
+    if (buttons.length === 0) {
+      this.toast(`${ServerRegistry.profile().displayName} 服务端不支持批量工具`);
+      return;
+    }
     this.getUIContext().getPromptAction().showActionMenu({
       title: '批量工具',
-      buttons: [
-        { text: '刷新全部元数据', color: '#007DFF' },
-        { text: '更新全部元数据', color: '#007DFF' },
-        { text: '全部更新标题排序', color: '#007DFF' },
-        { text: '更新全部动态封面', color: '#007DFF' },
-        { text: '重置全部封面', color: '#007DFF' },
-        { text: '清理无效条目', color: '#E84026' },
-      ],
-    }).then((result) => {
-      if (result.index === 0) {
+      buttons: buttons,
+    } as promptAction.ActionMenuOptions).then((result) => {
+      const action: string = actions[result.index] ?? '';
+      if (action === 'fill-all') {
         TalebookApi.fillAdminBooks('all')
           .then((rsp: ApiMessageResult) => this.handleOpResult(rsp, '已启动刷新元数据任务'))
           .catch((e: Object) => this.toast(`操作失败：${e}`));
-      } else if (result.index === 1) {
+      } else if (action === 'update-all-meta') {
         TalebookApi.updateAllAdminMeta()
           .then((rsp: ApiMessageResult) => this.handleOpResult(rsp, '已启动更新全部元数据任务'))
           .catch((e: Object) => this.toast(`操作失败：${e}`));
-      } else if (result.index === 2) {
+      } else if (action === 'update-title-sort') {
         TalebookApi.updateAdminTitleSort()
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '标题排序已更新');
             void this.loadBooks(true);
           })
           .catch((e: Object) => this.toast(`操作失败：${e}`));
-      } else if (result.index === 3) {
+      } else if (action === 'update-dynamic-cover') {
         TalebookApi.updateAdminDynamicCover('all')
           .then((rsp: ApiMessageResult) => this.handleOpResult(rsp, '已启动动态封面更新任务'))
           .catch((e: Object) => this.toast(`操作失败：${e}`));
-      } else if (result.index === 4) {
+      } else if (action === 'reset-cover') {
         TalebookApi.resetAdminCover('all')
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '封面已重置');
             void this.loadBooks(true);
           })
           .catch((e: Object) => this.toast(`操作失败：${e}`));
-      } else if (result.index === 5) {
+      } else if (action === 'clear-invalid') {
         TalebookApi.clearAdminInvalidItems()
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '已清理无效条目');
@@ -399,10 +451,13 @@ struct AdminBookListPage {
           label: '上传图书',
           onTap: () => router.pushUrl({ url: 'pages/BookUploadPage' }),
         });
-        TextButton({
-          label: '批量工具',
-          onTap: () => this.showGlobalTools(),
-        });
+        if (ServerRegistry.supports(ServerFeature.ADMIN_BOOK_FILL)
+          || ServerRegistry.supports(ServerFeature.ADMIN_BOOK_BATCH)) {
+          TextButton({
+            label: '批量工具',
+            onTap: () => this.showGlobalTools(),
+          });
+        }
       }
     }
     .width('100%')
@@ -457,12 +512,14 @@ struct AdminBookListPage {
   @Builder
   selectionBar() {
     Row({ space: 12 }) {
-      SecondaryButton({
-        label: '批量操作',
-        buttonEnabled: this.selectedIds.length > 0,
-        fullWidth: false,
-        onTap: () => this.showSelectionActions(),
-      }).layoutWeight(1);
+      if (this.supportsAnyBookBatch()) {
+        SecondaryButton({
+          label: '批量操作',
+          buttonEnabled: this.selectedIds.length > 0,
+          fullWidth: false,
+          onTap: () => this.showSelectionActions(),
+        }).layoutWeight(1);
+      }
     }
     .width('100%')
     .padding({ left: 16, right: 16, top: 8, bottom: 12 });

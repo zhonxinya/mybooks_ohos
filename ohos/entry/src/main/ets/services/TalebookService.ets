@@ -6,11 +6,19 @@ import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { parseApiEnvelopeTask, parseJsonArrayTask } from './TalebookJsonParser';
 import { TalebookCoreService } from './TalebookCoreService';
 import { PasswordStore } from './PasswordStore';
+import { ServerRegistry, ServerKind } from './ServerProfile';
+import { ACTIVE_ACCOUNT_KEY, identityDirFor, LEGACY_PASSWORD_ALIAS, passwordAliasFor } from '../models/AccountModels';
 
 export interface ApiEnvelope {
   status: number;
   body: Record<string, Object> | null;
   error: string;
+}
+
+/** 自动登录结果；失败时带可展示的原因。 */
+export interface AuthAttempt {
+  ok: boolean;
+  reason: string;
 }
 
 export interface DownloadRecord {
@@ -96,6 +104,8 @@ export interface DownloadTask {
   message: string;
   createdAt: number;
   updatedAt: number;
+  /** 任务所属账号 id；talebook 任务切换账号后不再执行（防止向其他服务器下载）。 */
+  accountId?: string;
   payload?: SoNovelBookPayload;
   talebookPayload?: TalebookDownloadPayload;
 }
@@ -112,6 +122,13 @@ export class TalebookService {
   /** 由 Asset Store Kit 加密保存的密码类键，不再写入明文 JSON。 */
   private static readonly PASSWORD_KEYS: string[] = ['talebook_password'];
   private static passwordMigrated: boolean = false;
+  /** 应用数据根目录（全局根）；账号身份根在该目录下的 accounts/<id>。 */
+  private static dataDir_: string = '';
+
+  /** 应用数据根目录（全局偏好所在位置）。 */
+  static dataDir(): string {
+    return TalebookService.dataDir_;
+  }
 
   static init(dataDir: string): void {
     if (TalebookService.initialized) {
@@ -119,6 +136,7 @@ export class TalebookService {
     }
     try {
       entry.init(dataDir);
+      TalebookService.dataDir_ = dataDir;
       TalebookService.initialized = true;
     } catch (error) {
       hilog.error(0x0000, TAG, 'init failed: %{public}s', String(error));
@@ -260,43 +278,76 @@ export class TalebookService {
     entry.setBaseUrl(service, url);
   }
 
+  /** 切换本模块（libentry）的账号身份根：凭据/下载记录/历史/书签 + Cookie。 */
+  static setIdentityDir(dir: string): void {
+    entry.setIdentityDir(dir);
+  }
+
   static ensureTalebookConfigured(): boolean {
     const url = TalebookService.secureGet('talebook_url');
     if (url.length === 0) {
       return false;
     }
     TalebookService.setBaseUrl('talebook', url);
-    // 同步到 talebook_core 模块（书单/书评等新 API 走此通道）
+    // 同步到 mybooks_core 模块（书单/书评等新 API 走此通道）
     TalebookCoreService.syncBaseUrl('talebook', url);
     return true;
   }
 
   static secureGet(key: string): string {
     if (TalebookService.PASSWORD_KEYS.indexOf(key) >= 0) {
-      return TalebookService.readPassword(key);
+      return TalebookService.readPassword();
+    }
+    if (TalebookService.isGlobalSecureKey(key)) {
+      return entry.secureGetGlobal(key);
     }
     return entry.secureGet(key);
   }
 
   static secureSet(key: string, value: string): void {
     if (TalebookService.PASSWORD_KEYS.indexOf(key) >= 0) {
-      PasswordStore.set(key, value);
+      PasswordStore.set(TalebookService.activePasswordAlias(), value);
+      return;
+    }
+    if (TalebookService.isGlobalSecureKey(key)) {
+      entry.secureSetGlobal(key, value);
       return;
     }
     entry.secureSet(key, value);
   }
 
-  /** 读取密码类关键资产；首次读取时把旧版明文存储迁移到 Asset Store Kit 并清除明文。 */
-  private static readPassword(key: string): string {
-    const secret = PasswordStore.get(key);
-    if (secret.length > 0 || TalebookService.passwordMigrated) {
+  /**
+   * 全局（不随账号）凭据键前缀：SoNovel 是独立第三方服务，其地址不随账号切换。
+   * 升级前的单账号安装其身份根就是全局根，因此历史值无需迁移即可被读到。
+   */
+  private static isGlobalSecureKey(key: string): boolean {
+    return key.startsWith('sonovel_');
+  }
+
+  /** 当前账号对应的密码别名；默认（历史）账号沿用旧别名以复用已保存的密码。 */
+  private static activePasswordAlias(): string {
+    return passwordAliasFor(entry.prefGet(ACTIVE_ACCOUNT_KEY));
+  }
+
+  /**
+   * 读取当前账号的密码（始终来自 Asset Store）。
+   * 旧版把密码明文存在 secure JSON 中，且键名与默认账号别名相同，故仅对默认账号做一次迁移。
+   * 新账号可能有不同的密码，不能回退到默认账号的明文，否则会串账号。
+   */
+  private static readPassword(): string {
+    const alias: string = TalebookService.activePasswordAlias();
+    const secret: string = PasswordStore.get(alias);
+    if (secret.length > 0) {
       return secret;
     }
+    if (alias !== LEGACY_PASSWORD_ALIAS || TalebookService.passwordMigrated) {
+      return '';
+    }
     TalebookService.passwordMigrated = true;
-    const legacy: string = entry.secureGet(key);
+    const legacy: string = entry.secureGet(LEGACY_PASSWORD_ALIAS);
     if (legacy.length > 0) {
-      PasswordStore.set(key, legacy);
-      entry.secureSet(key, '');
+      PasswordStore.set(alias, legacy);
+      entry.secureSet(LEGACY_PASSWORD_ALIAS, '');
     }
     return legacy;
   }
@@ -372,6 +423,8 @@ export class TalebookService {
   static invalidateLocalCaches(): void {
     TalebookService.downloadsCache = null;
     TalebookService.historyCache = null;
+    // 允许下一次 warmLocalCaches() 按新账号重新预热
+    TalebookService.localCacheWarmPromise = null;
   }
 
   static getBookmarks(): Record<string, Object>[] {
@@ -428,6 +481,13 @@ export class TalebookService {
   }
 
   static applyLocalConfig(): void {
+    // 先恢复当前账号的身份根：凭据/下载记录/历史/书签与其 Cookie 都随账号隔离
+    const identityDir = identityDirFor(TalebookService.dataDir_, entry.prefGet(ACTIVE_ACCOUNT_KEY));
+    TalebookService.setIdentityDir(identityDir);
+    TalebookCoreService.setIdentityDir(identityDir);
+    // 再恢复服务端类型，后续端点/分页/能力判定均依赖它
+    const kind = TalebookService.prefGet(ServerRegistry.PREF_KEY, ServerKind.MYBOOKS);
+    ServerRegistry.setKind(ServerRegistry.parse(kind));
     const url = TalebookService.secureGet('talebook_url');
     if (url.length > 0) {
       TalebookService.setBaseUrl('talebook', url);
@@ -507,11 +567,13 @@ export class TalebookService {
     if (TalebookService.sessionRestorePromise !== null) {
       return TalebookService.sessionRestorePromise;
     }
+    // 先套用本地配置（身份根 + 两套模块的 base URL + TLS），
+    // 否则新账号/未登录场景下两模块地址为空，请求会以 curl 的 malformed URL 报错
+    TalebookService.applyLocalConfig();
     const url = TalebookService.secureGet('talebook_url');
     if (url.length === 0) {
       return Promise.resolve(false);
     }
-    TalebookService.applyLocalConfig();
     TalebookService.sessionRestorePromise = TalebookService.restoreSessionAsync().finally(() => {
       TalebookService.sessionRestorePromise = null;
     });
@@ -523,22 +585,53 @@ export class TalebookService {
   }
 
   static async restoreSessionAsync(): Promise<boolean> {
+    const attempt = await TalebookService.tryAutoLogin();
+    return attempt.ok;
+  }
+
+  /** 从登录响应中提取可展示的原因：优先服务端 `msg`（中文提示），其次 `err` 错误码。 */
+  static authReason(envelope: ApiEnvelope): string {
+    if (envelope.body !== null) {
+      const msg = String(envelope.body['msg'] ?? '');
+      if (msg.length > 0 && msg !== 'ok') {
+        return msg;
+      }
+    }
+    return envelope.error.length > 0 ? envelope.error : '登录失败';
+  }
+
+  /**
+   * 用已保存的凭据尝试自动登录（不弹 UI）。
+   * 失败时返回具体原因，由调用方决定是否跳转登录页并把原因展示给用户。
+   */
+  static async tryAutoLogin(): Promise<AuthAttempt> {
+    TalebookService.applyLocalConfig();
     const url = TalebookService.secureGet('talebook_url');
     if (url.length === 0) {
-      return false;
+      const noUrl: AuthAttempt = { ok: false, reason: '未配置服务器地址' };
+      return noUrl;
     }
-    TalebookService.applyLocalConfig();
     const info = await TalebookService.getUserInfoAsync();
     if (TalebookService.isLoggedInEnvelope(info)) {
       TalebookService.saveUserProfileFromEnvelope(info);
-      return true;
+      const already: AuthAttempt = { ok: true, reason: '' };
+      return already;
     }
     const creds = TalebookService.getLoginCredentials();
     if (creds.username.length === 0 || creds.password.length === 0) {
-      return false;
+      const noCreds: AuthAttempt = {
+        ok: false,
+        reason: '该账号未保存密码，请手动登录一次（之后切换即可自动登录）',
+      };
+      return noCreds;
     }
     const login = await TalebookService.signInAsync(creds.username, creds.password);
-    return TalebookService.isApiSuccess(login);
+    if (TalebookService.isApiSuccess(login)) {
+      const success: AuthAttempt = { ok: true, reason: '' };
+      return success;
+    }
+    const failed: AuthAttempt = { ok: false, reason: TalebookService.authReason(login) };
+    return failed;
   }
 
   static restoreSession(): boolean {
@@ -601,18 +694,16 @@ export class TalebookService {
   }
 
   static searchAsync(name: string, page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiSearchAsync(name, page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync('/api/search', page, limit,
+      `name=${encodeURIComponent(name)}`);
   }
 
   static getRecentAsync(page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetRecentAsync(page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync('/api/recent', page, limit);
   }
 
   static getHotAsync(page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetHotAsync(page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync('/api/hot', page, limit);
   }
 
   static search(name: string, page: number = 1, limit: number = 20): ApiEnvelope {
@@ -635,9 +726,9 @@ export class TalebookService {
     }
   }
 
+  /** 全部书籍（端点由当前 ServerProfile 决定：mybooks `/api/all`，talebook `/api/library`）。 */
   static getAllBooksAsync(page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetAllBooksAsync(page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync(ServerRegistry.allBooksPath(), page, limit);
   }
 
   static getBookNav(): ApiEnvelope {
@@ -680,8 +771,7 @@ export class TalebookService {
   }
 
   static getReadingListAsync(page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetReadingListAsync(page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync('/api/reading', page, limit);
   }
 
   static getFavorites(page: number = 1, limit: number = 20): ApiEnvelope {
@@ -689,8 +779,7 @@ export class TalebookService {
   }
 
   static getFavoritesAsync(page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetFavoritesAsync(page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync('/api/favorites', page, limit);
   }
 
   static getMessages(page: number = 1, limit: number = 20): ApiEnvelope {
@@ -706,29 +795,34 @@ export class TalebookService {
     return TalebookService.parseEnvelope(entry.apiGetMetaList(type, page, limit));
   }
 
+  /** 元数据列表（GET /api/{meta}，服务端不分页；meta 键按 ServerProfile 归一化）。 */
   static getMetaListAsync(type: string, page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetMetaListAsync(type, page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync(
+      `/api/${ServerRegistry.resolveMetaType(type)}`, page, limit);
   }
 
-  static getMetaBooks(type: string, name: string, page: number = 1, limit: number = 20): ApiEnvelope {
-    try {
-      return TalebookService.parseNative(entry.apiGetMetaBooks(type, name, page, limit));
-    } catch (error) {
-      return TalebookService.failedEnvelope(`${error}`);
-    }
-  }
-
+  /** 元数据下的书籍（GET /api/{meta}/{name}，start/size 分页）。 */
   static getMetaBooksAsync(type: string, name: string, page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetMetaBooksAsync(type, name, page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+    return TalebookService.getServerBookListAsync(
+      `/api/${ServerRegistry.resolveMetaType(type)}/${encodeURIComponent(name)}`, page, limit);
+  }
+  static getAdminBooks(page: number = 1, limit: number = 20): ApiEnvelope {
+    return TalebookService.parseEnvelope(entry.apiGetAdminBooks(page, limit));
   }
 
-  /** 通用服务端书籍列表（start/size 分页，如 /api/audiobooks、/api/printbooks）。 */
-  static async getServerBookListAsync(path: string, page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
+  /** 管理端书籍列表（端点与分页由 ServerProfile 决定）。 */
+  static getAdminBooksAsync(page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
+    return TalebookService.getListAsync(ServerRegistry.adminBooksPath(),
+      ServerRegistry.adminBooksQuery(page, limit));
+  }
+
+  /**
+   * 通用服务端列表请求（query 已含分页）。
+   * 两端 ListHandler 系只识别 start(偏移)+size(每页)，均通过 `ServerProfile.listQuery` 生成。
+   */
+  private static async getListAsync(path: string, query: string): Promise<ApiEnvelope> {
     try {
-      const start = (page - 1) * limit;
-      const raw = await TalebookCoreService.talebookGet(`${path}?start=${start}&size=${limit}`);
+      const raw = await TalebookCoreService.talebookGet(`${path}?${query}`);
       const body = JSON.parse(raw) as Record<string, Object>;
       const envelope: ApiEnvelope = { status: 200, body: body, error: '' };
       envelope.error = TalebookService.apiMessage(envelope);
@@ -738,13 +832,11 @@ export class TalebookService {
     }
   }
 
-  static getAdminBooks(page: number = 1, limit: number = 20): ApiEnvelope {
-    return TalebookService.parseEnvelope(entry.apiGetAdminBooks(page, limit));
-  }
-
-  static getAdminBooksAsync(page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
-    return entry.apiGetAdminBooksAsync(page, limit).then((raw: string) => TalebookService.parseEnvelopeAsync(raw))
-      .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+  /** 通用服务端书籍列表（分页由当前 ServerProfile 决定）。 */
+  static getServerBookListAsync(path: string, page: number = 1, limit: number = 20,
+    extraQuery: string = ''): Promise<ApiEnvelope> {
+    const query = ServerRegistry.listQuery(page, limit);
+    return TalebookService.getListAsync(path, extraQuery.length > 0 ? `${query}&${extraQuery}` : query);
   }
 
   static getAdminUsers(page: number = 1, limit: number = 20): ApiEnvelope {

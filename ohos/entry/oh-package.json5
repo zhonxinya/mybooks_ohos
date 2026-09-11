@@ -1,11 +1,11 @@
 {
   "name": "entry",
   "version": "1.0.0",
-  "description": "Talebook entry module",
+  "description": "MyBooks entry module",
   "main": "",
   "author": "",
   "license": "BSD-2-Clause",
   "dependencies": {
-    "talebook_core": "file:../talebook_core"
+    "mybooks_core": "file:../mybooks_core"
   }
 }

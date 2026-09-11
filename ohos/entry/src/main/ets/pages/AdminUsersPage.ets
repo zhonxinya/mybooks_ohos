@@ -3,6 +3,7 @@ import {
 } from '../components';
 import { TalebookApi } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 
 interface SelectOptionDef {
@@ -258,6 +259,11 @@ struct AdminUsersPage {
     }
     if (email.indexOf('@') < 0) {
       this.toast('Email无效');
+      return;
+    }
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_USER_CREATE)) {
+      this.saving = false;
+      this.toast(`${ServerRegistry.profile().displayName} 服务端不支持在客户端新增用户`);
       return;
     }
     this.saving = true;

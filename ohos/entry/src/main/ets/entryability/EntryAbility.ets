@@ -5,6 +5,7 @@ import { deviceInfo } from '@kit.BasicServicesKit';
 import { WindowAbility } from './WindowAbility';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookCoreService } from '../services/TalebookCoreService';
+import { AccountManager } from '../services/AccountManager';
 import { NotificationService } from '../services/NotificationService';
 import { DownloadTaskService } from '../services/DownloadTaskService';
 import { ReadKitSession } from '../services/ReadKitSession';
@@ -20,6 +21,10 @@ export default class EntryAbility extends UIAbility {
     TalebookService.init(this.context.filesDir);
     TalebookCoreService.ensureInitialized(this.context);
     TalebookService.applyLocalConfig();
+    // 升级迁移：把既有单账号配置落成默认账号（其身份根就是 filesDir，不搬移任何文件）
+    AccountManager.ensureMigrated();
+    // 按当前账号记录重新下发身份：自愈历史上未能落盘的账号配置，避免重启后请求打到空地址
+    AccountManager.ensureActiveIdentity();
     NotificationService.init();
     DownloadTaskService.notifyChanged();
     void TalebookService.warmLocalCaches();

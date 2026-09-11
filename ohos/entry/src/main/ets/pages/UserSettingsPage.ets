@@ -5,6 +5,7 @@ import {
   SectionTitle, AuthImage,
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import {
   TalebookApi, AvatarUploadResponse, UserUpdatePayload, VipInfoResponse,
 } from '../services/TalebookApi';
@@ -73,6 +74,10 @@ struct UserSettingsPage {
   }
 
   private async refreshVip(): Promise<void> {
+    if (!ServerRegistry.supports(ServerFeature.USER_VIP)) {
+      this.vipSummary = '';
+      return;
+    }
     try {
       const rsp: VipInfoResponse = await TalebookApi.getVipInfo();
       if (rsp.err !== undefined && rsp.err !== 'ok') {

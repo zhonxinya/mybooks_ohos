@@ -7,6 +7,7 @@ import { HomeBook, ReadingDashboard, ReadingStatsSummary, parseHomeBooks, parseR
 import { ExpectedItemModel, UserMemoItem, parseExpectedItems, parseUserMemos } from '../models/UserModels';
 import { FormatReadingStat, ReadingDevice, parseFormatStats, parseReadingDevices } from '../models/DeviceModels';
 import { TalebookCoreService } from './TalebookCoreService';
+import { ServerEndpoint, ServerRegistry } from './ServerProfile';
 
 export { EditBookRequest, ReferBook, AudioFileInfo, AudioInfoResponse, AudioConversionResponse, AudioCollectionResponse, AudioPurchaseResponse };
 export { AdminBookListResponse, ApiMessageResult, AccessStatusResponse, WhoAmIResponse, UploadBookResponse, CropCoverResult, ToolboxDataResponse, ToolboxTaskProgressResponse, MimoTtsConvertRequest, MimoTtsTestRequest, MimoTtsConfigResponse, MimoTtsClonesResponse, MimoTtsPromptsResponse, EpubBeautifyRunOptions, BookBarnApplyTokenResponse, BookFilePathResponse, TxtReadResponse, TxtParserResponse, BatchTagUpdateResponse, BatchCategoryResponse, ClearRareTagsResponse, LibraryStatsResponse, LibraryStatsData, SysInfoResponse, AdminRunningTasksResponse, BatchAddRunResponse, BatchAddStatusResponse, ImportStatusResponse, AudioImportStatusResponse, ToolboxStoreIndexResponse, BarcodeResponse, InstallStatusResponse, InstallRequest, StampStatusResponse, ThanksNotesResponse, AdminTokenResponse, BookbarnAdminTokenResponse };
@@ -453,13 +454,20 @@ function appendQuery(base: string, key: string, value: string | number): string 
   return `${base}${sep}${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`;
 }
 
+/**
+ * 列表分页参数（start/size）。
+ * 两端 ListHandler 系（mybooks `ListHandler.get_book_list`、talebook `ListHandler.render_book_list`）
+ * 只识别 `start`（偏移）+ `size`（每页），传 `page`/`limit` 会被忽略而恒返回首页。
+ */
 function buildPagePath(base: string, page: number, limit: number): string {
-  let path = base;
-  path = appendQuery(path, 'page', page);
-  path = appendQuery(path, 'limit', limit);
-  return path;
+  const sep = base.indexOf('?') >= 0 ? '&' : '?';
+  return `${base}${sep}${ServerRegistry.listQuery(page, limit)}`;
 }
 
+/**
+ * 解析书籍列表响应。
+ * 列表键两端不同：mybooks 用 `books`，talebook 用 `items`；直接返回数组也接受。
+ */
 function parseList(raw: string): BookItem[] {
   const data = JSON.parse(raw) as Array<Record<string, Object>> | BookListPayload;
   let books: Array<Record<string, Object>> = [];
@@ -467,6 +475,11 @@ function parseList(raw: string): BookItem[] {
     books = data;
   } else if (data.books !== undefined) {
     books = data.books;
+  } else {
+    const items = (data as Record<string, Object>)['items'];
+    if (items !== undefined) {
+      books = items as Array<Record<string, Object>>;
+    }
   }
   const result: BookItem[] = [];
   for (let i = 0; i < books.length; i++) {
@@ -549,16 +562,32 @@ export class TalebookApi {
     const raw = await TalebookCoreService.talebookGet('/api/user/info');
     return JSON.parse(raw) as UserInfoResponse;
   }
-  /** 访问码状态（GET /api/access）。err=free 表示无需/已通过，ok 表示仍需输入。 */
+  /** 访问码状态（mybooks `GET /api/access`；talebook `GET /api/welcome`）。
+   * err=free 表示无需/已通过，ok 表示仍需输入。 */
   static async getAccessStatus(): Promise<AccessStatusResponse> {
-    const raw = await TalebookCoreService.talebookGet('/api/access');
+    const raw = await TalebookCoreService.talebookGet(ServerRegistry.profile().accessCodePath);
     return JSON.parse(raw) as AccessStatusResponse;
   }
 
-  /** 提交访问码（POST /api/access，JSON body: invite_code）。 */
-  static async submitAccessCode(inviteCode: string): Promise<ApiMessageResult> {
+  /**
+   * 提交访问码。
+   *
+   * mybooks 读 JSON body（`{invite_code}`）；talebook 用 `get_argument("invite_code")` 取值，
+   * 必须走 form 编码，并在启用验证码时附带 `captcha_code`（场景 `welcome`）。
+   */
+  static async submitAccessCode(inviteCode: string, captchaCode: string = ''):
+    Promise<ApiMessageResult> {
+    const profile = ServerRegistry.profile();
+    if (profile.accessCodeSubmitForm) {
+      let form = `invite_code=${encodeURIComponent(inviteCode)}`;
+      if (captchaCode.length > 0) {
+        form += `&captcha_code=${encodeURIComponent(captchaCode)}`;
+      }
+      const raw = await TalebookCoreService.talebookPostForm(profile.accessCodePath, form);
+      return JSON.parse(raw) as ApiMessageResult;
+    }
     const body: Record<string, Object> = { 'invite_code': inviteCode };
-    const raw = await TalebookCoreService.talebookPost('/api/access', JSON.stringify(body));
+    const raw = await TalebookCoreService.talebookPost(profile.accessCodePath, JSON.stringify(body));
     return JSON.parse(raw) as ApiMessageResult;
   }
 
@@ -642,8 +671,10 @@ export class TalebookApi {
     return JSON.parse(raw) as Array<Record<string, Object>>;
   }
 
+  /** 管理端书籍列表（端点与分页由 ServerProfile 决定）。 */
   static async getAdminBooks(page: number, limit: number): Promise<BookItem[]> {
-    const raw = await TalebookCoreService.talebookGet(buildPagePath('/api/admin/books', page, limit));
+    const raw = await TalebookCoreService.talebookGet(
+      `${ServerRegistry.adminBooksPath()}?${ServerRegistry.adminBooksQuery(page, limit)}`);
     return parseList(raw);
   }
 
@@ -683,9 +714,17 @@ export class TalebookApi {
     return JSON.parse(raw) as ApiMessageResult;
   }
 
+  /** 回收站书籍列表（端点与响应键由 ServerProfile 决定：books/items）。 */
   static async getTrashBooks(): Promise<TrashBooksResponse> {
-    const raw = await TalebookCoreService.adminTrashBooks();
-    return JSON.parse(raw) as TrashBooksResponse;
+    const raw = await TalebookCoreService.talebookGet(ServerRegistry.trashBooksPath());
+    const parsed = JSON.parse(raw) as TrashBooksResponse;
+    if (parsed.books === undefined) {
+      const fallback = (parsed as Record<string, Object>)[ServerRegistry.trashItemsKey()];
+      if (fallback !== undefined) {
+        parsed.books = fallback as Array<Record<string, Object>>;
+      }
+    }
+    return parsed;
   }
 
   static async getTrashSize(): Promise<TrashSizeResponse> {
@@ -693,14 +732,36 @@ export class TalebookApi {
     return JSON.parse(raw) as TrashSizeResponse;
   }
 
-  static async restoreTrashBooks(bookIds: number[]): Promise<ApiMessageResult> {
-    const raw = await TalebookCoreService.adminTrashRestore(JSON.stringify(bookIds));
+  /** 回收站 id 数组打包为当前服务端要求的请求体（book_ids / idlist）。 */
+  private static trashBody(bookIds: number[], withConfirm: boolean): string {
+    const payload: Record<string, Object> = {};
+    payload[ServerRegistry.trashIdKey()] = bookIds;
+    if (withConfirm && ServerRegistry.trashPurgeNeedsConfirm()) {
+      payload['confirm'] = true;
+    }
+    return JSON.stringify(payload);
+  }
+
+  private static async trashRequest(endpoint: ServerEndpoint, body: string): Promise<ApiMessageResult> {
+    let raw: string;
+    if (endpoint.method === 'POST') {
+      raw = await TalebookCoreService.talebookPost(endpoint.path, body);
+    } else if (endpoint.method === 'PATCH') {
+      raw = await TalebookCoreService.talebookPatch(endpoint.path, body);
+    } else {
+      raw = await TalebookCoreService.talebookDeleteWithBody(endpoint.path, body);
+    }
     return JSON.parse(raw) as ApiMessageResult;
   }
 
+  static async restoreTrashBooks(bookIds: number[]): Promise<ApiMessageResult> {
+    return TalebookApi.trashRequest(ServerRegistry.trashRestore(),
+      TalebookApi.trashBody(bookIds, false));
+  }
+
   static async purgeTrashBooks(bookIds: number[]): Promise<ApiMessageResult> {
-    const raw = await TalebookCoreService.adminTrashPurge(JSON.stringify(bookIds));
-    return JSON.parse(raw) as ApiMessageResult;
+    return TalebookApi.trashRequest(ServerRegistry.trashPurge(),
+      TalebookApi.trashBody(bookIds, true));
   }
 
   static async clearTrash(): Promise<ApiMessageResult> {
@@ -738,8 +799,9 @@ export class TalebookApi {
     return JSON.parse(raw) as ApiMessageResult;
   }
 
+  /** 系统日志（mybooks `/api/admin/syslog`；talebook `/api/admin/log`）。 */
   static async getAdminSyslog(): Promise<AdminSyslogResponse> {
-    const raw = await TalebookCoreService.adminSyslog();
+    const raw = await TalebookCoreService.talebookGet(ServerRegistry.adminSyslogPath());
     return JSON.parse(raw) as AdminSyslogResponse;
   }
 
@@ -867,9 +929,9 @@ export class TalebookApi {
     return JSON.parse(raw) as ApiMessageResult;
   }
 
-  /** 系统日志下载相对路径（GET /api/admin/syslog/download，二进制）。 */
+  /** 系统日志下载相对路径（二进制；路径随服务端变化）。 */
   static adminSyslogDownloadPath(): string {
-    return '/api/admin/syslog/download';
+    return `${ServerRegistry.adminSyslogPath()}/download`;
   }
 
   /** 致谢名单（GET /api/admin/thanks/notes）。 */
@@ -1550,7 +1612,8 @@ export class TalebookApi {
 
   static async deleteAdminBooks(idlist: number[]): Promise<ApiMessageResult> {
     const body: Record<string, Object> = { 'idlist': idlist as Object };
-    const raw = await TalebookCoreService.talebookPost('/api/admin/books/delete', JSON.stringify(body));
+    const raw = await TalebookCoreService.talebookPost(
+      ServerRegistry.profile().adminBookDeletePath, JSON.stringify(body));
     return JSON.parse(raw) as ApiMessageResult;
   }
 
@@ -1644,9 +1707,10 @@ export class TalebookApi {
     return JSON.parse(raw) as BookNavResponse;
   }
 
+  /** 元数据下的书籍（GET /api/{meta}/{name}；meta 键按 ServerProfile 归一化，如 language↔format）。 */
   static async getBooksByMeta(metaType: string, name: string, page: number, limit: number): Promise<BookItem[]> {
     const raw = await TalebookCoreService.talebookGet(
-      buildPagePath(`/api/${metaType}/${encodeURIComponent(name)}`, page, limit));
+      buildPagePath(`/api/${ServerRegistry.resolveMetaType(metaType)}/${encodeURIComponent(name)}`, page, limit));
     return parseList(raw);
   }
 
@@ -1746,10 +1810,9 @@ export class TalebookApi {
     const raw = await TalebookCoreService.talebookGet(`/api/audio/${bookId}`);
     return JSON.parse(raw) as AudioInfoResponse;
   }
-  /** 有声书列表（GET /api/audiobooks?start=&size=）。 */
+  /** 有声书列表（mybooks `/api/audiobooks`；talebook `/api/audios`，均 start/size 分页）。 */
   static async getAudiobooks(page: number = 1, size: number = 60): Promise<BookItem[]> {
-    const start = (page - 1) * size;
-    const path = `/api/audiobooks?start=${start}&size=${size}`;
+    const path = `${ServerRegistry.audiobooksPath()}?${ServerRegistry.listQuery(page, size)}`;
     const raw = await TalebookCoreService.talebookGet(path);
     return parseList(raw);
   }
@@ -1910,9 +1973,9 @@ export class TalebookApi {
     return fetchStateList('/api/read-done', page, size);
   }
 
-  /** 私有书籍（/api/soledbooks，需登录）。 */
-  static async getSoledBooks(page: number, size: number): Promise<BookItem[]> {
-    return fetchStateList('/api/soledbooks', page, size);
+  /** 私有范围书籍（mybooks `/api/soledbooks`；talebook `/api/scopedbooks`，均需登录）。 */
+  static async getScopedBooks(page: number, size: number): Promise<BookItem[]> {
+    return fetchStateList(ServerRegistry.profile().scopedBooksPath, page, size);
   }
 
   /** 保存个人设置（POST /api/user/update）。 */
@@ -2171,10 +2234,11 @@ export class TalebookApi {
 
   /**
    * 元数据列表（GET /api/{meta}?show=all）。
-   * meta: author|publisher|tag|rating|series|language
+   * meta 键按 ServerProfile 归一化：mybooks 为 author|publisher|tag|rating|series|language，
+   * talebook 为 author|publisher|tag|rating|series|format。
    */
   static async getMetaList(metaType: string, showAll: boolean = false): Promise<MetaListResponse> {
-    let path = `/api/${metaType}`;
+    let path = `/api/${ServerRegistry.resolveMetaType(metaType)}`;
     if (showAll) {
       path = `${path}?show=all`;
     }

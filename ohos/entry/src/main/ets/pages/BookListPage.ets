@@ -4,6 +4,7 @@ import {
   LoadingState, EmptyState,
 } from '../components';
 import { TalebookService, ApiEnvelope } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
 import { mapTalebookBook } from '../utils/BookMapper';
@@ -62,9 +63,13 @@ struct BookListPage {
       } else if (this.listType === 'all') {
         envelope = await TalebookService.getAllBooksAsync(page, PaginationConstants.PAGE_SIZE);
       } else if (this.listType === 'audiobooks') {
-        envelope = await TalebookService.getServerBookListAsync('/api/audiobooks', page,
+        envelope = await TalebookService.getServerBookListAsync(ServerRegistry.audiobooksPath(), page,
           PaginationConstants.PAGE_SIZE);
       } else if (this.listType === 'printbooks') {
+        if (!ServerRegistry.supports(ServerFeature.PRINT_BOOKS)) {
+          this.errorMessage = `${ServerRegistry.profile().displayName} 服务端不支持实体书列表`;
+          return;
+        }
         envelope = await TalebookService.getServerBookListAsync('/api/printbooks', page,
           PaginationConstants.PAGE_SIZE);
       } else if (this.listType === 'meta' && this.metaType.length > 0) {

@@ -19,6 +19,11 @@ public:
     static TalebookCore &instance();
 
     void init(const std::string &dataDir);
+    /**
+     * 切换账号身份根目录：secure 凭据、下载记录、阅读历史、书签与会话 Cookie 一并切换。
+     * 全局偏好（preferences.json）仍留在 dataDir，不随账号变。
+     */
+    void setIdentityDir(const std::string &dir);
     bool isInitialized() const { return initialized_; }
 
     HttpClient &http();
