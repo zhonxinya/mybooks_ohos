@@ -14,7 +14,10 @@
  *   `migratedb` 的 `force` 取 `"1"` 才表示强制。目标库非空时返回
  *   `{err:'db.target_has_data', count}`，需再次确认后带 force 重试。
  * - `POST /api/admin/ssl` 是 multipart，字段固定 `ssl_crt` 与 `ssl_key`。
- * - `PATCH /api/admin/podcast-audits` 只支持 `action` 为 freeze / unfreeze。
+ * - `PATCH /api/admin/podcast-audits` 只支持 `action` 为 freeze / unfreeze；
+ *   响应含 `frozen` / `frozen_reason`，可直接回显结果。
+ * - `GET /api/admin/trash/size` 返回 `{sizes:{trash,upload}}`（字节，服务端带缓存）；
+ *   `POST /api/admin/trash/clear` 清空 Calibre 回收站与上传目录，失败时 `err='error'` 且 `msg` 为原因。
  */
 import { TalebookCoreService } from './TalebookCoreService';
 import { ApiMessageResult } from './TalebookApi';
@@ -103,11 +106,28 @@ export interface AdminMigrateDbResponse extends ApiMessageResult {
   need_restart?: boolean;
 }
 
+/** 回收站 / 上传目录占用（AdminTrashSize → TrashManager.get_trash_sizes）。 */
+export interface AdminTrashSizes {
+  trash?: number;
+  upload?: number;
+}
+
+export interface AdminTrashSizeResponse extends ApiMessageResult {
+  sizes?: AdminTrashSizes;
+}
+
 /** podcast-audits PATCH 请求体（action=freeze|unfreeze）。 */
 interface AdminPodcastFreezePayload {
   action: string;
   subscription_id: number;
   reason?: string;
+}
+
+/** podcast-audits PATCH 响应（回显冻结结果）。 */
+export interface AdminPodcastFreezeResponse extends ApiMessageResult {
+  subscription_id?: number;
+  frozen?: boolean;
+  frozen_reason?: string;
 }
 
 /** Kindle 转换请求体（idlist 为空数组时上游转换为全部书籍）。 */
@@ -181,7 +201,7 @@ export class AdminMaintenanceApi {
 
   /** 冻结/解冻播客订阅（PATCH /api/admin/podcast-audits）。 */
   static async setPodcastSubscriptionFrozen(subscriptionId: number, freeze: boolean,
-    reason: string): Promise<ApiMessageResult> {
+    reason: string): Promise<AdminPodcastFreezeResponse> {
     const payload: AdminPodcastFreezePayload = {
       action: freeze ? PODCAST_ACTION_FREEZE : PODCAST_ACTION_UNFREEZE,
       subscription_id: subscriptionId,
@@ -189,6 +209,21 @@ export class AdminMaintenanceApi {
     };
     const raw = await TalebookCoreService.talebookPatch('/api/admin/podcast-audits',
       JSON.stringify(payload));
+    return JSON.parse(raw) as AdminPodcastFreezeResponse;
+  }
+
+  /** 回收站与上传目录占用（GET /api/admin/trash/size）。 */
+  static async getTrashSizes(): Promise<AdminTrashSizeResponse> {
+    const raw = await TalebookCoreService.talebookGet('/api/admin/trash/size');
+    return JSON.parse(raw) as AdminTrashSizeResponse;
+  }
+
+  /**
+   * 清空 Calibre 回收站与上传目录（POST /api/admin/trash/clear，危险操作）。
+   * 服务端对非绝对路径 / 不安全路径会跳过并返回 `err='error'` 与原因。
+   */
+  static async clearTrash(): Promise<ApiMessageResult> {
+    const raw = await TalebookCoreService.talebookPost('/api/admin/trash/clear', '{}');
     return JSON.parse(raw) as ApiMessageResult;
   }
 

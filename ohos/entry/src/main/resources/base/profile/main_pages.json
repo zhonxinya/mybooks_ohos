@@ -5,7 +5,6 @@
     "pages/BookDetailPage",
     "pages/LoginPage",
     "pages/ReadingHistoryPage",
-    "pages/ExtraServicesPage",
     "pages/TalebookConfigPage",
     "pages/SoNovelConfigPage",
     "pages/SoNovelSearchPage",

@@ -1,3 +1,4 @@
+import { router } from '@kit.ArkUI';
 import { BookshelfPage } from './BookshelfPage';
 import { BooksTabPage } from './BooksTabPage';
 import { SettingsPage } from './SettingsPage';
@@ -10,6 +11,29 @@ struct MainTabs {
   @State showBooksTab: boolean = false;
   @State showSettingsTab: boolean = false;
   private tabsController: TabsController = new TabsController();
+
+  /**
+   * 支持外页深链：`pushUrl({ url: 'pages/MainTabs', params: { tab: 2 } })` 直达指定 Tab。
+   * 未传参时保持默认（书架），不改变原有冷启动行为。
+   */
+  aboutToAppear(): void {
+    const params: Record<string, Object> | null = router.getParams() as Record<string, Object> | null;
+    if (params === null || params === undefined) {
+      return;
+    }
+    const raw: Object | undefined = params['tab'];
+    if (raw === undefined) {
+      return;
+    }
+    const tab: number = Number(raw);
+    if (tab === 1) {
+      this.showBooksTab = true;
+      this.currentIndex = tab;
+    } else if (tab === 2) {
+      this.showSettingsTab = true;
+      this.currentIndex = tab;
+    }
+  }
 
   onPageShow(): void {
     // 仅书架页可见时刷新，避免在设置/小说 Tab 或后台误触发整表重建

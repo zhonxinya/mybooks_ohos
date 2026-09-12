@@ -8,6 +8,67 @@ import { NotificationService } from '../services/NotificationService';
 import { TalebookApi, LibraryStatsResponse, AdminRunningTasksResponse } from '../services/TalebookApi';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { AccountManager } from '../services/AccountManager';
+import { DownloadTaskService } from '../services/DownloadTaskService';
+
+/** 折叠分组键：默认全部折叠，仅展开态渲染子项。 */
+const SECTION_APPEARANCE: string = 'appearance';
+const SECTION_ACCOUNT: string = 'account';
+const SECTION_SERVICE: string = 'service';
+const SECTION_ADMIN: string = 'admin';
+const SECTION_ABOUT: string = 'about';
+
+/**
+ * 设置页分组头：整行可点切换折叠态，右侧箭头指示展开状态。
+ * 用 `@Prop` 而非 `@Builder` 传参：按值传参的 `@Builder` 不会在状态变化后重绘，
+ * 会导致摘要（主题/书库统计/版本）停留在首次渲染的值。
+ */
+@Component
+struct SettingsSectionHeader {
+  @Prop title: string = '';
+  @Prop subtitle: string = '';
+  @Prop expanded: boolean = false;
+  onToggle?: () => void;
+
+  build() {
+    Row({ space: 8 }) {
+      Column({ space: 2 }) {
+        Text(this.title)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .width('100%');
+        if (this.subtitle.length > 0) {
+          Text(this.subtitle)
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%');
+        }
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1);
+
+      SymbolGlyph(this.expanded ? $r('sys.symbol.chevron_up') : $r('sys.symbol.chevron_down'))
+        .fontSize(16)
+        .fontColor([$r('app.color.text_tertiary')]);
+    }
+    .width('100%')
+    .padding({ left: 4, right: 4, top: 6, bottom: 6 })
+    // 必须先给常态底色，否则 pressed 态不会复位（与 SettingCell / QuickActionGrid 写法一致）
+    .backgroundColor(Color.Transparent)
+    .stateStyles({
+      pressed: {
+        .backgroundColor($r('app.color.surface_pressed'))
+      },
+    })
+    .onClick(() => {
+      if (this.onToggle) {
+        this.onToggle();
+      }
+    });
+  }
+}
 
 @Component
 export struct SettingsPage {
@@ -19,11 +80,16 @@ export struct SettingsPage {
   @State runningTasksSummary: string = '';
   @State adminOverviewLoading: boolean = false;
   @StorageProp('unreadMessageCount') unreadCount: number = 0;
+  @StorageProp('downloadTasksTick') @Watch('refreshBadges') downloadTasksTick: number = 0;
+  @State activeTaskCount: number = 0;
+  @State expandedSections: string[] = [];
 
   aboutToAppear(): void {
     this.themeMode = TalebookService.prefGet(StorageKeys.THEME_MODE, 'system');
     this.showBackButton = TalebookService.prefGet(StorageKeys.SHOW_BACK_BUTTON, 'true') === 'true';
     this.refreshAccount();
+    this.refreshBadges();
+    this.applySectionParam();
     void NotificationService.refreshUnreadCount();
     void this.loadAdminOverview();
     bundleManager.getBundleInfoForSelf(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT)
@@ -132,293 +198,450 @@ export struct SettingsPage {
     }).catch(() => {});
   }
 
+  /**
+   * 外部深链（如 EPUB 修复页的「查看运行中任务」）可带 `section` 参数直达分组，
+   * 避免默认折叠后无法直接看到目标内容。未传参时保持“全部折叠”。
+   */
+  private applySectionParam(): void {
+    const params: Record<string, Object> | null = router.getParams() as Record<string, Object> | null;
+    if (params === null || params === undefined) {
+      return;
+    }
+    const section: Object | undefined = params['section'];
+    if (section !== undefined) {
+      const key: string = String(section);
+      if (key.length > 0 && !this.isExpanded(key)) {
+        this.toggleSection(key);
+      }
+    }
+  }
+
+  private isExpanded(key: string): boolean {
+    return this.expandedSections.indexOf(key) >= 0;
+  }
+
+  private toggleSection(key: string): void {
+    const next: string[] = [];
+    let removed: boolean = false;
+    for (let i = 0; i < this.expandedSections.length; i++) {
+      if (this.expandedSections[i] === key) {
+        removed = true;
+      } else {
+        next.push(this.expandedSections[i]);
+      }
+    }
+    if (!removed) {
+      next.push(key);
+    }
+    this.expandedSections = next;
+  }
+
+  private refreshBadges(): void {
+    this.activeTaskCount = DownloadTaskService.activeCount();
+  }
+
+  private taskBadge(): string {
+    return this.activeTaskCount > 0 ? `${this.activeTaskCount}` : '';
+  }
+
+  private accountSectionSubtitle(): string {
+    return this.isLoggedIn ? '个人中心与消息通知' : '登录后可查看个人中心';
+  }
+
+  private adminSectionSubtitle(): string {
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_LIBRARY_STATS)) {
+      return '服务端管理入口';
+    }
+    return this.librarySummary.length > 0 ? this.librarySummary : '服务端管理入口与统计';
+  }
+
+  private aboutSectionSubtitle(): string {
+    return this.versionText.length > 0 ? `版本 ${this.versionText}` : '版本信息';
+  }
+
   build() {
     Column() {
       HarmonyTopBar({ title: '设置' });
       Scroll() {
         Column({ space: 12 }) {
-          Text('外观')
-            .fontSize(13)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%');
-          Column() {
-            SettingCell({
-              title: '显示返回按钮',
-              showToggle: true,
-              toggleOn: this.showBackButton,
-              onToggle: (value: boolean) => {
-                this.showBackButton = value;
-                TalebookService.prefSet(StorageKeys.SHOW_BACK_BUTTON, value ? 'true' : 'false');
-              },
-            });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: '主题模式',
-              subtitle: AppTheme.themeModeLabel(this.themeMode),
-              showChevron: true,
-              onTap: () => this.showThemePicker(),
-            });
-            if (ServerRegistry.supports(ServerFeature.THEMES)) {
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+          SettingsSectionHeader({
+            title: '外观',
+            subtitle: AppTheme.themeModeLabel(this.themeMode),
+            expanded: this.isExpanded(SECTION_APPEARANCE),
+            onToggle: () => this.toggleSection(SECTION_APPEARANCE),
+          });
+          if (this.isExpanded(SECTION_APPEARANCE)) {
+            Column() {
               SettingCell({
-                title: '服务端主题',
-                subtitle: '选择服务端界面主题',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/ThemesPage' }),
-              });
-            }
-          }
-          .width('100%')
-          .borderRadius($r('app.float.card_radius'))
-          .backgroundColor($r('app.color.card_background'));
-
-          Text('账号')
-            .fontSize(13)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%');
-          Column() {
-            if (this.isLoggedIn) {
-              SettingCell({
-                title: '个人中心',
-                subtitle: '收藏、消息与账号',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/ProfilePage' }),
+                title: '显示返回按钮',
+                showToggle: true,
+                toggleOn: this.showBackButton,
+                onToggle: (value: boolean) => {
+                  this.showBackButton = value;
+                  TalebookService.prefSet(StorageKeys.SHOW_BACK_BUTTON, value ? 'true' : 'false');
+                },
               });
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            }
-            SettingCell({
-              title: '通知',
-              badgeText: this.unreadBadge(),
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/NotificationPage' }),
-            });
-          }
-          .width('100%')
-          .borderRadius($r('app.float.card_radius'))
-          .backgroundColor($r('app.color.card_background'));
-
-          Text('服务')
-            .fontSize(13)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%');
-          Column() {
-            SettingCell({
-              title: '账号与服务器',
-              subtitle: this.accountSummary(),
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
-            });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: 'SoNovel 服务',
-              subtitle: '配置 SoNovel 地址',
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/SoNovelConfigPage' }),
-            });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: '附加服务',
-              subtitle: '扩展功能入口：下载管理、网络书库、我的书架等',
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/ExtraServicesPage' }),
-            });
-          }
-          .width('100%')
-          .borderRadius($r('app.float.card_radius'))
-          .backgroundColor($r('app.color.card_background'));
-
-          Text('管理')
-            .fontSize(13)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%');
-          Column({ space: 8 }) {
-            Row() {
-              Text('管理概览')
-                .fontSize(15)
-                .fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.text_primary'))
-                .layoutWeight(1);
-              Text(this.adminOverviewLoading ? '刷新中…' : '刷新')
-                .fontSize(12)
-                .fontColor($r('app.color.brand_primary'))
-                .onClick(() => {
-                  void this.loadAdminOverview();
+              SettingCell({
+                title: '主题模式',
+                subtitle: AppTheme.themeModeLabel(this.themeMode),
+                showChevron: true,
+                onTap: () => this.showThemePicker(),
+              });
+              if (ServerRegistry.supports(ServerFeature.THEMES)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '服务端主题',
+                  subtitle: '选择服务端界面主题',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/ThemesPage' }),
                 });
+              }
             }
             .width('100%')
-            .padding({
-              left: $r('app.float.page_padding'),
-              right: $r('app.float.page_padding'),
-              top: $r('app.float.page_padding'),
-            });
-            Text(this.librarySummary.length > 0 ? this.librarySummary : '加载书库统计…')
-              .fontSize(12)
-              .fontColor($r('app.color.text_secondary'))
-              .width('100%')
-              .padding({ left: $r('app.float.page_padding'), right: $r('app.float.page_padding') });
-            Text(this.runningTasksSummary.length > 0 ? this.runningTasksSummary : '加载后台任务…')
-              .fontSize(12)
-              .fontColor($r('app.color.text_tertiary'))
-              .width('100%')
-              .padding({
-                left: $r('app.float.page_padding'),
-                right: $r('app.float.page_padding'),
-                bottom: 8,
-              });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: '元数据书籍',
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/MetaBookListPage' }),
-            });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: '管理员书籍',
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/AdminBookListPage' }),
-            });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: '用户管理',
-              subtitle: '账号、权限与配额管理',
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/AdminUsersPage' }),
-            });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: '回收站管理',
-              subtitle: '恢复或彻底删除书籍',
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/AdminTrashPage' }),
-            });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            if (ServerRegistry.supports(ServerFeature.ADMIN_BOOK_REVIEWS)) {
-              SettingCell({
-                title: '评论审核',
-                subtitle: '通过、屏蔽用户书评',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/AdminBookReviewsPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            }
-            if (ServerRegistry.supports(ServerFeature.ADMIN_IMPORT)) {
-              SettingCell({
-                title: '导入管理',
-                subtitle: '扫描导入、状态轮询与记录维护',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/AdminImportsPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            }
-            if (ServerRegistry.supports(ServerFeature.BOOK_SOURCES)) {
-              SettingCell({
-                title: '书源管理',
-                subtitle: '书源导入导出、启停、测试与体检',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/BookSourceManagePage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            }
-            if (ServerRegistry.supports(ServerFeature.ADMIN_SCAN)) {
-              SettingCell({
-                title: '扫描与导入',
-                subtitle: '扫描记录、目录监控与批量导入',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/AdminScanPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            }
-            if (ServerRegistry.supports(ServerFeature.ADMIN_OPDS)) {
-              SettingCell({
-                title: 'OPDS 源',
-                subtitle: '浏览目录、导入与失败重试',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/AdminOpdsPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            }
-            if (ServerRegistry.supports(ServerFeature.ADMIN_PLUGINS)) {
-              SettingCell({
-                title: '插件中心',
-                subtitle: '插件启停、连接与正文工具',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/AdminPluginsPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            }
-            if (ServerRegistry.supports(ServerFeature.ADMIN_MAINTENANCE)) {
-              SettingCell({
-                title: '服务端维护',
-                subtitle: '更新、SSL、数据库与音频统计',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/AdminMaintenancePage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            }
-            SettingCell({
-              title: '系统日志',
-              subtitle: '查看服务端运行日志',
-              showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/AdminSyslogPage' }),
-            });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            if (ServerRegistry.supports(ServerFeature.ADMIN_RESOURCES)) {
-              SettingCell({
-                title: '资源导航',
-                subtitle: '站长推荐的外部资源',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/AdminResourcesPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            }
-            if (ServerRegistry.supports(ServerFeature.ADMIN_TOOLBOX)) {
-              SettingCell({
-                title: '工具箱',
-                subtitle: '启停、卸载与商店安装',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/AdminToolboxPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            }
-            if (ServerRegistry.supports(ServerFeature.ADMIN_MEMOS)) {
-              SettingCell({
-                title: '用户留言',
-                subtitle: '查看与处理用户反馈',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/AdminMemosPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            }
-            if (ServerRegistry.supports(ServerFeature.ADMIN_SETTINGS)) {
-              SettingCell({
-                title: '管理员设置',
-                subtitle: '站点、用户、邮件等服务端配置',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/AdminSettingsPage' }),
-              });
-            }
+            .borderRadius($r('app.float.card_radius'))
+            .backgroundColor($r('app.color.card_background'));
           }
-          .width('100%')
-          .borderRadius($r('app.float.card_radius'))
-          .backgroundColor($r('app.color.card_background'));
 
-          Text('关于')
-            .fontSize(13)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%');
-          Column() {
-            SettingCell({
-              title: '版本',
-              valueText: this.versionText,
-            });
+          SettingsSectionHeader({
+            title: '账号',
+            subtitle: this.accountSectionSubtitle(),
+            expanded: this.isExpanded(SECTION_ACCOUNT),
+            onToggle: () => this.toggleSection(SECTION_ACCOUNT),
+          });
+          if (this.isExpanded(SECTION_ACCOUNT)) {
+            Column() {
+              if (this.isLoggedIn) {
+                SettingCell({
+                  title: '个人中心',
+                  subtitle: '收藏、消息与账号',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/ProfilePage' }),
+                });
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              }
+              SettingCell({
+                title: '通知',
+                badgeText: this.unreadBadge(),
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/NotificationPage' }),
+              });
+            }
+            .width('100%')
+            .borderRadius($r('app.float.card_radius'))
+            .backgroundColor($r('app.color.card_background'));
           }
-          .width('100%')
-          .borderRadius($r('app.float.card_radius'))
-          .backgroundColor($r('app.color.card_background'));
+
+          SettingsSectionHeader({
+            title: '服务',
+            subtitle: this.accountSummary(),
+            expanded: this.isExpanded(SECTION_SERVICE),
+            onToggle: () => this.toggleSection(SECTION_SERVICE),
+          });
+          if (this.isExpanded(SECTION_SERVICE)) {
+            Column() {
+              SettingCell({
+                title: '账号与服务器',
+                subtitle: this.accountSummary(),
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: 'SoNovel 搜索',
+                subtitle: '聚合书源搜索与下载',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/SoNovelSearchPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: 'SoNovel 服务',
+                subtitle: '配置 SoNovel 地址',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/SoNovelConfigPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '下载管理',
+                subtitle: '服务端与 SoNovel 统一下载队列',
+                badgeText: this.taskBadge(),
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/DownloadManagerPage' }),
+              });
+              if (ServerRegistry.supports(ServerFeature.SYNC)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '数据同步',
+                  subtitle: '拉取 / 推送 / 批注导入',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/SyncPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.NETWORK_LIBRARY)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '网络书库',
+                  subtitle: '按书源搜索、阅读并保存到本地书库',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/NetworkLibraryPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.BOOK_SHELF)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '我的书架',
+                  subtitle: '服务端书架（阅读计划）',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/ShelfPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.LIBRARY_ONLINE)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '在线书库',
+                  subtitle: '已保存的网络书，可按连载状态筛选',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/OnlineLibraryPage' }),
+                });
+              }
+            }
+            .width('100%')
+            .borderRadius($r('app.float.card_radius'))
+            .backgroundColor($r('app.color.card_background'));
+          }
+
+          SettingsSectionHeader({
+            title: '管理',
+            subtitle: this.adminSectionSubtitle(),
+            expanded: this.isExpanded(SECTION_ADMIN),
+            onToggle: () => this.toggleSection(SECTION_ADMIN),
+          });
+          if (this.isExpanded(SECTION_ADMIN)) {
+            Column({ space: 8 }) {
+              // 与 loadAdminOverview 的能力门控保持一致：不支持的服务端不渲染永远停在“加载…”的卡
+              if (ServerRegistry.supports(ServerFeature.ADMIN_LIBRARY_STATS)) {
+                Row() {
+                  Text('管理概览')
+                    .fontSize(15)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor($r('app.color.text_primary'))
+                    .layoutWeight(1);
+                  Text(this.adminOverviewLoading ? '刷新中…' : '刷新')
+                    .fontSize(12)
+                    .fontColor($r('app.color.brand_primary'))
+                    .onClick(() => {
+                      void this.loadAdminOverview();
+                    });
+                }
+                .width('100%')
+                .padding({
+                  left: $r('app.float.page_padding'),
+                  right: $r('app.float.page_padding'),
+                  top: $r('app.float.page_padding'),
+                });
+                Text(this.librarySummary.length > 0 ? this.librarySummary : '加载书库统计…')
+                  .fontSize(12)
+                  .fontColor($r('app.color.text_secondary'))
+                  .width('100%')
+                  .padding({ left: $r('app.float.page_padding'), right: $r('app.float.page_padding') });
+                Text(this.runningTasksSummary.length > 0 ? this.runningTasksSummary : '加载后台任务…')
+                  .fontSize(12)
+                  .fontColor($r('app.color.text_tertiary'))
+                  .width('100%')
+                  .padding({
+                    left: $r('app.float.page_padding'),
+                    right: $r('app.float.page_padding'),
+                    bottom: 8,
+                  });
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              }
+              SettingCell({
+                title: '元数据书籍',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/MetaBookListPage' }),
+              });
+              if (ServerRegistry.supports(ServerFeature.AUTHOR_META_EDIT)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '作者元数据',
+                  subtitle: '作者简介/头像与作者、出版商书籍刷新',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AuthorMetaPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.ADMIN_BATCH_ADD)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '批量添加实体书',
+                  subtitle: 'CSV 导入实体书并轮询进度',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AdminBatchAddPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.ADMIN_AUDIO_IMPORT)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '有声书导入',
+                  subtitle: '扫描音频目录入库、测试音频服务',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AdminAudioImportPage' }),
+                });
+              }
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '管理员书籍',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/AdminBookListPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '用户管理',
+                subtitle: '账号、权限与配额管理',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/AdminUsersPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '回收站管理',
+                subtitle: '恢复或彻底删除书籍',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/AdminTrashPage' }),
+              });
+              if (ServerRegistry.supports(ServerFeature.ADMIN_BOOK_REVIEWS)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '评论审核',
+                  subtitle: '通过、屏蔽用户书评',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AdminBookReviewsPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.ADMIN_IMPORT)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '导入管理',
+                  subtitle: '扫描导入、状态轮询与记录维护',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AdminImportsPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.BOOK_SOURCES)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '书源管理',
+                  subtitle: '书源导入导出、启停、测试与体检',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/BookSourceManagePage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.ADMIN_SCAN)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '扫描与导入',
+                  subtitle: '扫描记录、目录监控与批量导入',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AdminScanPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.ADMIN_OPDS)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: 'OPDS 源',
+                  subtitle: '浏览目录、导入与失败重试',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AdminOpdsPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.ADMIN_PLUGINS)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '插件中心',
+                  subtitle: '插件启停、连接、能力测试与全局设置',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AdminPluginsPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.ADMIN_MAINTENANCE)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '服务端维护',
+                  subtitle: '更新、SSL、数据库与音频统计',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AdminMaintenancePage' }),
+                });
+              }
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '系统日志',
+                subtitle: '查看服务端运行日志',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/AdminSyslogPage' }),
+              });
+              if (ServerRegistry.supports(ServerFeature.ADMIN_RESOURCES)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '资源导航',
+                  subtitle: '站长推荐的外部资源',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AdminResourcesPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.ADMIN_TOOLBOX)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '工具箱',
+                  subtitle: '启停、卸载与商店安装',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AdminToolboxPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.ADMIN_MEMOS)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '用户留言',
+                  subtitle: '查看与处理用户反馈',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AdminMemosPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.ADMIN_SETTINGS)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '管理员设置',
+                  subtitle: '站点、用户、邮件等服务端配置',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/AdminSettingsPage' }),
+                });
+              }
+            }
+            .width('100%')
+            .borderRadius($r('app.float.card_radius'))
+            .backgroundColor($r('app.color.card_background'));
+          }
+
+          SettingsSectionHeader({
+            title: '关于',
+            subtitle: this.aboutSectionSubtitle(),
+            expanded: this.isExpanded(SECTION_ABOUT),
+            onToggle: () => this.toggleSection(SECTION_ABOUT),
+          });
+          if (this.isExpanded(SECTION_ABOUT)) {
+            Column() {
+              SettingCell({
+                title: '版本',
+                valueText: this.versionText,
+              });
+            }
+            .width('100%')
+            .borderRadius($r('app.float.card_radius'))
+            .backgroundColor($r('app.color.card_background'));
+          }
         }
         .padding($r('app.float.page_padding'));
       }
-      .layoutWeight(1);
+      .layoutWeight(1)
+      // 全部折叠时内容不满一屏，显式顶对齐，避免 Scroll 把内容垂直居中
+      .align(Alignment.Top);
     }
     .width('100%')
     .height('100%')

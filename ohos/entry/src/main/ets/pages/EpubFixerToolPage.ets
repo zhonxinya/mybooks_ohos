@@ -147,10 +147,13 @@ struct EpubFixerToolPage {
             },
           });
           SecondaryButton({
-            label: '查看运行中任务（管理概览）',
+            label: '查看运行中任务（设置 · 管理概览）',
             buttonEnabled: !this.busy,
             onTap: () => {
-              router.pushUrl({ url: 'pages/ExtraServicesPage' }).catch(() => {});
+              router.pushUrl({
+                url: 'pages/MainTabs',
+                params: { tab: 2, section: 'admin' },
+              }).catch(() => {});
             },
           });
         }
