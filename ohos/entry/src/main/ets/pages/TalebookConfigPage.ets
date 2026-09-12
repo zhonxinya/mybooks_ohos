@@ -3,6 +3,8 @@ import { PageScaffold, PrimaryButton, SecondaryButton } from '../components';
 import { AccountManager } from '../services/AccountManager';
 import { AccountStore } from '../services/AccountStore';
 import { ServerKind } from '../services/ServerProfile';
+import { TalebookService } from '../services/TalebookService';
+import { TalebookCoreService } from '../services/TalebookCoreService';
 import { AccountInput, AccountRecord, accountHost } from '../models/AccountModels';
 
 /**
@@ -29,6 +31,8 @@ struct TalebookConfigPage {
   @State formPassword: string = '';
   @State formServerKind: string = ServerKind.MYBOOKS;
   @State formAllowInsecureSsl: boolean = false;
+  /** SoNovel 是独立的全局服务（不随账号切换），地址直接在本页维护。 */
+  @State sonovelUrl: string = '';
   /** 可选服务端；顺序与服务端枚举的解析保持一致。 */
   private serverOptions: SelectOption[] = [
     { value: 'MyBooks' },
@@ -44,6 +48,20 @@ struct TalebookConfigPage {
   private reload(): void {
     this.accounts = AccountManager.list();
     this.activeId = AccountManager.activeId();
+    this.sonovelUrl = TalebookService.secureGet('sonovel_url');
+  }
+
+  /**
+   * 保存 SoNovel 地址：同时写入偏好、密钥库与 native 两套 HttpClient，
+   * 与旧版 SoNovelConfigPage 的行为保持一致（缺一处会导致搜索仍走旧地址）。
+   */
+  private saveSoNovel(): void {
+    const url = this.normalizeUrl(this.sonovelUrl);
+    this.sonovelUrl = url;
+    TalebookService.setBaseUrl('sonovel', url);
+    TalebookService.secureSet('sonovel_url', url);
+    TalebookCoreService.syncBaseUrl('sonovel', url);
+    this.toast(url.length > 0 ? 'SoNovel 地址已保存' : '已清除 SoNovel 地址');
   }
 
   private toast(message: string): void {
@@ -266,6 +284,7 @@ struct TalebookConfigPage {
       Column({ space: 12 }) {
         this.currentAccountCard();
         this.accountListCard();
+        this.sonovelCard();
         if (this.formOpen) {
           this.formCard();
         }
@@ -302,6 +321,36 @@ struct TalebookConfigPage {
         .fontSize(12)
         .fontColor($r('app.color.text_tertiary'))
         .width('100%');
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding($r('app.float.page_padding'))
+    .borderRadius($r('app.float.card_radius'))
+    .backgroundColor($r('app.color.card_background'));
+  }
+
+  /** SoNovel 全局服务地址（不随账号切换，与账号列表分开呈现以区分作用域）。 */
+  @Builder
+  sonovelCard() {
+    Column({ space: 8 }) {
+      Text('SoNovel 服务')
+        .fontSize(13)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%');
+      Text('独立第三方聚合书源服务，地址为全局设置，不随账号切换。留空表示不使用。')
+        .fontSize(12)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%');
+      TextInput({ placeholder: 'SoNovel 服务地址，如 http://192.168.1.10:8080', text: this.sonovelUrl })
+        .height(44)
+        .borderRadius(8)
+        .backgroundColor($r('app.color.page_background'))
+        .onChange((value: string) => this.sonovelUrl = value);
+      PrimaryButton({
+        label: '保存 SoNovel 地址',
+        fullWidth: false,
+        onTap: () => this.saveSoNovel(),
+      });
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
@@ -486,10 +535,6 @@ struct TalebookConfigPage {
         .fontColor($r('app.color.text_tertiary'))
         .width('100%');
       Text('切换账号后：登录状态、下载书籍、阅读历史与书签都会切到该账号自己的数据，界面会重新加载。')
-        .fontSize(12)
-        .fontColor($r('app.color.text_tertiary'))
-        .width('100%');
-      Text('SoNovel 地址为全局设置，不随账号切换。')
         .fontSize(12)
         .fontColor($r('app.color.text_tertiary'))
         .width('100%');

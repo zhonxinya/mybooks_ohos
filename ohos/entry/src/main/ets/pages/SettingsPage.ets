@@ -288,15 +288,6 @@ export struct SettingsPage {
                 showChevron: true,
                 onTap: () => this.showThemePicker(),
               });
-              if (ServerRegistry.supports(ServerFeature.THEMES)) {
-                Divider().color($r('app.color.divider')).strokeWidth(0.5);
-                SettingCell({
-                  title: '服务端主题',
-                  subtitle: '选择服务端界面主题',
-                  showChevron: true,
-                  onTap: () => router.pushUrl({ url: 'pages/ThemesPage' }),
-                });
-              }
             }
             .width('100%')
             .borderRadius($r('app.float.card_radius'))
@@ -348,20 +339,6 @@ export struct SettingsPage {
               });
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
-                title: 'SoNovel 搜索',
-                subtitle: '聚合书源搜索与下载',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/SoNovelSearchPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-              SettingCell({
-                title: 'SoNovel 服务',
-                subtitle: '配置 SoNovel 地址',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/SoNovelConfigPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-              SettingCell({
                 title: '下载管理',
                 subtitle: '服务端与 SoNovel 统一下载队列',
                 badgeText: this.taskBadge(),
@@ -384,24 +361,6 @@ export struct SettingsPage {
                   subtitle: '按书源搜索、阅读并保存到本地书库',
                   showChevron: true,
                   onTap: () => router.pushUrl({ url: 'pages/NetworkLibraryPage' }),
-                });
-              }
-              if (ServerRegistry.supports(ServerFeature.BOOK_SHELF)) {
-                Divider().color($r('app.color.divider')).strokeWidth(0.5);
-                SettingCell({
-                  title: '我的书架',
-                  subtitle: '服务端书架（阅读计划）',
-                  showChevron: true,
-                  onTap: () => router.pushUrl({ url: 'pages/ShelfPage' }),
-                });
-              }
-              if (ServerRegistry.supports(ServerFeature.LIBRARY_ONLINE)) {
-                Divider().color($r('app.color.divider')).strokeWidth(0.5);
-                SettingCell({
-                  title: '在线书库',
-                  subtitle: '已保存的网络书，可按连载状态筛选',
-                  showChevron: true,
-                  onTap: () => router.pushUrl({ url: 'pages/OnlineLibraryPage' }),
                 });
               }
             }
@@ -611,6 +570,15 @@ export struct SettingsPage {
                   subtitle: '站点、用户、邮件等服务端配置',
                   showChevron: true,
                   onTap: () => router.pushUrl({ url: 'pages/AdminSettingsPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.THEMES)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '服务端主题',
+                  subtitle: '选择服务端界面主题',
+                  showChevron: true,
+                  onTap: () => router.pushUrl({ url: 'pages/ThemesPage' }),
                 });
               }
             }

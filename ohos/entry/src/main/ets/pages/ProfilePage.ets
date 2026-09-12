@@ -139,6 +139,24 @@ struct ProfilePage {
               showChevron: true,
               onTap: () => router.pushUrl({ url: 'pages/MyBooksPage' }),
             });
+            if (ServerRegistry.supports(ServerFeature.BOOK_SHELF)) {
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '我的书架',
+                subtitle: '服务端书架（阅读计划）',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/ShelfPage' }),
+              });
+            }
+            if (ServerRegistry.supports(ServerFeature.LIBRARY_ONLINE)) {
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '在线书库',
+                subtitle: '已保存的网络书，可按连载状态筛选',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/OnlineLibraryPage' }),
+              });
+            }
             Divider().color($r('app.color.divider')).strokeWidth(0.5);
             SettingCell({
               title: '账号与服务器',
