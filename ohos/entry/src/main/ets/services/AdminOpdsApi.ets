@@ -11,8 +11,9 @@
  * - `POST /api/admin/opds/import` 是异步任务：立即返回 `{err:'ok', async:true}`，
  *   进度需轮询 `GET /api/admin/opds/import/status`（全局单例计数）。
  * - `POST /api/admin/opds/import/retry` 接受 `id` 或 `hash` 之一（ScanFile.FAILED 记录）。
- * - OPDS 源的创建/更新/删除（POST/PUT/DELETE `/api/admin/opds/sources`）不在本任务范围内；
- *   其中 PUT 需要 HTTP PUT 通道，而 native 通道（TalebookCoreService）未提供 PUT，故不实现。
+ * - OPDS 源的增/改/删（`POST/PUT/DELETE /api/admin/opds/sources`，见 admin_opds_sources.py）：
+ *   `POST` 必填 name+url（url 必须以 http(s) 开头、名称不可重复）；`PUT` 以 `id` 定位，
+ *   仅更新请求中出现的字段，`active` 可单独切换；`DELETE` 以 JSON 体的 `id` 定位。
  */
 import { TalebookCoreService } from './TalebookCoreService';
 import { ApiMessageResult } from './TalebookApi';
@@ -87,6 +88,11 @@ export interface AdminOpdsFailedResponse extends ApiMessageResult {
   count?: number;
 }
 
+/** 新建/更新 OPDS 源的返回（AdminOpdsSources.post 带新建 id）。 */
+export interface AdminOpdsSourceWriteResponse extends ApiMessageResult {
+  id?: number;
+}
+
 // ---- 请求载荷 ----
 
 interface AdminOpdsBrowsePayload {
@@ -107,11 +113,80 @@ interface AdminOpdsRetryByHashPayload {
   hash: string;
 }
 
+/** 新建 OPDS 源载荷（name/url 必填）。 */
+interface AdminOpdsSourceCreatePayload {
+  name: string;
+  url: string;
+  description: string;
+}
+
+/** 更新 OPDS 源载荷：以 id 定位，其余字段省略则不修改。 */
+export interface AdminOpdsSourceUpdatePayload {
+  id: number;
+  name?: string;
+  url?: string;
+  description?: string;
+  active?: boolean;
+}
+
+interface AdminOpdsSourceDeletePayload {
+  id: number;
+}
+
 export class AdminOpdsApi {
   /** OPDS 源列表（GET /api/admin/opds/sources）。 */
   static async listSources(): Promise<AdminOpdsSourcesResponse> {
     const raw = await TalebookCoreService.talebookGet('/api/admin/opds/sources');
     return JSON.parse(raw) as AdminOpdsSourcesResponse;
+  }
+
+  /** 新建 OPDS 源（POST /api/admin/opds/sources）。 */
+  static async createSource(name: string, url: string, description: string):
+    Promise<AdminOpdsSourceWriteResponse> {
+    const payload: AdminOpdsSourceCreatePayload = {
+      name: name,
+      url: url,
+      description: description,
+    };
+    const raw = await TalebookCoreService.talebookPost('/api/admin/opds/sources',
+      JSON.stringify(payload));
+    return JSON.parse(raw) as AdminOpdsSourceWriteResponse;
+  }
+
+  /** 更新 OPDS 源（PUT /api/admin/opds/sources，仅提交需变更的字段）。 */
+  static async updateSource(id: number, patch: AdminOpdsSourceUpdatePayload):
+    Promise<AdminOpdsSourceWriteResponse> {
+    const payload: AdminOpdsSourceUpdatePayload = { id: id };
+    if (patch.name !== undefined) {
+      payload.name = patch.name;
+    }
+    if (patch.url !== undefined) {
+      payload.url = patch.url;
+    }
+    if (patch.description !== undefined) {
+      payload.description = patch.description;
+    }
+    if (patch.active !== undefined) {
+      payload.active = patch.active;
+    }
+    const raw = await TalebookCoreService.talebookPut('/api/admin/opds/sources',
+      JSON.stringify(payload));
+    return JSON.parse(raw) as AdminOpdsSourceWriteResponse;
+  }
+
+  /** 切换启用状态（PUT /api/admin/opds/sources，仅提交 id+active）。 */
+  static async setSourceActive(id: number, active: boolean):
+    Promise<AdminOpdsSourceWriteResponse> {
+    const patch: AdminOpdsSourceUpdatePayload = { id: id, active: active };
+    return AdminOpdsApi.updateSource(id, patch);
+  }
+
+  /** 删除 OPDS 源（DELETE /api/admin/opds/sources，id 在 JSON 体内）。 */
+  static async deleteSource(id: number): Promise<AdminOpdsSourceWriteResponse> {
+    const payload: AdminOpdsSourceDeletePayload = { id: id };
+    const raw = await TalebookCoreService.talebookDeleteWithBody('/api/admin/opds/sources',
+      JSON.stringify(payload));
+    return JSON.parse(raw) as AdminOpdsSourceWriteResponse;
   }
 
   /** 浏览 OPDS 目录（POST /api/admin/opds/browse，传完整 url）。 */
