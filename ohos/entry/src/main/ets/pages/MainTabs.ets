@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { BookshelfPage } from './BookshelfPage';
 import { BooksTabPage } from './BooksTabPage';
 import { SettingsPage } from './SettingsPage';
@@ -24,7 +23,7 @@ struct MainTabs {
   aboutToAppear(): void {
     // 冷启动静默检查更新：命中缓存或无新版本时不会有任何打扰
     void this.checkUpdateOnStartup();
-    const params: Record<string, Object> | null = router.getParams() as Record<string, Object> | null;
+    const params: Record<string, Object> | null = this.getUIContext().getRouter().getParams() as Record<string, Object> | null;
     if (params === null || params === undefined) {
       return;
     }
@@ -42,6 +41,7 @@ struct MainTabs {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   onPageShow(): void {
     // 兜底：EntryAbility 先于本页写入失败原因时，@Watch 不会触发，这里主动提示一次
     this.reportAuthFailure();
@@ -51,11 +51,13 @@ struct MainTabs {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private onAuthFailureChanged(): void {
     this.reportAuthFailure();
   }
 
   /** 提示一次启动期的失败/纠正信息并清空，避免每次回到首页重复打扰。 */
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private reportAuthFailure(): void {
     if (this.serverKindNotice.length > 0) {
       const kind: string = this.serverKindNotice;
@@ -119,7 +121,7 @@ struct MainTabs {
       ],
     }).then((result) => {
       if (result.index === 0) {
-        router.pushUrl({ url: 'pages/UpdatePage' }).catch(() => {
+        this.getUIContext().getRouter().pushUrl({ url: 'pages/UpdatePage' }).catch(() => {
         });
       } else if (result.index === 1) {
         UpdateService.skipVersion(tag);

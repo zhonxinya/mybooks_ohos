@@ -1,5 +1,4 @@
 import { common } from '@kit.AbilityKit';
-import { router } from '@kit.ArkUI';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
@@ -71,7 +70,7 @@ struct ComicReaderPage {
   private progressHintShown: boolean = false;
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, Object>;
+    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
     this.bookId = Number(params['bookId'] ?? 0);
     const page = Number(params['page'] ?? -1);
     this.routePage = Number.isNaN(page) ? -1 : page;
@@ -85,7 +84,11 @@ struct ComicReaderPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private async load(): Promise<void> {
@@ -290,7 +293,7 @@ struct ComicReaderPage {
 
   private close(): void {
     this.exitImmersiveMode();
-    router.back();
+    this.getUIContext().getRouter().back();
   }
 
   /** 重新取图：变更 LazyForEach 键强制重建页面项，失败的页会重新走一次图片通道。 */
@@ -511,7 +514,7 @@ struct ComicPageImage {
   /** 探测 AuthImage 的缓存落盘位置（与 AuthImage 内部保持一致）。 */
   private cached(): boolean {
     try {
-      const context = getContext(this) as common.UIAbilityContext;
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       CoverCache.ensureDir(context);
       const destPath = CoverCache.pathFor(context, TalebookService.resolveCoverUrl(this.url));
       return fs.accessSync(destPath);

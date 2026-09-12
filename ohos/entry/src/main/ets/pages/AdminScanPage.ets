@@ -1,4 +1,4 @@
-import { router, LengthMetrics } from '@kit.ArkUI';
+import { LengthMetrics } from '@kit.ArkUI';
 import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem,
   PrimaryButton, SecondaryButton, DangerButton, SectionTitle, SettingCell, TextButton,
   ChipButton } from '../components';
@@ -247,7 +247,11 @@ struct AdminScanPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private messageOf(err: string | undefined, msg: string | undefined, fallback: string): string {
@@ -1285,7 +1289,7 @@ struct AdminScanPage {
         if (ServerRegistry.supports(ServerFeature.ADMIN_OPDS)) {
           ChipButton({
             label: 'OPDS 导入',
-            onTap: () => router.pushUrl({ url: 'pages/AdminOpdsPage' }),
+            onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminOpdsPage' }),
           });
         }
         ChipButton({

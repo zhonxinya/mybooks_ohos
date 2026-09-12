@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, LoadingState, EmptyState, SearchBar, FilterChips, FilterChipItem,
   TextButton, SectionTitle,
@@ -54,7 +53,11 @@ struct AnnotationsPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private async load(): Promise<void> {
@@ -165,8 +168,9 @@ struct AnnotationsPage {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openBook(item: AnnotationItem): void {
-    router.pushUrl({
+    this.getUIContext().getRouter().pushUrl({
       url: 'pages/BookAnnotationsPage',
       params: { bookId: item.bookId },
     });

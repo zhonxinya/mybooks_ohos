@@ -1,4 +1,4 @@
-import { router } from '@kit.ArkUI';
+import { UIContext } from '@kit.ArkUI';
 import { deviceInfo } from '@kit.BasicServicesKit';
 
 /**
@@ -65,14 +65,16 @@ export class ReaderLauncher {
 
   /**
    * 打开阅读器。
+   * @param uiContext 调用方所在页面的 UIContext（本类是静态工具，没有组件 `this`）。
    * @returns true 表示已跳转；false 表示当前环境不提供 ReaderKit
    *          （调用方应提示 `UNAVAILABLE_MESSAGE`）。
+   * @throws 内部调用可能抛出异常，由调用方处理
    */
-  static open(params: ReaderOpenParams): boolean {
+  static open(uiContext: UIContext, params: ReaderOpenParams): boolean {
     if (!ReaderLauncher.isAvailable()) {
       return false;
     }
-    router.pushUrl({ url: 'pages/ReadKitReader', params: params });
+    uiContext.getRouter().pushUrl({ url: 'pages/ReadKitReader', params: params });
     return true;
   }
 }

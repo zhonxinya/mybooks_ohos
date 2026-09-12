@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem,
   ChipButton, PrimaryButton, SecondaryButton, TextButton, SectionTitle,
@@ -64,7 +63,7 @@ struct BookAnnotationsPage {
   ];
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, Object> | null;
+    const params = this.getUIContext().getRouter().getParams() as Record<string, Object> | null;
     this.bookId = Number(params?.['bookId'] ?? 0);
     this.bookTitle = String(params?.['bookTitle'] ?? '');
     this.supported = ServerRegistry.supports(ServerFeature.ANNOTATIONS);
@@ -76,7 +75,11 @@ struct BookAnnotationsPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private async load(): Promise<void> {

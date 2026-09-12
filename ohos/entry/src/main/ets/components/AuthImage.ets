@@ -38,7 +38,7 @@ export struct AuthImage {
       return;
     }
     const token = ++this.loadToken;
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     CoverCache.ensureDir(context);
     const resolved = TalebookService.resolveCoverUrl(this.url);
     const destPath = CoverCache.pathFor(context, resolved);

@@ -48,7 +48,11 @@ struct UpdatePage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   /** 打开外部链接；链接可能来自 GitHub 响应，仅允许 http/https。 */
@@ -61,7 +65,7 @@ struct UpdatePage {
       this.toast('链接协议不受支持');
       return;
     }
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const want: Want = {
       action: 'ohos.want.action.viewData',
       uri: url,

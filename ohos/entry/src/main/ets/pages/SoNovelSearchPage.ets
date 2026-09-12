@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, SearchBar, BookCatalogView, BookViewToggleButton, BookListItemData,
   LoadingState, EmptyState, IconCircleButton,
@@ -106,9 +105,10 @@ struct SoNovelSearchPage {
     });
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openSource(item: SoNovelSearchItem): void {
     const payload = SoNovelMerge.toPayload(item);
-    router.pushUrl({
+    this.getUIContext().getRouter().pushUrl({
       url: 'pages/SoNovelBookDetailPage',
       params: {
         sourceId: payload.sourceId,
@@ -124,6 +124,7 @@ struct SoNovelSearchPage {
     });
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openMerged(index: number): void {
     if (index < 0 || index >= this.mergedResults.length) {
       return;
@@ -135,6 +136,7 @@ struct SoNovelSearchPage {
     this.openSource(merged.sources[0]);
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private startDownload(item: SoNovelSearchItem): void {
     if (item.sourceId <= 0 || item.url.length === 0) {
       this.getUIContext().getPromptAction().showToast({ message: '书源信息不完整' });
@@ -162,6 +164,7 @@ struct SoNovelSearchPage {
     });
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private downloadMerged(index: number): void {
     if (index < 0 || index >= this.mergedResults.length) {
       return;
@@ -250,7 +253,7 @@ struct SoNovelSearchPage {
         IconCircleButton({
           icon: $r('sys.symbol.arrow_down_circle'),
           variant: 'ghost',
-          onTap: () => router.pushUrl({ url: 'pages/DownloadManagerPage' }),
+          onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/DownloadManagerPage' }),
         });
       }
       BookViewToggleButton({ isListMode: $isListMode });
@@ -299,7 +302,7 @@ struct SoNovelSearchPage {
           message: '请先配置 SoNovel 服务地址',
           actionLabel: '去配置',
           // SoNovel 地址已并入「账号与服务器」，统一引导到该页，避免出现两个配置入口
-          onAction: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
+          onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
         });
       } else if (this.loading) {
         LoadingState({ hint: '正在聚合搜索，请稍候…' });

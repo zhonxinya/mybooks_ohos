@@ -5,7 +5,6 @@
  * （`{err, title, total, books:[...]}`），支持 `start`（偏移）+ `size`（每页），
  * 每本书额外带 `serialize_status`（serial / finished / unknown），可按其筛选。
  */
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, BookCatalogView, BookViewToggleButton, BookListItemData,
   LoadingState, EmptyState, FilterChips, FilterChipItem,
@@ -62,7 +61,11 @@ struct OnlineLibraryPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private currentStatus(): string {
@@ -248,7 +251,7 @@ struct OnlineLibraryPage {
       EmptyState({
         message: this.loadError,
         actionLabel: this.loadError.includes('配置') ? '去配置' : '',
-        onAction: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
+        onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
       });
     } else if (this.catalogItems.length === 0) {
       EmptyState({ message: '在线书库暂无书籍', detail: '可先通过网络书源搜索并保存书籍。' });
@@ -274,7 +277,7 @@ struct OnlineLibraryPage {
             header: () => {
               this.listHeader();
             },
-            onItemTap: (item: BookListItemData) => router.pushUrl({
+            onItemTap: (item: BookListItemData) => this.getUIContext().getRouter().pushUrl({
               url: 'pages/BookDetailPage', params: { bookId: Number(item.id) }
             }),
             onLoadMore: () => this.loadMore(),

@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, FilterChips, FilterChipItem, BookCatalogView, BookViewToggleButton,
   BookListItemData, LoadingState, EmptyState, PrimaryButton,
@@ -53,7 +52,7 @@ struct ReadingBooksPage {
 
   aboutToAppear(): void {
     this.isListMode = BookViewMode.isListMode();
-    const params = router.getParams() as Record<string, Object> | null;
+    const params = this.getUIContext().getRouter().getParams() as Record<string, Object> | null;
     this.activeTab = params?.['tab'] === 'favorites' ? 1 : 0;
     void this.loadBooks(true);
   }
@@ -214,6 +213,7 @@ struct ReadingBooksPage {
     return '读完';
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async removeSelected(action: string): Promise<void> {
     if (this.removing) {
       return;
@@ -348,7 +348,7 @@ struct ReadingBooksPage {
           items: this.catalogItems,
           isListMode: this.isListMode,
           loadingMore: this.loadingMore,
-          onItemTap: (item: BookListItemData) => router.pushUrl({
+          onItemTap: (item: BookListItemData) => this.getUIContext().getRouter().pushUrl({
             url: 'pages/BookDetailPage', params: { bookId: Number(item.id) }
           }),
           onLoadMore: () => this.loadMore(),

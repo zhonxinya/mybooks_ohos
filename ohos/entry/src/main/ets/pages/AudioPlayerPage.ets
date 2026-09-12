@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { media } from '@kit.MediaKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
@@ -33,16 +32,17 @@ struct AudioPlayerPage {
   private sliderDragging: boolean = false;
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, Object>;
+    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
     this.bookId = Number(params['bookId'] ?? 0);
     this.bookTitle = String(params['title'] ?? '');
     this.bookAuthor = String(params['author'] ?? '');
     this.bookCover = String(params['cover'] ?? '');
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.audioDir = `${context.filesDir}/audio/${this.bookId}`;
     void this.loadList();
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   aboutToDisappear(): void {
     this.releasePlayer();
     this.cleanupDistantAudioFiles();
@@ -76,7 +76,11 @@ struct AudioPlayerPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private async loadList(): Promise<void> {
@@ -98,7 +102,7 @@ struct AudioPlayerPage {
         this.errorMessage = rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '暂无音频文件';
         return;
       }
-      const params = router.getParams() as Record<string, Object>;
+      const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
       const start = Number(params['startIndex'] ?? 0);
       this.currentIndex = start >= 0 && start < this.files.length ? start : 0;
       void this.loadTrack(this.currentIndex);
@@ -121,6 +125,7 @@ struct AudioPlayerPage {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async ensureLocalFile(filename: string): Promise<string> {
     const path = this.localPath(filename);
     if (this.hasLocalFile(path)) {
@@ -211,6 +216,7 @@ struct AudioPlayerPage {
     });
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private releasePlayer(): void {
     if (this.avPlayer !== null) {
       this.avPlayer.release();
@@ -218,6 +224,7 @@ struct AudioPlayerPage {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private togglePlay(): void {
     const player = this.avPlayer;
     if (player === null || this.trackLoading) {

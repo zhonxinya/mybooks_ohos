@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, LoadingState, EmptyState, SectionTitle, FilterChips, FilterChipItem,
   PrimaryButton, SecondaryButton
@@ -53,7 +52,7 @@ struct TxtBookPage {
       this.loading = false;
       return;
     }
-    const rawParams = router.getParams();
+    const rawParams = this.getUIContext().getRouter().getParams();
     if (rawParams !== undefined) {
       const params = rawParams as Record<string, Object>;
       const rawId = params['bookId'];
@@ -68,7 +67,11 @@ struct TxtBookPage {
   }
 
   private toast(text: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: text });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: text });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private setMsg(text: string, error: boolean): void {

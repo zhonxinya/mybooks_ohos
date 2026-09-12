@@ -7,6 +7,7 @@ export class AppTheme {
   static readonly cardRadius: number = 12;
   static readonly coverRadius: number = 8;
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   static applyThemeMode(context: common.UIAbilityContext, mode: string): void {
     const appContext = context.getApplicationContext();
     if (mode === 'light') {

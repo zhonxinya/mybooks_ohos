@@ -51,7 +51,11 @@ struct AdminBatchAddPage {
   }
 
   private toast(text: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: text });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: text });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private setMsg(text: string, error: boolean): void {
@@ -105,7 +109,7 @@ struct AdminBatchAddPage {
     }
     this.picking = true;
     try {
-      const context = getContext(this) as common.UIAbilityContext;
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const file: PickedBookFile | null =
         await BookUploadService.pickStagedFile(context, ['.csv'], 'batch_add_csv');
       if (file === null) {

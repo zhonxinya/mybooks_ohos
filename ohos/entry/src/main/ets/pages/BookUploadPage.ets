@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { PageScaffold, PrimaryButton, TextButton, SecondaryButton } from '../components';
@@ -60,7 +59,11 @@ struct BookUploadPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   /** ISBN-10/13 校验（去连字符/空格后校验位验证）。 */
@@ -112,7 +115,7 @@ struct BookUploadPage {
       this.isbnInput = '';
       const bookId = Number(rsp.book_id ?? 0);
       if (bookId > 0) {
-        router.pushUrl({ url: 'pages/BookDetailPage', params: { bookId: bookId } });
+        this.getUIContext().getRouter().pushUrl({ url: 'pages/BookDetailPage', params: { bookId: bookId } });
       }
     } catch (e) {
       this.isbnError = `添加失败：${e}`;
@@ -126,7 +129,7 @@ struct BookUploadPage {
     if (this.scanningBarcode) {
       return;
     }
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.scanningBarcode = true;
     this.isbnError = '';
     let localPath = '';
@@ -174,9 +177,10 @@ struct BookUploadPage {
 
   /** 大文件分块上传：逐块写临时文件后上传，服务端收齐后自动合并导入。
    *  已上传的分块保留在缓存目录，中断后再次上传会先重传缺失分块（断点续传）。
+   * @throws 内部调用可能抛出异常，由调用方处理
    */
   private async uploadChunked(item: UploadItem): Promise<void> {
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const chunkDir = `${context.cacheDir}/upload/chunks`;
     try {
       if (!fs.accessSync(chunkDir)) {
@@ -392,7 +396,7 @@ struct BookUploadPage {
     if (this.uploading) {
       return;
     }
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     try {
       const result = await BookUploadService.pickBookFiles(context, 10);
       if (result.files.length > 0) {
@@ -656,14 +660,14 @@ struct BookUploadPage {
       if (item.status === ITEM_SUCCESS || (item.status === ITEM_FAILED && item.bookId > 0)) {
         TextButton({
           label: '编辑元数据',
-          onTap: () => router.pushUrl({
+          onTap: () => this.getUIContext().getRouter().pushUrl({
             url: 'pages/BookEditPage',
             params: { bookId: item.bookId },
           }),
         });
         TextButton({
           label: '查看详情',
-          onTap: () => router.pushUrl({
+          onTap: () => this.getUIContext().getRouter().pushUrl({
             url: 'pages/BookDetailPage',
             params: { bookId: item.bookId },
           }),

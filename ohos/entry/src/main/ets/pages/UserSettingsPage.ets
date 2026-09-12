@@ -36,7 +36,11 @@ struct UserSettingsPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private async loadProfile(): Promise<void> {
@@ -103,6 +107,7 @@ struct UserSettingsPage {
     this.toast('已生成新 Token，请保存设置后生效');
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private copyPodcastToken(): void {
     if (this.podcastToken.length === 0) {
       this.toast('暂无 Token');
@@ -160,7 +165,7 @@ struct UserSettingsPage {
     if (this.uploadingAvatar) {
       return;
     }
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     try {
       const file = await BookUploadService.pickAvatarImage(context);
       if (file === null) {

@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { PageScaffold, SettingCell, LoadingState, DangerButton } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
@@ -123,13 +122,13 @@ struct ProfilePage {
             SettingCell({
               title: '我的阅读',
               showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/ReadingBooksPage' }),
+              onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/ReadingBooksPage' }),
             });
             Divider().color($r('app.color.divider')).strokeWidth(0.5);
             SettingCell({
               title: '我的书籍',
               showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/MyBooksPage' }),
+              onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/MyBooksPage' }),
             });
             if (ServerRegistry.supports(ServerFeature.BOOK_SHELF)) {
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
@@ -137,7 +136,7 @@ struct ProfilePage {
                 title: '我的书架',
                 subtitle: '服务端书架（阅读计划）',
                 showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/ShelfPage' }),
+                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/ShelfPage' }),
               });
             }
             if (ServerRegistry.supports(ServerFeature.LIBRARY_ONLINE)) {
@@ -146,7 +145,7 @@ struct ProfilePage {
                 title: '在线书库',
                 subtitle: '已保存的网络书，可按连载状态筛选',
                 showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/OnlineLibraryPage' }),
+                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/OnlineLibraryPage' }),
               });
             }
             Divider().color($r('app.color.divider')).strokeWidth(0.5);
@@ -154,7 +153,7 @@ struct ProfilePage {
               title: '账号与服务器',
               subtitle: this.accountSummary(),
               showChevron: true,
-              onTap: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
+              onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
             });
             if (this.isLogin) {
               if (ServerRegistry.supports(ServerFeature.ANNOTATIONS)) {
@@ -163,7 +162,7 @@ struct ProfilePage {
                   title: '我的标注',
                   subtitle: '查看与导出全部书内标注',
                   showChevron: true,
-                  onTap: () => router.pushUrl({ url: 'pages/AnnotationsPage' }),
+                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AnnotationsPage' }),
                 });
               }
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
@@ -171,20 +170,20 @@ struct ProfilePage {
                 title: '消息通知',
                 badgeText: this.unreadBadge(),
                 showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/NotificationPage' }),
+                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/NotificationPage' }),
               });
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
                 title: '个人设置',
                 showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/UserSettingsPage' }),
+                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/UserSettingsPage' }),
               });
               if (ServerRegistry.supports(ServerFeature.USER_MEMO)) {
                 Divider().color($r('app.color.divider')).strokeWidth(0.5);
                 SettingCell({
                   title: '我的留言',
                   showChevron: true,
-                  onTap: () => router.pushUrl({ url: 'pages/UserMemosPage' }),
+                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/UserMemosPage' }),
                 });
               }
               if (ServerRegistry.supports(ServerFeature.USER_EXPECTED)) {
@@ -192,7 +191,7 @@ struct ProfilePage {
                 SettingCell({
                   title: '求书期望',
                   showChevron: true,
-                  onTap: () => router.pushUrl({ url: 'pages/ExpectedBooksPage' }),
+                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/ExpectedBooksPage' }),
                 });
               }
             }
@@ -210,7 +209,7 @@ struct ProfilePage {
               this.nickname = '';
               this.username = '';
               this.getUIContext().getPromptAction().showToast({ message: '已退出登录' });
-              router.back();
+              this.getUIContext().getRouter().back();
             },
           });
         }

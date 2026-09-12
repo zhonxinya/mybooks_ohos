@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { PageScaffold, FilterChipItem, LoadingState, EmptyState, ChipButton, LazyDataSource } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, MetaNameCount } from '../services/TalebookApi';
@@ -225,23 +224,25 @@ struct MetaBookListPage {
     return result;
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openMeta(name: string): void {
     if (name.length === 0) {
       return;
     }
     if (this.metaType === 'category') {
-      router.pushUrl({
+      this.getUIContext().getRouter().pushUrl({
         url: 'pages/BookListPage',
         params: { type: 'category', metaName: name },
       });
     } else {
-      router.pushUrl({
+      this.getUIContext().getRouter().pushUrl({
         url: 'pages/BookListPage',
         params: { type: 'meta', metaType: this.metaType, metaName: name },
       });
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async togglePin(name: string, pinned: boolean): Promise<void> {
     try {
       await TalebookService.ensureAuthenticated();
@@ -477,7 +478,7 @@ struct MetaBookListPage {
         EmptyState({
           message: this.errorMessage,
           actionLabel: this.errorMessage.includes('配置') ? '去配置' : '',
-          onAction: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
+          onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
         });
       } else {
         // 卡片左右留白放在外层 Column 的 padding 上：

@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
@@ -144,7 +143,11 @@ struct BookSourceManagePage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private enabledParam(): string {
@@ -525,6 +528,7 @@ struct BookSourceManagePage {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private copyExport(): void {
     if (this.fullExportJson.length === 0) {
       this.toast('暂无可复制的导出内容');
@@ -776,7 +780,7 @@ struct BookSourceManagePage {
   }
 
   private async pickImportFile(): Promise<void> {
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const options = new picker.DocumentSelectOptions();
     options.maxSelectNumber = 1;
     options.fileSuffixFilters = ['.json', '.txt'];
@@ -995,7 +999,7 @@ struct BookSourceManagePage {
                 fullWidth: false,
                 onTap: () => {
                   // 上游书源工作台内嵌的「全局配置」实为 legado 插件连接配置，跳插件中心维护
-                  router.pushUrl({ url: 'pages/AdminPluginsPage' });
+                  this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminPluginsPage' });
                 },
               });
             }

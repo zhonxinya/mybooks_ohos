@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { IconCircleButton } from './IconCircleButton';
 
 @Component
@@ -18,7 +17,7 @@ export struct HarmonyTopBar {
           IconCircleButton({
             icon: $r('sys.symbol.chevron_left'),
             variant: 'ghost',
-            onTap: () => router.back(),
+            onTap: () => this.getUIContext().getRouter().back(),
           });
         }
         Text(this.title)

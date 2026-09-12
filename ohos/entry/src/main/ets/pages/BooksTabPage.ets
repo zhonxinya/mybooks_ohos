@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   BookCatalogView, BookViewToggleButton, BookListItemData, LoadingState,
   SectionTitle, AuthImage, HarmonyTopBar,
@@ -181,6 +180,7 @@ export struct BooksTabPage {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async loadInitialData(page: number): Promise<void> {
     const authPromise = TalebookService.hasAuthCredentials()
       ? TalebookService.ensureAuthenticated()
@@ -240,10 +240,12 @@ export struct BooksTabPage {
     }));
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async fetchBookListAsync(reset: boolean, page: number): Promise<void> {
     await this.applyBookListEnvelope(reset, await this.requestBookList(page));
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async applyBookListEnvelope(reset: boolean, envelope: ApiEnvelope): Promise<void> {
     let result = envelope;
     if (!TalebookService.isApiSuccess(result) && reset && TalebookService.hasAuthCredentials()) {
@@ -324,18 +326,20 @@ export struct BooksTabPage {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private handleEmptyAction(): void {
     if (this.emptyActionLabel === '去搜索') {
-      router.pushUrl({ url: 'pages/TalebookBookSearchPage' });
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookBookSearchPage' });
       return;
     }
     // 「去配置」与「去配置账号」都指向账号与服务器：登录页已移除，配置好账号后由应用自动登录
-    router.pushUrl({ url: 'pages/TalebookConfigPage' });
+    this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' });
   }
 
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openBookDetail(bookId: number): void {
-    router.pushUrl({ url: 'pages/BookDetailPage', params: { bookId: bookId } });
+    this.getUIContext().getRouter().pushUrl({ url: 'pages/BookDetailPage', params: { bookId: bookId } });
   }
 
   private rebuildCatalogItems(): void {

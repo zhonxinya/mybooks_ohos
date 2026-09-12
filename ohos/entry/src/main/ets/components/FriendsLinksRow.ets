@@ -15,7 +15,7 @@ export struct FriendsLinksRow {
     if (!(href.startsWith('http://') || href.startsWith('https://'))) {
       return;
     }
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const want: Want = {
       action: 'ohos.want.action.viewData',
       uri: href,

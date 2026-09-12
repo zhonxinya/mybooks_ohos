@@ -32,13 +32,14 @@ struct AdminResourcesPage {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openLink(url: string): void {
     // 链接来自服务端数据，仅允许 http/https，避免隐式 Want 被注入任意协议 URI
     if (!(url.startsWith('http://') || url.startsWith('https://'))) {
       this.getUIContext().getPromptAction().showToast({ message: '链接协议不受支持' });
       return;
     }
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const want: Want = {
       action: 'ohos.want.action.viewData',
       uri: url,

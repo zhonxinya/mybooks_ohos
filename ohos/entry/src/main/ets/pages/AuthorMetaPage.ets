@@ -47,7 +47,11 @@ struct AuthorMetaPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   /** 门控：非 mybooks 服务端不支持作者元数据维护。 */
@@ -156,7 +160,7 @@ struct AuthorMetaPage {
       this.toast('请先查询作者');
       return;
     }
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     let file: PickedBookFile | null = null;
     try {
       file = await BookUploadService.pickStagedFile(

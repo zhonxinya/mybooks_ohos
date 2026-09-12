@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import {
   PageScaffold, PrimaryButton, SecondaryButton, SettingCell, LoadingState
@@ -42,7 +41,11 @@ struct MinifyPdfToolPage {
   }
 
   private toast(msg: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: msg });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: msg });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private setMsg(text: string, error: boolean): void {
@@ -135,7 +138,7 @@ struct MinifyPdfToolPage {
     }
     this.busy = true;
     try {
-      const context = getContext(this) as common.UIAbilityContext;
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const picked = await BookUploadService.pickPdfFile(context);
       if (picked === null) {
         this.toast('未选择 PDF');

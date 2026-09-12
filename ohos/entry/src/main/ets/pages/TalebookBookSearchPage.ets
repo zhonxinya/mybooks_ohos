@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, SearchBar, BookCatalogView, BookViewToggleButton, BookListItemData,
   LoadingState, EmptyState, FilterChips, FilterChipItem,
@@ -31,10 +30,11 @@ struct TalebookBookSearchPage {
     { label: '作者', value: 2 },
   ];
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   aboutToAppear(): void {
     this.isListMode = BookViewMode.isListMode();
     this.ensureTalebookUrl();
-    const params = router.getParams() as Record<string, Object> | undefined;
+    const params = this.getUIContext().getRouter().getParams() as Record<string, Object> | undefined;
     const initial = String(params?.['keyword'] ?? '').trim();
     if (initial.length > 0) {
       this.keyword = initial;
@@ -58,6 +58,7 @@ struct TalebookBookSearchPage {
     }, PaginationConstants.DEBOUNCE_MS);
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private search(reset: boolean = true): void {
     const trimmed = this.keyword.trim();
     if (trimmed.length === 0) {
@@ -73,6 +74,7 @@ struct TalebookBookSearchPage {
     void this.searchAsync(reset, query);
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async searchAsync(reset: boolean, trimmed: string): Promise<void> {
     this.ensureTalebookUrl();
     if (reset) {
@@ -120,6 +122,7 @@ struct TalebookBookSearchPage {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private loadMore(): void {
     if (!PaginationHelper.canLoadMore(this.lastLoadTime, this.loadingMore, this.hasMore)) {
       return;
@@ -200,7 +203,7 @@ struct TalebookBookSearchPage {
           items: this.catalogItems,
           isListMode: this.isListMode,
           loadingMore: this.loadingMore,
-          onItemTap: (item: BookListItemData) => router.pushUrl({
+          onItemTap: (item: BookListItemData) => this.getUIContext().getRouter().pushUrl({
             url: 'pages/BookDetailPage', params: { bookId: Number(item.id) }
           }),
           onLoadMore: () => this.loadMore(),

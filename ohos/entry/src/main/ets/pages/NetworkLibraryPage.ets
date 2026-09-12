@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, LoadingState, EmptyState, SearchBar, FilterChips, FilterChipItem,
   BookCatalogView, BookListItem, BookListItemData, PrimaryButton, TextButton, ChipButton,
@@ -130,7 +129,11 @@ struct NetworkLibraryPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private availabilityText(): string {
@@ -523,12 +526,13 @@ struct NetworkLibraryPage {
     void this.explorePage(1);
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openBook(row: BookListItemData): void {
     const book = this.index.get(row.id);
     if (book === undefined) {
       return;
     }
-    router.pushUrl({
+    this.getUIContext().getRouter().pushUrl({
       url: 'pages/NetworkBookDetailPage',
       params: {
         sourceId: book.sourceId,
@@ -667,7 +671,7 @@ struct NetworkLibraryPage {
           .fontSize(14)
           .fontColor($r('app.color.brand_primary'))
           .padding({ left: 8, right: 16 })
-          .onClick(() => router.pushUrl({ url: 'pages/BookSourceManagePage' }));
+          .onClick(() => this.getUIContext().getRouter().pushUrl({ url: 'pages/BookSourceManagePage' }));
       }
     }
   }
@@ -772,7 +776,7 @@ struct NetworkLibraryPage {
               ? '去书源管理' : (this.progressText.length > 0 ? '重试' : ''),
             onAction: () => {
               if (this.sources.length === 0 && ServerRegistry.supports(ServerFeature.BOOK_SOURCES)) {
-                router.pushUrl({ url: 'pages/BookSourceManagePage' });
+                this.getUIContext().getRouter().pushUrl({ url: 'pages/BookSourceManagePage' });
                 return;
               }
               this.startSearch(true);

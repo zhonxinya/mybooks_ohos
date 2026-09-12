@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { PageScaffold, PrimaryButton, SecondaryButton } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookCoreService } from '../services/TalebookCoreService';
@@ -53,7 +52,7 @@ struct SoNovelConfigPage {
 
       SecondaryButton({
         label: '前往搜索',
-        onTap: () => router.pushUrl({ url: 'pages/SoNovelSearchPage' }),
+        onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/SoNovelSearchPage' }),
       });
     }
     .padding($r('app.float.page_padding'));

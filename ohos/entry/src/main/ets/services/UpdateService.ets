@@ -311,6 +311,7 @@ export class UpdateService {
   }
 
   /** 拉取 GitHub 最新 release；网络或接口异常时抛出 Error。 */
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private static async fetchLatestRelease(): Promise<ReleaseInfo> {
     const httpRequest = http.createHttp();
     try {

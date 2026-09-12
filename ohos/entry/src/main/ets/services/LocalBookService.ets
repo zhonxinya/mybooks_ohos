@@ -8,6 +8,7 @@ const SUPPORTED_SUFFIXES: string[] = ['.epub', '.txt', '.mobi', '.azw', '.azw3']
 const MAX_FILE_SIZE: number = 300 * 1024 * 1024;
 
 export class LocalBookService {
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   static async pickAndImport(context: common.UIAbilityContext): Promise<DownloadRecord | null> {
     const options = new picker.DocumentSelectOptions();
     options.fileSuffixFilters = SUPPORTED_SUFFIXES;
@@ -20,6 +21,7 @@ export class LocalBookService {
     return LocalBookService.importFile(context.filesDir, srcPath);
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   static async importFile(filesDir: string, srcPath: string): Promise<DownloadRecord> {
     if (srcPath.length === 0) {
       throw new Error('未选择文件');
@@ -60,6 +62,7 @@ export class LocalBookService {
     return SUPPORTED_SUFFIXES.includes(normalized.toLowerCase());
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private static ensureDir(path: string): void {
     try {
       if (!fs.accessSync(path)) {
@@ -70,6 +73,7 @@ export class LocalBookService {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private static async copyFile(srcPath: string, destPath: string): Promise<void> {
     let fileId = -1;
     try {
@@ -85,6 +89,7 @@ export class LocalBookService {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private static fileSize(path: string): number {
     let fileId = -1;
     try {

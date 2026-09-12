@@ -1,5 +1,3 @@
-import { router } from '@kit.ArkUI';
-import { componentSnapshot } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
@@ -58,13 +56,17 @@ struct BookListDetailPage {
   private lastAddTime: number = 0;
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, Object>;
+    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
     this.booklistId = Number(params['booklistId'] ?? 0);
     void this.prepareAndLoad();
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private isOwner(): boolean {
@@ -157,7 +159,7 @@ struct BookListDetailPage {
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         if (rsp.err === 'user.need_login') {
           this.toast('请先在「账号与服务器」中配置账号，应用会自动登录');
-          router.pushUrl({ url: 'pages/TalebookConfigPage' });
+          this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' });
           return;
         }
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '操作失败');
@@ -234,7 +236,7 @@ struct BookListDetailPage {
             .then((rsp: ApiMessageResult) => {
               if (rsp.err === undefined || rsp.err === 'ok') {
                 this.toast('已删除');
-                router.back();
+                this.getUIContext().getRouter().back();
               } else {
                 this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
               }
@@ -288,10 +290,10 @@ struct BookListDetailPage {
     }
     this.shareSaving = true;
     try {
-      const pm = await componentSnapshot.get('booklistShareCard');
+      const pm = await this.getUIContext().getComponentSnapshot().get('booklistShareCard');
       const packer = image.createImagePacker();
       const data: ArrayBuffer = await packer.packToData(pm, { format: 'image/jpeg', quality: 92 });
-      const context = getContext(this) as common.UIAbilityContext;
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const dir = `${context.filesDir}/share`;
       try {
         if (!fs.accessSync(dir)) {
@@ -470,8 +472,9 @@ struct BookListDetailPage {
     });
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openBook(bookId: number): void {
-    router.pushUrl({ url: 'pages/BookDetailPage', params: { bookId: bookId } });
+    this.getUIContext().getRouter().pushUrl({ url: 'pages/BookDetailPage', params: { bookId: bookId } });
   }
 
   @Builder

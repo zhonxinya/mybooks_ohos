@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { PageScaffold, PrimaryButton, SecondaryButton } from '../components';
 import { SoNovelBookPayload } from '../services/TalebookService';
 import { DownloadTaskService } from '../services/DownloadTaskService';
@@ -24,7 +23,7 @@ struct SoNovelBookDetailPage {
   };
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, Object>;
+    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
     this.payload = {
       sourceId: Number(params['sourceId'] ?? 0),
       sourceName: String(params['sourceName'] ?? ''),
@@ -47,6 +46,7 @@ struct SoNovelBookDetailPage {
     this.statusText = this.payload.status ?? '';
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private startDownload(): void {
     if (this.enqueueing) {
       return;
@@ -73,7 +73,7 @@ struct SoNovelBookDetailPage {
       } else {
         this.getUIContext().getPromptAction().showToast({ message: '已加入下载队列，由服务器下载' });
       }
-      router.pushUrl({ url: 'pages/DownloadManagerPage' });
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/DownloadManagerPage' });
     } finally {
       this.enqueueing = false;
     }
@@ -157,7 +157,7 @@ struct SoNovelBookDetailPage {
 
       SecondaryButton({
         label: '查看下载管理',
-        onTap: () => router.pushUrl({ url: 'pages/DownloadManagerPage' }),
+        onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/DownloadManagerPage' }),
       });
     }
     .padding($r('app.float.page_padding'));

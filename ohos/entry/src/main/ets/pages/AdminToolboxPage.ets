@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem,
   SecondaryButton } from '../components';
 import { TalebookApi, ApiMessageResult, ToolboxStoreIndexResponse } from '../services/TalebookApi';
@@ -21,7 +20,11 @@ struct AdminToolboxPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private onTabChange(value: number): void {
@@ -157,66 +160,70 @@ struct AdminToolboxPage {
 
     private openToolPage(toolId: string): void {
     if (toolId === 'mimo_tts') {
-      router.pushUrl({ url: 'pages/MimoTtsToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/MimoTtsToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'epub_beautify') {
-      router.pushUrl({ url: 'pages/EpubBeautifyToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/EpubBeautifyToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'chinese_converter') {
-      router.pushUrl({ url: 'pages/ChineseConverterToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/ChineseConverterToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'bookbarn_acceptor') {
-      router.pushUrl({ url: 'pages/BookbarnAcceptorToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/BookbarnAcceptorToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'minify_pdf') {
-      router.pushUrl({ url: 'pages/MinifyPdfToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/MinifyPdfToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'epub_fixer') {
-      router.pushUrl({ url: 'pages/EpubFixerToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/EpubFixerToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'epub_split') {
-      router.pushUrl({ url: 'pages/EpubSplitToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/EpubSplitToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'text_replace') {
-      router.pushUrl({ url: 'pages/TextReplaceToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/TextReplaceToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'txt_encoding_fixer') {
-      router.pushUrl({ url: 'pages/TxtEncodingFixerToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/TxtEncodingFixerToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'formats_pruning') {
-      router.pushUrl({ url: 'pages/FormatsPruningToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/FormatsPruningToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'author_clean') {
-      router.pushUrl({ url: 'pages/AuthorCleanToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/AuthorCleanToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'text_processor') {
-      router.pushUrl({ url: 'pages/TextProcessorToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/TextProcessorToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'merge_formats_tool' || toolId === 'merge_formats') {
-      router.pushUrl({ url: 'pages/MergeFormatsToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/MergeFormatsToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'rare_book_downloader') {
-      router.pushUrl({ url: 'pages/RareBookDownloaderToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/RareBookDownloaderToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'review_book_language') {
-      router.pushUrl({ url: 'pages/ReviewBookLanguageToolPage' }).catch(() => {});
+      this.getUIContext().getRouter().pushUrl({ url: 'pages/ReviewBookLanguageToolPage' }).catch(() => {});
       return;
     }
-    this.getUIContext().getPromptAction().showToast({ message: '该工具暂无独立页面' });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: '该工具暂无独立页面' });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private showInstalledActions(tool: Record<string, Object>): void {

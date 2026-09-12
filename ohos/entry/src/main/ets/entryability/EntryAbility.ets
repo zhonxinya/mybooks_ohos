@@ -18,6 +18,7 @@ import { UpdateService } from '../services/UpdateService';
 const TAG: string = 'EntryAbility';
 
 export default class EntryAbility extends UIAbility {
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   onCreate(_want: Want, _launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, TAG, 'Ability onCreate');
     WindowAbility.getInstance().initContext(this.context);
@@ -54,6 +55,7 @@ export default class EntryAbility extends UIAbility {
     hilog.info(0x0000, TAG, 'Ability onDestroy');
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   onWindowStageCreate(windowStage: window.WindowStage): void {
     hilog.info(0x0000, TAG, 'Ability onWindowStageCreate');
     WindowAbility.getInstance().setWindowStage(windowStage);

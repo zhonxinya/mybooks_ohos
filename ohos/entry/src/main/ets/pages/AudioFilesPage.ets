@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, EmptyState, LoadingState, SettingCell,
   PrimaryButton, SecondaryButton, DangerButton, LazyDataSource
@@ -65,7 +64,7 @@ struct AudioFilesPage {
   }
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, Object>;
+    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
     this.bookId = Number(params['bookId'] ?? 0);
     this.bookTitle = String(params['title'] ?? '');
     this.bookAuthor = String(params['author'] ?? '');
@@ -82,7 +81,11 @@ struct AudioFilesPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private stopPoll(): void {
@@ -371,8 +374,9 @@ struct AudioFilesPage {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private onFileTap(file: AudioFileInfo, index: number): void {
-    router.pushUrl({
+    this.getUIContext().getRouter().pushUrl({
       url: 'pages/AudioPlayerPage',
       params: {
         bookId: this.bookId,
