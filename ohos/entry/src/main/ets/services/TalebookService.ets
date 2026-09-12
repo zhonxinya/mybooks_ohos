@@ -795,10 +795,14 @@ export class TalebookService {
     return TalebookService.parseEnvelope(entry.apiGetMetaList(type, page, limit));
   }
 
-  /** 元数据列表（GET /api/{meta}，服务端不分页；meta 键按 ServerProfile 归一化）。 */
-  static getMetaListAsync(type: string, page: number = 1, limit: number = 20): Promise<ApiEnvelope> {
+  /**
+   * 元数据列表（GET /api/{meta}，服务端不分页；meta 键按 ServerProfile 归一化）。
+   * `extraQuery` 用于传 `show=all`：条目过多时服务端按热门度截断，该参数可取全量。
+   */
+  static getMetaListAsync(type: string, page: number = 1, limit: number = 20,
+    extraQuery: string = ''): Promise<ApiEnvelope> {
     return TalebookService.getServerBookListAsync(
-      `/api/${ServerRegistry.resolveMetaType(type)}`, page, limit);
+      `/api/${ServerRegistry.resolveMetaType(type)}`, page, limit, extraQuery);
   }
 
   /** 元数据下的书籍（GET /api/{meta}/{name}，start/size 分页）。 */
