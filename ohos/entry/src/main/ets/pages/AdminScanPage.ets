@@ -1,5 +1,7 @@
+import { router, LengthMetrics } from '@kit.ArkUI';
 import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem,
-  PrimaryButton, SecondaryButton, DangerButton, SectionTitle, SettingCell, TextButton } from '../components';
+  PrimaryButton, SecondaryButton, SectionTitle, SettingCell, TextButton,
+  ChipButton } from '../components';
 import {
   AdminScanApi, AdminScanItem, AdminScanSummary, AdminScanStatusCounts,
   AdminDirectoryEntry, AdminImportDirectoryCheck, AdminImportSettings, AdminWatchStatus,
@@ -15,6 +17,197 @@ const SCAN_PAGE_SIZE: number = 20;
 /** 轮询间隔与上限：约 3 分钟后自动停止，避免页面退出前的无界轮询。 */
 const POLL_INTERVAL_MS: number = 3000;
 const POLL_MAX_TICKS: number = 60;
+
+/**
+ * 页面自有「带计数」筛选胶囊。
+ * 不用共享 FilterChips：其 `items` 是普通成员，计数变化后标签不会重绘（ArkUI 陷阱）；
+ * ChipButton 的 `label` 是 @Prop，故用 Row + ChipButton 自建。
+ */
+@Component
+struct ScanFilterChips {
+  @Prop labels: string[] = [];
+  @Prop selected: number = 0;
+  onPick?: (value: number) => void;
+
+  build() {
+    Scroll() {
+      Row({ space: 8 }) {
+        ForEach(this.labels, (label: string, index: number) => {
+          ChipButton({
+            label: label,
+            selected: this.selected === index,
+            onTap: () => {
+              if (this.onPick) {
+                this.onPick(index);
+              }
+            },
+          });
+        }, (label: string, index: number) => `scan-chip-${index}-${label}`);
+      }
+      .padding({ left: 16, right: 16, top: 2, bottom: 6 });
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .width('100%');
+  }
+}
+
+/** 概览分栏单元（数值 + 标签）。
+ * 必须用 @Prop 而非 @Builder 按值传参：@Builder 内的文本/属性不会随状态变化重绘。
+ */
+@Component
+struct ScanStatCell {
+  @Prop label: string = '';
+  @Prop value: number = 0;
+  @Prop valueColor: ResourceColor = $r('app.color.text_primary');
+
+  build() {
+    Column({ space: 2 }) {
+      Text(`${this.value}`)
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.valueColor);
+      Text(this.label)
+        .fontSize(11)
+        .fontColor($r('app.color.text_tertiary'));
+    }
+    .alignItems(HorizontalAlign.Center)
+    .padding({ top: 6, bottom: 6 })
+    .borderRadius(8)
+    .backgroundColor($r('app.color.page_background'));
+  }
+}
+
+/** 概览信息胶囊（目录 / 模式 / 监控 / 最近扫描）。 */
+@Component
+struct ScanInfoChip {
+  @Prop text: string = '';
+  @Prop textColor: ResourceColor = $r('app.color.text_secondary');
+
+  build() {
+    Text(this.text)
+      .fontSize(11)
+      .fontColor(this.textColor)
+      .backgroundColor($r('app.color.page_background'))
+      .borderRadius(8)
+      .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+      .maxLines(1)
+      .textOverflow({ overflow: TextOverflow.Ellipsis });
+  }
+}
+
+/** 提示/警示块（目录预检、轮询进度行）。 */
+@Component
+struct ScanNotice {
+  @Prop text: string = '';
+  @Prop textColor: ResourceColor = $r('app.color.text_secondary');
+  @Prop bg: ResourceColor = Color.Transparent;
+
+  build() {
+    Text(this.text)
+      .fontSize(12)
+      .fontColor(this.textColor)
+      .backgroundColor(this.bg)
+      .borderRadius(8)
+      .padding(this.bg === Color.Transparent ? 0 : 8)
+      .width('100%');
+  }
+}
+
+/** 多选批量操作条（对齐上游选中态的「导入所选 / 删除」分支）。
+ * 计数与可用态用 @Prop 下发（页面内自定义 @Prop 组件是本项目验证过的刷新方式）。
+ */
+@Component
+struct ScanBatchBar {
+  @Prop selectedCount: number = 0;
+  @Prop pageCount: number = 0;
+  @Prop allSelected: boolean = false;
+  @Prop importEnabled: boolean = false;
+  @Prop deleteEnabled: boolean = false;
+  onToggleAll?: () => void;
+  onExit?: () => void;
+  onImport?: () => void;
+  onDelete?: () => void;
+
+  build() {
+    Column({ space: 6 }) {
+      Row({ space: 8 }) {
+        Text(`已选 ${this.selectedCount} / 本页 ${this.pageCount}`)
+          .fontSize(12)
+          .fontColor($r('app.color.text_primary'))
+          .layoutWeight(1);
+        ChipButton({
+          label: this.allSelected ? '取消全选' : '全选',
+          onTap: () => {
+            if (this.onToggleAll) {
+              this.onToggleAll();
+            }
+          },
+        });
+        Text('退出多选')
+          .fontSize(13)
+          .fontColor($r('app.color.brand_primary'))
+          .padding({ left: 8, right: 8 })
+          .onClick(() => {
+            if (this.onExit) {
+              this.onExit();
+            }
+          });
+      }
+      .width('100%');
+
+      Row({ space: 12 }) {
+        Button(`导入所选${this.selectedCount > 0 ? `（${this.selectedCount}）` : ''}`,
+          { type: ButtonType.Capsule, stateEffect: false })
+          .height($r('app.float.button_height'))
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.on_brand'))
+          .backgroundColor($r('app.color.brand_primary'))
+          .enabled(this.importEnabled)
+          .opacity(this.importEnabled ? 1 : 0.55)
+          .layoutWeight(1)
+          .stateStyles({
+            pressed: {
+              .backgroundColor($r('app.color.brand_primary_pressed'))
+            },
+          })
+          .onClick(() => {
+            if (this.importEnabled && this.onImport) {
+              this.onImport();
+            }
+          });
+        Button('删除所选', { type: ButtonType.Capsule, stateEffect: false })
+          .height($r('app.float.button_height'))
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.error'))
+          .backgroundColor($r('app.color.error_light'))
+          .border({ width: 1, color: '#33E84026' })
+          .enabled(this.deleteEnabled)
+          .opacity(this.deleteEnabled ? 1 : 0.55)
+          .layoutWeight(1)
+          .stateStyles({
+            pressed: {
+              .backgroundColor($r('app.color.error_light_pressed'))
+            },
+          })
+          .onClick(() => {
+            if (this.deleteEnabled && this.onDelete) {
+              this.onDelete();
+            }
+          });
+      }
+      .width('100%');
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding(12)
+    .margin({ left: 16, right: 16, bottom: 8 })
+    .borderRadius($r('app.float.card_radius'))
+    .backgroundColor($r('app.color.card_background'));
+  }
+}
 
 @Entry
 @Component
@@ -48,6 +241,9 @@ struct AdminScanPage {
   @State private browsePath: string = '';
   @State private browseParent: string = '';
   @State private browseItems: AdminDirectoryEntry[] = [];
+  // 多选批量操作（对齐上游表格 show-select：导入所选 / 删除所选）
+  @State private selecting: boolean = false;
+  @State private selectedHashes: string[] = [];
   private lastLoadTime: number = 0;
   private pollTimer: number = -1;
   private pollTicks: number = 0;
@@ -72,11 +268,14 @@ struct AdminScanPage {
   }
 
   private messageOf(err: string | undefined, msg: string | undefined, fallback: string): string {
-    if (msg !== undefined && msg.length > 0) {
-      return msg;
+    // 服务端字段可能为 JSON null，统一用 ?? 避免 .length 崩溃
+    const text: string = msg ?? '';
+    if (text.length > 0) {
+      return text;
     }
-    if (err !== undefined && err !== 'ok') {
-      return err;
+    const code: string = err ?? '';
+    if (code.length > 0 && code !== 'ok') {
+      return code;
     }
     return fallback;
   }
@@ -269,6 +468,171 @@ struct AdminScanPage {
     return $r('app.color.text_secondary');
   }
 
+  /** 状态徽标底色：按语义分组着色（对齐上游彩色 chip，而不是一律灰底）。 */
+  private statusChipBg(status: string): ResourceColor {
+    if (status === 'imported' || status === 'indexed' || status === 'ready') {
+      return $r('app.color.success_light');
+    }
+    if (status === 'failed' || status === 'delete_failed') {
+      return $r('app.color.error_light');
+    }
+    if (status === 'queued' || status === 'importing' || status === 'downloading') {
+      return $r('app.color.brand_primary_light');
+    }
+    if (status === 'drop') {
+      return $r('app.color.warning_light');
+    }
+    return $r('app.color.page_background');
+  }
+
+  /** 在途状态：需要展示进度感（对齐上游 info 色）。 */
+  private statusTextColor(status: string): ResourceColor {
+    if (status === 'queued' || status === 'importing' || status === 'downloading') {
+      return $r('app.color.brand_primary');
+    }
+    if (status === 'drop') {
+      return $r('app.color.warning');
+    }
+    return this.statusColor(status);
+  }
+
+  // ---- 概览语义（对齐上游 imports.vue 的 computed） ----
+
+  /** 监控状态文案：上游按 state 给出差异化描述，而不是直接打印原始值。 */
+  private watchStatusText(): string {
+    const state: string = this.watchStatus.state ?? 'off';
+    if (!this.autoWatch && state === 'off') {
+      return '未开启';
+    }
+    if (state === 'scanning') {
+      return '正在扫描目录';
+    }
+    if (state === 'queued') {
+      return `已排队 ${this.watchStatus.queued ?? 0} 项`;
+    }
+    if (state === 'importing') {
+      return `正在导入 ${this.watchStatus.running ?? 0} 项`;
+    }
+    if (state === 'failed') {
+      return `有 ${this.watchStatus.failed ?? 0} 项失败`;
+    }
+    if (state === 'starting') {
+      return '正在启动监控';
+    }
+    if (state === 'idle') {
+      return '待命中';
+    }
+    return this.autoWatch ? '监控中' : '未开启';
+  }
+
+  private watchStatusColor(): ResourceColor {
+    const state: string = this.watchStatus.state ?? 'off';
+    if (state === 'failed') {
+      return $r('app.color.error');
+    }
+    if (state === 'scanning' || state === 'queued' || state === 'importing' || state === 'starting') {
+      return $r('app.color.brand_primary');
+    }
+    if (this.autoWatch) {
+      return $r('app.color.success');
+    }
+    return $r('app.color.text_secondary');
+  }
+
+  /** 最近扫描时间（上游：空则「从未扫描」）。 */
+  private lastScanText(): string {
+    const at: string = this.watchStatus.last_scan_at ?? '';
+    return at.length > 0 ? at : '从未扫描';
+  }
+
+  /** 目录预检：仅当 status 非 ok 且带 msg 时给出警示（上游 directoryAlert）。 */
+  private directoryAlertIsError(): boolean {
+    const check = this.dirCheck;
+    return check !== undefined && check.status === 'error';
+  }
+
+  private directoryAlertMessage(): string {
+    const check = this.dirCheck;
+    if (check === undefined) {
+      return '';
+    }
+    const status: string = check.status ?? '';
+    const msg: string = check.msg ?? '';
+    if (status === 'ok' || msg.length === 0) {
+      return '';
+    }
+    return msg;
+  }
+
+  /** 需要关注：目录预检 error 或监控 failed（上游 needsSettingsAttention）。 */
+  private needsSettingsAttention(): boolean {
+    return this.directoryAlertIsError() || (this.watchStatus.state ?? '') === 'failed';
+  }
+
+  /** 目录预检 error 时上游会禁用扫描/导入动作，避免必然失败的任务。 */
+  private importActionsDisabled(): boolean {
+    return this.working || this.directoryAlertIsError();
+  }
+
+  private importModeLabel(): string {
+    const mode: string = this.importMode;
+    if (mode === IMPORT_MODE_INDEX) {
+      return '仅索引';
+    }
+    if (mode === IMPORT_MODE_MOVE) {
+      return '剪切';
+    }
+    return '复制';
+  }
+
+  /** delete_failed 的失败原因（上游 tooltip 取 item.data.delete_error）。 */
+  private deleteErrorMessage(item: AdminScanItem): string {
+    const data = item.data;
+    if (data === undefined || data === null) {
+      return '';
+    }
+    const value = data['delete_error'];
+    if (value === undefined || value === null) {
+      return '';
+    }
+    return `${value}`;
+  }
+
+  /**
+   * 概览区「状态签名」。
+   * ArkUI 陷阱：概览行内的文本/@Prop 在纯状态变化下不保证刷新（实测：勾选后计数不更新），
+   * 因此用签名作为 ForEach 的 key 强制重建该区块。任何会影响展示的字段都必须纳入签名。
+   */
+  private overviewKey(): string {
+    const check: AdminImportDirectoryCheck | undefined = this.dirCheck;
+    return `ov-${this.summary.total ?? this.total}-${this.summary.done ?? 0}-${this.summary.todo ?? 0}`
+      + `-${this.summary.failed ?? 0}-${this.scanDir}-${this.settingsPath}-${this.importMode}-${this.autoWatch}`
+      + `-${this.watchStatus.state ?? ''}-${this.watchStatus.queued ?? 0}-${this.watchStatus.running ?? 0}`
+      + `-${this.watchStatus.failed ?? 0}-${this.watchStatus.last_scan_at ?? ''}-${this.statusLine}`
+      + `-${check === undefined ? 'none' : `${check.status ?? ''}|${check.msg ?? ''}`}`;
+  }
+
+  /** 列表头部（计数胶囊 + 批量条）的「状态签名」，同上用于强制重建。 */
+  private listHeaderKey(): string {
+    return `lh-${this.countOf(0)}-${this.countOf(1)}-${this.countOf(2)}-${this.countOf(3)}`
+      + `-${this.selectedFilter}-${this.selectedHashes.length}-${this.selectableHashes().length}`
+      + `-${this.allSelected()}-${this.importActionsDisabled()}-${this.working}`;
+  }
+
+  /** 当前筛选下的计数（供带计数的筛选胶囊使用；上游页签同源 summary）。 */
+  private countOf(filter: number): number {
+    if (filter === 1) {
+      return this.summary.todo ?? 0;
+    }
+    if (filter === 2) {
+      return this.summary.done ?? 0;
+    }
+    if (filter === 3) {
+      return this.summary.failed ?? 0;
+    }
+    return this.summary.total ?? this.total;
+  }
+
   private itemTitle(item: AdminScanItem): string {
     const title: string = item.title !== undefined && item.title.length > 0 ? item.title : '待识别';
     const author: string = item.author !== undefined && item.author.length > 0 ? item.author : '未知作者';
@@ -279,6 +643,14 @@ struct AdminScanPage {
     const path: string = item.path !== undefined ? item.path : '';
     const time: string = item.update_time !== undefined ? item.update_time : '';
     return `${path} · ${time}`;
+  }
+
+  /**
+   * ForEach key 必须包含行内会变化的字段：导入后 status / book_id / 时间会变，
+   * 若只用 id 则行不会重建，界面会停留在旧状态（ArkUI 陷阱）。
+   */
+  private itemKey(item: AdminScanItem): string {
+    return `scan-${item.id ?? 0}-${item.status ?? ''}-${item.book_id ?? 0}-${item.update_time ?? ''}`;
   }
 
   // ---- 操作 ----
@@ -360,21 +732,6 @@ struct AdminScanPage {
     });
   }
 
-  private markRecord(item: AdminScanItem): void {
-    if (this.working) {
-      return;
-    }
-    this.working = true;
-    AdminScanApi.markScans().then((rsp) => {
-      this.working = false;
-      this.toast(this.messageOf(rsp.err, rsp.msg, `已标记「${item.title ?? ''}」`));
-      void this.loadScans(true);
-    }).catch((e: Object) => {
-      this.working = false;
-      this.toast(`标记失败：${e}`);
-    });
-  }
-
   private confirmDelete(item: AdminScanItem): void {
     const hash: string = item.hash !== undefined ? item.hash : '';
     if (hash.length === 0) {
@@ -433,23 +790,164 @@ struct AdminScanPage {
   }
 
   private showItemActions(item: AdminScanItem): void {
-    this.getUIContext().getPromptAction().showActionMenu({
-      title: item.title !== undefined ? item.title : '',
-      buttons: [
-        { text: '导入此书', color: '#007DFF' },
-        { text: '标记', color: '#007DFF' },
-        { text: '删除记录', color: '#E84026' },
-      ],
-    }).then((result) => {
-      if (result.index === 0) {
-        this.importOne(item);
-      } else if (result.index === 1) {
-        this.markRecord(item);
-      } else if (result.index === 2) {
-        this.confirmDelete(item);
-      }
-    }).catch(() => {});
+    // 长按/点击「详情」查看完整信息（path/hash/失败原因），避免与行内按钮抢点击
+    const hash: string = item.hash ?? '';
+    const detail: string[] = [];
+    if (hash.length > 0) {
+      detail.push(`hash：${hash}`);
+    }
+    const path: string = item.path ?? '';
+    if (path.length > 0) {
+      detail.push(`路径：${path}`);
+    }
+    const created: string = item.create_time ?? '';
+    if (created.length > 0) {
+      detail.push(`入库时间：${created}`);
+    }
+    const updated: string = item.update_time ?? '';
+    if (updated.length > 0) {
+      detail.push(`更新时间：${updated}`);
+    }
+    const bookId = item.book_id ?? 0;
+    if (bookId > 0) {
+      detail.push(`已关联书籍 #${bookId}`);
+    }
+    const deleteError: string = this.deleteErrorMessage(item);
+    if (deleteError.length > 0) {
+      detail.push(`删除源文件失败：${deleteError}`);
+    }
+    this.getUIContext().showAlertDialog({
+      title: item.title ?? '扫描记录',
+      message: detail.length > 0 ? detail.join('\n') : '无更多信息',
+      primaryButton: {
+        value: '导入此书',
+        action: () => this.importOne(item),
+      },
+      secondaryButton: { value: '关闭', action: () => {} },
+    });
   }
+
+  // ---- 多选批量（对齐上游表格 show-select 的导入所选 / 删除所选） ----
+
+  private toggleSelecting(): void {
+    this.selecting = !this.selecting;
+    if (!this.selecting) {
+      this.selectedHashes = [];
+    }
+  }
+
+  private isSelected(hash: string): boolean {
+    return hash.length > 0 && this.selectedHashes.indexOf(hash) >= 0;
+  }
+
+  /**
+   * 幂等写入单行勾选态。
+   * ⚠️ 必须幂等：行级 onClick 与 Toggle.onChange 会作用于同一行，
+   * 若两者都做「取反」，会出现「刚勾上又被撤销」（实测选中恒为 0）。
+   */
+  private setSelected(hash: string, wanted: boolean): void {
+    if (hash.length === 0) {
+      return;
+    }
+    if (this.isSelected(hash) === wanted) {
+      return;
+    }
+    const next: string[] = [];
+    for (const item of this.selectedHashes) {
+      if (item !== hash) {
+        next.push(item);
+      }
+    }
+    if (wanted) {
+      next.push(hash);
+    }
+    this.selectedHashes = next;
+  }
+
+  private toggleSelected(hash: string): void {
+    this.setSelected(hash, !this.isSelected(hash));
+  }
+
+  private selectableHashes(): string[] {
+    const result: string[] = [];
+    for (const item of this.items) {
+      const hash: string = item.hash ?? '';
+      if (hash.length > 0) {
+        result.push(hash);
+      }
+    }
+    return result;
+  }
+
+  private allSelected(): boolean {
+    const all: string[] = this.selectableHashes();
+    return all.length > 0 && this.selectedHashes.length >= all.length;
+  }
+
+  private toggleSelectAll(): void {
+    this.selectedHashes = this.allSelected() ? [] : this.selectableHashes();
+  }
+
+  /** 导入所选（POST /api/admin/import/run，hashlist 为哈希数组）。 */
+  private runImportSelected(): void {
+    if (this.selectedHashes.length === 0 || this.importActionsDisabled()) {
+      return;
+    }
+    const hashes: string[] = this.selectedHashes.slice();
+    this.working = true;
+    AdminScanApi.runImport(hashes, this.deleteAfter, this.importMode).then((rsp) => {
+      this.working = false;
+      if (rsp.err === undefined || rsp.err === 'ok') {
+        this.toast(this.messageOf(rsp.err, rsp.msg, `已开始导入 ${hashes.length} 本`));
+        this.selectedHashes = [];
+        this.startPoll();
+        void this.loadScans(true);
+      } else {
+        this.toast(this.messageOf(rsp.err, rsp.msg, '导入失败'));
+      }
+    }).catch((e: Object) => {
+      this.working = false;
+      this.toast(`导入失败：${e}`);
+    });
+  }
+
+  private confirmDeleteSelected(): void {
+    if (this.selectedHashes.length === 0) {
+      return;
+    }
+    const count: number = this.selectedHashes.length;
+    this.getUIContext().showAlertDialog({
+      title: '删除所选扫描记录',
+      message: `将删除选中的 ${count} 条扫描记录（不影响已入库书籍与源文件）。确定继续？`,
+      primaryButton: {
+        value: '删除',
+        action: () => {
+          const hashes: string[] = this.selectedHashes.slice();
+          this.working = true;
+          AdminScanApi.deleteScans(hashes).then((rsp) => {
+            this.working = false;
+            if (rsp.err === undefined || rsp.err === 'ok') {
+              this.toast(this.messageOf(rsp.err, rsp.msg, `已删除 ${count} 条记录`));
+              this.selectedHashes = [];
+              void this.loadScans(true);
+            } else {
+              this.toast(this.messageOf(rsp.err, rsp.msg, '删除失败'));
+            }
+          }).catch((e: Object) => {
+            this.working = false;
+            this.toast(`删除失败：${e}`);
+          });
+        },
+      },
+      secondaryButton: { value: '取消', action: () => {} },
+    });
+  }
+
+  /**
+   * 关于「标记」：上游 `POST /api/admin/scan/mark` 是**空实现占位**，
+   * 恒返回 `{err:'ok'}` 且无任何副作用，因此本页不提供该入口，避免造成假成功
+   * （见 AdminScanApi.markScans 上方注释）。
+   */
 
   // ---- 导入设置 ----
 
@@ -587,12 +1085,6 @@ struct AdminScanPage {
     return `${name}${writable ? ' · 可写' : readable ? ' · 只读' : ' · 不可读'}${allowed ? '' : ' · 越界'}`;
   }
 
-  private watchLabel(): string {
-    const state: string = this.watchStatus.state !== undefined ? this.watchStatus.state : 'off';
-    const message: string = this.watchStatus.message !== undefined ? this.watchStatus.message : '';
-    return `${state}${message.length > 0 ? ` · ${message}` : ''}`;
-  }
-
   build() {
     Column() {
       PageScaffold({
@@ -645,16 +1137,29 @@ struct AdminScanPage {
           .align(Alignment.Top);
         } else {
           this.summaryCard();
-          FilterChips({
-            items: [
-              { label: '全部', value: 0 },
-              { label: '待处理', value: 1 },
-              { label: '已完成', value: 2 },
-              { label: '失败', value: 3 },
-            ] as FilterChipItem[],
-            selected: $selectedFilter,
-            onChange: (value: number) => this.onFilterChange(value),
+          ScanFilterChips({
+            labels: [
+              `全部 (${this.countOf(0)})`,
+              `待处理 (${this.countOf(1)})`,
+              `已完成 (${this.countOf(2)})`,
+              `失败 (${this.countOf(3)})`,
+            ],
+            selected: this.selectedFilter,
+            onPick: (value: number) => this.onFilterChange(value),
           });
+          if (this.selecting) {
+            ScanBatchBar({
+              selectedCount: this.selectedHashes.length,
+              pageCount: this.selectableHashes().length,
+              allSelected: this.allSelected(),
+              importEnabled: this.selectedHashes.length > 0 && !this.importActionsDisabled(),
+              deleteEnabled: this.selectedHashes.length > 0 && !this.working,
+              onToggleAll: () => this.toggleSelectAll(),
+              onExit: () => this.toggleSelecting(),
+              onImport: () => this.runImportSelected(),
+              onDelete: () => this.confirmDeleteSelected(),
+            });
+          }
           if (this.items.length === 0) {
             EmptyState({ message: '暂无扫描记录，先在上方运行一次扫描' });
           } else {
@@ -663,7 +1168,8 @@ struct AdminScanPage {
                 ListItem() {
                   this.itemRow(item);
                 }
-              }, (item: AdminScanItem) => `scan-${item.id ?? 0}`);
+                .padding({ left: 16, right: 16 })
+              }, (item: AdminScanItem) => this.itemKey(item));
               if (this.loadingMore) {
                 ListItem() {
                   LoadingState({ hint: '加载更多...' });
@@ -683,61 +1189,133 @@ struct AdminScanPage {
 
   @Builder
   summaryCard() {
-    Column({ space: 8 }) {
-      Text(`扫描目录：${this.scanDir.length > 0 ? this.scanDir : this.settingsPath}`)
-        .fontSize(12)
-        .fontColor($r('app.color.text_secondary'))
-        .maxLines(2)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%');
-      Text(`共 ${this.summary.total ?? this.total} · 完成 ${this.summary.done ?? 0}`
-        + ` · 待处理 ${this.summary.todo ?? 0} · 失败 ${this.summary.failed ?? 0}`)
-        .fontSize(12)
-        .fontColor($r('app.color.text_secondary'))
-        .width('100%');
-      if (this.statusLine.length > 0) {
-        Text(this.statusLine)
-          .fontSize(12)
-          .fontColor($r('app.color.brand_primary'))
-          .width('100%');
+    Column({ space: 10 }) {
+      // 标题行：设置关注警示 + 导入设置入口
+      Row({ space: 8 }) {
+        Text('导入概览')
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .layoutWeight(1);
+        if (this.needsSettingsAttention()) {
+          Text('需关注')
+            .fontSize(11)
+            .fontColor($r('app.color.warning'))
+            .backgroundColor($r('app.color.warning_light'))
+            .borderRadius(8)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 });
+        }
       }
+      .width('100%');
+
+      // 分栏统计：总数 / 已完成 / 待处理 / 失败
+      Row({ space: 8 }) {
+        ScanStatCell({ label: '总记录', value: this.summary.total ?? this.total,
+          valueColor: $r('app.color.text_primary') }).layoutWeight(1);
+        ScanStatCell({ label: '已完成', value: this.summary.done ?? 0,
+          valueColor: $r('app.color.success') }).layoutWeight(1);
+        ScanStatCell({ label: '待处理', value: this.summary.todo ?? 0,
+          valueColor: $r('app.color.brand_primary') }).layoutWeight(1);
+        ScanStatCell({ label: '失败', value: this.summary.failed ?? 0,
+          valueColor: $r('app.color.error') }).layoutWeight(1);
+      }
+      .width('100%');
+
+      // 关键设置一览（目录 / 模式 / 监控 / 最近扫描）
+      Row({ space: 6 }) {
+        ScanInfoChip({
+          text: `目录：${this.scanDir.length > 0 ? this.scanDir : (this.settingsPath.length > 0 ? this.settingsPath : '未配置')}`,
+        }).layoutWeight(1);
+        ScanInfoChip({ text: `模式：${this.importModeLabel()}` });
+      }
+      .width('100%');
+
+      Row({ space: 6 }) {
+        ScanInfoChip({ text: `自动监控：${this.watchStatusText()}`, textColor: this.watchStatusColor() })
+          .layoutWeight(1);
+        ScanInfoChip({ text: `最近扫描：${this.lastScanText()}` });
+      }
+      .width('100%');
+
+      // 目录预检警示（上游 directoryAlert：status=error/warning 且带 msg）
+      if (this.directoryAlertIsError()) {
+        ScanNotice({
+          text: this.directoryAlertMessage(),
+          textColor: $r('app.color.error'),
+          bg: $r('app.color.error_light'),
+        });
+        ScanNotice({
+          text: '导入目录预检未通过，扫描/导入已禁用；请先到「导入设置」修正目录。',
+          textColor: $r('app.color.text_tertiary'),
+        });
+      } else if (this.directoryAlertMessage().length > 0) {
+        ScanNotice({
+          text: this.directoryAlertMessage(),
+          textColor: $r('app.color.warning'),
+          bg: $r('app.color.warning_light'),
+        });
+      }
+
+      ScanNotice({ text: '导入为异步任务：启动后可在本页查看进度，逐条状态会随轮询刷新。',
+        textColor: $r('app.color.text_tertiary') });
+
+      if (this.statusLine.length > 0) {
+        ScanNotice({ text: this.statusLine, textColor: $r('app.color.brand_primary') });
+      }
+
+      // 主操作
       Row({ space: 12 }) {
         PrimaryButton({
           label: this.working ? '处理中…' : '运行扫描',
-          buttonEnabled: !this.working,
+          buttonEnabled: !this.working && !this.importActionsDisabled(),
           fullWidth: false,
           onTap: () => this.runScan(),
         }).layoutWeight(1);
         PrimaryButton({
           label: '导入待导入',
-          buttonEnabled: !this.working,
+          buttonEnabled: !this.working && !this.importActionsDisabled(),
           fullWidth: false,
           onTap: () => this.confirmImportAll(),
         }).layoutWeight(1);
       }
       .width('100%');
-      Row({ space: 12 }) {
-        SecondaryButton({
-          label: this.desc ? '按时间倒序' : '按时间正序',
-          fullWidth: false,
-          compact: true,
+
+      // 次操作（换行排列：窄屏自动折行，避免按钮被裁切或隐藏）
+      // 用 ChipButton 而非 SecondaryButton：后者 label 是普通成员，动态文案（正/倒序、多选）不会重绘。
+      Flex({
+        wrap: FlexWrap.Wrap,
+        justifyContent: FlexAlign.Start,
+        space: { main: LengthMetrics.vp(8), cross: LengthMetrics.vp(8) },
+      }) {
+        ChipButton({
+          label: this.desc ? '时间倒序' : '时间正序',
           onTap: () => {
             this.desc = !this.desc;
             void this.loadScans(true);
           },
-        }).layoutWeight(1);
-        SecondaryButton({
-          label: '标记',
-          fullWidth: false,
-          compact: true,
-          onTap: () => this.markRecord({}),
-        }).layoutWeight(1);
-        DangerButton({
+        });
+        ChipButton({
+          label: this.selecting ? '退出多选' : '多选',
+          selected: this.selecting,
+          onTap: () => this.toggleSelecting(),
+        });
+        if (ServerRegistry.supports(ServerFeature.ADMIN_OPDS)) {
+          ChipButton({
+            label: 'OPDS 导入',
+            onTap: () => router.pushUrl({ url: 'pages/AdminOpdsPage' }),
+          });
+        }
+        ChipButton({
+          label: '导入设置',
+          onTap: () => {
+            this.view = 1;
+            void this.loadSettings();
+          },
+        });
+        ChipButton({
           label: '清空记录',
-          buttonEnabled: !this.working,
-          fullWidth: false,
           onTap: () => this.confirmDeleteAll(),
-        }).layoutWeight(1);
+        });
       }
       .width('100%');
     }
@@ -751,8 +1329,12 @@ struct AdminScanPage {
 
   @Builder
   itemRow(item: AdminScanItem) {
-    Column({ space: 4 }) {
+    Column({ space: 6 }) {
       Row({ space: 8 }) {
+        if (this.selecting) {
+          Toggle({ type: ToggleType.Checkbox, isOn: this.isSelected(item.hash ?? '') })
+            .onChange((isOn: boolean) => this.setSelected(item.hash ?? '', isOn));
+        }
         Text(this.itemTitle(item))
           .fontSize(14)
           .fontColor($r('app.color.text_primary'))
@@ -761,61 +1343,72 @@ struct AdminScanPage {
           .layoutWeight(1);
         Text(this.statusLabel(item.status ?? ''))
           .fontSize(11)
-          .fontColor(this.statusColor(item.status ?? ''))
-          .backgroundColor($r('app.color.page_background'))
-          .borderRadius(4)
+          .fontColor(this.statusTextColor(item.status ?? ''))
+          .backgroundColor(this.statusChipBg(item.status ?? ''))
+          .borderRadius(8)
           .padding({ left: 6, right: 6, top: 2, bottom: 2 });
       }
       .width('100%');
+
       Text(this.itemSubtitle(item))
         .fontSize(12)
         .fontColor($r('app.color.text_tertiary'))
         .maxLines(2)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%');
-      Row({ space: 8 }) {
-        TextButton({
-          label: '导入',
-          onTap: () => this.importOne(item),
-        });
-        TextButton({
-          label: '标记',
-          onTap: () => this.markRecord(item),
-        });
-        TextButton({
-          label: '删除',
-          tone: 'danger',
-          onTap: () => this.confirmDelete(item),
-        });
+
+      // 删除源文件失败时展示上游 tooltip 中的原因
+      if ((item.status ?? '') === 'delete_failed' && this.deleteErrorMessage(item).length > 0) {
+        Text(`原因：${this.deleteErrorMessage(item)}`)
+          .fontSize(11)
+          .fontColor($r('app.color.error'))
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%');
       }
-      .width('100%');
+
+      if (!this.selecting) {
+        Row({ space: 8 }) {
+          TextButton({
+            label: '导入',
+            onTap: () => this.importOne(item),
+          });
+          TextButton({
+            label: '详情',
+            onTap: () => this.showItemActions(item),
+          });
+          TextButton({
+            label: '删除',
+            tone: 'danger',
+            onTap: () => this.confirmDelete(item),
+          });
+        }
+        .width('100%');
+      }
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
     .padding($r('app.float.page_padding'))
     .borderRadius($r('app.float.card_radius'))
     .backgroundColor($r('app.color.card_background'))
-    .onClick(() => this.showItemActions(item));
+    .onClick(() => {
+      if (this.selecting) {
+        this.toggleSelected(item.hash ?? '');
+      }
+    });
   }
 
   @Builder
   settingsSection() {
     SectionTitle({ title: '导入设置' });
     Column({ space: 8 }) {
-      Text(`当前目录：${this.settingsPath.length > 0 ? this.settingsPath : '（未配置）'}`)
-        .fontSize(12)
-        .fontColor($r('app.color.text_secondary'))
-        .width('100%');
+      ScanNotice({
+        text: `当前目录：${this.settingsPath.length > 0 ? this.settingsPath : '（未配置）'}`,
+      });
       if (this.dirCheck !== undefined) {
-        Text(this.directorySummary(this.dirCheck))
-          .fontSize(12)
-          .fontColor($r('app.color.text_tertiary'))
-          .width('100%');
+        ScanNotice({ text: this.directorySummary(this.dirCheck), textColor: $r('app.color.text_tertiary') });
       }
-      Text(`监控：${this.watchLabel()}`)
-        .fontSize(12)
-        .fontColor($r('app.color.text_tertiary'))
-        .width('100%');
+      ScanNotice({ text: `监控：${this.watchStatusText()}`, textColor: this.watchStatusColor() });
       SettingCell({
         title: '自动监控目录',
         subtitle: '开启后按服务端间隔自动扫描并导入新文件',
@@ -827,17 +1420,14 @@ struct AdminScanPage {
       });
       SettingCell({
         title: '导入后删除源文件',
-        subtitle: '仅对复制/索引模式生效（剪切模式始终删除源文件）',
+        subtitle: '运行时选项（不随设置保存）；仅复制/索引模式生效',
         showToggle: true,
         toggleOn: this.deleteAfter,
         onToggle: (value: boolean) => {
           this.deleteAfter = value;
         },
       });
-      Text(`导入模式：${this.modeOf(this.modeIndex)}`)
-        .fontSize(12)
-        .fontColor($r('app.color.text_secondary'))
-        .width('100%');
+      ScanNotice({ text: `导入模式：${this.importModeLabel()}`, textColor: $r('app.color.text_secondary') });
       FilterChips({
         items: [
           { label: '复制', value: 0 },
@@ -879,12 +1469,7 @@ struct AdminScanPage {
   @Builder
   browseView() {
     Column({ space: 8 }) {
-      Text(`当前目录：${this.browsePath}`)
-        .fontSize(12)
-        .fontColor($r('app.color.text_secondary'))
-        .maxLines(2)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%');
+      ScanNotice({ text: `当前目录：${this.browsePath}` });
       Row({ space: 12 }) {
         SecondaryButton({
           label: '上级目录',
