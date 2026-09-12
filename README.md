@@ -4,6 +4,11 @@ HarmonyOS 原生多源聚合阅读器（ArkTS UI + C++ 核心层），是 [MyBoo
 
 > 本项目仅提供服务端客户端，自身不包含、不提供任何电子书内容。
 
+> [!IMPORTANT]
+> **安装包需签名后才能使用。** 本仓库不包含任何签名证书与密钥，默认构建产出的是未签名 HAP，
+> 仅可用于编译校验，**无法安装到真机或模拟器**（安装报 `code:9568320 error: no signature file`）。
+> 安装前请先按[签名](#签名)章节配置签名材料。
+
 ## 架构
 
 - **ArkTS**：页面、导航、Reader Kit 阅读器 UI
@@ -74,6 +79,8 @@ volumes:
 ```
 
 构建产物：`ohos/entry/build/default/outputs/default/` 下的 `entry-default-*.hap`
+
+> ⚠️ 未配置签名时产出的是 `entry-default-unsigned.hap`，**需签名后才能安装使用**，详见[签名](#签名)章节。
 
 依赖：需存在 `ohos/entry/libs/arm64-v8a/libcurl.so`（见 `third_party/README.md`），
 且首次构建前需在 `ohos/` 目录执行 `ohpm install --all` 生成 `oh_modules`。
