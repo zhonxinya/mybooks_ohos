@@ -1,3 +1,4 @@
+import { router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
@@ -29,6 +30,12 @@ const EXPORT_PREVIEW_MAX: number = 20000;
 const EDITOR_CREATE: string = 'create';
 /** 编辑器模式：编辑。 */
 const EDITOR_EDIT: string = 'edit';
+
+// ---- 底部面板模式（同一节点只能生效一个 bindSheet，故用单面板 + 模式分发） ----
+const SHEET_IMPORT: string = 'import';
+const SHEET_EXPORT: string = 'export';
+const SHEET_EDITOR: string = 'editor';
+const SHEET_TEST: string = 'test';
 
 /** 体检状态码 → 中文标签。 */
 function checkStatusLabel(status: string): string {
@@ -83,20 +90,21 @@ struct BookSourceManagePage {
   @State totalCount: number = 0;
   @State keyword: string = '';
   @State enabledFilter: number = 0;
+  @State selecting: boolean = false;
+  @State selectedIds: number[] = [];
   @State working: boolean = false;
   @State checking: boolean = false;
   @State checkText: string = '';
-  @State showImportSheet: boolean = false;
+  @State showSheet: boolean = false;
+  @State sheetMode: string = '';
   @State importText: string = '';
   @State importUrl: string = '';
   @State importing: boolean = false;
   @State importResult: string = '';
-  @State showExportSheet: boolean = false;
   @State exporting: boolean = false;
   @State exportError: string = '';
   @State exportPreview: string = '';
   @State exportCount: number = 0;
-  @State showEditorSheet: boolean = false;
   @State editorMode: string = EDITOR_CREATE;
   @State editorBusy: boolean = false;
   @State createText: string = '';
@@ -105,7 +113,6 @@ struct BookSourceManagePage {
   @State editGroup: string = '';
   @State editWeight: string = '0';
   @State editEnabled: boolean = true;
-  @State showTestSheet: boolean = false;
   @State testId: number = 0;
   @State testName: string = '';
   @State testKey: string = '剑来';
@@ -163,6 +170,10 @@ struct BookSourceManagePage {
     }
     const check = `体检：${checkStatusLabel(source.checkStatus)}`;
     parts.push(source.checkMessage.length > 0 ? `${check}（${source.checkMessage}）` : check);
+    // 检测标签（上游 check_tags）：最多展示 4 个，与服务端表格列一致
+    if (source.checkTags.length > 0) {
+      parts.push(`标签：${source.checkTags.slice(0, 4).join('、')}`);
+    }
     return parts.join(' · ');
   }
 
@@ -439,7 +450,7 @@ struct BookSourceManagePage {
       this.toast('导入完成');
       this.importText = '';
       this.importUrl = '';
-      this.showImportSheet = false;
+      this.showSheet = false;
       void this.load(true);
       this.watchImportChecks(stats.checking);
     } catch (e) {
@@ -527,7 +538,8 @@ struct BookSourceManagePage {
   private openCreate(): void {
     this.editorMode = EDITOR_CREATE;
     this.createText = '';
-    this.showEditorSheet = true;
+    this.sheetMode = SHEET_EDITOR;
+    this.showSheet = true;
   }
 
   private openEdit(source: BookSourceItem): void {
@@ -537,7 +549,8 @@ struct BookSourceManagePage {
     this.editGroup = source.group;
     this.editWeight = `${source.weight}`;
     this.editEnabled = source.enabled;
-    this.showEditorSheet = true;
+    this.sheetMode = SHEET_EDITOR;
+    this.showSheet = true;
   }
 
   private async submitEditor(): Promise<void> {
@@ -562,7 +575,7 @@ struct BookSourceManagePage {
         return;
       }
       this.toast(rsp.id !== undefined ? `已新增书源（ID ${rsp.id}）` : '已新增书源');
-      this.showEditorSheet = false;
+      this.showSheet = false;
       this.createText = '';
       void this.load(true);
     } catch (e) {
@@ -583,7 +596,7 @@ struct BookSourceManagePage {
         return;
       }
       this.toast('书源已更新');
-      this.showEditorSheet = false;
+      this.showSheet = false;
       void this.load(true);
     } catch (e) {
       this.toast(`更新失败：${e}`);
@@ -592,12 +605,151 @@ struct BookSourceManagePage {
     }
   }
 
-  private openTest(source: BookSourceItem): void {
-    this.testId = source.id;
+  // ---- 多选与批量操作（对齐上游：全选 + 批量启用/停用/删除） ----
+
+  private toggleSelecting(): void {
+    this.selecting = !this.selecting;
+    if (!this.selecting) {
+      this.selectedIds = [];
+    }
+  }
+
+  private allSelected(): boolean {
+    return this.sources.length > 0 && this.selectedIds.length === this.sources.length;
+  }
+
+  private isSourceSelected(id: number): boolean {
+    return this.selectedIds.indexOf(id) >= 0;
+  }
+
+  private toggleSourceSelected(id: number): void {
+    const next: number[] = [];
+    let removed = false;
+    for (const item of this.selectedIds) {
+      if (item === id) {
+        removed = true;
+      } else {
+        next.push(item);
+      }
+    }
+    if (!removed) {
+      next.push(id);
+    }
+    this.selectedIds = next;
+  }
+
+  private listHintText(): string {
+    if (this.selecting) {
+      return `共 ${this.totalCount} 个书源 · 多选模式：点击行可勾选`;
+    }
+    return `共 ${this.totalCount} 个书源 · 长按书源可测试 / 编辑 / 删除`;
+  }
+
+  /** 批量启用/停用（POST /api/admin/booksource/toggle，body `{ids, enabled}`）。 */
+  private runBatchToggle(enabled: boolean): void {
+    if (this.selectedIds.length === 0) {
+      this.toast('请先选择书源');
+      return;
+    }
+    if (this.working) {
+      return;
+    }
+    const ids = this.selectedIds.slice();
+    this.working = true;
+    BookSourceApi.toggleSources(ids, enabled).then((rsp) => {
+      this.working = false;
+      if (!BookSourceApi.isOk(rsp)) {
+        this.toast(BookSourceApi.errorMessage(rsp));
+        return;
+      }
+      const updated = rsp.updated !== undefined ? rsp.updated : ids.length;
+      this.toast(`已${enabled ? '启用' : '停用'} ${updated} 个书源`);
+      this.selectedIds = [];
+      void this.load(true);
+    }).catch((e: Object) => {
+      this.working = false;
+      this.toast(`批量操作失败：${e}`);
+    });
+  }
+
+  private confirmBatchDelete(): void {
+    if (this.selectedIds.length === 0) {
+      this.toast('请先选择书源');
+      return;
+    }
+    const count = this.selectedIds.length;
+    this.getUIContext().showAlertDialog({
+      title: '批量删除书源',
+      message: `将删除选中的 ${count} 个书源，且无法恢复；已保存的书籍不受影响。确定继续？`,
+      primaryButton: {
+        value: '删除',
+        action: () => {
+          this.runBatchDelete();
+        },
+      },
+      secondaryButton: { value: '取消', action: () => {} },
+    });
+  }
+
+  /** 批量删除（DELETE /api/admin/booksource，ids 走查询参数）。 */
+  private runBatchDelete(): void {
+    if (this.working) {
+      return;
+    }
+    const ids = this.selectedIds.slice();
+    this.working = true;
+    BookSourceApi.deleteSources(ids).then((rsp) => {
+      this.working = false;
+      if (!BookSourceApi.isOk(rsp)) {
+        this.toast(BookSourceApi.errorMessage(rsp));
+        return;
+      }
+      const deleted = rsp.deleted !== undefined ? rsp.deleted : ids.length;
+      this.toast(`已删除 ${deleted} 个书源`);
+      this.selectedIds = [];
+      void this.load(true);
+    }).catch((e: Object) => {
+      this.working = false;
+      this.toast(`批量删除失败：${e}`);
+    });
+  }
+
+  /** 多选模式下的行：左侧勾选框 + 名称/副标题，整行可点。 */
+  @Builder
+  selectableRow(source: BookSourceItem) {
+    Row({ space: 12 }) {
+      Toggle({ type: ToggleType.Checkbox, isOn: this.isSourceSelected(source.id) })
+        .onChange(() => {
+          this.toggleSourceSelected(source.id);
+        });
+      Column({ space: 2 }) {
+        Text(source.name.length > 0 ? source.name : source.url)
+          .fontSize(15)
+          .fontColor($r('app.color.text_primary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%');
+        Text(this.sourceSubtitle(source))
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'))
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%');
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1);
+    }
+    .width('100%')
+    .padding($r('app.float.page_padding'))
+    .onClick(() => this.toggleSourceSelected(source.id));
+  }
+
+  private openTest(source: BookSourceItem): void {    this.testId = source.id;
     this.testName = source.name;
     this.testResult = null;
     this.testError = '';
-    this.showTestSheet = true;
+    this.sheetMode = SHEET_TEST;
+    this.showSheet = true;
   }
 
   private async runTest(): Promise<void> {
@@ -683,30 +835,41 @@ struct BookSourceManagePage {
     }
     .width('100%')
     .height('100%')
-    .bindSheet($$this.showImportSheet, this.importSheet(), {
+    .bindSheet($$this.showSheet, this.sheetContent(), {
       height: SheetSize.MEDIUM,
       dragBar: true,
       showClose: true,
-      title: { title: '导入书源' },
-    })
-    .bindSheet($$this.showExportSheet, this.exportSheet(), {
-      height: SheetSize.MEDIUM,
-      dragBar: true,
-      showClose: true,
-      title: { title: '导出书源' },
-    })
-    .bindSheet($$this.showEditorSheet, this.editorSheet(), {
-      height: SheetSize.MEDIUM,
-      dragBar: true,
-      showClose: true,
-      title: { title: this.editorMode === EDITOR_CREATE ? '新增书源' : '编辑书源' },
-    })
-    .bindSheet($$this.showTestSheet, this.testSheet(), {
-      height: SheetSize.MEDIUM,
-      dragBar: true,
-      showClose: true,
-      title: { title: `测试 · ${this.testName}` },
+      title: { title: this.sheetTitle() },
+      onDisappear: () => {
+        this.sheetMode = '';
+      },
     });
+  }
+
+  private sheetTitle(): string {
+    if (this.sheetMode === SHEET_IMPORT) {
+      return '导入书源';
+    }
+    if (this.sheetMode === SHEET_EXPORT) {
+      return '导出书源';
+    }
+    if (this.sheetMode === SHEET_TEST) {
+      return `测试 · ${this.testName}`;
+    }
+    return this.editorMode === EDITOR_CREATE ? '新增书源' : '编辑书源';
+  }
+
+  @Builder
+  sheetContent() {
+    if (this.sheetMode === SHEET_IMPORT) {
+      this.importSheet();
+    } else if (this.sheetMode === SHEET_EXPORT) {
+      this.exportSheet();
+    } else if (this.sheetMode === SHEET_TEST) {
+      this.testSheet();
+    } else {
+      this.editorSheet();
+    }
   }
 
   @Builder
@@ -756,64 +919,95 @@ struct BookSourceManagePage {
             void this.load(true);
           },
         });
-        Row({ space: 8 }) {
-          SecondaryButton({
-            label: '新增',
-            compact: true,
-            fullWidth: false,
-            onTap: () => this.openCreate(),
-          });
-          SecondaryButton({
-            label: '导入',
-            compact: true,
-            fullWidth: false,
-            onTap: () => {
-              this.importResult = '';
-              this.showImportSheet = true;
-            },
-          });
-          SecondaryButton({
-            label: '导出',
-            compact: true,
-            fullWidth: false,
-            onTap: () => {
-              this.showExportSheet = true;
-              void this.doExport();
-            },
-          });
+        Scroll() {
+          Row({ space: 8 }) {
+            SecondaryButton({
+              label: '新增',
+              compact: true,
+              fullWidth: false,
+              onTap: () => this.openCreate(),
+            });
+            SecondaryButton({
+              label: '导入',
+              compact: true,
+              fullWidth: false,
+              onTap: () => {
+                this.importResult = '';
+                this.sheetMode = SHEET_IMPORT;
+                this.showSheet = true;
+              },
+            });
+            SecondaryButton({
+              label: '导出',
+              compact: true,
+              fullWidth: false,
+              onTap: () => {
+                this.sheetMode = SHEET_EXPORT;
+                this.showSheet = true;
+                void this.doExport();
+              },
+            });
+          }
+          .padding({ left: 16, right: 16 });
         }
-        .width('100%')
-        .padding({ left: 16, right: 16 });
-        Row({ space: 8 }) {
-          SecondaryButton({
-            label: '体检',
-            compact: true,
-            fullWidth: false,
-            buttonEnabled: !this.checking && !this.working,
-            onTap: () => {
-              void this.runCheck(false);
-            },
-          });
-          SecondaryButton({
-            label: '清理无效',
-            compact: true,
-            fullWidth: false,
-            buttonEnabled: !this.checking && !this.working,
-            onTap: () => {
-              void this.runCheck(true);
-            },
-          });
-          SecondaryButton({
-            label: '种子书源',
-            compact: true,
-            fullWidth: false,
-            buttonEnabled: !this.working && !this.checking,
-            onTap: () => this.confirmSeed(),
-          });
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
+        .width('100%');
+        Scroll() {
+          Row({ space: 8 }) {
+            SecondaryButton({
+              label: '体检',
+              compact: true,
+              fullWidth: false,
+              buttonEnabled: !this.checking && !this.working,
+              onTap: () => {
+                void this.runCheck(false);
+              },
+            });
+            SecondaryButton({
+              label: '清理无效',
+              compact: true,
+              fullWidth: false,
+              buttonEnabled: !this.checking && !this.working,
+              onTap: () => {
+                void this.runCheck(true);
+              },
+            });
+            SecondaryButton({
+              label: '种子书源',
+              compact: true,
+              fullWidth: false,
+              buttonEnabled: !this.working && !this.checking,
+              onTap: () => this.confirmSeed(),
+            });
+            SecondaryButton({
+              // 共享 SecondaryButton 的 label 是普通成员（不会重绘），故用静态文案；
+              // 多选态与退出入口由下方 batchBar 的 Text 表达。
+              label: '多选',
+              compact: true,
+              fullWidth: false,
+              onTap: () => this.toggleSelecting(),
+            });
+            if (ServerRegistry.supports(ServerFeature.ADMIN_PLUGINS)) {
+              SecondaryButton({
+                label: '插件配置',
+                compact: true,
+                fullWidth: false,
+                onTap: () => {
+                  // 上游书源工作台内嵌的「全局配置」实为 legado 插件连接配置，跳插件中心维护
+                  router.pushUrl({ url: 'pages/AdminPluginsPage' });
+                },
+              });
+            }
+          }
+          .padding({ left: 16, right: 16 });
         }
-        .width('100%')
-        .padding({ left: 16, right: 16 });
-        Text(`共 ${this.totalCount} 个书源 · 长按书源可测试 / 编辑 / 删除`)
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
+        .width('100%');
+        if (this.selecting) {
+          this.batchBar();
+        }        Text(this.listHintText())
           .fontSize(12)
           .fontColor($r('app.color.text_secondary'))
           .width('100%')
@@ -856,17 +1050,72 @@ struct BookSourceManagePage {
   }
 
   @Builder
+  batchBar() {
+    Column({ space: 6 }) {
+      Row({ space: 8 }) {
+        Text(`已选 ${this.selectedIds.length} / 本页 ${this.sources.length}`)
+          .fontSize(12)
+          .fontColor($r('app.color.text_primary'))
+          .layoutWeight(1);
+        TextButton({
+          label: this.allSelected() ? '取消全选' : '全选',
+          onTap: () => {
+            if (this.allSelected()) {
+              this.selectedIds = [];
+            } else {
+              this.selectedIds = this.sources.map((item: BookSourceItem) => item.id);
+            }
+          },
+        });
+        Text('退出多选')
+          .fontSize(13)
+          .fontColor($r('app.color.brand_primary'))
+          .padding({ left: 8, right: 8 })
+          .onClick(() => this.toggleSelecting());
+      }
+      .width('100%');
+      Row({ space: 8 }) {
+        TextButton({
+          label: '启用',
+          onTap: () => this.runBatchToggle(true),
+        });
+        TextButton({
+          label: '停用',
+          onTap: () => this.runBatchToggle(false),
+        });
+        TextButton({
+          label: '删除',
+          tone: 'danger',
+          onTap: () => this.confirmBatchDelete(),
+        });
+        Blank().layoutWeight(1);
+      }
+      .width('100%');
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding(12)
+    .margin({ left: 16, right: 16 })
+    .borderRadius($r('app.float.card_radius'))
+    .backgroundColor($r('app.color.card_background'));
+  }
+
+  @Builder
   sourceRow(source: BookSourceItem) {
     Column() {
-      SettingCell({
-        title: source.name.length > 0 ? source.name : source.url,
-        subtitle: this.sourceSubtitle(source),
-        showToggle: true,
-        toggleOn: source.enabled,
-        onToggle: (value: boolean) => {
-          void this.toggleSource(source, value);
-        },
-      });
+      if (this.selecting) {
+        this.selectableRow(source);
+      } else {
+        SettingCell({
+          title: source.name.length > 0 ? source.name : source.url,
+          subtitle: this.sourceSubtitle(source),
+          showToggle: true,
+          toggleOn: source.enabled,
+          onToggle: (value: boolean) => {
+            void this.toggleSource(source, value);
+          },
+        });
+      }
     }
     .width('100%')
     .borderRadius($r('app.float.card_radius'))
@@ -1069,7 +1318,7 @@ struct BookSourceManagePage {
             label: '删除该书源',
             fullWidth: false,
             onTap: () => {
-              this.showEditorSheet = false;
+              this.showSheet = false;
               this.confirmDelete(this.editId, this.editName);
             },
           });

@@ -16,6 +16,9 @@ import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import {
   BookListResponse, OnlineBookStatus, ShelfApi, isShelfApiOk,
 } from '../services/ShelfApi';
+import {
+  NetworkLibraryApi, ONLINE_STATUS_SERIAL, ONLINE_STATUS_FINISHED, ONLINE_STATUS_UNKNOWN,
+} from '../services/NetworkLibraryApi';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
 import { mapTalebookBook } from '../utils/BookMapper';
@@ -33,6 +36,9 @@ struct OnlineLibraryPage {
   @State hasMore: boolean = false;
   @State total: number = 0;
   @State loadError: string = '';
+  /** 长按修正连载状态时的目标书籍（用于提示标题与二次确认）。 */
+  @State pendingBookId: number = 0;
+  @State pendingBookTitle: string = '';
   private statusItems: FilterChipItem[] = [
     { label: '全部', value: 0 },
     { label: '连载中', value: 1 },
@@ -153,6 +159,49 @@ struct OnlineLibraryPage {
     return '';
   }
 
+  /**
+   * 长按书籍手动修正连载状态。
+   * 对应上游 `SerializeStatusBadge` 的可编辑分支：`POST /api/network/status`
+   * （仅 `serial|finished|unknown`；非网络书或未保存时上游返回 params.not_found）。
+   */
+  private pickSerializeStatus(item: BookListItemData): void {
+    const bookId = Number(item.id);
+    if (!(bookId > 0)) {
+      return;
+    }
+    this.pendingBookId = bookId;
+    this.pendingBookTitle = item.title;
+    this.getUIContext().getPromptAction().showActionMenu({
+      title: `修正连载状态 · ${this.pendingBookTitle}`,
+      buttons: [
+        { text: '连载中', color: '#007DFF' },
+        { text: '已完结', color: '#007DFF' },
+        { text: '未知', color: '#007DFF' },
+      ],
+    }).then((result) => {
+      const values: string[] = [
+        ONLINE_STATUS_SERIAL, ONLINE_STATUS_FINISHED, ONLINE_STATUS_UNKNOWN,
+      ];
+      if (result.index >= 0 && result.index < values.length) {
+        this.saveSerializeStatus(bookId, values[result.index]);
+      }
+    }).catch(() => {});
+  }
+
+  private saveSerializeStatus(bookId: number, status: string): void {
+    NetworkLibraryApi.setOnlineStatus(bookId, status).then((rsp) => {
+      if (!NetworkLibraryApi.isOk(rsp)) {
+        this.toast(NetworkLibraryApi.errorMessage(rsp));
+        return;
+      }
+      this.toast(`已置为「${this.statusLabel(status)}」`);
+      // 服务端按状态过滤，改完必须重拉才能看到分桶变化
+      void this.loadBooks(true);
+    }).catch((e: Object) => {
+      this.toast(`保存失败：${e}`);
+    });
+  }
+
   /** 在公共书籍映射之上补充连载状态副标题。 */
   private mapBook(book: Record<string, Object>): BookListItemData {
     const item = mapTalebookBook(book);
@@ -212,6 +261,11 @@ struct OnlineLibraryPage {
             void this.loadBooks(true);
           },
         });
+        Text('长按书籍可修正连载状态（服务端会标记为手动指定）。')
+          .fontSize(12)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+          .padding({ left: 16, right: 16, bottom: 4 });
         Refresh({ refreshing: $$this.isRefreshing }) {
           BookCatalogView({
             items: this.catalogItems,
@@ -224,6 +278,7 @@ struct OnlineLibraryPage {
               url: 'pages/BookDetailPage', params: { bookId: Number(item.id) }
             }),
             onLoadMore: () => this.loadMore(),
+            onItemLongPress: (item: BookListItemData) => this.pickSerializeStatus(item),
           });
         }
         .layoutWeight(1)

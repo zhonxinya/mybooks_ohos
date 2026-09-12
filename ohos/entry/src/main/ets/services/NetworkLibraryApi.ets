@@ -41,14 +41,25 @@ import { TalebookCoreService } from './TalebookCoreService';
  *        返回 `{err, tag, msg}`（同书已在保存中会返回 err=ok + msg="该书籍正在保存中"）。
  *
  * 另（本文件不覆盖，见说明）：`/api/library/online`（本地已保存网络书列表）由
- * `services/ShelfApi.ets` 封装；`/api/network/status`（本地网络书连载状态读写，仅
- * 保留在过渡命名空间下）当前无客户端调用方，暂不封装。
+ * `services/ShelfApi.ets` 封装。
+ *   GET  /api/network/status?book_id=  → NetworkStatus.get，`{err, meta|null}`
+ *        （meta = `OnlineBookMeta.to_dict()`，含 `serialize_status` / `status_manual`）
+ *   POST /api/network/status body `{book_id, serialize_status}`
+ *        → NetworkStatus.post，仅接受 serial|finished|unknown；
+ *        非网络书或未保存时返回 `err=params.not_found`。
+ *        ⚠️ 该端点**只在过渡命名空间 `/api/network/` 下**，没有 `/api/book-sources/status` 别名。
  */
 
 /** 搜索模式：仅取「近期可用」的前 K 个书源（上游 `BOOKSOURCE_SEARCH_TOP_K`）。 */
 export const NETWORK_SEARCH_MODE_TOP: string = 'top';
 /** 搜索模式：全部可用书源。 */
 export const NETWORK_SEARCH_MODE_ALL: string = 'all';
+/**
+ * 搜索模式：手选书源。
+ * 上游 handler 优先看 `sources` 参数（非空即用选中源）；`mode=custom` 本身不参与选源，
+ * 仅用于前端区分「手选」并在未选择时阻断提交。
+ */
+export const NETWORK_SEARCH_MODE_CUSTOM: string = 'custom';
 
 /** 保存格式：TXT（服务端拼装后导入本地书库）。 */
 export const NETWORK_SAVE_FMT_TXT: string = 'txt';
@@ -246,6 +257,33 @@ export interface NetworkTocResponse extends NetworkApiResult {
 export interface NetworkContentResponse extends NetworkApiResult {
   title?: string;
   content?: string;
+}
+
+/** 连载状态：连载中。 */
+export const ONLINE_STATUS_SERIAL: string = 'serial';
+/** 连载状态：已完结。 */
+export const ONLINE_STATUS_FINISHED: string = 'finished';
+/** 连载状态：未知。 */
+export const ONLINE_STATUS_UNKNOWN: string = 'unknown';
+
+/** 归一化后的本地网络书元信息（`OnlineBookMeta.to_dict()`，字段以上游模型为准）。 */
+export interface OnlineBookMetaItem {
+  bookId: number;
+  /** 保存时使用的书源 URL。 */
+  sourceUrl: string;
+  /** 原始书籍页 URL。 */
+  originBookUrl: string;
+  serializeStatus: string;
+  /** 是否为用户手动指定（true 时不再被自动探测覆盖）。 */
+  statusManual: boolean;
+  /** 保存时记录的最新章节名。 */
+  lastChapter: string;
+}
+
+/** `GET /api/network/status` 响应。 */
+export interface NetworkStatusResponse extends NetworkApiResult {
+  /** 原始 `meta` 对象（可能为 null），用 `parseOnlineMeta` 转换。 */
+  meta?: Object;
 }
 
 /** `POST /api/book-sources/save` 响应。 */
@@ -487,6 +525,45 @@ export class NetworkLibraryApi {
     path = withQuery(path, 'book_url', bookUrl);
     const raw = await TalebookCoreService.talebookGet(path);
     return JSON.parse(raw) as NetworkSaveStatusResponse;
+  }
+
+  /**
+   * 读取本地网络书的元信息：`GET /api/network/status?book_id=`。
+   * 非网络书或未保存时上游返回 `{err:'ok', meta:null}`。
+   */
+  static async getOnlineStatus(bookId: number): Promise<NetworkStatusResponse> {
+    const path = withQuery('/api/network/status', 'book_id', `${bookId}`);
+    const raw = await TalebookCoreService.talebookGet(path);
+    return JSON.parse(raw) as NetworkStatusResponse;
+  }
+
+  /**
+   * 手动修正连载状态：`POST /api/network/status` body `{book_id, serialize_status}`。
+   * 仅接受 `serial|finished|unknown`；上游会把 `status_manual` 置为 true。
+   */
+  static async setOnlineStatus(bookId: number, status: string): Promise<NetworkApiResult> {
+    const body: Record<string, Object> = {
+      'book_id': bookId,
+      'serialize_status': status,
+    };
+    const raw = await TalebookCoreService.talebookPost('/api/network/status', JSON.stringify(body));
+    return JSON.parse(raw) as NetworkApiResult;
+  }
+
+  /** 解析 `GET /api/network/status` 的 `meta`（为 null 时返回 null）。 */
+  static parseOnlineMeta(value: Object | undefined): OnlineBookMetaItem | null {
+    const row = netMap(value);
+    if (row === null) {
+      return null;
+    }
+    return {
+      bookId: netCount(row, 'book_id'),
+      sourceUrl: netText(row, 'source_url'),
+      originBookUrl: netText(row, 'origin_book_url'),
+      serializeStatus: netText(row, 'serialize_status', ONLINE_STATUS_UNKNOWN),
+      statusManual: netFlag(row, 'status_manual'),
+      lastChapter: netText(row, 'last_chapter'),
+    };
   }
 
   /** 解析 `GET /api/book-sources` 的 `items`。 */

@@ -298,7 +298,8 @@ struct SoNovelSearchPage {
         EmptyState({
           message: '请先配置 SoNovel 服务地址',
           actionLabel: '去配置',
-          onAction: () => router.pushUrl({ url: 'pages/SoNovelConfigPage' }),
+          // SoNovel 地址已并入「账号与服务器」，统一引导到该页，避免出现两个配置入口
+          onAction: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
         });
       } else if (this.loading) {
         LoadingState({ hint: '正在聚合搜索，请稍候…' });
