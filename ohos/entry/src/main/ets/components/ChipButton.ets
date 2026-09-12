@@ -14,10 +14,11 @@ export struct ChipButton {
     .height(34)
     .padding({ left: 14, right: 14 })
     .backgroundColor(this.selected ? $r('app.color.brand_primary') : $r('app.color.card_background'))
-    .borderRadius($r('app.float.chip_radius'))
+    // 圆角必须写进 border：先 borderRadius 再 border 会重置圆角，旧写法使芯片/分段控件渲染成直角方块
     .border({
       width: 1,
       color: this.selected ? $r('app.color.brand_primary') : $r('app.color.divider'),
+      radius: $r('app.float.chip_radius'),
     })
     .shadow(this.selected ? {
       radius: 6,

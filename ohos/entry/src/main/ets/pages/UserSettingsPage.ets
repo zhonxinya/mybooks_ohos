@@ -239,15 +239,18 @@ struct UserSettingsPage {
                 .backgroundColor($r('app.color.brand_primary'))
                 .justifyContent(FlexAlign.Center);
               }
-              SecondaryButton({
-                label: this.uploadingAvatar ? '上传中…' : '更换头像',
-                fullWidth: false,
-                compact: true,
-                buttonEnabled: !this.uploadingAvatar,
-                onTap: () => {
-                  void this.pickAndUploadAvatar();
-                },
-              });
+              // 更换头像走 mybooks 专有的 `POST /api/user/avatar`（talebook 上游无此端点）
+              if (ServerRegistry.supports(ServerFeature.USER_AVATAR)) {
+                SecondaryButton({
+                  label: this.uploadingAvatar ? '上传中…' : '更换头像',
+                  fullWidth: false,
+                  compact: true,
+                  buttonEnabled: !this.uploadingAvatar,
+                  onTap: () => {
+                    void this.pickAndUploadAvatar();
+                  },
+                });
+              }
             }
             .width('100%');
             Row({ space: 10 }) {

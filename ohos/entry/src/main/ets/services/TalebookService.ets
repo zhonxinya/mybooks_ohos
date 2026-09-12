@@ -15,6 +15,12 @@ export interface ApiEnvelope {
   error: string;
 }
 
+/**
+ * 自动登录失败原因的 AppStorage 键。
+ * 登录页已移除，启动时的自动登录失败只能靠提示告知，由 MainTabs 消费并清空。
+ */
+export const AUTH_FAILURE_KEY: string = 'authFailureReason';
+
 /** 自动登录结果；失败时带可展示的原因。 */
 export interface AuthAttempt {
   ok: boolean;
@@ -124,6 +130,8 @@ export class TalebookService {
   private static passwordMigrated: boolean = false;
   /** 应用数据根目录（全局根）；账号身份根在该目录下的 accounts/<id>。 */
   private static dataDir_: string = '';
+  /** 最近一次自动登录失败原因（空串 = 无失败）；登录页已移除，该值仅用于提示。 */
+  private static authFailure_: string = '';
 
   /** 应用数据根目录（全局偏好所在位置）。 */
   static dataDir(): string {
@@ -451,16 +459,34 @@ export class TalebookService {
     TalebookService.secureSet('talebook_user_profile', JSON.stringify(user));
   }
 
+  /**
+   * 判断响应体/缓存是否真的是用户资料。
+   *
+   * 上游 `POST /api/user/sign_in` 只返回 `{err:'ok',msg:'ok'}`，不含用户对象；
+   * 若把它当资料保存，「个人中心」会读到非用户对象而恒显示「未登录」（且隐藏登录后菜单）。
+   */
+  private static isUserProfile(record: Record<string, Object>): boolean {
+    return record['is_login'] !== undefined || record['username'] !== undefined
+      || record['nickname'] !== undefined || record['avatar'] !== undefined;
+  }
+
   static getSavedUserProfile(): Record<string, Object> | null {
     const raw = TalebookService.secureGet('talebook_user_profile');
     if (raw.length === 0) {
       return null;
     }
+    let parsed: Record<string, Object>;
     try {
-      return JSON.parse(raw) as Record<string, Object>;
+      parsed = JSON.parse(raw) as Record<string, Object>;
     } catch (_error) {
       return null;
     }
+    if (!TalebookService.isUserProfile(parsed)) {
+      // 历史版本曾把 sign_in 响应误存为资料：丢弃，避免「个人中心」永久停在未登录态
+      TalebookService.secureSet('talebook_user_profile', '');
+      return null;
+    }
+    return parsed;
   }
 
   static saveUserProfileFromEnvelope(envelope: ApiEnvelope): void {
@@ -468,6 +494,10 @@ export class TalebookService {
       return;
     }
     const user = (envelope.body['user'] as Record<string, Object> | undefined) ?? envelope.body;
+    // 非用户资料（如登录响应的 {err,msg}）不得写入，否则会覆盖真实资料
+    if (!TalebookService.isUserProfile(user)) {
+      return;
+    }
     TalebookService.saveUserProfile(user);
   }
 
@@ -477,6 +507,9 @@ export class TalebookService {
       return;
     }
     const user = (envelope.body['user'] as Record<string, Object> | undefined) ?? envelope.body;
+    if (!TalebookService.isUserProfile(user)) {
+      return;
+    }
     TalebookService.saveUserProfile(user);
   }
 
@@ -505,6 +538,18 @@ export class TalebookService {
     const url = TalebookService.secureGet('talebook_url');
     const creds = TalebookService.getLoginCredentials();
     return url.length > 0 && creds.username.length > 0 && creds.password.length > 0;
+  }
+
+  /**
+   * 应用 SoNovel 服务地址。
+   *
+   * SoNovel 是全局第三方服务（不随书库账号切换），因此只写全局键与两套 native 的 sonovel 通道；
+   * 缺任一处都会导致搜索仍走旧地址（`secureGet('sonovel_url')` 是 `sonovel_` 前缀的全局键）。
+   */
+  static applySonovelUrl(url: string): void {
+    TalebookService.setBaseUrl('sonovel', url);
+    TalebookService.secureSet('sonovel_url', url);
+    TalebookCoreService.syncBaseUrl('sonovel', url);
   }
 
   static isLoggedInEnvelope(envelope: ApiEnvelope): boolean {
@@ -564,6 +609,8 @@ export class TalebookService {
   }
 
   static ensureAuthenticated(): Promise<boolean> {
+    // 每轮会话校验前重置失败原因，避免把上一轮（或切换账号时）的旧原因当成启动结果
+    TalebookService.authFailure_ = '';
     if (TalebookService.sessionRestorePromise !== null) {
       return TalebookService.sessionRestorePromise;
     }
@@ -602,9 +649,23 @@ export class TalebookService {
 
   /**
    * 用已保存的凭据尝试自动登录（不弹 UI）。
-   * 失败时返回具体原因，由调用方决定是否跳转登录页并把原因展示给用户。
+   * 失败时返回具体原因，由调用方决定如何展示（跳账号配置页 / 启动提示）。
    */
   static async tryAutoLogin(): Promise<AuthAttempt> {
+    const attempt = await TalebookService.autoLoginInternal();
+    // 记录本轮结果：登录页已移除，失败原因只在此汇总，由启动流程或账号页取走展示
+    TalebookService.authFailure_ = attempt.ok ? '' : attempt.reason;
+    return attempt;
+  }
+
+  /** 取走最近一次自动登录失败原因（读取后清空），供启动提示只报一次。 */
+  static consumeAuthFailure(): string {
+    const reason: string = TalebookService.authFailure_;
+    TalebookService.authFailure_ = '';
+    return reason;
+  }
+
+  private static async autoLoginInternal(): Promise<AuthAttempt> {
     TalebookService.applyLocalConfig();
     const url = TalebookService.secureGet('talebook_url');
     if (url.length === 0) {
@@ -656,7 +717,10 @@ export class TalebookService {
   static signIn(username: string, password: string): ApiEnvelope {
     try {
       const envelope = TalebookService.parseNative(entry.apiSignIn(username, password));
-      TalebookService.saveUserProfileFromEnvelope(envelope);
+      if (TalebookService.isApiSuccess(envelope)) {
+        // 登录响应不含用户对象，单独拉一次 user/info 写入真实资料
+        TalebookService.refreshUserProfile();
+      }
       return envelope;
     } catch (error) {
       return TalebookService.failedEnvelope(`${error}`);
@@ -666,10 +730,20 @@ export class TalebookService {
   static signInAsync(username: string, password: string): Promise<ApiEnvelope> {
     return entry.apiSignInAsync(username, password).then((raw: string) => {
       return TalebookService.parseEnvelopeAsync(raw).then((envelope: ApiEnvelope) => {
-        TalebookService.saveUserProfileFromEnvelope(envelope);
-        return envelope;
+        return TalebookService.cacheProfileAfterLogin(envelope);
       });
     }).catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
+  }
+
+  /** 登录成功后缓存真实用户资料（user/info）；失败不影响登录结果本身。 */
+  private static cacheProfileAfterLogin(loginEnvelope: ApiEnvelope): Promise<ApiEnvelope> {
+    if (!TalebookService.isApiSuccess(loginEnvelope)) {
+      return Promise.resolve(loginEnvelope);
+    }
+    return TalebookService.getUserInfoAsync().then((info: ApiEnvelope) => {
+      TalebookService.saveUserProfileFromEnvelope(info);
+      return loginEnvelope;
+    });
   }
 
   static signOut(): ApiEnvelope {

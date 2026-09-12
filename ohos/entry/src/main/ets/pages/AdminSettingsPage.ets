@@ -1465,7 +1465,7 @@ struct AdminSettingsPage {
                   $r('app.color.on_brand') : $r('app.color.text_secondary'));
             }
             .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-            .borderRadius(14)
+            .borderRadius($r('app.float.chip_radius'))
             .backgroundColor(this.selectedSourceNames.indexOf(source) >= 0 ?
               $r('app.color.brand_primary') : $r('app.color.page_background'))
             .margin({ right: 8, bottom: 8 })

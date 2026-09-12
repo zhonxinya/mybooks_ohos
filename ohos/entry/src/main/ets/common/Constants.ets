@@ -12,6 +12,16 @@ export class StorageKeys {
   static readonly NOVELS_GRID_MODE: string = 'novels_grid_mode';
   static readonly READING_HISTORY: string = 'reading_history';
   static readonly READING_BOOKMARKS: string = 'reading_bookmarks';
+  /** 客户端自更新检查：最近一次成功结果的缓存（ReleaseInfo JSON）。 */
+  static readonly UPDATE_RELEASE_CACHE: string = 'update_release_cache';
+  /** 客户端自更新检查：最近一次成功检查的时间戳（毫秒）。 */
+  static readonly UPDATE_CHECKED_AT: string = 'update_checked_at';
+  /** 客户端自更新检查：用户选择「忽略此版本」的 tag。 */
+  static readonly UPDATE_SKIPPED_TAG: string = 'update_skipped_tag';
+  /** 客户端自更新检查：已弹过启动提示的 tag。 */
+  static readonly UPDATE_PROMPTED_TAG: string = 'update_prompted_tag';
+  /** 客户端自更新检查：可升级版本号提示（AppStorage 键，空串表示无提示）。 */
+  static readonly UPDATE_HINT_VERSION: string = 'update_hint_version';
 }
 
 /** Pagination constants aligned with Flutter PaginationConstants. */

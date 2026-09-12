@@ -142,8 +142,17 @@ struct ReadingBooksPage {
     void this.loadBooks(false);
   }
 
-  /** 当前 tab 对应的批量移除 action（私有书不支持）。 */
+  /**
+   * 当前 tab 对应的批量移除 action（私有书不支持）。
+   *
+   * ⚠️ 批量移除走 mybooks 专有的 `POST /api/books/batch-remove-state`（talebook 上游无此端点，
+   * talebook 只能逐本改 `/api/book/{id}/readstate`）。因此无该能力时返回空串，
+   * 使顶栏的「管理」入口自动隐藏，而不是让用户点了才 404。
+   */
   private batchAction(): string {
+    if (!ServerRegistry.supports(ServerFeature.STATE_BATCH_REMOVE)) {
+      return '';
+    }
     if (this.activeTab === 0) {
       return 'reading';
     }

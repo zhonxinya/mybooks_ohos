@@ -1,7 +1,7 @@
 import { router } from '@kit.ArkUI';
 import {
   BookCatalogView, BookViewToggleButton, BookListItemData, LoadingState,
-  SectionTitle, AuthImage,
+  SectionTitle, AuthImage, HarmonyTopBar,
 } from '../components';
 import { ApiEnvelope, TalebookService } from '../services/TalebookService';
 import { TalebookApi, IndexHomeData, LibraryStatsResponse, LibraryStatsData } from '../services/TalebookApi';
@@ -174,7 +174,7 @@ export struct BooksTabPage {
     } catch (error) {
       if (reset) {
         this.errorMessage = error instanceof Error ? error.message : `${error}`;
-        this.emptyActionLabel = TalebookService.hasAuthCredentials() ? '' : '去登录';
+        this.emptyActionLabel = TalebookService.hasAuthCredentials() ? '' : '去配置账号';
       }
     } finally {
       this.finishLoad(reset);
@@ -255,7 +255,7 @@ export struct BooksTabPage {
     if (!TalebookService.isApiSuccess(result)) {
       if (reset) {
         this.errorMessage = result.error.length > 0 ? result.error : '加载失败';
-        this.emptyActionLabel = TalebookService.hasAuthCredentials() ? '' : '去登录';
+        this.emptyActionLabel = TalebookService.hasAuthCredentials() ? '' : '去配置账号';
       } else {
         this.getUIContext().getPromptAction().showToast({
           message: result.error.length > 0 ? result.error : '加载更多失败',
@@ -325,15 +325,12 @@ export struct BooksTabPage {
   }
 
   private handleEmptyAction(): void {
-    if (this.emptyActionLabel === '去配置') {
-      router.pushUrl({ url: 'pages/TalebookConfigPage' });
-      return;
-    }
     if (this.emptyActionLabel === '去搜索') {
       router.pushUrl({ url: 'pages/TalebookBookSearchPage' });
       return;
     }
-    router.pushUrl({ url: 'pages/LoginPage' });
+    // 「去配置」与「去配置账号」都指向账号与服务器：登录页已移除，配置好账号后由应用自动登录
+    router.pushUrl({ url: 'pages/TalebookConfigPage' });
   }
 
 
@@ -352,26 +349,36 @@ export struct BooksTabPage {
     }));
   }
 
+  /**
+   * 顶部栏：与书架/设置页统一使用 HarmonyTopBar（白底 56vp + 底部 Divider + 20px 标题）。
+   * 历史实现是自绘的 34px 粗体大字（无白底、无分隔线），与另两个导航页视觉不一致。
+   */
   @Builder
-  pageHeader() {
-    Column({ space: 4 }) {
-      Row() {
-        Column({ space: 2 }) {
-          Text('小说')
-            .fontSize(34)
-            .fontWeight(FontWeight.Bold)
-            .fontColor($r('app.color.text_primary'));
-          Text(this.bookCount > 0 ? `共 ${this.bookCount} 本` :
-            '推荐与全部')
-            .fontSize(13)
-            .fontColor($r('app.color.text_secondary'));
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1);
-        BookViewToggleButton({ isListMode: $isListMode });
-      }
-      .width('100%')
-      .padding({ top: 4 });
+  headerTopBar() {
+    HarmonyTopBar({
+      title: '小说',
+      action: () => {
+        this.headerAction();
+      },
+    });
+  }
+
+  @Builder
+  headerAction() {
+    BookViewToggleButton({ isListMode: $isListMode });
+  }
+
+  /**
+   * 顶部信息卡：图书总数与书库统计。
+   * 规格对齐书架页的胶囊卡片（左右 16 / 圆角 12 / 白底），使三个导航页的顶部层次一致。
+   */
+  @Builder
+  headerSummary() {
+    Column({ space: 6 }) {
+      Text(this.bookCount > 0 ? `共 ${this.bookCount} 本` : '推荐与全部')
+        .fontSize(13)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%');
       if (this.libraryStats !== null) {
         Row({ space: 10 }) {
           this.statGroup('总藏书', this.libraryStats.total_books ?? 0);
@@ -380,14 +387,18 @@ export struct BooksTabPage {
           this.statSeparator();
           this.statGroup('实体书', this.libraryStats.physical_count ?? 0);
           this.statSeparator();
-          this.statGroup('本月新增', (this.libraryStats.month_ebook_count ?? 0) + (this.libraryStats.month_physical_count ?? 0));
+          this.statGroup('本月新增',
+            (this.libraryStats.month_ebook_count ?? 0) + (this.libraryStats.month_physical_count ?? 0));
         }
-        .width('100%')
-        .margin({ top: 6 });
+        .width('100%');
       }
     }
     .width('100%')
-    .padding({ left: 16, right: 16, top: 4, bottom: 2 });
+    .alignItems(HorizontalAlign.Start)
+    .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+    .margin({ left: 16, right: 16, bottom: 4 })
+    .borderRadius($r('app.float.card_radius'))
+    .backgroundColor($r('app.color.card_background'));
   }
 
   @Builder
@@ -606,7 +617,7 @@ export struct BooksTabPage {
               .maxLines(1);
           }
           .padding({ left: 4, right: 4, top: 2, bottom: 2 })
-          .borderRadius(9)
+          .borderRadius($r('app.float.badge_radius'))
           .backgroundColor('#B3000000')
           .margin(4);
         }
@@ -634,7 +645,8 @@ export struct BooksTabPage {
 
   build() {
     Column() {
-      this.pageHeader();
+      this.headerTopBar();
+      this.headerSummary();
       if (this.loading && this.allBooks.length === 0 &&
         this.randomBooks.length === 0 && this.socialBooks.length === 0) {
         LoadingState({})

@@ -11,11 +11,12 @@ export struct SearchBar {
       TextInput({ placeholder: this.placeholder, text: this.keyword })
         .layoutWeight(1)
         .height($r('app.float.button_height_compact'))
-        .borderRadius(20)
         .backgroundColor($r('app.color.card_background'))
+        // 圆角写进 border：先 borderRadius 再 border 会重置圆角；与按钮/卡片保持同一档圆角
         .border({
           width: 1,
           color: $r('app.color.divider'),
+          radius: $r('app.float.button_radius'),
         })
         .padding({ left: 16, right: 16 })
         .onChange((value: string) => {

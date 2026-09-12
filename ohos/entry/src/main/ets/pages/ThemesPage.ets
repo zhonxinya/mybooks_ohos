@@ -179,7 +179,7 @@ struct ThemesPage {
             .fontSize(11)
             .fontColor($r('app.color.on_brand'))
             .backgroundColor($r('app.color.brand_primary'))
-            .borderRadius(10)
+            .borderRadius($r('app.float.badge_radius'))
             .padding({ left: 6, right: 6, top: 2, bottom: 2 });
         }
       }

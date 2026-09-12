@@ -480,9 +480,11 @@ struct AdminBookListPage {
               .borderRadius(11)
               .backgroundColor(this.selectedIds.indexOf(Number(book['id'] ?? 0)) >= 0 ?
                 $r('app.color.brand_primary') : $r('app.color.page_background'))
+              // 圆角必须写进 border：否则 22×22 的圆形选择框会被 border 重置成方块
               .border({
                 width: 1,
                 color: $r('app.color.divider'),
+                radius: 11,
               });
             Column({ space: 2 }) {
               Text(String(book['title'] ?? ''))

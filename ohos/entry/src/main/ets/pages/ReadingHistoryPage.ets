@@ -4,6 +4,7 @@ import {
   SectionTitle, LazyDataSource, BookListItem, BookListItemData,
 } from '../components';
 import { DownloadRecord, ReadingHistoryItem, TalebookService } from '../services/TalebookService';
+import { ReaderLauncher, ReaderOpenParams } from '../services/ReaderLauncher';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { TalebookApi } from '../services/TalebookApi';
 import { BookItem as ApiBookItem } from '../services/BookModels';
@@ -250,20 +251,22 @@ struct ReadingHistoryPage {
   }
 
   private openHistory(row: HistoryRow): void {
-    if (row.filePath.length > 0) {
-      router.pushUrl({
-        url: 'pages/ReadKitReader',
-        params: {
-          filePath: row.filePath,
-          bookId: row.bookId,
-          bookTitle: row.title,
-          format: row.format,
-          location: row.location,
-        },
-      });
+    if (row.filePath.length === 0) {
+      this.getUIContext().getPromptAction().showToast({ message: '未找到本地文件，无法继续阅读' });
       return;
     }
-    this.getUIContext().getPromptAction().showToast({ message: '未找到本地文件，无法继续阅读' });
+    // 设备缺 ReaderKit 时不能路由（会 cppcrash），改由守卫提示
+    const readerParams: ReaderOpenParams = {
+      filePath: row.filePath,
+      bookId: row.bookId,
+      bookTitle: row.title,
+      format: row.format,
+      location: row.location,
+    };
+    const opened: boolean = ReaderLauncher.open(readerParams);
+    if (!opened) {
+      this.getUIContext().getPromptAction().showToast({ message: ReaderLauncher.UNAVAILABLE_MESSAGE });
+    }
   }
 
   @Builder

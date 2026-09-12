@@ -69,7 +69,12 @@ export struct ReaderControlPanel {
     .borderRadius({ topLeft: 20, topRight: 20 })
     .clip(true)
     .shadow({ radius: 24, color: '#40000000', offsetX: 0, offsetY: -8 })
-    .border({ width: { top: 0.5 }, color: ReaderThemeColors.divider(this.theme) })
+    // 圆角必须写进 border：先 borderRadius 再 border 会重置圆角
+    .border({
+      width: { top: 0.5 },
+      color: ReaderThemeColors.divider(this.theme),
+      radius: { topLeft: 20, topRight: 20 },
+    })
     .padding({ bottom: 12 })
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM]);
   }

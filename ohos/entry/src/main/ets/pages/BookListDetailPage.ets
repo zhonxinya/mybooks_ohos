@@ -156,8 +156,8 @@ struct BookListDetailPage {
       const rsp = await BookListApi.toggleLike(this.detail.id);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         if (rsp.err === 'user.need_login') {
-          this.toast('请先登录');
-          router.pushUrl({ url: 'pages/LoginPage' });
+          this.toast('请先在「账号与服务器」中配置账号，应用会自动登录');
+          router.pushUrl({ url: 'pages/TalebookConfigPage' });
           return;
         }
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '操作失败');
@@ -558,6 +558,8 @@ struct BookListDetailPage {
       .border({
         width: { left: 4 },
         color: { left: booklistColorHex(this.detail.color) },
+        // 圆角必须写进 border：先 borderRadius 再 border 会重置圆角
+        radius: $r('app.float.card_radius'),
       })
       .alignItems(HorizontalAlign.Start);
     }
@@ -603,7 +605,13 @@ struct BookListDetailPage {
           .justifyContent(FlexAlign.Center)
           .borderRadius($r('app.float.card_radius'))
           .backgroundColor($r('app.color.card_background'))
-          .border({ width: 1, color: $r('app.color.divider'), style: BorderStyle.Dashed })
+          .border({
+            width: 1,
+            color: $r('app.color.divider'),
+            style: BorderStyle.Dashed,
+            // 圆角必须写进 border：否则虚线框会盖成直角
+            radius: $r('app.float.card_radius'),
+          })
           .onClick(() => this.openAddSheet());
         }
       }
@@ -692,9 +700,11 @@ struct BookListDetailPage {
             .justifyContent(FlexAlign.Center)
             .borderRadius(16)
             .backgroundColor(option.hex)
+            // 圆角必须写进 border：否则选中环会把 32×32 的色板盖成方块
             .border({
               width: 2,
               color: this.editColor === option.key ? $r('app.color.text_primary') : Color.Transparent,
+              radius: 16,
             })
             .margin({ right: 10, bottom: 8 })
             .onClick(() => {
@@ -885,7 +895,7 @@ struct BookListDetailPage {
       }
       .width('100%')
       .padding(16)
-      .borderRadius(16)
+      .borderRadius($r('app.float.card_radius'))
       .backgroundColor('#FFFFFF')
       .id('booklistShareCard');
       PrimaryButton({

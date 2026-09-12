@@ -3,7 +3,6 @@
     "pages/MainTabs",
     "pages/ReadKitReader",
     "pages/BookDetailPage",
-    "pages/LoginPage",
     "pages/ReadingHistoryPage",
     "pages/TalebookConfigPage",
     "pages/SoNovelConfigPage",
@@ -70,6 +69,7 @@
     "pages/AdminPluginsPage",
     "pages/AdminScanPage",
     "pages/AdminOpdsPage",
-    "pages/AdminMaintenancePage"
+    "pages/AdminMaintenancePage",
+    "pages/UpdatePage"
   ]
 }

@@ -179,6 +179,8 @@ export struct BookListCardItem {
     .border({
       width: { left: 4 },
       color: { left: this.accentColor() },
+      // 圆角必须写进 border：先 borderRadius 再 border 会重置圆角
+      radius: $r('app.float.card_radius'),
     })
     .alignItems(HorizontalAlign.Start)
     .stateStyles({

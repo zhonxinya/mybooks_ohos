@@ -32,7 +32,12 @@ export struct ReaderOverlayBar {
     .backgroundColor(ReaderThemeColors.barBackground(this.theme))
     .borderRadius({ topLeft: 16, topRight: 16 })
     .shadow({ radius: 20, color: '#30000000', offsetX: 0, offsetY: -6 })
-    .border({ width: { top: 0.5 }, color: ReaderThemeColors.divider(this.theme) })
+    // 圆角必须写进 border：先 borderRadius 再 border 会重置圆角
+    .border({
+      width: { top: 0.5 },
+      color: ReaderThemeColors.divider(this.theme),
+      radius: { topLeft: 16, topRight: 16 },
+    })
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM]);
   }
 

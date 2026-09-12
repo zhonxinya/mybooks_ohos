@@ -2,9 +2,8 @@ import { router } from '@kit.ArkUI';
 import { PageScaffold, PrimaryButton, SecondaryButton } from '../components';
 import { AccountManager } from '../services/AccountManager';
 import { AccountStore } from '../services/AccountStore';
-import { ServerKind } from '../services/ServerProfile';
+import { ServerKind, ServerRegistry } from '../services/ServerProfile';
 import { TalebookService } from '../services/TalebookService';
-import { TalebookCoreService } from '../services/TalebookCoreService';
 import { AccountInput, AccountRecord, accountHost } from '../models/AccountModels';
 
 /**
@@ -12,7 +11,14 @@ import { AccountInput, AccountRecord, accountHost } from '../models/AccountModel
  *
  * 切换账号后必须整栈重渲染：各页面在 aboutToAppear 里读取配置与拉取数据，
  * 只靠局部刷新会残留上一个账号的书架/历史，因此这里 clear + replaceUrl 回首页重建。
+ *
+ * 服务端类型含 SoNovel：它只是全局第三方书源服务地址（不参与书库账号切换），
+ * 单独用一条账号记录承载，避免再单独开一块表单。
  */
+
+/** 表单可选的服务端类型，顺序与 `serverOptions` 一一对应。 */
+const FORM_SERVER_KINDS: string[] = [ServerKind.MYBOOKS, ServerKind.TALEBOOK, ServerKind.SONOVEL];
+
 @Entry
 @Component
 struct TalebookConfigPage {
@@ -31,12 +37,11 @@ struct TalebookConfigPage {
   @State formPassword: string = '';
   @State formServerKind: string = ServerKind.MYBOOKS;
   @State formAllowInsecureSsl: boolean = false;
-  /** SoNovel 是独立的全局服务（不随账号切换），地址直接在本页维护。 */
-  @State sonovelUrl: string = '';
   /** 可选服务端；顺序与服务端枚举的解析保持一致。 */
   private serverOptions: SelectOption[] = [
     { value: 'MyBooks' },
     { value: 'Talebook' },
+    { value: 'SoNovel' },
   ];
 
   aboutToAppear(): void {
@@ -48,20 +53,6 @@ struct TalebookConfigPage {
   private reload(): void {
     this.accounts = AccountManager.list();
     this.activeId = AccountManager.activeId();
-    this.sonovelUrl = TalebookService.secureGet('sonovel_url');
-  }
-
-  /**
-   * 保存 SoNovel 地址：同时写入偏好、密钥库与 native 两套 HttpClient，
-   * 与旧版 SoNovelConfigPage 的行为保持一致（缺一处会导致搜索仍走旧地址）。
-   */
-  private saveSoNovel(): void {
-    const url = this.normalizeUrl(this.sonovelUrl);
-    this.sonovelUrl = url;
-    TalebookService.setBaseUrl('sonovel', url);
-    TalebookService.secureSet('sonovel_url', url);
-    TalebookCoreService.syncBaseUrl('sonovel', url);
-    this.toast(url.length > 0 ? 'SoNovel 地址已保存' : '已清除 SoNovel 地址');
   }
 
   private toast(message: string): void {
@@ -69,11 +60,23 @@ struct TalebookConfigPage {
   }
 
   private serverKindLabel(kind: string): string {
-    return kind === ServerKind.TALEBOOK ? 'Talebook' : 'MyBooks';
+    if (kind === ServerKind.TALEBOOK) {
+      return 'Talebook';
+    }
+    if (kind === ServerKind.SONOVEL) {
+      return 'SoNovel';
+    }
+    return 'MyBooks';
+  }
+
+  /** 当前表单是否为 SoNovel（只需地址，无用户名/密码，也不参与账号切换）。 */
+  private formIsSonovel(): boolean {
+    return this.formServerKind === ServerKind.SONOVEL;
   }
 
   private formServerIndex(): number {
-    return this.formServerKind === ServerKind.TALEBOOK ? 1 : 0;
+    const index: number = FORM_SERVER_KINDS.indexOf(this.formServerKind);
+    return index >= 0 ? index : 0;
   }
 
   private normalizeUrl(url: string): string {
@@ -93,10 +96,27 @@ struct TalebookConfigPage {
     if (active === null) {
       return '点击右上角「新增账号」添加服务器与账号';
     }
-    return `${this.serverKindLabel(active.serverKind)} · ${accountHost(active.url)} · ${active.username}`;
+    const base: string = `${this.serverKindLabel(active.serverKind)} · ${accountHost(active.url)}`;
+    return active.username.length > 0 ? `${base} · ${active.username}` : base;
   }
 
-  /** 打开新增表单（默认继承当前账号的服务端类型与 TLS 设置，便于「同服务器加个账号」）。 */
+  /** 保存按钮文案：SoNovel 不切换书库账号，不用「保存并切换」。 */
+  private saveButtonLabel(): string {
+    if (this.busy) {
+      return '保存中…';
+    }
+    if (this.formIsSonovel()) {
+      return '保存';
+    }
+    return this.editingId.length > 0 ? '保存并应用' : '保存并切换';
+  }
+
+  /**
+   * 打开新增表单（默认继承当前账号的服务端类型与 TLS 设置，便于「同服务器加个账号」）。
+   *
+   * 无账号时（首次使用或已清空账号）不能直接回退到默认值：用户上一个用过的服务端类型
+   * 仍保存在偏好里，按它预选可避免「用 Talebook 服务器却存成 MyBooks」导致端点/能力判定全错。
+   */
   private openCreateForm(): void {
     const active = AccountManager.active();
     this.editingId = '';
@@ -104,8 +124,12 @@ struct TalebookConfigPage {
     this.formUrl = '';
     this.formUsername = '';
     this.formPassword = '';
-    this.formServerKind = active === null ? ServerKind.MYBOOKS : active.serverKind;
-    this.formAllowInsecureSsl = active === null ? false : active.allowInsecureSsl;
+    this.formServerKind = active === null
+      ? ServerRegistry.parse(TalebookService.prefGet(ServerRegistry.PREF_KEY, ''))
+      : active.serverKind;
+    this.formAllowInsecureSsl = active === null
+      ? TalebookService.prefGet('allow_insecure_ssl', 'false') === 'true'
+      : active.allowInsecureSsl;
     this.message = '';
     this.formOpen = true;
   }
@@ -129,25 +153,27 @@ struct TalebookConfigPage {
     this.message = '';
   }
 
-  /** 保存表单：新增后直接切换过去；编辑当前账号后重新应用身份。 */
+  /** 保存表单：新增后直接切换过去（SoNovel 除外，它只更新全局服务地址）；编辑当前账号后重新应用身份。 */
   private async saveForm(): Promise<void> {
     if (this.busy) {
       return;
     }
+    const sonovel = this.formIsSonovel();
     const url = this.normalizeUrl(this.formUrl);
     const username = this.formUsername.trim();
     if (url.length === 0) {
-      this.message = '请填写服务器地址';
+      this.message = sonovel ? '请填写 SoNovel 服务地址' : '请填写服务器地址';
       this.isError = true;
       return;
     }
-    if (username.length === 0) {
+    // SoNovel 无需账号：只有地址有意义（用户名/密码框在 UI 上也不展示）
+    if (!sonovel && username.length === 0) {
       this.message = '请填写用户名';
       this.isError = true;
       return;
     }
-    // 新增账号必须填密码：自动登录依赖它；不填会导致新增后只能手动登录
-    if (this.editingId.length === 0 && this.formPassword.length === 0) {
+    // 新增书库账号必须填密码：自动登录依赖它；不填会导致新增后只能手动登录
+    if (!sonovel && this.editingId.length === 0 && this.formPassword.length === 0) {
       this.message = '请填写密码（新增后用于自动登录）';
       this.isError = true;
       return;
@@ -172,6 +198,10 @@ struct TalebookConfigPage {
       this.editingId = '';
       this.message = '';
       this.reload();
+      if (sonovel) {
+        await this.applySonovelRecord(editedId);
+        return;
+      }
       if (AccountStore.isActive(editedId)) {
         // 地址/用户名/TLS 变化必须重新应用身份（并重启 UI 使各页面重新拉数据）
         await this.switchTo(editedId, '已保存并重新登录');
@@ -184,7 +214,17 @@ struct TalebookConfigPage {
     const created = AccountManager.add(input);
     this.formOpen = false;
     this.reload();
+    if (sonovel) {
+      await this.applySonovelRecord(created.id);
+      return;
+    }
     await this.switchTo(created.id, '已新增账号并切换');
+  }
+
+  /** SoNovel 是全局第三方服务：只同步地址，不切书库账号、不重启导航栈。 */
+  private async applySonovelRecord(id: string): Promise<void> {
+    await AccountManager.activate(id);
+    this.toast('SoNovel 服务地址已保存');
   }
 
   /** 切换账号并重启导航栈，使全部页面按新账号重新渲染与拉取数据。 */
@@ -197,16 +237,23 @@ struct TalebookConfigPage {
       const record = AccountStore.find(id);
       const name = record === null ? '' : AccountManager.displayNameOf(record);
       const attempt = await AccountManager.activate(id);
-      // 整栈重建：各页面 aboutToAppear 会读取新账号配置并重新请求
-      router.clear();
-      router.replaceUrl({ url: 'pages/MainTabs' });
+      // 按服务器实际响应自愈类型：用户选错（如把 talebook 选成 MyBooks）时，
+      // 管理概览等功能会整类走错，这里自动纠正后再重建导航栈
+      const corrected: boolean = await AccountManager.syncServerKindByProbe();
       if (attempt.ok) {
-        this.toast(`${successHint}：${name}`);
+        // 整栈重建：各页面 aboutToAppear 会读取新账号配置并重新请求
+        router.clear();
+        router.replaceUrl({ url: 'pages/MainTabs' });
+        this.toast(corrected
+          ? `${successHint}：${name}（已按服务器实际类型识别为 ${ServerRegistry.profile().displayName}）`
+          : `${successHint}：${name}`);
         return;
       }
-      // 自动登录失败：直达登录页（可返回首页），并把服务端原因告诉用户
+      // 自动登录失败：登录页已移除，这里**留在本页**提示（页面若被 replaceUrl 销毁，红字与 toast 用户都看不到），
+      // 用户可立即核对并重新保存该账号
       this.toast(`已切换到 ${name}：${attempt.reason}`);
-      router.pushUrl({ url: 'pages/LoginPage', params: { skipAutoLogin: true } });
+      this.message = `自动登录失败（${name}）：${attempt.reason}。请核对地址、用户名与密码后重新保存。`;
+      this.isError = true;
     } finally {
       this.busy = false;
     }
@@ -284,7 +331,6 @@ struct TalebookConfigPage {
       Column({ space: 12 }) {
         this.currentAccountCard();
         this.accountListCard();
-        this.sonovelCard();
         if (this.formOpen) {
           this.formCard();
         }
@@ -329,36 +375,7 @@ struct TalebookConfigPage {
     .backgroundColor($r('app.color.card_background'));
   }
 
-  /** SoNovel 全局服务地址（不随账号切换，与账号列表分开呈现以区分作用域）。 */
-  @Builder
-  sonovelCard() {
-    Column({ space: 8 }) {
-      Text('SoNovel 服务')
-        .fontSize(13)
-        .fontColor($r('app.color.text_secondary'))
-        .width('100%');
-      Text('独立第三方聚合书源服务，地址为全局设置，不随账号切换。留空表示不使用。')
-        .fontSize(12)
-        .fontColor($r('app.color.text_tertiary'))
-        .width('100%');
-      TextInput({ placeholder: 'SoNovel 服务地址，如 http://192.168.1.10:8080', text: this.sonovelUrl })
-        .height(44)
-        .borderRadius(8)
-        .backgroundColor($r('app.color.page_background'))
-        .onChange((value: string) => this.sonovelUrl = value);
-      PrimaryButton({
-        label: '保存 SoNovel 地址',
-        fullWidth: false,
-        onTap: () => this.saveSoNovel(),
-      });
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-    .padding($r('app.float.page_padding'))
-    .borderRadius($r('app.float.card_radius'))
-    .backgroundColor($r('app.color.card_background'));
-  }
-
+  /** SoNovel 全局服务地址由「新增/编辑账号」中的 SoNovel 类型承载，不再单列表单。 */
   @Builder
   accountListCard() {
     Column() {
@@ -394,7 +411,7 @@ struct TalebookConfigPage {
                 .fontSize(11)
                 .fontColor($r('app.color.on_brand'))
                 .backgroundColor($r('app.color.brand_primary'))
-                .borderRadius(9)
+                .borderRadius($r('app.float.badge_radius'))
                 .padding({ left: 6, right: 6, top: 1, bottom: 1 });
             }
           }
@@ -413,7 +430,8 @@ struct TalebookConfigPage {
       .width('100%');
 
       Row({ space: 16 }) {
-        if (!AccountStore.isActive(record.id)) {
+        // SoNovel 不是书库账号：它只提供全局服务地址，没有「切为当前书库」的语义
+        if (!AccountStore.isActive(record.id) && record.serverKind !== ServerKind.SONOVEL) {
           Text('切换')
             .fontSize(14)
             .fontColor($r('app.color.brand_primary'))
@@ -454,30 +472,39 @@ struct TalebookConfigPage {
         .value(this.serverKindLabel(this.formServerKind))
         .width('100%')
         .onSelect((index: number) => {
-          this.formServerKind = index === 1 ? ServerKind.TALEBOOK : ServerKind.MYBOOKS;
+          this.formServerKind = index >= 0 && index < FORM_SERVER_KINDS.length
+            ? FORM_SERVER_KINDS[index] : ServerKind.MYBOOKS;
         });
 
-      TextInput({ placeholder: '服务器地址，如 https://books.example.com', text: this.formUrl })
+      TextInput({
+        placeholder: this.formIsSonovel()
+          ? 'SoNovel 服务地址，如 http://192.168.1.10:8080'
+          : '服务器地址，如 https://books.example.com',
+        text: this.formUrl,
+      })
         .height(44)
         .borderRadius(8)
         .backgroundColor($r('app.color.page_background'))
         .onChange((value: string) => this.formUrl = value);
 
-      TextInput({ placeholder: '用户名', text: this.formUsername })
-        .height(44)
-        .borderRadius(8)
-        .backgroundColor($r('app.color.page_background'))
-        .onChange((value: string) => this.formUsername = value);
+      // SoNovel 无需账号与密码：只维护服务地址
+      if (!this.formIsSonovel()) {
+        TextInput({ placeholder: '用户名', text: this.formUsername })
+          .height(44)
+          .borderRadius(8)
+          .backgroundColor($r('app.color.page_background'))
+          .onChange((value: string) => this.formUsername = value);
 
-      TextInput({
-        placeholder: this.editingId.length > 0 ? '密码（留空表示不修改）' : '密码（用于自动登录）',
-        text: this.formPassword,
-      })
-        .type(InputType.Password)
-        .height(44)
-        .borderRadius(8)
-        .backgroundColor($r('app.color.page_background'))
-        .onChange((value: string) => this.formPassword = value);
+        TextInput({
+          placeholder: this.editingId.length > 0 ? '密码（留空表示不修改）' : '密码（用于自动登录）',
+          text: this.formPassword,
+        })
+          .type(InputType.Password)
+          .height(44)
+          .borderRadius(8)
+          .backgroundColor($r('app.color.page_background'))
+          .onChange((value: string) => this.formPassword = value);
+      }
 
       TextInput({ placeholder: '账号备注名（可选）', text: this.formName })
         .height(44)
@@ -510,7 +537,7 @@ struct TalebookConfigPage {
         })
           .layoutWeight(1);
         PrimaryButton({
-          label: this.busy ? '保存中…' : (this.editingId.length > 0 ? '保存并应用' : '保存并切换'),
+          label: this.saveButtonLabel(),
           buttonEnabled: !this.busy,
           onTap: () => {
             void this.saveForm();
@@ -531,6 +558,14 @@ struct TalebookConfigPage {
   helpText() {
     Column({ space: 4 }) {
       Text('每个账号可指向不同服务器，也可指向同一服务器的不同用户。')
+        .fontSize(12)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%');
+      Text('类型选 SoNovel 时只需地址：它是以聚合书源搜书/取书的第三方服务，不参与书库账号切换。')
+        .fontSize(12)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%');
+      Text('账号保存后由应用自动登录，无需手动登录；失败时会在切换时与启动时提示原因。')
         .fontSize(12)
         .fontColor($r('app.color.text_tertiary'))
         .width('100%');

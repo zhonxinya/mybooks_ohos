@@ -23,6 +23,11 @@ import { PaginationConstants } from '../common/Constants';
 export enum ServerKind {
   MYBOOKS = 'mybooks',
   TALEBOOK = 'talebook',
+  /**
+   * SoNovel：第三方聚合书源服务，仅用于搜书/取书，**不是书库服务端**。
+   * 它不参与「当前书库」身份切换，只把地址写入全局 `sonovel_url`。
+   */
+  SONOVEL = 'sonovel',
 }
 
 /** 服务端能力开关。驱动入口显隐与降级提示，避免在缺少该能力的服务端上发起必然失败的请求。 */
@@ -432,7 +437,12 @@ export class ServerRegistry {
     return ServerRegistry.current.kind;
   }
 
-  /** 持久化值 → 枚举；未知/空值回退 MyBooks（既有客户端行为）。 */
+  /**
+   * 持久化值 → 书库 profile 枚举。
+   *
+   * 注意：只解析两种书库服务端。`ServerKind.SONOVEL` 不属于书库（它只存地址、不提供书库端点），
+   * 因此这里不返回它；未知/空值一并回退 MyBooks（既有客户端行为）。
+   */
   static parse(value: string): ServerKind {
     for (const candidate of [ServerKind.MYBOOKS, ServerKind.TALEBOOK]) {
       if (candidate === value) {

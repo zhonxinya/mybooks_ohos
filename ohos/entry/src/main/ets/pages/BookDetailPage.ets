@@ -2,7 +2,8 @@ import { router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { PageScaffold, PrimaryButton, SecondaryButton, LoadingState, SettingCell, AuthImage, ChipButton, StarRating, SectionTitle } from '../components';
-import { TalebookService } from '../services/TalebookService';
+import { DownloadTask, TalebookService } from '../services/TalebookService';
+import { ReaderLauncher, ReaderOpenParams } from '../services/ReaderLauncher';
 import { TalebookApi, ApiMessageResult, apiErrorMessage } from '../services/TalebookApi';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { AccountManager } from '../services/AccountManager';
@@ -53,6 +54,7 @@ struct BookDetailPage {
   @State downloadMessage: string = '';
   @State readEnabled: boolean = false;
   @State downloading: boolean = false;
+  @StorageProp('downloadTasksTick') @Watch('onDownloadTasksChanged') downloadTasksTick: number = 0;
   @State activeSheet: string = '';
   @State showSheet: boolean = false;
   @State booklistItems: BookListQuickItem[] = [];
@@ -88,6 +90,8 @@ struct BookDetailPage {
   @State manageFormat: string = '';
   @State coverBusy: boolean = false;
   @State isSole: boolean = false;
+  /** 本页入队的下载任务 id，用于精准跟踪该任务的进度。 */
+  private downloadTaskId: string = '';
 
   aboutToAppear(): void {
     const params = router.getParams() as Record<string, Object>;
@@ -106,17 +110,13 @@ struct BookDetailPage {
   }
 
   onPageShow(): void {
-    // 从下载管理页返回时同步本地文件与队列状态，避免按钮停留在旧状态
+    // 从其他页面返回时同步本地文件与队列状态，避免按钮停留在旧状态
     if (this.bookId <= 0) {
       return;
     }
-    const downloads = TalebookService.getDownloads();
-    const local = downloads.find((item) => item.bookId === `${this.bookId}`);
-    if (local?.filePath !== undefined && local.filePath.length > 0) {
-      this.localFilePath = local.filePath;
-      this.localFormat = local.format ?? this.localFormat;
-    }
+    this.syncLocalFileFromDownloads();
     this.refreshReadEnabled();
+    this.syncDownloadState();
   }
 
   private async loadDetail(): Promise<void> {
@@ -276,6 +276,57 @@ struct BookDetailPage {
     return false;
   }
 
+  /** 已下载记录里若含本书，则回填本地文件路径（下载完成后按钮要变成「开始阅读」）。 */
+  private syncLocalFileFromDownloads(): void {
+    const local = TalebookService.getDownloads().find((item) => item.bookId === `${this.bookId}`);
+    if (local?.filePath !== undefined && local.filePath.length > 0) {
+      this.localFilePath = local.filePath;
+      this.localFormat = local.format ?? this.localFormat;
+    }
+  }
+
+  private onDownloadTasksChanged(): void {
+    this.syncDownloadState();
+  }
+
+  /**
+   * 详情页下载不跳转下载管理，改为就地反映队列状态：
+   * 优先跟踪本页入队的任务，其次回退到本书仍在进行中的任务。
+   */
+  private findDownloadTask(): DownloadTask | undefined {
+    const tasks = DownloadTaskService.getTasks();
+    if (this.downloadTaskId.length > 0) {
+      return tasks.find((task: DownloadTask) => task.id === this.downloadTaskId);
+    }
+    const bookId = `${this.bookId}`;
+    return tasks.find((task: DownloadTask) =>
+      task.kind === 'talebook' && task.bookId === bookId &&
+      (task.status === 'pending' || task.status === 'downloading'));
+  }
+
+  private syncDownloadState(): void {
+    const task = this.findDownloadTask();
+    if (task === undefined) {
+      return;
+    }
+    if (task.status === 'completed') {
+      this.downloading = false;
+      this.downloadMessage = '下载完成';
+      this.syncLocalFileFromDownloads();
+      this.refreshReadEnabled();
+      return;
+    }
+    if (task.status === 'failed') {
+      this.downloading = false;
+      this.downloadMessage = task.error.length > 0 ? task.error : '下载失败，可在「下载管理」重试';
+      return;
+    }
+    this.downloading = true;
+    this.downloadMessage = task.status === 'downloading'
+      ? (task.message.length > 0 ? task.message : '正在下载中')
+      : '已加入下载队列';
+  }
+
   private openMetaBooks(metaType: string, metaName: string): void {
     if (metaName.length === 0) {
       return;
@@ -359,7 +410,7 @@ struct BookDetailPage {
       fs.mkdirSync(booksDir, true);
     }
     const destPath = `${booksDir}/${this.bookId}.${this.selectedFormat.toLowerCase()}`;
-    DownloadTaskService.enqueueTalebook({
+    const task = DownloadTaskService.enqueueTalebook({
       bookId: this.bookId,
       bookName: this.title,
       author: this.author,
@@ -367,10 +418,10 @@ struct BookDetailPage {
       format: this.selectedFormat,
       destPath: destPath,
     });
+    this.downloadTaskId = task.id;
     DownloadTaskService.processQueue();
     this.downloadMessage = '已加入下载队列';
-    this.getUIContext().getPromptAction().showToast({ message: '已加入下载队列' });
-    router.pushUrl({ url: 'pages/DownloadManagerPage' });
+    this.getUIContext().getPromptAction().showToast({ message: '已加入下载队列，可继续浏览' });
   }
 
   private openReader(): void {
@@ -379,16 +430,18 @@ struct BookDetailPage {
       this.getUIContext().getPromptAction().showToast({ message: '请先下载书籍' });
       return;
     }
-    router.pushUrl({
-      url: 'pages/ReadKitReader',
-      params: {
-        filePath: filePath,
-        bookId: this.localBookId.length > 0 ? this.localBookId : `${this.bookId}`,
-        bookTitle: this.title,
-        format: this.localFormat.length > 0 ? this.localFormat : this.selectedFormat,
-        location: this.resolveReadLocation(),
-      }
-    });
+    // 设备缺 ReaderKit 时不能路由（会 cppcrash），改由守卫提示
+    const readerParams: ReaderOpenParams = {
+      filePath: filePath,
+      bookId: this.localBookId.length > 0 ? this.localBookId : `${this.bookId}`,
+      bookTitle: this.title,
+      format: this.localFormat.length > 0 ? this.localFormat : this.selectedFormat,
+      location: this.resolveReadLocation(),
+    };
+    const opened: boolean = ReaderLauncher.open(readerParams);
+    if (!opened) {
+      this.getUIContext().getPromptAction().showToast({ message: ReaderLauncher.UNAVAILABLE_MESSAGE });
+    }
   }
 
   private async loadSocialData(): Promise<void> {
@@ -1245,14 +1298,17 @@ struct BookDetailPage {
                   });
                 });
               }
-              ListItem() {
-                this.menuItem($r('sys.symbol.headphones'), '音频文件', '', () => {
-                  this.closeSheet();
-                  router.pushUrl({
-                    url: 'pages/AudioFilesPage',
-                    params: { bookId: this.bookId, title: this.title, author: this.author, cover: this.cover },
+              // 音频文件页依赖 mybooks 专有的转换/购买/合集端点（talebook 上游是另一套 podcast 音频体系）
+              if (ServerRegistry.supports(ServerFeature.AUDIOBOOKS)) {
+                ListItem() {
+                  this.menuItem($r('sys.symbol.headphones'), '音频文件', '', () => {
+                    this.closeSheet();
+                    router.pushUrl({
+                      url: 'pages/AudioFilesPage',
+                      params: { bookId: this.bookId, title: this.title, author: this.author, cover: this.cover },
+                    });
                   });
-                });
+                }
               }
               if (ServerRegistry.supports(ServerFeature.COMIC)) {
                 ListItem() {
@@ -1422,31 +1478,34 @@ struct BookDetailPage {
         }
         .tabBar('管理')
         if (!this.localOnly && this.bookId > 0) {
-          TabContent() {
-            List() {
-              ListItem() {
-                this.menuItem($r('sys.symbol.headphones'), '音频文件', '', () => {
-                  this.closeSheet();
-                  router.pushUrl({
-                    url: 'pages/AudioFilesPage',
-                    params: { bookId: this.bookId, title: this.title, author: this.author, cover: this.cover },
-                  });
-                });
-              }
-              if (ServerRegistry.supports(ServerFeature.COMIC)) {
+          // 整个「音频」页签只含 mybooks 专有的音频功能，加能力后再渲染页签本身
+          if (ServerRegistry.supports(ServerFeature.AUDIOBOOKS)) {
+            TabContent() {
+              List() {
                 ListItem() {
-                  this.menuItem($r('sys.symbol.square_grid_2x2'), '漫画阅读', '在线阅读', () => {
+                  this.menuItem($r('sys.symbol.headphones'), '音频文件', '', () => {
                     this.closeSheet();
-                    router.pushUrl({ url: 'pages/ComicReaderPage', params: { bookId: this.bookId } });
+                    router.pushUrl({
+                      url: 'pages/AudioFilesPage',
+                      params: { bookId: this.bookId, title: this.title, author: this.author, cover: this.cover },
+                    });
                   });
                 }
+                if (ServerRegistry.supports(ServerFeature.COMIC)) {
+                  ListItem() {
+                    this.menuItem($r('sys.symbol.square_grid_2x2'), '漫画阅读', '在线阅读', () => {
+                      this.closeSheet();
+                      router.pushUrl({ url: 'pages/ComicReaderPage', params: { bookId: this.bookId } });
+                    });
+                  }
+                }
               }
+              .width('100%')
+              .height('100%')
+              .scrollBar(BarState.Off);
             }
-            .width('100%')
-            .height('100%')
-            .scrollBar(BarState.Off);
+            .tabBar('音频')
           }
-          .tabBar('音频')
         }
       }
       .scrollable(false)
@@ -2231,12 +2290,6 @@ struct BookDetailPage {
             if (this.errorMessage.length > 0) {
               Text(this.errorMessage).fontColor($r('app.color.error'));
             }
-            if (this.downloadMessage.length > 0) {
-              Text(this.downloadMessage)
-                .fontSize(13)
-                .fontColor(this.downloadMessage === '下载完成' ?
-                  $r('app.color.success') : $r('app.color.text_secondary'));
-            }
           }
           .padding($r('app.float.page_padding'))
           .alignItems(HorizontalAlign.Start);
@@ -2244,6 +2297,13 @@ struct BookDetailPage {
         .layoutWeight(1);
 
         Column({ space: 10 }) {
+          if (this.downloadMessage.length > 0) {
+            Text(this.downloadMessage)
+              .fontSize(13)
+              .width('100%')
+              .fontColor(this.downloadMessage === '下载完成' ?
+                $r('app.color.success') : $r('app.color.text_secondary'));
+          }
           Row({ space: 10 }) {
             PrimaryButton({
               label: this.readEnabled ? '开始阅读' :
