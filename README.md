@@ -25,7 +25,7 @@ HarmonyOS 原生多源聚合阅读器（ArkTS UI + C++ 核心层），是 [MyBoo
 ### MyBooks 服务端
 
 1. 部署并启动 MyBooks，参见其[项目首页](https://github.com/PoxenStudio/mybooks/)与[使用指南](https://github.com/PoxenStudio/mybooks/blob/develop/document/UserGuide.zh_CN.md)
-2. 在本应用「设置 → 附加服务」填入服务地址
+2. 在本应用「设置 → 服务 → 账号与服务器」填入服务地址
 3. 登录 Talebook 账号
 
 ### SoNovel 服务端（可选）
@@ -49,7 +49,7 @@ volumes:
   sonovel_data:
 ```
 
-部署完成后，在本应用「设置 → 附加服务」填入其地址（如 `http://<ip>:7765`）。
+部署完成后，在本应用「设置 → 服务 → SoNovel 服务」填入其地址（如 `http://<ip>:7765`）。
 更多部署方式（Windows / Linux / Homebrew / Scoop / 源码构建）见 [so-novel 文档](https://github.com/freeok/so-novel)。
 
 > SoNovel 为可选功能。未配置服务地址时，聚合搜索页会提示「请先配置 SoNovel 服务地址」并提供跳转入口，此时不会发起任何请求；不影响 MyBooks 书库功能。
@@ -102,7 +102,7 @@ volumes:
 
 1. 设置 → 账号与服务器：**新增账号**（选择服务端类型 MyBooks / Talebook，填写书库地址与用户名密码）。
    可保存多个账号，也可为同一服务器添加不同用户；列表内可**切换 / 编辑 / 删除**。
-2. 设置 → 附加服务 → 配置 SoNovel 服务器地址（可选，全局设置不随账号切换）
+2. 设置 → 服务 → SoNovel 服务：配置 SoNovel 服务器地址（可选，全局设置不随账号切换）
 3. 书架页查看本地下载书籍，点击阅读打开 Reader Kit
 
 客户端同时支持两套服务端（差异由 `ohos/entry/src/main/ets/services/ServerProfile.ets` 统一承载）
