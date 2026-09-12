@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, EmptyState, SwipeDeleteAction, LoadingState, AuthImage, IconCircleButton,
   SectionTitle, LazyDataSource, BookListItem, BookListItemData,
@@ -240,16 +239,19 @@ struct ReadingHistoryPage {
     });
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private deleteItem(row: HistoryRow): void {
     TalebookService.removeHistoryItem(row.bookId, row.filePath);
     this.reloadHistory();
     this.getUIContext().getPromptAction().showToast({ message: '已删除' });
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openBook(bookId: number): void {
-    router.pushUrl({ url: 'pages/BookDetailPage', params: { bookId: bookId } });
+    this.getUIContext().getRouter().pushUrl({ url: 'pages/BookDetailPage', params: { bookId: bookId } });
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openHistory(row: HistoryRow): void {
     if (row.filePath.length === 0) {
       this.getUIContext().getPromptAction().showToast({ message: '未找到本地文件，无法继续阅读' });
@@ -263,7 +265,7 @@ struct ReadingHistoryPage {
       format: row.format,
       location: row.location,
     };
-    const opened: boolean = ReaderLauncher.open(readerParams);
+    const opened: boolean = ReaderLauncher.open(this.getUIContext(), readerParams);
     if (!opened) {
       this.getUIContext().getPromptAction().showToast({ message: ReaderLauncher.UNAVAILABLE_MESSAGE });
     }
@@ -399,7 +401,7 @@ struct ReadingHistoryPage {
         message: '暂无阅读历史',
         detail: '打开任意书籍开始阅读后，这里会记录你的阅读进度',
         actionLabel: '去书架',
-        onAction: () => router.pushUrl({ url: 'pages/MainTabs' }),
+        onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/MainTabs' }),
       });
     } else {
       List({ space: 8 }) {

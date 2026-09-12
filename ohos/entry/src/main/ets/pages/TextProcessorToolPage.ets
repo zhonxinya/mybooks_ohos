@@ -57,7 +57,11 @@ struct TextProcessorToolPage {
   }
 
   private toast(msg: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: msg });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: msg });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private setMsg(text: string, error: boolean): void {

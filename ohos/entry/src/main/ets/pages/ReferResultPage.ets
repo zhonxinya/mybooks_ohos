@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, EmptyState, LoadingState, PrimaryButton, SecondaryButton,
   AuthImage, StarRating,
@@ -23,7 +22,7 @@ struct ReferResultPage {
   @State expandedKey: string = '';
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, Object>;
+    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
     this.bookId = Number(params['bookId'] ?? 0);
     this.queryTitle = String(params['title'] ?? '');
     this.queryIsbn = String(params['isbn'] ?? '');
@@ -34,7 +33,11 @@ struct ReferResultPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private entryKey(entry: ReferBook): string {
@@ -126,7 +129,7 @@ struct ReferResultPage {
         return;
       }
       this.toast('引用信息已应用');
-      router.back();
+      this.getUIContext().getRouter().back();
     } catch (error) {
       this.toast(`应用失败：${error}`);
     } finally {
@@ -156,7 +159,7 @@ struct ReferResultPage {
         return;
       }
       this.toast('已重置');
-      router.back();
+      this.getUIContext().getRouter().back();
     } catch (error) {
       this.toast(`重置失败：${error}`);
     }

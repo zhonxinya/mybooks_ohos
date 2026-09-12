@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import {
   PageScaffold, PrimaryButton, SecondaryButton, DangerButton,
@@ -62,7 +61,11 @@ struct MimoTtsToolPage {
   }
 
   private toast(msg: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: msg });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: msg });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private stopPoll(): void {
@@ -427,7 +430,7 @@ struct MimoTtsToolPage {
       return;
     }
     try {
-      const context = getContext(this) as common.UIAbilityContext;
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const picked = await BookUploadService.pickAudioClone(context);
       if (picked === null) {
         this.toast('未选择文件，或格式/大小不符合（仅 mp3/wav，≤7MB）');

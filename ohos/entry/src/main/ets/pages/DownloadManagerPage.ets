@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { PageScaffold, EmptyState, LoadingState, SwipeDeleteAction, PrimaryButton, SecondaryButton, FilterChips, FilterChipItem } from '../components';
 import { DownloadTask, DownloadTaskStatus } from '../services/TalebookService';
 import { DownloadTaskService } from '../services/DownloadTaskService';
@@ -23,11 +22,13 @@ struct DownloadManagerPage {
     { label: 'SoNovel', value: FILTER_SONOVEL },
   ];
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   aboutToAppear(): void {
     this.reloadTasks(true);
     this.processQueue();
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   onPageShow(): void {
     this.reloadTasks(false);
     this.processQueue();
@@ -71,6 +72,7 @@ struct DownloadManagerPage {
     this.applyFilter();
   }
 
+  /** @throws 内部系统调用（提示弹窗）可能抛出，由调用方处理 */
   private processQueue(showFeedback: boolean = false): void {
     this.reloadTasks(false);
     const pendingCount = this.tasks.filter((task: DownloadTask) => task.status === 'pending').length;
@@ -97,6 +99,10 @@ struct DownloadManagerPage {
     }
   }
 
+  /**
+   * 清空已完成任务。
+   * @throws 内部系统调用（提示弹窗）可能抛出，由调用方处理
+   */
   private clearCompletedTasks(): void {
     const completedCount = this.tasks.filter((task: DownloadTask) => task.status === 'completed').length;
     DownloadTaskService.clearCompleted();
@@ -108,6 +114,7 @@ struct DownloadManagerPage {
     }
   }
 
+  /** @throws 内部系统调用（提示弹窗）可能抛出，由调用方处理 */
   private openTask(task: DownloadTask): void {
     if (task.status === 'completed') {
       if (task.kind === 'talebook') {
@@ -171,6 +178,7 @@ struct DownloadManagerPage {
     }
   }
 
+  /** @throws 内部系统调用（提示弹窗）可能抛出，由调用方处理 */
   private deleteTask(task: DownloadTask): void {
     DownloadTaskService.remove(task.id);
     this.tasks = this.tasks.filter((item) => item.id !== task.id);
@@ -305,7 +313,7 @@ struct DownloadManagerPage {
               ? '在 SoNovel 搜索页选择书籍并下载'
               : 'Talebook 详情页或 SoNovel 搜索页均可添加任务',
           actionLabel: this.filterIndex === FILTER_TALEBOOK ? '去书库' : '去搜索',
-          onAction: () => router.pushUrl({
+          onAction: () => this.getUIContext().getRouter().pushUrl({
             url: this.filterIndex === FILTER_TALEBOOK ? 'pages/MainTabs' : 'pages/SoNovelSearchPage',
           }),
         });

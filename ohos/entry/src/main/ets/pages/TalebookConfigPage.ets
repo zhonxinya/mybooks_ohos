@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { PageScaffold, PrimaryButton, SecondaryButton } from '../components';
 import { AccountManager } from '../services/AccountManager';
 import { AccountStore } from '../services/AccountStore';
@@ -56,7 +55,11 @@ struct TalebookConfigPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private serverKindLabel(kind: string): string {
@@ -154,6 +157,7 @@ struct TalebookConfigPage {
   }
 
   /** 保存表单：新增后直接切换过去（SoNovel 除外，它只更新全局服务地址）；编辑当前账号后重新应用身份。 */
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async saveForm(): Promise<void> {
     if (this.busy) {
       return;
@@ -228,6 +232,7 @@ struct TalebookConfigPage {
   }
 
   /** 切换账号并重启导航栈，使全部页面按新账号重新渲染与拉取数据。 */
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async switchTo(id: string, successHint: string): Promise<void> {
     if (this.busy) {
       return;
@@ -242,8 +247,8 @@ struct TalebookConfigPage {
       const corrected: boolean = await AccountManager.syncServerKindByProbe();
       if (attempt.ok) {
         // 整栈重建：各页面 aboutToAppear 会读取新账号配置并重新请求
-        router.clear();
-        router.replaceUrl({ url: 'pages/MainTabs' });
+        this.getUIContext().getRouter().clear();
+        this.getUIContext().getRouter().replaceUrl({ url: 'pages/MainTabs' });
         this.toast(corrected
           ? `${successHint}：${name}（已按服务器实际类型识别为 ${ServerRegistry.profile().displayName}）`
           : `${successHint}：${name}`);
@@ -282,6 +287,7 @@ struct TalebookConfigPage {
     });
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async deleteAccount(record: AccountRecord): Promise<void> {
     const wasActive = AccountStore.isActive(record.id);
     if (!AccountManager.remove(record.id)) {
@@ -292,8 +298,8 @@ struct TalebookConfigPage {
     if (wasActive) {
       // 删除的是当前账号：AccountManager 已切到剩余首个账号，这里重启 UI 使数据同步
       this.toast('已删除当前账号并切换到其他账号');
-      router.clear();
-      router.replaceUrl({ url: 'pages/MainTabs' });
+      this.getUIContext().getRouter().clear();
+      this.getUIContext().getRouter().replaceUrl({ url: 'pages/MainTabs' });
       return;
     }
     this.toast('已删除');

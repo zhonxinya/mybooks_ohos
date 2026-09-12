@@ -20,7 +20,11 @@ struct AdminMemosPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private async load(): Promise<void> {

@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, PrimaryButton, SecondaryButton, DangerButton, SettingCell, EmptyState, LoadingState,
   SectionTitle, FilterChips, FilterChipItem,
@@ -80,7 +79,11 @@ struct SyncPage {
   }
 
   private toast(msg: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: msg });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: msg });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private setMsg(text: string, error: boolean): void {
@@ -421,7 +424,7 @@ struct SyncPage {
         message: '未配置服务器',
         detail: '请先在服务器配置中填写书库地址与账号',
         actionLabel: '去配置',
-        onAction: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
+        onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
       });
     } else if (this.unsupported) {
       EmptyState({ message: `${ServerRegistry.profile().displayName} 服务端不支持同步` });

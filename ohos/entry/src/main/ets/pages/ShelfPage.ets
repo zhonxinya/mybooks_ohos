@@ -5,7 +5,6 @@
  * 因此分页在本地完成：每次「加载更多」先重新拉取一次书架（保证其它端加入/移出的书籍可见），
  * 再按 `PaginationConstants.PAGE_SIZE` 展开展示。
  */
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, BookCatalogView, BookViewToggleButton, BookListItemData,
   LoadingState, EmptyState,
@@ -45,7 +44,11 @@ struct ShelfPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   /** 首屏/下拉刷新传 reset=true；加载更多传 false（页码已自增）。 */
@@ -209,7 +212,7 @@ struct ShelfPage {
       EmptyState({
         message: this.loadError,
         actionLabel: this.loadError.includes('配置') ? '去配置' : '',
-        onAction: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
+        onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
       });
     } else if (this.catalogItems.length === 0) {
       EmptyState({
@@ -225,7 +228,7 @@ struct ShelfPage {
           header: () => {
             this.listHeader();
           },
-          onItemTap: (item: BookListItemData) => router.pushUrl({
+          onItemTap: (item: BookListItemData) => this.getUIContext().getRouter().pushUrl({
             url: 'pages/BookDetailPage', params: { bookId: Number(item.id) }
           }),
           onItemLongPress: (item: BookListItemData) => this.confirmRemove(item),

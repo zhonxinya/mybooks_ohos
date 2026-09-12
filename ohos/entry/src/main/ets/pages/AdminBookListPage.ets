@@ -1,4 +1,4 @@
-import { router, promptAction } from '@kit.ArkUI';
+import { promptAction } from '@kit.ArkUI';
 import {
   PageScaffold, BookCatalogView, BookViewToggleButton, BookListItemData,
   LoadingState, EmptyState, SearchBar, TextButton, IconCircleButton,
@@ -49,7 +49,11 @@ struct AdminBookListPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private async loadBooks(reset: boolean = true): Promise<void> {
@@ -115,7 +119,7 @@ struct AdminBookListPage {
       ],
     }).then((result) => {
       if (result.index === 0) {
-        router.pushUrl({ url: 'pages/BookEditPage', params: { bookId: bookId } });
+        this.getUIContext().getRouter().pushUrl({ url: 'pages/BookEditPage', params: { bookId: bookId } });
       } else if (result.index === 1) {
         this.confirmDelete(book);
       } else if (result.index === 2) {
@@ -449,7 +453,7 @@ struct AdminBookListPage {
       } else {
         TextButton({
           label: '上传图书',
-          onTap: () => router.pushUrl({ url: 'pages/BookUploadPage' }),
+          onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/BookUploadPage' }),
         });
         if (ServerRegistry.supports(ServerFeature.ADMIN_BOOK_FILL)
           || ServerRegistry.supports(ServerFeature.ADMIN_BOOK_BATCH)) {
@@ -578,7 +582,7 @@ struct AdminBookListPage {
           items: this.catalogItems,
           isListMode: this.isListMode,
           loadingMore: this.loadingMore,
-          onItemTap: (item: BookListItemData) => router.pushUrl({
+          onItemTap: (item: BookListItemData) => this.getUIContext().getRouter().pushUrl({
             url: 'pages/BookDetailPage', params: { bookId: Number(item.id) }
           }),
           onItemLongPress: (item: BookListItemData) => {

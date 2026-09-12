@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, FilterChips, FilterChipItem, LoadingState, EmptyState,
   BookListCardItem, IconCircleButton, PrimaryButton,
@@ -44,7 +43,11 @@ struct BookListsPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private tabItems(): FilterChipItem[] {
@@ -156,7 +159,7 @@ struct BookListsPage {
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         if (rsp.err === 'user.need_login') {
           this.toast('请先在「账号与服务器」中配置账号，应用会自动登录');
-          router.pushUrl({ url: 'pages/TalebookConfigPage' });
+          this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' });
           return;
         }
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '操作失败');
@@ -294,8 +297,9 @@ struct BookListsPage {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openDetail(item: BookListSummary): void {
-    router.pushUrl({
+    this.getUIContext().getRouter().pushUrl({
       url: 'pages/BookListDetailPage',
       params: { booklistId: item.id },
     });
@@ -380,7 +384,7 @@ struct BookListsPage {
         message: '请先配置账号',
         detail: '配置账号后应用会自动登录，即可查看点赞书单与我的书单',
         actionLabel: '去配置账号',
-        onAction: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
+        onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
       });
     } else if (this.errorMessage.length > 0) {
       EmptyState({ message: this.errorMessage });

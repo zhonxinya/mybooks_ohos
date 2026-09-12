@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, PrimaryButton, SecondaryButton, SettingCell, LoadingState
 } from '../components';
@@ -23,7 +22,11 @@ struct EpubFixerToolPage {
   }
 
   private toast(msg: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: msg });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: msg });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private setMsg(text: string, error: boolean): void {
@@ -150,7 +153,7 @@ struct EpubFixerToolPage {
             label: '查看运行中任务（设置 · 管理概览）',
             buttonEnabled: !this.busy,
             onTap: () => {
-              router.pushUrl({
+              this.getUIContext().getRouter().pushUrl({
                 url: 'pages/MainTabs',
                 params: { tab: 2, section: 'admin' },
               }).catch(() => {});

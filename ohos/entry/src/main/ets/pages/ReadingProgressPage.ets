@@ -6,7 +6,6 @@
  * - 可见范围：`GET /api/book/{id}` 读取 + `POST /api/book/{id}/setscope` 翻转（无请求体）。
  * - 媒体类型：`GET /api/book/{id}` 读取 + `POST /api/book/{id}/media_type` 设置（`ebook` / `comic`）。
  */
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, LoadingState, EmptyState, SectionTitle, PrimaryButton,
   SecondaryButton, DangerButton, FilterChips, FilterChipItem, SettingCell,
@@ -47,13 +46,17 @@ struct ReadingProgressPage {
   private mediaTypeValues: string[] = [BookMediaType.EBOOK, BookMediaType.COMIC];
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, Object>;
+    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
     this.bookId = Number(params['bookId'] ?? 0);
     void this.load();
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private async load(): Promise<void> {
@@ -290,7 +293,7 @@ struct ReadingProgressPage {
       EmptyState({
         message: this.loadError,
         actionLabel: this.loadError.includes('配置') ? '去配置' : '',
-        onAction: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
+        onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
       });
     } else {
       Scroll() {

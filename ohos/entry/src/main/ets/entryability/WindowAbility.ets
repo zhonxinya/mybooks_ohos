@@ -81,6 +81,7 @@ export class WindowAbility {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   async setWindowLayoutFullScreen(isFullScreen: boolean): Promise<void> {
     if (!this.context || deviceInfo.deviceType === '2in1') {
       return;
@@ -89,6 +90,7 @@ export class WindowAbility {
     await wnd.setWindowLayoutFullScreen(isFullScreen);
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   setOrientation(windowStage: window.WindowStage, orientation: window.Orientation): void {
     windowStage.getMainWindow().then((win) => {
       win.setPreferredOrientation(orientation);

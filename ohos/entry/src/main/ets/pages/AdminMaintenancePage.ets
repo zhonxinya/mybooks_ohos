@@ -74,7 +74,11 @@ struct AdminMaintenancePage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   /** 服务端字段可能为 JSON null，此处统一保证返回字符串（err/msg 为 null 时回退 fallback）。 */
@@ -224,7 +228,7 @@ struct AdminMaintenancePage {
       this.toast('发布页链接不可用');
       return;
     }
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const want: Want = {
       action: 'ohos.want.action.viewData',
       uri: url,
@@ -284,11 +288,12 @@ struct AdminMaintenancePage {
     });
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async uploadSslPair(): Promise<void> {
     if (this.working.length > 0) {
       return;
     }
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.toast('请选择证书文件（.crt / .pem / .cer）');
     const crt: PickedBookFile | null = await BookUploadService.pickStagedFile(
       context, ['.crt', '.pem', '.cer'], 'ssl_crt');

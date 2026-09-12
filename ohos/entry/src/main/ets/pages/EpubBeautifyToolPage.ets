@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import {
   PageScaffold, PrimaryButton, SecondaryButton, DangerButton,
@@ -58,7 +57,11 @@ struct EpubBeautifyToolPage {
   }
 
   private toast(msg: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: msg });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: msg });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private setMsg(text: string, error: boolean): void {
@@ -294,7 +297,7 @@ struct EpubBeautifyToolPage {
     }
     this.busy = true;
     try {
-      const context = getContext(this) as common.UIAbilityContext;
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const picked = await BookUploadService.pickAvatarImage(context);
       if (picked === null) {
         this.toast('未选择图片');

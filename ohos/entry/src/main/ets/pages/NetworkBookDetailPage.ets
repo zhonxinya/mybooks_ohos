@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { pasteboard } from '@kit.BasicServicesKit';
 import {
   PageScaffold, LoadingState, EmptyState, AuthImage, PrimaryButton, SecondaryButton,
@@ -72,7 +71,7 @@ struct NetworkBookDetailPage {
   private savePolls: number = 0;
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, Object>;
+    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
     this.sourceId = String(params['sourceId'] ?? '');
     this.bookUrl = String(params['bookUrl'] ?? '');
     this.bookName = String(params['bookName'] ?? '');
@@ -89,7 +88,11 @@ struct NetworkBookDetailPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private async load(): Promise<void> {
@@ -203,6 +206,7 @@ struct NetworkBookDetailPage {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private copyContent(): void {
     if (this.contentText.length === 0) {
       this.toast('正文为空，无法复制');
@@ -478,7 +482,7 @@ struct NetworkBookDetailPage {
           SecondaryButton({
             label: '打开书籍',
             fullWidth: false,
-            onTap: () => router.pushUrl({
+            onTap: () => this.getUIContext().getRouter().pushUrl({
               url: 'pages/BookDetailPage',
               params: { bookId: this.savedBookId },
             }),

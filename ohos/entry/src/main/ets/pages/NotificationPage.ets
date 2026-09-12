@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { PageScaffold, EmptyState, LoadingState, LazyDataSource } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { NotificationService } from '../services/NotificationService';
@@ -25,6 +24,7 @@ struct NotificationPage {
     this.messagesSource.update(this.messages);
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   aboutToAppear(): void {
     if (!TalebookService.ensureTalebookConfigured()) {
       this.needLogin = true;
@@ -41,6 +41,7 @@ struct NotificationPage {
     void this.loadMessages(true);
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async loadMessages(reset: boolean = true): Promise<void> {
     if (reset) {
       this.currentPage = 1;
@@ -90,6 +91,7 @@ struct NotificationPage {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private loadMore(): void {
     if (!PaginationHelper.canLoadMore(this.lastLoadTime, this.loadingMore, this.hasMore)) {
       return;
@@ -158,7 +160,7 @@ struct NotificationPage {
       EmptyState({
         message: this.errorMessage,
         actionLabel: '去配置账号',
-        onAction: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
+        onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
       });
     } else if (this.messages.length === 0) {
       EmptyState({ message: this.errorMessage.length > 0 ? this.errorMessage : '暂无通知' });

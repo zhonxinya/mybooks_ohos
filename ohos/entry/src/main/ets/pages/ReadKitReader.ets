@@ -1,6 +1,6 @@
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
-import { display, router, window } from '@kit.ArkUI';
+import { display, window } from '@kit.ArkUI';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { ReadPageComponent, readerCore, bookParser } from '@kit.ReaderKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -136,7 +136,7 @@ struct ReadKitReader {
     this.restoreResolvedFont();
     this.initTtsService();
     void this.enterImmersiveMode();
-    const params = router.getParams() as ReadKitParams;
+    const params = this.getUIContext().getRouter().getParams() as ReadKitParams;
     const parsed = this.parseLocationParam(
       params.location,
       params.resourceIndex ?? 0,
@@ -247,6 +247,7 @@ struct ReadKitReader {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private exitImmersiveMode(context: common.UIAbilityContext): void {
     WindowAbility.getInstance().toggleWindowSystemBar(['status', 'navigation'], context);
     void WindowAbility.getInstance().setWindowLayoutFullScreen(false);
@@ -270,6 +271,7 @@ struct ReadKitReader {
     return this.resolveViewPort();
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private chapterNameForSpine(resourceIndex: number): string {
     if (this.handler === null) {
       return '';
@@ -315,6 +317,7 @@ struct ReadKitReader {
     return matchedIndex;
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private resolveChapterTitle(data: readerCore.PageDataInfo): string {
     const header = data.pageHeaderContent ?? '';
     if (header.length > 0) {
@@ -399,6 +402,7 @@ struct ReadKitReader {
     });
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private retryStart(params: ReadKitParams, attempt: number, lastError: string): void {
     if (this.destroyed) {
       return;
@@ -518,6 +522,7 @@ struct ReadKitReader {
     this.controller.on('resourceRequest', this.resourceRequestCallback);
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async start(params: ReadKitParams): Promise<void> {
     if (!params.filePath) {
       throw new Error('书籍路径为空');
@@ -580,6 +585,7 @@ struct ReadKitReader {
     return dotIndex > 0 ? name.substring(0, dotIndex) : name;
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private applySettings(persist: boolean): void {
     try {
       this.controller.setPageConfig({
@@ -606,6 +612,7 @@ struct ReadKitReader {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async selectFont(fontId: string): Promise<void> {
     if (fontId === this.selectedFontId || this.fontDownloading) {
       return;
@@ -662,6 +669,7 @@ struct ReadKitReader {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private onWindowDimensionsChanged(): void {
     const prevWidth = this.viewPortWidth;
     const prevHeight = this.viewPortHeight;
@@ -712,6 +720,7 @@ struct ReadKitReader {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private toggleNightTheme(): void {
     if (this.readerTheme === ReaderTheme.DARK) {
       this.readerTheme = ReaderTheme.LIGHT;
@@ -721,10 +730,12 @@ struct ReadKitReader {
     this.applySettings(true);
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private spineCount(): number {
     return this.handler?.getSpineList()?.length ?? 0;
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private chapterProgress(): number {
     const total = this.spineCount();
     if (total <= 1 || this.lastResourceIndex < 0) {
@@ -737,10 +748,12 @@ struct ReadKitReader {
     return this.lastResourceIndex > 0;
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private canGoNextChapter(): boolean {
     return this.lastResourceIndex >= 0 && this.lastResourceIndex < this.spineCount() - 1;
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async goSpineIndex(index: number): Promise<void> {
     if (index < 0 || index >= this.spineCount()) {
       return;
@@ -811,6 +824,7 @@ struct ReadKitReader {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async startTtsFromCurrentChapter(): Promise<void> {
     if (this.handler === null || this.lastResourceIndex < 0) {
       this.getUIContext().getPromptAction().showToast({ message: '当前章节不可用' });
@@ -835,6 +849,7 @@ struct ReadKitReader {
   }
 
   /** 翻页到达后接着朗读新页；新页没内容时按章末继续处理。 */
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async continueTtsOnNewPage(): Promise<void> {
     const chunks = await this.loadPageTtsText(
       this.lastResourceIndex, this.lastDomPos, this.ttsPageEndDomPos);
@@ -850,6 +865,7 @@ struct ReadKitReader {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async resumeTts(): Promise<void> {
     const resumed = await this.ttsService.resume();
     if (!resumed) {
@@ -862,6 +878,7 @@ struct ReadKitReader {
     this.syncKeepScreenOn();
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private handleTtsPlay(): void {
     if (this.ttsState === 'paused') {
       void this.resumeTts();
@@ -877,6 +894,7 @@ struct ReadKitReader {
     this.stopTts();
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private toggleReadAloud(): void {
     if (this.ttsState === 'playing') {
       this.pauseTts();
@@ -890,6 +908,7 @@ struct ReadKitReader {
   }
 
   /** 一段（一页）读完：页级朗读时翻到下一页等回调，否则按章末继续。 */
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async handleTtsFinished(): Promise<void> {
     if (this.ttsPageDriven && this.turnToNextPage()) {
       return;
@@ -920,6 +939,7 @@ struct ReadKitReader {
     return true;
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async handleTtsChapterFinished(): Promise<void> {
     this.ttsPageDriven = false;
     if (!this.canGoNextChapter()) {
@@ -943,6 +963,7 @@ struct ReadKitReader {
   }
 
   /** 兜底：pageShow 未按时到达时按整章续读。 */
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async startTtsForChapter(spineIndex: number): Promise<void> {
     const chunks = await this.loadChapterTtsText(spineIndex, '');
     if (chunks.length === 0) {
@@ -958,19 +979,23 @@ struct ReadKitReader {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async goSpineIndexWithTtsStop(index: number): Promise<void> {
     this.stopTts();
     await this.goSpineIndex(index);
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async goPrevChapter(): Promise<void> {
     await this.goSpineIndexWithTtsStop(this.lastResourceIndex - 1);
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async goNextChapter(): Promise<void> {
     await this.goSpineIndexWithTtsStop(this.lastResourceIndex + 1);
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async goChapterProgress(progress: number): Promise<void> {
     const total = this.spineCount();
     if (total <= 0) {
@@ -1097,6 +1122,7 @@ struct ReadKitReader {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private emitProgress(data: readerCore.PageDataInfo): void {
     if (data.resourceIndex === this.lastResourceIndex &&
       data.startDomPos === this.lastDomPos &&
@@ -1132,6 +1158,7 @@ struct ReadKitReader {
   }
 
   /** 朗读跟随：翻页后接着读新页，跨章后在新章首页重新起读，手动翻页则改以新页为准。 */
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private onTtsPageChanged(resourceIndex: number): void {
     if (this.pendingTtsChapterIndex >= 0 && resourceIndex === this.pendingTtsChapterIndex) {
       this.pendingTtsChapterIndex = -1;
@@ -1150,13 +1177,15 @@ struct ReadKitReader {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private emitError(_code: string, message: string): void {
     this.getUIContext().getPromptAction().showToast({ message: message });
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private showFatalError(message: string): void {
     this.getUIContext().getPromptAction().showToast({ message: message });
-    router.back();
+    this.getUIContext().getRouter().back();
   }
 
   private async openCatalogItem(item: bookParser.CatalogItem): Promise<void> {
@@ -1173,6 +1202,7 @@ struct ReadKitReader {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private addBookmark(): void {
     if (this.lastResourceIndex < 0) {
       return;
@@ -1200,6 +1230,7 @@ struct ReadKitReader {
     ReadKitSession.handleBookmarkRemoved(this.bookId, bookmark.id);
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async openBookmark(bookmark: ReadKitBookmarkPayload): Promise<void> {
     this.stopTts();
     try {
@@ -1213,6 +1244,7 @@ struct ReadKitReader {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   aboutToDisappear(): void {
     this.destroyed = true;
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -1310,6 +1342,7 @@ struct ReadKitReader {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   build() {
     Stack() {
       Stack() {
@@ -1389,7 +1422,7 @@ struct ReadKitReader {
             expanded: true,
             onBack: () => {
               this.closeControlPanel();
-              router.back();
+              this.getUIContext().getRouter().back();
             },
             onBookmark: () => {
               this.addBookmark();

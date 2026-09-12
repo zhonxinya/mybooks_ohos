@@ -23,6 +23,7 @@ export class BookUploadService {
     return BookUploadService.SUPPORTED_SUFFIXES.some((suffix: string) => lower.endsWith(suffix));
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   static async pickBookFiles(context: common.UIAbilityContext, maxCount: number = 10):
     Promise<PickBookResult> {
     const options = new picker.DocumentSelectOptions();
@@ -88,6 +89,7 @@ export class BookUploadService {
   static readonly CLONE_AUDIO_SUFFIXES: string[] = ['.mp3', '.wav'];
   static readonly CLONE_AUDIO_MAX_BYTES: number = 7 * 1024 * 1024;
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   static async pickAudioClone(context: common.UIAbilityContext): Promise<PickedBookFile | null> {
     const options = new picker.DocumentSelectOptions();
     options.maxSelectNumber = 1;
@@ -127,6 +129,7 @@ export class BookUploadService {
   }
 
   /** 通用单选文件并拷贝到缓存目录（图章/SSL 等管理上传复用）。 */
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   static async pickStagedFile(
     context: common.UIAbilityContext,
     suffixes: string[],
@@ -162,6 +165,7 @@ export class BookUploadService {
   }
 
   /** 打开系统文件选择器，单选 PDF，复制到缓存目录供上传使用 */
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   static async pickPdfFile(context: common.UIAbilityContext): Promise<PickedBookFile | null> {
     const options = new picker.DocumentSelectOptions();
     options.maxSelectNumber = 1;
@@ -195,6 +199,7 @@ export class BookUploadService {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   static async pickAvatarImage(context: common.UIAbilityContext): Promise<PickedBookFile | null> {
     const options = new picker.DocumentSelectOptions();
     options.maxSelectNumber = 1;
@@ -233,6 +238,7 @@ export class BookUploadService {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private static stageUri(uri: string, stageDir: string, uniqueId: number): PickedBookFile | null {
     const name = BookUploadService.uriToName(uri);
     if (!BookUploadService.isSupportedName(name)) {

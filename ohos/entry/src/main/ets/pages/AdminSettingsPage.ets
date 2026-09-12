@@ -444,11 +444,12 @@ struct AdminSettingsPage {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async uploadStampImage(): Promise<void> {
     if (this.stampBusy) {
       return;
     }
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const file = await BookUploadService.pickStagedFile(context, ['.png'], 'stamp');
     if (file === null) {
       return;
@@ -490,6 +491,7 @@ struct AdminSettingsPage {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private copyText(text: string): void {
     if (text.length === 0) {
       return;
@@ -499,11 +501,12 @@ struct AdminSettingsPage {
     this.toast('已复制到剪贴板');
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async uploadSslPair(): Promise<void> {
     if (this.sslBusy) {
       return;
     }
-    const context = getContext(this) as common.UIAbilityContext;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.toast('请选择证书文件（.crt / .pem）');
     const crt = await BookUploadService.pickStagedFile(
       context, ['.crt', '.pem', '.cer'], 'ssl_crt');
@@ -573,7 +576,11 @@ struct AdminSettingsPage {
   }
 
   private toast(message: string): void {
-    this.getUIContext().getPromptAction().showToast({ message: message });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      // 提示失败不影响主流程
+    }
   }
 
   private save(): void {

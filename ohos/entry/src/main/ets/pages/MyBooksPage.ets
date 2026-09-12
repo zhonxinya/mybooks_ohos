@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import {
   PageScaffold, BookCatalogView, BookViewToggleButton, BookListItemData,
   LoadingState, EmptyState,
@@ -122,7 +121,7 @@ struct MyBooksPage {
         items: this.catalogItems,
         isListMode: this.isListMode,
         loadingMore: this.loadingMore,
-        onItemTap: (item: BookListItemData) => router.pushUrl({
+        onItemTap: (item: BookListItemData) => this.getUIContext().getRouter().pushUrl({
           url: 'pages/BookDetailPage', params: { bookId: Number(item.id) }
         }),
         onLoadMore: () => this.loadMore(),

@@ -237,6 +237,7 @@ export class SoNovelService {
     }
   }
 
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
   private static async fetchBookWithProgressInternal(
     payload: SoNovelBookPayload,
     onProgress: (progress: SoNovelDownloadProgress) => void,
