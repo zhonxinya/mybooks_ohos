@@ -83,6 +83,8 @@ export struct SettingsPage {
   @StorageProp('downloadTasksTick') @Watch('refreshBadges') downloadTasksTick: number = 0;
   @State activeTaskCount: number = 0;
   @State expandedSections: string[] = [];
+  /** 可升级的版本号（由 UpdateService 经 AppStorage 发布，空串表示无提示）。 */
+  @StorageProp('update_hint_version') updateAvailableVersion: string = '';
 
   aboutToAppear(): void {
     this.themeMode = TalebookService.prefGet(StorageKeys.THEME_MODE, 'system');
@@ -100,8 +102,9 @@ export struct SettingsPage {
   }
 
   private refreshAccount(): void {
-    const saved = TalebookService.getSavedUserProfile();
-    this.isLoggedIn = saved !== null && TalebookService.hasAuthCredentials();
+    // 以「凭据已保存」作为判定：新账号刚切换时资料尚未拉取（或曾因服务端不可达而拿不到），
+    // 若以「已缓存用户资料」为门槛，「个人中心」入口会整个消失。
+    this.isLoggedIn = TalebookService.hasAuthCredentials();
   }
 
   /** 当前账号摘要：账号数与当前账号名，便于在设置页一眼看出正在用哪个账号。 */
@@ -256,7 +259,10 @@ export struct SettingsPage {
   }
 
   private aboutSectionSubtitle(): string {
-    return this.versionText.length > 0 ? `版本 ${this.versionText}` : '版本信息';
+    const base: string = this.versionText.length > 0 ? `版本 ${this.versionText}` : '版本信息';
+    return this.updateAvailableVersion.length > 0
+      ? `${base} · 有新版本 v${this.updateAvailableVersion}`
+      : base;
   }
 
   build() {
@@ -598,6 +604,16 @@ export struct SettingsPage {
               SettingCell({
                 title: '版本',
                 valueText: this.versionText,
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '检查更新',
+                subtitle: this.updateAvailableVersion.length > 0
+                  ? `发现新版本 v${this.updateAvailableVersion}`
+                  : '从 GitHub 获取最新发布版本与升级内容',
+                badgeText: this.updateAvailableVersion.length > 0 ? '有更新' : '',
+                showChevron: true,
+                onTap: () => router.pushUrl({ url: 'pages/UpdatePage' }),
               });
             }
             .width('100%')

@@ -157,10 +157,8 @@ struct NotificationPage {
     } else if (this.needLogin) {
       EmptyState({
         message: this.errorMessage,
-        actionLabel: TalebookService.hasAuthCredentials() ? '去配置' : '去登录',
-        onAction: () => router.pushUrl({
-          url: TalebookService.hasAuthCredentials() ? 'pages/TalebookConfigPage' : 'pages/LoginPage',
-        }),
+        actionLabel: '去配置账号',
+        onAction: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
       });
     } else if (this.messages.length === 0) {
       EmptyState({ message: this.errorMessage.length > 0 ? this.errorMessage : '暂无通知' });

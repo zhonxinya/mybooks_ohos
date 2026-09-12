@@ -37,7 +37,7 @@ export struct SettingCell {
           .fontSize(12)
           .fontColor(Color.White)
           .backgroundColor($r('app.color.brand_primary'))
-          .borderRadius(10)
+          .borderRadius($r('app.float.badge_radius'))
           .padding({ left: 6, right: 6, top: 2, bottom: 2 });
         if (this.showChevron) {
           SymbolGlyph($r('sys.symbol.chevron_right'))

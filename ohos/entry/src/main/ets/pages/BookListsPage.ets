@@ -155,8 +155,8 @@ struct BookListsPage {
       const rsp = await BookListApi.toggleLike(item.id);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         if (rsp.err === 'user.need_login') {
-          this.toast('请先登录');
-          router.pushUrl({ url: 'pages/LoginPage' });
+          this.toast('请先在「账号与服务器」中配置账号，应用会自动登录');
+          router.pushUrl({ url: 'pages/TalebookConfigPage' });
           return;
         }
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '操作失败');
@@ -343,9 +343,11 @@ struct BookListsPage {
             .justifyContent(FlexAlign.Center)
             .borderRadius(16)
             .backgroundColor(option.hex)
+            // 圆角必须写进 border：否则选中环会把 32×32 的色板盖成方块
             .border({
               width: 2,
               color: this.editColor === option.key ? $r('app.color.text_primary') : Color.Transparent,
+              radius: 16,
             })
             .margin({ right: 10, bottom: 8 })
             .onClick(() => {
@@ -375,10 +377,10 @@ struct BookListsPage {
       LoadingState({});
     } else if (this.needLogin) {
       EmptyState({
-        message: '请先登录',
-        detail: '登录后可查看点赞书单与我的书单',
-        actionLabel: '去登录',
-        onAction: () => router.pushUrl({ url: 'pages/LoginPage' }),
+        message: '请先配置账号',
+        detail: '配置账号后应用会自动登录，即可查看点赞书单与我的书单',
+        actionLabel: '去配置账号',
+        onAction: () => router.pushUrl({ url: 'pages/TalebookConfigPage' }),
       });
     } else if (this.errorMessage.length > 0) {
       EmptyState({ message: this.errorMessage });

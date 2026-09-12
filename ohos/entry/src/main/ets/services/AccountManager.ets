@@ -5,6 +5,7 @@ import {
 import { AccountStore } from './AccountStore';
 import { NotificationService } from './NotificationService';
 import { ServerKind, ServerRegistry } from './ServerProfile';
+import { ServerProbe } from './ServerProbe';
 import { TalebookCoreService } from './TalebookCoreService';
 import { TalebookService, AuthAttempt } from './TalebookService';
 
@@ -140,12 +141,15 @@ export class AccountManager {
   }
 
   /**
-   * 删除账号。最后一个账号不允许删除（否则应用无可用配置）。
+   * 删除账号。至少保留一个书库账号（否则应用无可用书库配置）。
+   * SoNovel 只是全局第三方服务地址，可以单独删除。
    * 若删的是当前账号，则把当前账号切到剩余列表的第一项并立即应用其身份。
    * 说明：账号目录保留在磁盘上（不删用户数据），因此重新添加同服务器账号不会复用旧数据。
    */
   static remove(id: string): boolean {
-    if (AccountStore.count() <= 1) {
+    const target = AccountStore.find(id);
+    const isSonovel = target !== null && target.serverKind === ServerKind.SONOVEL;
+    if (AccountStore.count() <= 1 && !isSonovel) {
       return false;
     }
     const wasActive = AccountStore.isActive(id);
@@ -176,6 +180,12 @@ export class AccountManager {
     if (record.url.length === 0) {
       return;
     }
+    // SoNovel 是全局第三方服务（不参与书库身份切换）：只同步其地址，
+    // 不能套用下面的书库键，否则会把当前书库账号的地址/凭据覆盖掉。
+    if (record.serverKind === ServerKind.SONOVEL) {
+      TalebookService.applySonovelUrl(record.url);
+      return;
+    }
     const dir = identityDirFor(TalebookService.dataDir(), record.id);
     // 1) 身份根：libentry 的凭据/下载/历史/书签 + Cookie；mybooks_core 的数据库 + Cookie
     TalebookService.setIdentityDir(dir);
@@ -204,21 +214,65 @@ export class AccountManager {
       const missing: AuthAttempt = { ok: false, reason: '账号不存在' };
       return missing;
     }
+    // SoNovel 不是书库账号：只同步地址，不改变「当前书库账号」，也无需登录
+    if (record.serverKind === ServerKind.SONOVEL) {
+      AccountManager.applyIdentity(record);
+      const sonovelReady: AuthAttempt = { ok: true, reason: '' };
+      return sonovelReady;
+    }
     AccountStore.setActiveId(id);
     AccountManager.applyIdentity(record);
     // 丢弃上一账号的内存缓存，否则书架/历史仍显示旧账号数据
     TalebookService.invalidateLocalCaches();
     TalebookService.invalidateSession();
-    // 未读消息属账号级数据，切换后刷新一次，避免沿用上一账号的角标
-    NotificationService.refreshUnreadCount();
     AccountManager.notifySwitched();
-    // 返回失败原因，便于调用方跳转登录页并向用户说明
-    return TalebookService.tryAutoLogin();
+    // 先完成自动登录，再刷新账号级数据。顺序不能反：
+    // refreshUnreadCount 会同步调用 ensureAuthenticated() 发起另一轮登录，
+    // 与下面这轮并发 POST /api/user/sign_in 共用同一个 cookie jar，偶发失败会把用户丢到登录页。
+    const attempt = await TalebookService.tryAutoLogin();
+    // 未读消息属账号级数据，登录完成后刷新，避免沿用上一账号的角标
+    NotificationService.refreshUnreadCount();
+    return attempt;
   }
 
   /** 广播账号切换，供 AppStorage 监听方原地刷新（主要靠调用方重启导航栈重渲染）。 */
   static notifySwitched(): void {
     AppStorage.setOrCreate(AccountManager.SWITCH_TICK_KEY, Date.now());
+  }
+
+  /**
+   * 按服务器**实际类型**自愈当前书库账号的 `serverKind`，返回是否发生了纠正。
+   *
+   * 用户在下拉里选错类型时，端点/分页/能力判定会整类走错（例：把 talebook 当 MyBooks
+   * 会请求 mybooks 专有的 `/api/library/stats` 而 404，且隐藏 talebook 专有入口）。
+   * 仅在探测出高置信度且与当前不同的类型时改写，探测失败一律保持用户选择不变。
+   */
+  static async syncServerKindByProbe(): Promise<boolean> {
+    const active = AccountStore.active();
+    if (active === null || active.url.length === 0) {
+      return false;
+    }
+    // SoNovel 不是书库服务端，不参与类型识别
+    if (active.serverKind === ServerKind.SONOVEL) {
+      return false;
+    }
+    const detected: string = await ServerProbe.detect();
+    if (detected.length === 0 || detected === active.serverKind) {
+      return false;
+    }
+    const records = AccountStore.list();
+    for (let i = 0; i < records.length; i++) {
+      if (records[i].id === active.id) {
+        records[i].serverKind = detected;
+      }
+    }
+    AccountStore.saveAll(records);
+    // 重新下发身份：把纠正后的类型写入偏好与 ServerRegistry，各页面按新能力渲染
+    const updated = AccountStore.find(active.id);
+    if (updated !== null) {
+      AccountManager.applyIdentity(updated);
+    }
+    return true;
   }
 
   /**

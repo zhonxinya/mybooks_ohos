@@ -4,7 +4,13 @@
     { "name": "card_padding", "value": "12vp" },
     { "name": "card_radius", "value": "12vp" },
     { "name": "cover_radius", "value": "8vp" },
-    { "name": "chip_radius", "value": "16vp" },
+    { "name": "chip_radius", "value": "10vp" },
+    {
+      "name": "button_radius",
+      "value": "12vp",
+      "comment": "按钮与输入框圆角，与 card_radius 对齐，避免胶囊/椭圆的笨重观感"
+    },
+    { "name": "badge_radius", "value": "10vp" },
     { "name": "top_bar_height", "value": "56vp" },
     { "name": "list_item_height", "value": "108vp" },
     { "name": "cover_tile_width", "value": "100vp" },

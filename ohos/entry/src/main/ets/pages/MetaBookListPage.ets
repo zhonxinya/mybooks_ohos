@@ -297,7 +297,7 @@ struct MetaBookListPage {
           .fontSize(11)
           .fontColor($r('app.color.brand_primary'))
           .backgroundColor($r('app.color.card_background'))
-          .borderRadius(9)
+          .borderRadius($r('app.float.badge_radius'))
           .padding({ left: 8, right: 8, top: 2, bottom: 2 });
       }
       .width('100%');
@@ -428,7 +428,7 @@ struct MetaBookListPage {
             .fontSize(11)
             .fontColor($r('app.color.text_secondary'))
             .backgroundColor($r('app.color.page_background'))
-            .borderRadius(9)
+            .borderRadius($r('app.float.badge_radius'))
             .padding({ left: 8, right: 8, top: 2, bottom: 2 });
         }
       }

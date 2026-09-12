@@ -1,6 +1,6 @@
 import { router, LengthMetrics } from '@kit.ArkUI';
 import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem,
-  PrimaryButton, SecondaryButton, SectionTitle, SettingCell, TextButton,
+  PrimaryButton, SecondaryButton, DangerButton, SectionTitle, SettingCell, TextButton,
   ChipButton } from '../components';
 import {
   AdminScanApi, AdminScanItem, AdminScanSummary, AdminScanStatusCounts,
@@ -157,46 +157,29 @@ struct ScanBatchBar {
       .width('100%');
 
       Row({ space: 12 }) {
-        Button(`导入所选${this.selectedCount > 0 ? `（${this.selectedCount}）` : ''}`,
-          { type: ButtonType.Capsule, stateEffect: false })
-          .height($r('app.float.button_height'))
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.on_brand'))
-          .backgroundColor($r('app.color.brand_primary'))
-          .enabled(this.importEnabled)
-          .opacity(this.importEnabled ? 1 : 0.55)
-          .layoutWeight(1)
-          .stateStyles({
-            pressed: {
-              .backgroundColor($r('app.color.brand_primary_pressed'))
-            },
-          })
-          .onClick(() => {
-            if (this.importEnabled && this.onImport) {
+        // 复用共享按钮组件：胶囊/圆角与全应用保持一致，避免各页手写出一套自己的形态
+        PrimaryButton({
+          label: `导入所选${this.selectedCount > 0 ? `（${this.selectedCount}）` : ''}`,
+          fullWidth: false,
+          buttonEnabled: this.importEnabled,
+          onTap: () => {
+            if (this.onImport) {
               this.onImport();
             }
-          });
-        Button('删除所选', { type: ButtonType.Capsule, stateEffect: false })
-          .height($r('app.float.button_height'))
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.error'))
-          .backgroundColor($r('app.color.error_light'))
-          .border({ width: 1, color: '#33E84026' })
-          .enabled(this.deleteEnabled)
-          .opacity(this.deleteEnabled ? 1 : 0.55)
-          .layoutWeight(1)
-          .stateStyles({
-            pressed: {
-              .backgroundColor($r('app.color.error_light_pressed'))
-            },
-          })
-          .onClick(() => {
-            if (this.deleteEnabled && this.onDelete) {
+          },
+        })
+          .layoutWeight(1);
+        DangerButton({
+          label: '删除所选',
+          fullWidth: false,
+          buttonEnabled: this.deleteEnabled,
+          onTap: () => {
+            if (this.onDelete) {
               this.onDelete();
             }
-          });
+          },
+        })
+          .layoutWeight(1);
       }
       .width('100%');
     }

@@ -3,14 +3,17 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { WindowAbility } from './WindowAbility';
-import { TalebookService } from '../services/TalebookService';
+import { TalebookService, AUTH_FAILURE_KEY } from '../services/TalebookService';
 import { TalebookCoreService } from '../services/TalebookCoreService';
 import { AccountManager } from '../services/AccountManager';
+import { SERVER_KIND_NOTICE_KEY } from '../services/ServerProbe';
+import { ServerRegistry } from '../services/ServerProfile';
 import { NotificationService } from '../services/NotificationService';
 import { DownloadTaskService } from '../services/DownloadTaskService';
 import { ReadKitSession } from '../services/ReadKitSession';
 import { AppTheme } from '../theme/AppTheme';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
+import { UpdateService } from '../services/UpdateService';
 
 const TAG: string = 'EntryAbility';
 
@@ -30,9 +33,20 @@ export default class EntryAbility extends UIAbility {
     void TalebookService.warmLocalCaches();
     // 先预热连接再恢复会话，减轻首次 API 握手等待
     void TalebookService.warmConnection().then(() => {
-      void TalebookService.ensureAuthenticated();
+      void TalebookService.ensureAuthenticated().then((_ok: boolean) => {
+        // 登录页已移除：自动登录失败的原因发布到 AppStorage，由 MainTabs 提示一次
+        AppStorage.setOrCreate(AUTH_FAILURE_KEY, TalebookService.consumeAuthFailure());
+        // 启动自愈：按服务器实际响应纠正书库类型（选错会导致管理概览等功能整类走错）
+        void AccountManager.syncServerKindByProbe().then((corrected: boolean) => {
+          if (corrected) {
+            AppStorage.setOrCreate(SERVER_KIND_NOTICE_KEY, ServerRegistry.profile().displayName);
+          }
+        });
+      });
     });
     BookshelfRefresh.init();
+    // 初始化「可升级版本」提示键，供设置页订阅（值为空串表示暂无提示）
+    UpdateService.publishHint();
     AppTheme.applyThemeMode(this.context, TalebookService.prefGet('theme_mode', 'system'));
   }
 

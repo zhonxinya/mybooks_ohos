@@ -108,7 +108,7 @@ struct ProfilePage {
                 .fontSize(20)
                 .fontWeight(FontWeight.Medium)
                 .fontColor($r('app.color.text_primary'));
-              Text(this.isLogin ? this.username : '登录后可同步阅读与收藏')
+              Text(this.isLogin ? this.username : '未登录：请在下方「账号与服务器」中配置账号，应用会自动登录')
                 .fontColor($r('app.color.text_secondary'));
             }
             .alignItems(HorizontalAlign.Start);
@@ -120,14 +120,6 @@ struct ProfilePage {
 
         Column() {
           Column() {
-            if (!this.isLogin) {
-              SettingCell({
-                title: '登录账号',
-                showChevron: true,
-                onTap: () => router.pushUrl({ url: 'pages/LoginPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            }
             SettingCell({
               title: '我的阅读',
               showChevron: true,

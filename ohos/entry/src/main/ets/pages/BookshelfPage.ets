@@ -5,6 +5,7 @@ import {
   EmptyState, LoadingState, IconCircleButton, BookCatalogView, AuthImage,
 } from '../components';
 import { DownloadRecord, ReadingHistoryItem, TalebookService, ApiEnvelope } from '../services/TalebookService';
+import { ReaderLauncher, ReaderOpenParams } from '../services/ReaderLauncher';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { LocalBookService } from '../services/LocalBookService';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
@@ -279,16 +280,18 @@ export struct BookshelfPage {
       this.openDetail(record);
       return;
     }
-    router.pushUrl({
-      url: 'pages/ReadKitReader',
-      params: {
-        filePath: record.filePath,
-        bookId: record.bookId,
-        bookTitle: record.title,
-        format: record.format ?? '',
-        location: this.resolveLocation(record),
-      }
-    });
+    // 设备缺 ReaderKit 时不能路由（会 cppcrash），改由守卫提示
+    const readerParams: ReaderOpenParams = {
+      filePath: record.filePath,
+      bookId: record.bookId,
+      bookTitle: record.title,
+      format: record.format ?? '',
+      location: this.resolveLocation(record),
+    };
+    const opened: boolean = ReaderLauncher.open(readerParams);
+    if (!opened) {
+      this.getUIContext().getPromptAction().showToast({ message: ReaderLauncher.UNAVAILABLE_MESSAGE });
+    }
   }
 
   private deleteRecord(record: DownloadRecord): void {
