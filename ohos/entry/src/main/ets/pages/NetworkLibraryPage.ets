@@ -1,14 +1,15 @@
 import { router } from '@kit.ArkUI';
 import {
   PageScaffold, LoadingState, EmptyState, SearchBar, FilterChips, FilterChipItem,
-  BookCatalogView, BookListItemData, PrimaryButton, TextButton, ChipButton,
+  BookCatalogView, BookListItem, BookListItemData, PrimaryButton, TextButton, ChipButton,
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import {
   NetworkLibraryApi, NetworkSourceItem, NetworkAvailability, NetworkBookItem,
-  NetworkCategoryItem, NetworkSearchProgress,
+  NetworkCategoryItem, NetworkSearchProgress, NetworkSearchFailure,
   NETWORK_CAPABILITY_BROWSE, NETWORK_SEARCH_MODE_TOP, NETWORK_SEARCH_MODE_ALL,
+  NETWORK_SEARCH_MODE_CUSTOM,
   NETWORK_AVAILABILITY_NO_PLUGINS, NETWORK_AVAILABILITY_NO_SOURCES,
 } from '../services/NetworkLibraryApi';
 
@@ -23,6 +24,10 @@ const LIST_MODE_IDLE: string = 'idle';
 const LIST_MODE_SEARCH: string = 'search';
 /** 列表模式：书源发现页浏览。 */
 const LIST_MODE_EXPLORE: string = 'explore';
+
+// ---- 底部面板模式（同一节点只能生效一个 bindSheet，故用单面板 + 模式分发） ----
+const SHEET_SOURCE: string = 'source';
+const SHEET_CATEGORY: string = 'category';
 
 /** 结果去重键：`sourceId#bookUrl`（source_id 不含 `#`，拼接无二义性）。 */
 function bookKey(item: NetworkBookItem): string {
@@ -65,12 +70,15 @@ struct NetworkLibraryPage {
   @State searchMode: number = 0;
   @State searching: boolean = false;
   @State progressText: string = '';
+  @State progressDone: number = 0;
+  @State progressTotal: number = 0;
+  @State failedSources: NetworkSearchFailure[] = [];
   @State rows: BookListItemData[] = [];
   @State loadingMore: boolean = false;
   @State hasMore: boolean = false;
   @State mode: string = LIST_MODE_IDLE;
-  @State showSourceSheet: boolean = false;
-  @State showCategorySheet: boolean = false;
+  @State showSheet: boolean = false;
+  @State sheetMode: string = SHEET_SOURCE;
   @State selectedKeys: string[] = [];
   @State categorySourceKey: string = '';
   @State categorySourceName: string = '';
@@ -81,6 +89,11 @@ struct NetworkLibraryPage {
   private modeItems: FilterChipItem[] = [
     { label: '常用书源', value: 0 },
     { label: '全部书源', value: 1 },
+    { label: '手选书源', value: 2 },
+  ];
+  /** 搜索范围序号 → 上游 `mode` 值（手选时 `sources` 参数才真正决定选源）。 */
+  private modeValues: string[] = [
+    NETWORK_SEARCH_MODE_TOP, NETWORK_SEARCH_MODE_ALL, NETWORK_SEARCH_MODE_CUSTOM,
   ];
   /** 已收口任务的结果（跨页累积）。 */
   private committed: NetworkBookItem[] = [];
@@ -93,6 +106,11 @@ struct NetworkLibraryPage {
   private pollTimer: number = -1;
   private polls: number = 0;
   private taskId: string = '';
+  /**
+   * 搜索代次：每次新搜索/停止搜索 +1，进行中的轮询发现代次不匹配即自行退出。
+   * 用途与上游 `searchToken` 一致：避免停止后仍被旧任务的结果覆盖页面。
+   */
+  private searchToken: number = 0;
   private page: number = 1;
   private exploreSourceKey: string = '';
   private exploreSourceName: string = '';
@@ -250,8 +268,15 @@ struct NetworkLibraryPage {
       this.toast(hint.length > 0 ? hint : '没有可用的书源');
       return;
     }
+    // 上游：手选模式下未勾选任何书源则阻断（否则服务端会回退成「常用书源」）
+    if (this.searchMode === 2 && this.selectedKeys.length === 0) {
+      this.toast('请先选择要搜索的书源');
+      this.openSourceSheet();
+      return;
+    }
     if (reset) {
       this.stopPoll();
+      this.searchToken += 1;
       this.committed = [];
       this.live = [];
       this.seen.clear();
@@ -265,13 +290,35 @@ struct NetworkLibraryPage {
     void this.createTask();
   }
 
+  /** 停止搜索：让进行中的轮询因代次失配退出，并保留已返回结果。 */
+  private stopSearch(): void {
+    this.searchToken += 1;
+    this.stopPoll();
+    this.taskId = '';
+    this.searching = false;
+    this.loadingMore = false;
+    this.progressText = this.committed.length > 0
+      ? `已停止，保留已返回 ${this.committed.length} 本`
+      : '已停止搜索';
+    this.toast('已停止搜索');
+  }
+
   private async createTask(): Promise<void> {
+    const token = this.searchToken;
     this.searching = true;
     this.loadingMore = false;
+    this.progressDone = 0;
+    this.progressTotal = 0;
+    this.failedSources = [];
     this.progressText = `正在创建搜索任务（第 ${this.page} 页）…`;
     try {
-      const mode = this.searchMode === 1 ? NETWORK_SEARCH_MODE_ALL : NETWORK_SEARCH_MODE_TOP;
-      const rsp = await NetworkLibraryApi.search(this.keyword, this.page, this.selectedKeys, '', mode);
+      const mode = this.modeValues[this.searchMode] ?? NETWORK_SEARCH_MODE_TOP;
+      // 非手选模式下不限制书源（与上游一致：sources 仅在 custom 时下发）
+      const keys = this.searchMode === 2 ? this.selectedKeys : [];
+      const rsp = await NetworkLibraryApi.search(this.keyword, this.page, keys, '', mode);
+      if (token !== this.searchToken) {
+        return;
+      }
       if (!NetworkLibraryApi.isOk(rsp)) {
         this.settleSearch(NetworkLibraryApi.errorMessage(rsp));
         return;
@@ -283,10 +330,13 @@ struct NetworkLibraryPage {
       }
       this.taskId = taskId;
       this.polls = 0;
-      this.progressText = `搜索中：${rsp.total !== undefined ? rsp.total : 0} 个书源`;
+      this.progressTotal = rsp.total ?? 0;
+      this.progressText = `搜索中：${this.progressTotal} 个书源`;
       this.schedulePoll(600);
     } catch (e) {
-      this.settleSearch(`搜索失败：${e}`);
+      if (token === this.searchToken) {
+        this.settleSearch(`搜索失败：${e}`);
+      }
     }
   }
 
@@ -299,6 +349,11 @@ struct NetworkLibraryPage {
     }
     this.live = live;
     this.renderRows();
+    this.progressDone = progress.done;
+    if (progress.total > 0) {
+      this.progressTotal = progress.total;
+    }
+    this.failedSources = progress.failures;
     const failText = progress.failures.length > 0 ? ` · ${progress.failures.length} 源失败` : '';
     this.progressText =
       `搜索中 ${progress.done}/${progress.total} 源 · 已返回 ${live.length} 本${failText}`;
@@ -327,17 +382,22 @@ struct NetworkLibraryPage {
     this.hasMore = pageBooks > 0;
     const text = message.length > 0 ? message : this.searchDoneText();
     this.progressText = text;
+    // 失败源保留展示（上游同样在完成后继续提示 partial），仅在重开搜索时清空
     this.toast(text);
   }
 
   private async pollSearchStatus(): Promise<void> {
     const taskId = this.taskId;
+    const token = this.searchToken;
     if (taskId.length === 0) {
       this.searching = false;
       return;
     }
     try {
       const rsp = await NetworkLibraryApi.getSearchStatus(taskId);
+      if (token !== this.searchToken) {
+        return;
+      }
       if (!NetworkLibraryApi.isOk(rsp)) {
         this.settleSearch(NetworkLibraryApi.errorMessage(rsp));
         return;
@@ -349,7 +409,9 @@ struct NetworkLibraryPage {
         return;
       }
     } catch (e) {
-      this.settleSearch(`搜索状态查询失败：${e}`);
+      if (token === this.searchToken) {
+        this.settleSearch(`搜索状态查询失败：${e}`);
+      }
       return;
     }
     this.polls += 1;
@@ -412,7 +474,8 @@ struct NetworkLibraryPage {
   }
 
   private openSourceSheet(): void {
-    this.showSourceSheet = true;
+    this.sheetMode = SHEET_SOURCE;
+    this.showSheet = true;
   }
 
   private openCategorySheet(): void {
@@ -420,7 +483,16 @@ struct NetworkLibraryPage {
     this.categorySourceName = '';
     this.categories = [];
     this.categoryError = '';
-    this.showCategorySheet = true;
+    this.sheetMode = SHEET_CATEGORY;
+    this.showSheet = true;
+  }
+
+  private sheetTitle(): string {
+    return this.sheetMode === SHEET_CATEGORY ? '书源发现页' : '选择搜索书源';
+  }
+
+  private onSheetClosed(): void {
+    this.sheetMode = SHEET_SOURCE;
   }
 
   private async loadCategories(source: NetworkSourceItem): Promise<void> {
@@ -443,7 +515,7 @@ struct NetworkLibraryPage {
   }
 
   private pickCategory(category: NetworkCategoryItem): void {
-    this.showCategorySheet = false;
+    this.showSheet = false;
     this.exploreSourceKey = this.categorySourceKey;
     this.exploreSourceName = this.categorySourceName;
     this.exploreCategoryId = category.url.length > 0 ? category.url : category.id;
@@ -467,6 +539,86 @@ struct NetworkLibraryPage {
     });
   }
 
+  // ---- 展示辅助 ----
+
+  /** 搜索范围说明（对齐上游：显示当前模式与参与搜索的书源数量）。 */
+  private searchScopeText(): string {
+    const scope = this.searchMode === 2 ? '手选书源' : (this.searchMode === 1 ? '全部书源' : '常用书源');
+    if (this.searchMode === 2) {
+      return `${scope} · 已选 ${this.selectedKeys.length} 个`;
+    }
+    return `${scope} · 共 ${this.sources.length} 个可用`;
+  }
+
+  /** 失败源名称（最多列 3 个，其余折叠为「等 N 个」）。 */
+  private failedSourceNames(): string {
+    const names: string[] = [];
+    for (let i = 0; i < this.failedSources.length && i < 3; i++) {
+      const name = this.failedSources[i].sourceName;
+      names.push(name.length > 0 ? name : this.failedSources[i].sourceId);
+    }
+    const more = this.failedSources.length > 3 ? ` 等 ${this.failedSources.length} 个` : '';
+    return `${names.join('、')}${more}`;
+  }
+
+  /** 结果中出现过的书源名（按首次出现顺序）。 */
+  private sourceNames(): string[] {
+    const names: string[] = [];
+    for (const row of this.rows) {
+      const book = this.index.get(row.id);
+      if (book === undefined) {
+        continue;
+      }
+      const name = book.sourceName.length > 0 ? book.sourceName : book.sourceId;
+      if (names.indexOf(name) < 0) {
+        names.push(name);
+      }
+    }
+    return names;
+  }
+
+  /** 某个书源下的行。 */
+  private rowsOfSource(name: string): BookListItemData[] {
+    const result: BookListItemData[] = [];
+    for (const row of this.rows) {
+      const book = this.index.get(row.id);
+      if (book === undefined) {
+        continue;
+      }
+      const bookName = book.sourceName.length > 0 ? book.sourceName : book.sourceId;
+      if (bookName === name) {
+        result.push(row);
+      }
+    }
+    return result;
+  }
+
+  /** 翻页：搜索模式重发任务，发现模式重拉指定页。 */
+  private changePage(delta: number): void {
+    if (this.loadingMore || this.searching) {
+      return;
+    }
+    const target = this.page + delta;
+    if (target < 1) {
+      return;
+    }
+    if (this.mode === LIST_MODE_EXPLORE) {
+      void this.explorePage(target);
+      return;
+    }
+    if (this.mode === LIST_MODE_SEARCH) {
+      // 换页相当于重新发起该页的搜索任务，清空当前累积结果避免串台
+      this.stopPoll();
+      this.searchToken += 1;
+      this.committed = [];
+      this.live = [];
+      this.seen.clear();
+      this.page = target;
+      this.renderRows();
+      void this.createTask();
+    }
+  }
+
   build() {
     Column() {
       PageScaffold({
@@ -482,18 +634,24 @@ struct NetworkLibraryPage {
     }
     .width('100%')
     .height('100%')
-    .bindSheet($$this.showSourceSheet, this.sourceSheet(), {
+    .bindSheet($$this.showSheet, this.sheetContent(), {
       height: SheetSize.MEDIUM,
       dragBar: true,
       showClose: true,
-      title: { title: '选择搜索书源' },
-    })
-    .bindSheet($$this.showCategorySheet, this.categorySheet(), {
-      height: SheetSize.MEDIUM,
-      dragBar: true,
-      showClose: true,
-      title: { title: '书源发现页' },
+      title: { title: this.sheetTitle() },
+      onDisappear: () => {
+        this.onSheetClosed();
+      },
     });
+  }
+
+  @Builder
+  sheetContent() {
+    if (this.sheetMode === SHEET_CATEGORY) {
+      this.categorySheet();
+    } else {
+      this.sourceSheet();
+    }
   }
 
   @Builder
@@ -542,24 +700,63 @@ struct NetworkLibraryPage {
         FilterChips({
           items: this.modeItems,
           selected: $searchMode,
-          onChange: () => {
+          onChange: (value: number) => {
+            // 切到「手选书源」时直接弹出选择面板（上游在此模式下展开多选框）
+            if (value === 2) {
+              this.openSourceSheet();
+              return;
+            }
             if (this.keyword.trim().length > 0) {
               this.startSearch(true);
             }
           },
         });
         Row({ space: 8 }) {
-          Text(this.selectedKeys.length > 0 ? `已指定 ${this.selectedKeys.length} 个书源` : '全部可用书源')
+          Text(this.searchScopeText())
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
             .layoutWeight(1);
           TextButton({
-            label: '筛选书源',
+            // 共享 TextButton 的 label 是普通成员（不重绘），故用静态文案
+            label: '选择书源',
             onTap: () => this.openSourceSheet(),
           });
         }
         .width('100%')
         .padding({ left: 16, right: 16 });
+        if (this.searching && this.progressTotal > 0) {
+          Column({ space: 4 }) {
+            Progress({ value: this.progressDone, total: this.progressTotal, type: ProgressType.Linear })
+              .width('100%')
+              .color($r('app.color.brand_primary'));
+            Row({ space: 8 }) {
+              Text(`已完成 ${this.progressDone}/${this.progressTotal} 个书源`)
+                .fontSize(12)
+                .fontColor($r('app.color.text_secondary'))
+                .layoutWeight(1);
+              TextButton({
+                label: '停止搜索',
+                tone: 'danger',
+                onTap: () => this.stopSearch(),
+              });
+            }
+            .width('100%');
+          }
+          .width('100%')
+          .padding({ left: 16, right: 16 });
+        }
+        if (this.failedSources.length > 0) {
+          Text(`有 ${this.failedSources.length} 个书源未返回结果：${this.failedSourceNames()}`)
+            .fontSize(12)
+            .fontColor($r('app.color.warning'))
+            .backgroundColor($r('app.color.warning_light'))
+            .borderRadius(8)
+            .padding(8)
+            .width('100%')
+            .maxLines(3)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .margin({ left: 16, right: 16 });
+        }
         if (this.progressText.length > 0) {
           Text(this.progressText)
             .fontSize(12)
@@ -571,9 +768,18 @@ struct NetworkLibraryPage {
           EmptyState({
             message: this.searching ? '正在搜索…' : '搜索网络书源',
             detail: this.availabilityText(),
-            actionLabel: this.progressText.length > 0 ? '重试' : '',
-            onAction: () => this.startSearch(true),
+            actionLabel: this.sources.length === 0 && ServerRegistry.supports(ServerFeature.BOOK_SOURCES)
+              ? '去书源管理' : (this.progressText.length > 0 ? '重试' : ''),
+            onAction: () => {
+              if (this.sources.length === 0 && ServerRegistry.supports(ServerFeature.BOOK_SOURCES)) {
+                router.pushUrl({ url: 'pages/BookSourceManagePage' });
+                return;
+              }
+              this.startSearch(true);
+            },
           });
+        } else if (this.mode === LIST_MODE_SEARCH) {
+          this.groupedResults();
         } else {
           BookCatalogView({
             items: this.rows,
@@ -583,16 +789,93 @@ struct NetworkLibraryPage {
             onLoadMore: () => this.loadMore(),
           });
         }
+        this.pagerRow();
       }
       .width('100%')
       .height('100%');
     }
   }
 
+  /**
+   * 搜索结果按书源分组展示（对齐上游：每个书源一个标题 + 该源返回的书）。
+   * 分组标题用内联 Row 而非共享 SectionTitle（后者的参数是普通成员，不会随状态重绘）。
+   */
+  @Builder
+  groupedResults() {
+    List({ space: 8 }) {
+      ForEach(this.sourceNames(), (name: string) => {
+        ListItem() {
+          Row({ space: 8 }) {
+            Column()
+              .width(4)
+              .height(16)
+              .borderRadius(2)
+              .backgroundColor($r('app.color.brand_primary'));
+            Text(name)
+              .fontSize(15)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.text_primary'))
+              .layoutWeight(1)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis });
+            Text(`${this.rowsOfSource(name).length} 本`)
+              .fontSize(12)
+              .fontColor($r('app.color.text_tertiary'));
+          }
+          .width('100%')
+          .padding({ left: 16, right: 16, top: 6, bottom: 2 });
+        }
+        ForEach(this.rowsOfSource(name), (row: BookListItemData) => {
+          ListItem() {
+            BookListItem({
+              item: row,
+              onTap: () => this.openBook(row),
+            });
+          }
+          .height($r('app.float.list_item_height'))
+          .padding({ left: 16, right: 16 });
+        }, (row: BookListItemData) => `grp-${name}-${row.id}`);
+      }, (name: string) => `grp-head-${name}`);
+      if (this.loadingMore || this.searching) {
+        ListItem() {
+          LoadingState({ hint: this.searching ? '搜索中…' : '加载更多…' });
+        }
+      }
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .divider({ strokeWidth: 0.5, color: $r('app.color.divider') })
+    .cachedCount(8)
+    .onReachEnd(() => this.loadMore());
+  }
+
+  /** 上一页 / 第 N 页 / 下一页（搜索与发现页共用）。 */
+  @Builder
+  pagerRow() {
+    if (this.rows.length > 0 || this.page > 1) {
+      Row({ space: 12 }) {
+        TextButton({
+          label: '上一页',
+          onTap: () => this.changePage(-1),
+        });
+        Text(`第 ${this.page} 页`)
+          .fontSize(13)
+          .fontColor($r('app.color.text_secondary'));
+        TextButton({
+          label: '下一页',
+          onTap: () => this.changePage(1),
+        });
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.Center)
+      .padding({ top: 4, bottom: 12 });
+    }
+  }
+
   @Builder
   sourceSheet() {
     Column({ space: 12 }) {
-      Text('不指定时按「常用 / 全部书源」模式搜索；勾选后可只在指定书源中搜索。')
+      Text('不指定时按「常用 / 全部书源」模式搜索；切到「手选书源」或在此勾选后，只搜索选中的书源。')
         .fontSize(12)
         .fontColor($r('app.color.text_secondary'));
       Row({ space: 8 }) {
@@ -628,7 +911,9 @@ struct NetworkLibraryPage {
       PrimaryButton({
         label: '应用并搜索',
         onTap: () => {
-          this.showSourceSheet = false;
+          // 勾选即视为手选模式，下次提交才会下发 sources
+          this.searchMode = this.selectedKeys.length > 0 ? 2 : this.searchMode;
+          this.showSheet = false;
           this.startSearch(true);
         },
       });
