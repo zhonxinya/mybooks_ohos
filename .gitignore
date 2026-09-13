@@ -23,6 +23,7 @@ tests/tachidesk-test-config.json
 build-profile.json5
 !ohos/entry/build-profile.json5
 !ohos/mybooks_core/build-profile.json5
+!ohos/feature/reader/build-profile.json5
 !ohos_packages/harmony_flutter_plugin/flutter_readkit/ohos/build-profile.json5
 ohos_packages/harmony_flutter_plugin/flutter_readkit/ohos/oh_modules/
 

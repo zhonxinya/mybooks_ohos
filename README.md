@@ -14,6 +14,9 @@ HarmonyOS 原生多源聚合阅读器（ArkTS UI + C++ 核心层），是 [MyBoo
 - **ArkTS**：页面、导航、Reader Kit 阅读器 UI
 - **C++ NAPI**（`ohos/entry/src/main/cpp/`）：HTTP、Cookie、持久化、Talebook/SoNovel API
 - **Reader Kit**：EPUB / TXT / MOBI / AZW / AZW3 原生阅读
+- **内置阅读器**（`ohos/feature/reader/` 独立 HAR 模块）：自研 EPUB / TXT 阅读，**不依赖系统
+  ReaderKit**，因此在 DevEco 模拟器与未预装 ReaderKit 的发行版上同样可读书。
+  设备无 ReaderKit 时由 `ReaderLauncher` 自动回退到它（MOBI / AZW3 仍需华为手机）。
 
 ## 关联项目
 
@@ -141,7 +144,15 @@ ohos/entry/src/main/
 ├── cpp/           # C++ NAPI 核心
 ├── ets/pages/     # ArkTS 页面
 ├── ets/services/  # TalebookService / ReadKitSession
-└── ets/components/
+├── ets/components/
+└── ets/entryability/
+
+ohos/feature/reader/   # 独立阅读器 HAR 模块（自研 EPUB/TXT 渲染，不依赖 ReaderKit）
+├── Index.ets          # 对外出口：ReaderView / 类型 / 工具
+└── src/main/ets/
+    ├── engine/        # TXT / EPUB 解析、编码探测、标记文本取文
+    ├── model/         # 类型与配色
+    └── ui/            # ReaderView、目录面板、设置面板
 ```
 
 ## 法律声明与免责声明

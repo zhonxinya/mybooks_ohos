@@ -1,0 +1,9 @@
+{
+  "name": "reader",
+  "version": "1.0.0",
+  "description": "MyBooks standalone reader feature (self-implemented, no ReaderKit dependency)",
+  "main": "Index.ets",
+  "author": "",
+  "license": "BSD-2-Clause",
+  "dependencies": {}
+}

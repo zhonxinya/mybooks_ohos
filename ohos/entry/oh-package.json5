@@ -6,6 +6,7 @@
   "author": "",
   "license": "BSD-2-Clause",
   "dependencies": {
-    "mybooks_core": "file:../mybooks_core"
+    "mybooks_core": "file:../mybooks_core",
+    "reader": "file:../feature/reader"
   }
 }

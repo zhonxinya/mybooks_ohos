@@ -184,6 +184,11 @@ struct ReadKitReader {
     domPos = String(loc['domPos'] ?? domPos);
     const parsedIndex = Number(loc['resourceIndex'] ?? resourceIndex);
     resourceIndex = Number.isNaN(parsedIndex) || parsedIndex < 0 ? 0 : parsedIndex;
+    // 位置也可能来自内置阅读器（engine 非 readkit）：其 domPos 是段落序号而非 CFI，
+    // 直接丢给 ReaderKit 可能被当锚点误匹配，故忽略它、从本章开头起读
+    if (String(loc['engine'] ?? 'readkit') !== 'readkit') {
+      return { resourceIndex: resourceIndex, domPos: fallbackDomPos };
+    }
     return { resourceIndex: resourceIndex, domPos: domPos };
   }
 
