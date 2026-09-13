@@ -11,10 +11,12 @@ import {
   READER_PANEL_TOC,
   READER_PARAGRAPH_PREFIX,
   ReaderBlock,
+  READER_DEFAULT_FONT_FAMILY,
   ReaderBlockKind,
   ReaderCallbacks,
   ReaderCatalogItem,
   ReaderFlip,
+  ReaderFontResolve,
   ReaderLocation,
   ReaderOpenOptions,
   ReaderSettings,
@@ -67,6 +69,7 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   theme: ReaderTheme.LIGHT,
   flipMode: READER_FLIP_DEFAULT,
   keepScreenOn: false,
+  fontId: 'system',
 };
 const DEFAULT_OPTIONS: ReaderOpenOptions = {
   filePath: '',
@@ -75,6 +78,7 @@ const DEFAULT_OPTIONS: ReaderOpenOptions = {
   cacheDir: '',
   location: '',
   settings: DEFAULT_SETTINGS,
+  fontOptions: [],
 };
 
 interface ParsedLocation {
@@ -110,6 +114,9 @@ export struct ReaderView {
     onProgress: (location: ReaderLocation, chapterTitle: string): void => {},
     onClose: (): void => {},
     onSettingsChanged: (settings: ReaderSettings): void => {},
+    onFontSelected: async (fontId: string): Promise<ReaderFontResolve> => {
+      return { fontName: 'system', fontPath: '' };
+    },
   };
 
   @State private bookTitle: string = '';
@@ -130,6 +137,10 @@ export struct ReaderView {
   @State private fontSize: number = DEFAULT_SETTINGS.fontSize;
   @State private lineHeight: number = DEFAULT_SETTINGS.lineHeight;
   @State private theme: ReaderTheme = DEFAULT_SETTINGS.theme;
+  /** 正文字体：fontId 持久化，fontFamily 是注册后的家族名（空 = 系统默认）。 */
+  @State private fontId: string = DEFAULT_SETTINGS.fontId;
+  @State private fontFamily: string = '';
+  @State private fontDownloading: boolean = false;
   @State private flipMode: string = DEFAULT_SETTINGS.flipMode;
   @State private keepScreenOn: boolean = DEFAULT_SETTINGS.keepScreenOn;
   /** 控制面板朗读页的语速：本阅读器未启用朗读，仅满足面板的 @Link 绑定。 */
@@ -171,6 +182,8 @@ export struct ReaderView {
   @State private batteryLevel: number = -1;
   @State private batteryCharging: boolean = false;
   private batteryTimer: number = -1;
+  /** 已注册进 ArkUI 的字体家族名，避免重复注册。 */
+  private registeredFonts: Set<string> = new Set<string>();
   /** 分片分页：进行中的分页器与调度状态。 */
   private activePager: PagePager | null = null;
   private pagerGeneration: number = 0;
@@ -199,6 +212,9 @@ export struct ReaderView {
     this.theme = settings.theme;
     this.flipMode = ReaderFlip.normalize(settings.flipMode);
     this.keepScreenOn = settings.keepScreenOn;
+    this.fontId = settings.fontId.length > 0 ? settings.fontId : DEFAULT_SETTINGS.fontId;
+    // 打开时把已选字体注册进 ArkUI（宿主侧 ensureCached 命中缓存时立即返回）
+    void this.applyFont(this.fontId, false);
     const start = ReaderView.parseLocation(this.options.location);
     this.initialIndex = start.paragraphIndex;
     this.lastParagraph = start.paragraphIndex;
@@ -269,8 +285,12 @@ export struct ReaderView {
           fontSize: $fontSize,
           lineHeight: $lineHeight,
           theme: $theme,
-          selectedFontId: '',
-          fontOptions: [],
+          selectedFontId: this.fontId,
+          fontOptions: this.options.fontOptions,
+          fontDownloading: this.fontDownloading,
+          onSelectFont: (fontId: string) => {
+            void this.applyFont(fontId, true);
+          },
           flipLabels: ReaderFlip.labels(),
           flipValues: READER_FLIP_OPTIONS,
           flipValue: $flipMode,
@@ -317,6 +337,7 @@ export struct ReaderView {
       theme: this.theme,
       flipMode: this.flipMode,
       keepScreenOn: this.keepScreenOn,
+      fontId: this.fontId,
     };
     this.applySettings(settings, relayout);
   }
@@ -392,6 +413,7 @@ export struct ReaderView {
         bookTitle: this.bookTitle,
         batteryLevel: this.batteryLevel,
         batteryCharging: this.batteryCharging,
+        fontFamily: this.fontFamily,
       });
     }
   }
@@ -421,6 +443,7 @@ export struct ReaderView {
                 .fontSize(this.fontSize)
                 .lineHeight(this.lineHeight * this.fontSize)
                 .fontColor(ReaderPalette.textColor(this.theme))
+                .fontFamily(this.fontFamily.length > 0 ? this.fontFamily : READER_DEFAULT_FONT_FAMILY)
                 // 两端对齐：与分页模式一致，避免每行右侧参差
                 .textAlign(TextAlign.JUSTIFY)
                 .width('100%');
@@ -666,6 +689,7 @@ export struct ReaderView {
       theme: next,
       flipMode: this.flipMode,
       keepScreenOn: this.keepScreenOn,
+      fontId: this.fontId,
     };
     this.applySettings(settings, false);
   }
@@ -707,6 +731,75 @@ export struct ReaderView {
       clearTimeout(this.barTimer);
       this.barTimer = -1;
     }
+  }
+
+  /**
+   * 应用正文字体：宿主解析（下载/缓存）→ 模块用 ArkUI 注册 → 正文改用该家族。
+   * `persist=false` 用于打开时恢复（失败静默回退系统字体）；`true` 用于用户主动切换。
+   */
+  private async applyFont(fontId: string, persist: boolean): Promise<void> {
+    const target = fontId.length > 0 ? fontId : DEFAULT_SETTINGS.fontId;
+    this.fontId = target;
+    const resolved = await this.resolveFont(target);
+    if (resolved === null) {
+      // 下载或注册失败：回退系统字体；用户主动切换时把偏好也回退，避免下次打开又失败
+      this.fontFamily = '';
+      if (persist) {
+        this.fontId = DEFAULT_SETTINGS.fontId;
+        this.notifySettingsChanged();
+      }
+      return;
+    }
+    this.fontFamily = resolved.fontPath.length > 0 ? resolved.fontName : '';
+    if (persist) {
+      // 换字体后正文宽高都变，必须重新测量分页（applySettings 的 relayout 分支）并落盘偏好
+      const settings: ReaderSettings = {
+        fontSize: this.fontSize,
+        lineHeight: this.lineHeight,
+        theme: this.theme,
+        flipMode: this.flipMode,
+        keepScreenOn: this.keepScreenOn,
+        fontId: this.fontId,
+      };
+      this.applySettings(settings, true);
+    }
+  }
+
+  /** 让宿主解析字体（下载/缓存），并按需注册进 ArkUI；失败返回 null。 */
+  private async resolveFont(fontId: string): Promise<ReaderFontResolve | null> {
+    if (fontId === DEFAULT_SETTINGS.fontId) {
+      return { fontName: 'system', fontPath: '' };
+    }
+    this.fontDownloading = true;
+    try {
+      const resolved = await this.callbacks.onFontSelected(fontId);
+      if (resolved.fontPath.length > 0 && !this.registeredFonts.has(resolved.fontName)) {
+        this.getUIContext().getFont().registerFont({
+          familyName: resolved.fontName,
+          familySrc: `file://${resolved.fontPath}`,
+        });
+        this.registeredFonts.add(resolved.fontName);
+      }
+      return resolved;
+    } catch (error) {
+      hilog.warn(0x0000, TAG, 'font resolve failed: %{public}s', (error as Error).message);
+      return null;
+    } finally {
+      this.fontDownloading = false;
+    }
+  }
+
+  /** 把当前设置（含字体）回调给宿主持久化。 */
+  private notifySettingsChanged(): void {
+    const settings: ReaderSettings = {
+      fontSize: this.fontSize,
+      lineHeight: this.lineHeight,
+      theme: this.theme,
+      flipMode: this.flipMode,
+      keepScreenOn: this.keepScreenOn,
+      fontId: this.fontId,
+    };
+    this.callbacks.onSettingsChanged(settings);
   }
 
   /**
@@ -1298,6 +1391,7 @@ export struct ReaderView {
       theme: settings.theme,
       flipMode: nextFlip,
       keepScreenOn: settings.keepScreenOn,
+      fontId: this.fontId,
     };
     this.callbacks.onSettingsChanged(applied);
     if (ReaderFlip.isPaged(nextFlip)) {

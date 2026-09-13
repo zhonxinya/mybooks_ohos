@@ -1,5 +1,5 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { ReaderBlock, ReaderBlockKind, ReaderTheme } from '../model/ReaderTypes';
+import { ReaderBlock, READER_DEFAULT_FONT_FAMILY, ReaderBlockKind, ReaderTheme } from '../model/ReaderTypes';
 import { ReaderPalette } from '../model/ReaderPalette';
 import { PageLayout, PageMetrics, ReaderPage } from '../engine/PageLayout';
 import { LazyDataSource } from './LazyDataSource';
@@ -47,6 +47,8 @@ export struct ReaderPageView {
   /** 页脚电量（-1 表示未知，不渲染）。 */
   @Prop batteryLevel: number = -1;
   @Prop batteryCharging: boolean = false;
+  /** 正文字体家族名（空 = 系统默认；由宿主解析并用 UIContext 注册后传入）。 */
+  @Prop fontFamily: string = '';
 
   build() {
     Column() {
@@ -71,6 +73,7 @@ export struct ReaderPageView {
               .fontSize(this.fontSize)
               .lineHeight(this.lineHeight * this.fontSize)
               .fontColor(ReaderPalette.textColor(this.theme))
+              .fontFamily(this.fontFamily.length > 0 ? this.fontFamily : READER_DEFAULT_FONT_FAMILY)
               // 两端对齐：否则每行右侧参差，视觉上右边留白明显大于左边
               .textAlign(TextAlign.JUSTIFY)
               .width('100%');

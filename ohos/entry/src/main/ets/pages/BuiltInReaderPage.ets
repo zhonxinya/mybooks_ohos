@@ -6,6 +6,8 @@ import {
   READER_FLIP_PREF_KEY,
   ReaderCallbacks,
   ReaderFlip,
+  ReaderFontOption as ReaderFontOptionView,
+  ReaderFontResolve,
   ReaderLocation,
   ReaderLocations,
   ReaderOpenOptions,
@@ -13,6 +15,8 @@ import {
   ReaderTheme,
   ReaderView,
 } from 'reader';
+import { ReaderFontCatalog, ReaderFontOption } from '../models/ReaderFontCatalog';
+import { ReaderFontService } from '../services/ReaderFontService';
 import { TalebookService } from '../services/TalebookService';
 import { ReadKitSession } from '../services/ReadKitSession';
 import { WindowAbility } from '../entryability/WindowAbility';
@@ -38,6 +42,8 @@ const FONT_SIZE_KEY: string = 'reader_font_size';
 const LINE_HEIGHT_KEY: string = 'reader_line_height';
 const THEME_KEY: string = 'reader_theme';
 const KEEP_SCREEN_ON_KEY: string = 'reader_keep_screen_on';
+/** 正文字体偏好键：与 ReaderKit 阅读器（ReadKitReader）共用同一个键。 */
+const READER_FONT_ID_KEY: string = 'reader_font_id';
 /** 主题取值顺序必须与 `ReaderTheme` 枚举一致。 */
 const THEMES: ReaderTheme[] = [ReaderTheme.LIGHT, ReaderTheme.DARK, ReaderTheme.EYE];
 
@@ -53,13 +59,18 @@ const DEFAULT_OPTIONS: ReaderOpenOptions = {
     theme: ReaderTheme.LIGHT,
     flipMode: READER_FLIP_DEFAULT,
     keepScreenOn: false,
+    fontId: 'system',
   },
+  fontOptions: [],
 };
 
 const DEFAULT_CALLBACKS: ReaderCallbacks = {
   onProgress: (location: ReaderLocation, chapterTitle: string): void => {},
   onClose: (): void => {},
   onSettingsChanged: (settings: ReaderSettings): void => {},
+  onFontSelected: async (fontId: string): Promise<ReaderFontResolve> => {
+    return { fontName: 'system', fontPath: '' };
+  },
 };
 
 /**
@@ -87,6 +98,8 @@ struct BuiltInReaderPage {
     this.bookId = params.bookId ?? '';
     this.bookTitle = params.bookTitle ?? '';
     this.bookFormat = params.format ?? '';
+    // 字体缓存目录初始化：与 ReaderKit 阅读器共用同一套 ReaderFontService（同一目录、同一份缓存）
+    ReaderFontService.init(context.filesDir);
     const settings = BuiltInReaderPage.loadSettings();
     this.keepScreenOn = settings.keepScreenOn;
     this.options = {
@@ -96,6 +109,15 @@ struct BuiltInReaderPage {
       cacheDir: context.cacheDir,
       location: params.location ?? '',
       settings: settings,
+      // 内置阅读器用 ArkUI 原生字体栈：只列带 ttf/otf 源的字体（woff2 加载不了会静默回退）
+      fontOptions: ReaderFontCatalog.listOptions()
+        .filter((option: ReaderFontOption): boolean => {
+          return option.id === ReaderFontCatalog.SYSTEM_ID || ReaderFontCatalog.hasTtf(option.id);
+        })
+        .map((option: ReaderFontOption): ReaderFontOptionView => {
+          const view: ReaderFontOptionView = { id: option.id, name: option.name };
+          return view;
+        }),
     };
     this.callbacks = {
       onProgress: (location: ReaderLocation, chapterTitle: string): void => {
@@ -103,6 +125,10 @@ struct BuiltInReaderPage {
       },
       onClose: (): void => {
         this.exitReader();
+      },
+      onFontSelected: async (fontId: string): Promise<ReaderFontResolve> => {
+        const resolved = await ReaderFontService.ensureCached(fontId);
+        return { fontName: resolved.fontName, fontPath: resolved.fontPath };
       },
       onSettingsChanged: (settings: ReaderSettings): void => {
         BuiltInReaderPage.saveSettings(settings);
@@ -191,7 +217,14 @@ struct BuiltInReaderPage {
       theme: theme,
       flipMode: ReaderFlip.normalize(TalebookService.prefGet(READER_FLIP_PREF_KEY, READER_FLIP_DEFAULT)),
       keepScreenOn: TalebookService.prefGet(KEEP_SCREEN_ON_KEY, 'false') === 'true',
+      fontId: BuiltInReaderPage.loadFontId(),
     };
+  }
+
+  /** 正文字体偏好与 ReaderKit 阅读器共用 `reader_font_id`，两者切换字体后互相看到。 */
+  private static loadFontId(): string {
+    const fontId = TalebookService.prefGet(READER_FONT_ID_KEY, ReaderFontCatalog.SYSTEM_ID);
+    return ReaderFontCatalog.findById(fontId) === null ? ReaderFontCatalog.SYSTEM_ID : fontId;
   }
 
   private static saveSettings(settings: ReaderSettings): void {
@@ -201,6 +234,8 @@ struct BuiltInReaderPage {
     values[THEME_KEY] = `${settings.theme}`;
     values[READER_FLIP_PREF_KEY] = ReaderFlip.normalize(settings.flipMode);
     values[KEEP_SCREEN_ON_KEY] = settings.keepScreenOn ? 'true' : 'false';
+    values[READER_FONT_ID_KEY] = settings.fontId.length > 0 ?
+      settings.fontId : ReaderFontCatalog.SYSTEM_ID;
     TalebookService.prefSetBatch(values);
   }
 
