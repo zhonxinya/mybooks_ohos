@@ -19,7 +19,10 @@ const SECTION_ADMIN: string = 'admin';
 const SECTION_ABOUT: string = 'about';
 
 /**
- * 设置页分组头：整行可点切换折叠态，右侧箭头指示展开状态。
+ * 设置页分组头：整行可点切换折叠态，右侧圆底箭头指示展开状态。
+ *
+ * 折叠态下它本身就是一张卡片（与展开后的设置项卡片同一套卡片语言），
+ * 不再裸贴在页面底色上；展开时标题转主色以示当前项。
  * 用 `@Prop` 而非 `@Builder` 传参：按值传参的 `@Builder` 不会在状态变化后重绘，
  * 会导致摘要（主题/书库统计/版本）停留在首次渲染的值。
  */
@@ -31,16 +34,16 @@ struct SettingsSectionHeader {
   onToggle?: () => void;
 
   build() {
-    Row({ space: 8 }) {
-      Column({ space: 2 }) {
+    Row({ space: 12 }) {
+      Column({ space: 3 }) {
         Text(this.title)
-          .fontSize(15)
+          .fontSize(16)
           .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
+          .fontColor(this.expanded ? $r('app.color.brand_primary') : $r('app.color.text_primary'))
           .width('100%');
         if (this.subtitle.length > 0) {
           Text(this.subtitle)
-            .fontSize(12)
+            .fontSize(13)
             .fontColor($r('app.color.text_secondary'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -50,14 +53,23 @@ struct SettingsSectionHeader {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1);
 
-      SymbolGlyph(this.expanded ? $r('sys.symbol.chevron_up') : $r('sys.symbol.chevron_down'))
-        .fontSize(16)
-        .fontColor([$r('app.color.text_tertiary')]);
+      // 折叠指示做成小圆底：触达区域与「可点」的视觉反馈更明确
+      Column() {
+        SymbolGlyph(this.expanded ? $r('sys.symbol.chevron_up') : $r('sys.symbol.chevron_down'))
+          .fontSize(14)
+          .fontColor([this.expanded ? $r('app.color.brand_primary') : $r('app.color.text_secondary')]);
+      }
+      .width(26)
+      .height(26)
+      .borderRadius(13)
+      .backgroundColor($r('app.color.surface_pressed'))
+      .justifyContent(FlexAlign.Center);
     }
     .width('100%')
-    .padding({ left: 4, right: 4, top: 6, bottom: 6 })
-    // 必须先给常态底色，否则 pressed 态不会复位（与 SettingCell / QuickActionGrid 写法一致）
-    .backgroundColor(Color.Transparent)
+    .padding({ left: 16, right: 16, top: 14, bottom: 14 })
+    .alignItems(VerticalAlign.Center)
+    .borderRadius($r('app.float.card_radius'))
+    .backgroundColor($r('app.color.card_background'))
     .stateStyles({
       pressed: {
         .backgroundColor($r('app.color.surface_pressed'))
