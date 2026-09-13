@@ -3,6 +3,7 @@ import { ReaderBlock, ReaderBlockKind, ReaderTheme } from '../model/ReaderTypes'
 import { ReaderPalette } from '../model/ReaderPalette';
 import { PageLayout, PageMetrics, ReaderPage } from '../engine/PageLayout';
 import { LazyDataSource } from './LazyDataSource';
+import { ReaderBattery } from './ReaderBattery';
 
 const TAG: string = 'ReaderPageView';
 const PARAGRAPH_SPACING: number = 12;
@@ -43,6 +44,9 @@ export struct ReaderPageView {
   @Prop chapterTitle: string = '';
   /** 底部左侧书名。 */
   @Prop bookTitle: string = '';
+  /** 页脚电量（-1 表示未知，不渲染）。 */
+  @Prop batteryLevel: number = -1;
+  @Prop batteryCharging: boolean = false;
 
   build() {
     Column() {
@@ -78,28 +82,31 @@ export struct ReaderPageView {
       .alignItems(HorizontalAlign.Start)
       .clip(true);
 
-      // 底部分隔线 + 页脚：左侧书名，右侧页码；整块高度小
+      // 底部分隔线 + 页脚：左侧书名、右侧电量与页码；整块高度小
       Divider()
         .color(ReaderPalette.dividerColor(this.theme))
         .strokeWidth(0.5);
-      Row() {
+      Row({ space: 10 }) {
         Text(this.bookTitle.length > 0 ? this.bookTitle : ' ')
           .fontSize(10)
           .fontColor(ReaderPalette.hintColor(this.theme))
           .layoutWeight(1)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
+        ReaderBattery({
+          theme: this.theme,
+          level: this.batteryLevel,
+          charging: this.batteryCharging,
+        });
         if (this.pageCount >= 1) {
           Text(`${this.pageIndex + 1} / ${this.pageCount}`)
             .fontSize(10)
-            .fontColor(ReaderPalette.hintColor(this.theme))
-            .margin({ left: 8 });
+            .fontColor(ReaderPalette.hintColor(this.theme));
         }
       }
       .width('100%')
       .height(PAGE_FOOTER_SPACE)
-      .alignItems(VerticalAlign.Center);
-    }
+      .alignItems(VerticalAlign.Center);    }
     .width('100%')
     .height('100%')
     .padding({

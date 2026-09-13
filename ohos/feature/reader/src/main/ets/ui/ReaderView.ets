@@ -1,3 +1,4 @@
+import { batteryInfo } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
   BookEngine,
@@ -23,6 +24,7 @@ import { ReaderPalette } from '../model/ReaderPalette';
 import { BookEngineFactory } from '../engine/BookEngineFactory';
 import { PageLayout, PageMetrics, PagePager, ReaderPage } from '../engine/PageLayout';
 import { LazyDataSource } from './LazyDataSource';
+import { ReaderBattery } from './ReaderBattery';
 import { ReaderChrome } from './ReaderChrome';
 import { ReaderControlPanel } from './ReaderControlPanel';
 import { ReaderOverlayBar } from './ReaderOverlayBar';
@@ -57,6 +59,8 @@ const PAGINATION_SLICE_MS: number = 8;
 const PAGE_TURN_PAGINATION_MS: number = 8;
 /** 工具栏显示后自动隐藏的延时（ms）。 */
 const BARS_AUTO_HIDE_MS: number = 4000;
+/** 页脚电量的刷新间隔（ms）：系统不提供电量变化订阅，这里按分钟级轮询。 */
+const BATTERY_REFRESH_MS: number = 60000;
 const DEFAULT_SETTINGS: ReaderSettings = {
   fontSize: 18,
   lineHeight: 1.6,
@@ -163,6 +167,10 @@ export struct ReaderView {
   private measureArgScale: number = 0;
   /** 工具栏自动隐藏定时器。 */
   private barTimer: number = -1;
+  /** 页脚电量（-1 表示读取失败，不显示）。 */
+  @State private batteryLevel: number = -1;
+  @State private batteryCharging: boolean = false;
+  private batteryTimer: number = -1;
   /** 分片分页：进行中的分页器与调度状态。 */
   private activePager: PagePager | null = null;
   private pagerGeneration: number = 0;
@@ -181,6 +189,10 @@ export struct ReaderView {
   private pageCache: Map<string, ReaderPage[]> = new Map<string, ReaderPage[]>();
 
   aboutToAppear(): void {
+    this.refreshBattery();
+    this.batteryTimer = setInterval(() => {
+      this.refreshBattery();
+    }, BATTERY_REFRESH_MS);
     const settings = this.options.settings;
     this.fontSize = settings.fontSize;
     this.lineHeight = settings.lineHeight;
@@ -197,6 +209,10 @@ export struct ReaderView {
     this.destroyed = true;
     this.pendingScrollIndex = -1;
     this.cancelBarsAutoHide();
+    if (this.batteryTimer >= 0) {
+      clearInterval(this.batteryTimer);
+      this.batteryTimer = -1;
+    }
     if (this.engine !== null) {
       this.engine.close();
       this.engine = null;
@@ -374,6 +390,8 @@ export struct ReaderView {
         pageHeightVp: this.textHeightVp(),
         chapterTitle: this.chapterTitle,
         bookTitle: this.bookTitle,
+        batteryLevel: this.batteryLevel,
+        batteryCharging: this.batteryCharging,
       });
     }
   }
@@ -429,17 +447,21 @@ export struct ReaderView {
         Divider()
           .color(ReaderPalette.dividerColor(this.theme))
           .strokeWidth(0.5);
-        Row() {
+        Row({ space: 10 }) {
           Text(this.bookTitle.length > 0 ? this.bookTitle : ' ')
             .fontSize(10)
             .fontColor(ReaderPalette.hintColor(this.theme))
             .layoutWeight(1)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis });
+          ReaderBattery({
+            theme: this.theme,
+            level: this.batteryLevel,
+            charging: this.batteryCharging,
+          });
           Text(`${Math.round(this.lastReportedPercent * 100)}%`)
             .fontSize(10)
-            .fontColor(ReaderPalette.hintColor(this.theme))
-            .margin({ left: 8 });
+            .fontColor(ReaderPalette.hintColor(this.theme));
         }
         .width('100%')
         .height(PAGE_FOOTER_SPACE)
@@ -685,6 +707,19 @@ export struct ReaderView {
     }
   }
 
+  /**
+   * 读取设备电量供页脚显示（系统 API，开销极小）。
+   * 系统未向普通应用开放电量变化订阅，这里在打开时读一次并按分钟级轮询刷新。
+   */
+  private refreshBattery(): void {
+    try {
+      this.batteryLevel = batteryInfo.batterySOC;
+      this.batteryCharging = batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.ENABLE ||
+        batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.FULL;
+    } catch (_error) {
+      this.batteryLevel = -1;
+    }
+  }
   // ---- 打开 / 切章 ----
 
   private async openBook(start: ParsedLocation): Promise<void> {
