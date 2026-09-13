@@ -17,7 +17,7 @@ import {
 } from '../model/ReaderTypes';
 import { ReaderPalette } from '../model/ReaderPalette';
 import { BookEngineFactory } from '../engine/BookEngineFactory';
-import { PageLayout, PageMetrics, ReaderPage } from '../engine/PageLayout';
+import { PageLayout, PageMetrics, PagePager, ReaderPage } from '../engine/PageLayout';
 import { LazyDataSource } from './LazyDataSource';
 import { ReaderCatalogSheet } from './ReaderCatalogSheet';
 import { PAGE_FOOTER_SPACE, ReaderPageView } from './ReaderPageView';
@@ -43,6 +43,9 @@ const TAP_ZONE_RATIO: number = 0.33;
 const PROBE_WIDTH_VP: number = 80;
 /** 分页结果最多缓存几章。 */
 const MAX_PAGE_CACHE: number = 4;
+/** 分片分页：首屏同步推进的步数、以及每帧推进的步数（步 ≈ 一个块/一次切分，含 1–4 次测量）。 */
+const INITIAL_PAGINATION_STEPS: number = 24;
+const PAGINATION_STEPS_PER_FRAME: number = 24;
 /** 工具栏显示后自动隐藏的延时（ms）。 */
 const BARS_AUTO_HIDE_MS: number = 4000;
 const DEFAULT_SETTINGS: ReaderSettings = {
@@ -138,6 +141,13 @@ export struct ReaderView {
   private measureArgScale: number = 0;
   /** 工具栏自动隐藏定时器。 */
   private barTimer: number = -1;
+  /** 分片分页：进行中的分页器与调度状态。 */
+  private activePager: PagePager | null = null;
+  private pagerGeneration: number = 0;
+  private pagerTargetBlock: number = 0;
+  private pagerRestore: number = 0;
+  private pagerPositionApplied: boolean = false;
+  private paginationStartedAt: number = 0;
   /**
    * 分页结果缓存：同一章在相同排版参数下不重复测量。
    * 长章节（近 500 段、含跨页切分）测量要 1.5s 量级，来回翻章时缓存收益明显。
@@ -593,6 +603,10 @@ export struct ReaderView {
       this.pageCount = 0;
       this.pageIndex = 0;
       this.paginationToken++;
+      // 切章即作废进行中的分页调度，避免旧章的分片结果覆盖新章
+      this.activePager = null;
+      this.pagerGeneration++;
+      this.pagerPositionApplied = false;
       if (ReaderFlip.isPaged(this.flipMode)) {
         this.paginateCurrentChapter();
       } else {
@@ -620,7 +634,7 @@ export struct ReaderView {
 
   private paginateCurrentChapter(): void {
     if (this.contentWidthVp <= 0 || this.contentHeightVp <= 0 || this.chapterBlocks.length === 0) {
-      // 首帧还没拿到内容区尺寸（或本章无文字）：等 onAreaChange 再补做
+      // 首帧还没拿到内容区尺寸（或本章无正文）：等 onAreaChange 再补做
       this.paginationPending = true;
       return;
     }
@@ -628,44 +642,135 @@ export struct ReaderView {
     this.paginating = true;
     const restore = this.restoreParagraph;
     const toLastPage = this.pendingLastPage;
-    // 下一帧再测量：让「正在分页」先上屏，测量期间界面不至于完全无反馈
+    // 下一帧再开始：让「正在分页」先上屏，测量期间界面不至于完全无反馈
     setTimeout(() => {
-      this.runPagination(restore, toLastPage);
+      this.beginPagination(restore, toLastPage);
     }, 0);
   }
 
-  private runPagination(restoreParagraph: number, toLastPage: boolean): void {
+  /** 分页入口：命中缓存直接用，否则按帧分片推进（长章节不再一次阻塞 UI）。 */
+  private beginPagination(restoreParagraph: number, toLastPage: boolean): void {
     if (this.destroyed) {
       return;
     }
     this.calibrateMeasureUnit();
     const started = Date.now();
+    this.paginationStartedAt = started;
     const cacheKey = this.paginationCacheKey();
     const cached = this.pageCache.get(cacheKey);
-    let pages: ReaderPage[];
     if (cached !== undefined) {
-      pages = cached;
-    } else {
-      pages = PageLayout.paginate(this.chapterBlocks, this.pageMetrics(),
-        (text: string, size: number, width: number, lineHeight: number) =>
-          this.measureTextHeightPx(text, size, width, lineHeight));
-      if (this.pageCache.size >= MAX_PAGE_CACHE) {
-        this.pageCache.clear();
-      }
-      this.pageCache.set(cacheKey, pages);
+      this.applyPages(cached, restoreParagraph, toLastPage);
+      this.paginating = false;
+      hilog.info(0x0000, TAG, 'paged chapter=%{public}d pages=%{public}d cached=true ms=%{public}d',
+        this.chapterIndex, cached.length, Date.now() - started);
+      return;
     }
+    this.pagerGeneration++;
+    const measure = (text: string, size: number, width: number, lineHeight: number) =>
+      this.measureTextHeightPx(text, size, width, lineHeight);
+    if (toLastPage) {
+      // 翻上一章的末页：必须先知道总页数，直接同步分完（有「正在分页」提示兜底）
+      const pager = new PagePager(this.chapterBlocks, this.pageMetrics(), measure);
+      pager.advance(Number.MAX_SAFE_INTEGER);
+      this.cachePages(cacheKey, pager.getPages());
+      this.applyPages(pager.getPages(), restoreParagraph, true);
+      this.paginating = false;
+      hilog.info(0x0000, TAG, 'paged chapter=%{public}d pages=%{public}d sync=true ms=%{public}d',
+        this.chapterIndex, this.pageCount, Date.now() - started);
+      return;
+    }
+    this.activePager = new PagePager(this.chapterBlocks, this.pageMetrics(), measure);
+    this.pagerRestore = restoreParagraph;
+    this.pagerTargetBlock = PageLayout.blockIndexForParagraph(this.chapterBlocks, restoreParagraph);
+    this.pagerPositionApplied = false;
+    // 首屏：同步推进一小段（通常几页），让用户立刻看到内容；其余按帧补完
+    this.activePager.advance(INITIAL_PAGINATION_STEPS);
+    this.publishPagination(cacheKey, this.pagerGeneration);
+  }
+
+  /** 把当前已分页的结果发布到界面；未完成时继续调度下一帧。 */
+  private publishPagination(cacheKey: string, generation: number): void {
+    const pager = this.activePager;
+    if (pager === null || this.destroyed || generation !== this.pagerGeneration) {
+      return;
+    }
+    const pages = pager.getPages().slice();
+    this.pages = pages;
+    this.pageSource.update(pages);
+    this.pageCount = pages.length;
+    if (!this.pagerPositionApplied && pager.getNextBlockIndex() > this.pagerTargetBlock && pages.length > 0) {
+      this.pagerPositionApplied = true;
+      this.pageIndex = PageLayout.pageForParagraph(pages, this.pagerRestore);
+      this.paginating = false;
+      hilog.info(0x0000, TAG, 'first page ready chapter=%{public}d pages=%{public}d ms=%{public}d',
+        this.chapterIndex, pages.length, Date.now() - this.paginationStartedAt);
+      this.reportProgress(this.firstParagraphOf(this.pageIndex), false);
+    }
+    if (pager.isFinished()) {
+      this.finishPagination(cacheKey, pages);
+      return;
+    }
+    setTimeout(() => {
+      const running = this.activePager;
+      if (running === null || this.destroyed || generation !== this.pagerGeneration) {
+        return;
+      }
+      running.advance(PAGINATION_STEPS_PER_FRAME);
+      this.publishPagination(cacheKey, generation);
+    }, 0);
+  }
+
+  private finishPagination(cacheKey: string, pages: ReaderPage[]): void {
+    this.cachePages(cacheKey, pages);
+    this.activePager = null;
+    this.paginating = false;
+    this.pendingLastPage = false;
+    if (!this.pagerPositionApplied && pages.length > 0) {
+      // 边界情况（如恢复位置落在最后一页）：收尾时再定位一次
+      this.pagerPositionApplied = true;
+      this.pageIndex = PageLayout.pageForParagraph(pages, this.pagerRestore);
+      this.reportProgress(this.firstParagraphOf(this.pageIndex), false);
+    }
+    hilog.info(0x0000, TAG, 'paged chapter=%{public}d pages=%{public}d cached=false ms=%{public}d',
+      this.chapterIndex, pages.length, Date.now() - this.paginationStartedAt);
+  }
+
+  /** 把完整页表应用到界面（缓存命中 / 同步分页路径）。 */
+  private applyPages(pages: ReaderPage[], restoreParagraph: number, toLastPage: boolean): void {
     this.pages = pages;
     this.pageSource.update(pages);
     this.pageCount = pages.length;
     this.pageIndex = toLastPage ? Math.max(0, pages.length - 1) :
       PageLayout.pageForParagraph(pages, restoreParagraph);
     this.paginationToken++;
-    this.paginating = false;
     this.pendingLastPage = false;
-    const page = this.pages[this.pageIndex];
-    hilog.info(0x0000, TAG, 'paged chapter=%{public}d pages=%{public}d cached=%{public}s ms=%{public}d',
-      this.chapterIndex, pages.length, `${cached !== undefined}`, Date.now() - started);
-    this.reportProgress(page === undefined ? 0 : page.firstParagraph, false);
+    this.reportProgress(this.firstParagraphOf(this.pageIndex), false);
+  }
+
+  private cachePages(cacheKey: string, pages: ReaderPage[]): void {
+    if (this.pageCache.size >= MAX_PAGE_CACHE) {
+      this.pageCache.clear();
+    }
+    this.pageCache.set(cacheKey, pages.slice());
+  }
+
+  private firstParagraphOf(pageIndex: number): number {
+    const page = this.pages[pageIndex];
+    return page === undefined ? 0 : page.firstParagraph;
+  }
+
+  /** 交互发生前先把分页补完，避免「还没分到的页」被误判为越界而跳章。 */
+  private drainPagination(): void {
+    const pager = this.activePager;
+    if (pager === null || pager.isFinished()) {
+      return;
+    }
+    pager.advance(Number.MAX_SAFE_INTEGER);
+    const pages = pager.getPages().slice();
+    this.pages = pages;
+    this.pageSource.update(pages);
+    this.pageCount = pages.length;
+    this.finishPagination(this.paginationCacheKey(), pages);
   }
 
   /** 缓存键：章 + 排版参数（字号/行高/正文可用区），任一变化即重新分页。 */
@@ -838,6 +943,8 @@ export struct ReaderView {
     if (!ReaderFlip.isPaged(this.flipMode)) {
       return;
     }
+    // 分片分页还没补完时先补完：否则「未分到的页」会被误判为章末而跳章
+    this.drainPagination();
     const target = this.pageIndex + delta;
     if (target < 0) {
       const previousChapter = this.chapterIndex - 1;
