@@ -12,6 +12,7 @@ import { BookReviewItem, BookSocialStats } from '../models/BookReviewModels';
 import { FormatReadingStat, ReadingDevice, deviceTypeLabel, formatStatDuration } from '../models/DeviceModels';
 import { BookUploadService } from '../services/BookUploadService';
 import { DownloadTaskService } from '../services/DownloadTaskService';
+import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 
 interface BookFileFormat {
   format: string;
@@ -88,6 +89,7 @@ struct BookDetailPage {
   @State formatBusy: boolean = false;
   @State manageFormat: string = '';
   @State coverBusy: boolean = false;
+  @State deleteBusy: boolean = false;
   @State isSole: boolean = false;
   /** 本页入队的下载任务 id，用于精准跟踪该任务的进度。 */
   private downloadTaskId: string = '';
@@ -685,6 +687,52 @@ struct BookDetailPage {
     });
   }
 
+  /** 删除整本：服务端书籍移入回收站（可在「回收站管理」恢复），本地导入书籍删除本地文件与下载记录。 */
+  private confirmDeleteBook(): void {
+    this.getUIContext().showAlertDialog({
+      title: '删除图书',
+      message: this.localOnly
+        ? `确定删除《${this.title}》的本地文件吗？`
+        : `确定删除《${this.title}》吗？书籍会移入服务端回收站，可在「回收站管理」中恢复。`,
+      primaryButton: {
+        value: '删除',
+        action: () => {
+          void this.runDeleteBook();
+        },
+      },
+      secondaryButton: { value: '取消', action: () => {} },
+    });
+  }
+
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
+  private async runDeleteBook(): Promise<void> {
+    if (this.deleteBusy) {
+      return;
+    }
+    this.deleteBusy = true;
+    try {
+      if (this.localOnly) {
+        TalebookService.removeDownloadRecord(this.localBookId);
+        this.toast('已删除');
+        this.getUIContext().getRouter().back();
+        return;
+      }
+      await TalebookService.ensureAuthenticated();
+      const rsp = await TalebookApi.deleteBook(this.bookId);
+      if (rsp.err !== undefined && rsp.err !== 'ok') {
+        this.toast(apiErrorMessage(rsp));
+        return;
+      }
+      this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '已删除');
+      BookshelfRefresh.notify();
+      this.getUIContext().getRouter().back();
+    } catch (error) {
+      this.toast(`删除失败：${error}`);
+    } finally {
+      this.deleteBusy = false;
+    }
+  }
+
   private async pickAndUploadCover(): Promise<void> {
     if (this.coverBusy) {
       return;
@@ -1033,14 +1081,14 @@ struct BookDetailPage {
   }
 
   @Builder
-  menuItem(icon: Resource, title: string, valueText: string, onTap: () => void) {
+  menuItem(icon: Resource, title: string, valueText: string, onTap: () => void, danger: boolean = false) {
     Row({ space: 12 }) {
       SymbolGlyph(icon)
         .fontSize(20)
-        .fontColor([$r('app.color.brand_primary')]);
+        .fontColor([danger ? $r('app.color.error') : $r('app.color.brand_primary')]);
       Text(title)
         .fontSize(15)
-        .fontColor($r('app.color.text_primary'))
+        .fontColor(danger ? $r('app.color.error') : $r('app.color.text_primary'))
         .layoutWeight(1);
       if (valueText.length > 0) {
         Text(valueText)
@@ -1477,6 +1525,15 @@ struct BookDetailPage {
                   this.closeSheet();
                   this.getUIContext().getRouter().pushUrl({ url: 'pages/ReadingProgressPage', params: { bookId: this.bookId } });
                 });
+              }
+            }
+            // 删除图书放最后：服务端书籍移入回收站（可恢复），本地导入书籍删除本地文件
+            if (this.localOnly || this.bookId > 0) {
+              ListItem() {
+                this.menuItem($r('sys.symbol.trash'), '删除图书', '', () => {
+                  this.closeSheet();
+                  this.confirmDeleteBook();
+                }, true);
               }
             }
           }
