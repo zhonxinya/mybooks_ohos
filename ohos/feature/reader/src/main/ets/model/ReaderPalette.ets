@@ -78,6 +78,17 @@ export class ReaderPalette {
     return '#E6F2FF';
   }
 
+  /** 插图底色：图片未铺满容器时露出的背景，比正文底色略深一点以区分图区。 */
+  static imageBackground(theme: ReaderTheme): string {
+    if (theme === ReaderTheme.DARK) {
+      return '#242438';
+    }
+    if (theme === ReaderTheme.EYE) {
+      return '#BCE3C1';
+    }
+    return '#EAE3D6';
+  }
+
   static accentColor(): string {
     return '#007DFF';
   }

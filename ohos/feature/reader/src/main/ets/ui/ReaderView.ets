@@ -5,6 +5,8 @@ import {
   READER_FLIP_DEFAULT,
   READER_FLIP_NONE,
   READER_PARAGRAPH_PREFIX,
+  ReaderBlock,
+  ReaderBlockKind,
   ReaderCallbacks,
   ReaderCatalogItem,
   ReaderFlip,
@@ -92,8 +94,10 @@ export struct ReaderView {
   @State private chapterIndex: number = 0;
   @State private chapterTitle: string = '';
   @State private catalogSize: number = 0;
-  /** 必须是 @State：空页占位/列表的显隐由它决定，普通字段不会触发重渲染。 */
+  /** 必须是 @State：空页占位/正文的显隐由它决定，普通字段不会触发重渲染。 */
   @State private paragraphCount: number = 0;
+  /** 当前章的正文块数（含插图），为 0 才显示空页占位。 */
+  @State private blockCount: number = 0;
   @State private showBars: boolean = false;
   @State private showCatalog: boolean = false;
   @State private showSettings: boolean = false;
@@ -112,7 +116,7 @@ export struct ReaderView {
   @State private dragDir: number = 0;
 
   private engine: BookEngine | null = null;
-  private paragraphs: LazyDataSource<string> = new LazyDataSource<string>();
+  private blocks: LazyDataSource<ReaderBlock> = new LazyDataSource<ReaderBlock>();
   private catalogSource: LazyDataSource<ReaderCatalogItem> = new LazyDataSource<ReaderCatalogItem>();
   private pageSource: LazyDataSource<ReaderPage> = new LazyDataSource<ReaderPage>();
   private listScroller: Scroller = new Scroller();
@@ -123,7 +127,7 @@ export struct ReaderView {
   private lastParagraph: number = 0;
   private chapterLoading: boolean = false;
   private destroyed: boolean = false;
-  private chapterParagraphs: string[] = [];
+  private chapterBlocks: ReaderBlock[] = [];
   private pages: ReaderPage[] = [];
   private restoreParagraph: number = 0;
   private pendingLastPage: boolean = false;
@@ -167,7 +171,7 @@ export struct ReaderView {
     Stack() {
       // 正文常驻：状态切换只用叠加层，避免在分支里销毁重建正文
       this.contentArea();
-      if (!this.opening && this.errorMessage.length === 0 && this.paragraphCount === 0) {
+      if (!this.opening && this.errorMessage.length === 0 && this.blockCount === 0) {
         this.emptyChapterView();
       }
       if (this.opening) {
@@ -263,6 +267,7 @@ export struct ReaderView {
         pages: this.pageSource,
         pageIndex: index,
         pageCount: this.pageCount,
+        pageToken: this.paginationToken,
         offsetX: this.layerX(offset),
         layerOrder: this.layerZ(offset),
         fontSize: this.fontSize,
@@ -271,6 +276,8 @@ export struct ReaderView {
         horizontalSpace: CONTENT_HORIZONTAL_SPACE,
         topSpace: CONTENT_TOP_SPACE,
         bottomSpace: CONTENT_BOTTOM_SPACE,
+        pageWidthVp: this.textWidthVp(),
+        pageHeightVp: this.textHeightVp(),
       });
     }
   }
@@ -278,15 +285,19 @@ export struct ReaderView {
   @Builder
   scrollContent() {
     List({ scroller: this.listScroller, initialIndex: this.initialIndex, space: PARAGRAPH_SPACING }) {
-      LazyForEach(this.paragraphs, (paragraph: string, index: number) => {
+      LazyForEach(this.blocks, (block: ReaderBlock, index: number) => {
         ListItem() {
-          Text(paragraph)
-            .fontSize(this.fontSize)
-            .lineHeight(this.lineHeight * this.fontSize)
-            .fontColor(ReaderPalette.textColor(this.theme))
-            .width('100%');
+          if (block.kind === ReaderBlockKind.IMAGE) {
+            this.scrollImageBlock(block);
+          } else {
+            Text(block.text)
+              .fontSize(this.fontSize)
+              .lineHeight(this.lineHeight * this.fontSize)
+              .fontColor(ReaderPalette.textColor(this.theme))
+              .width('100%');
+          }
         }
-      }, (paragraph: string, index: number) => `${this.chapterIndex}_${index}`);
+      }, (block: ReaderBlock, index: number) => `${this.chapterIndex}_${index}`);
     }
     .width('100%')
     .height('100%')
@@ -304,6 +315,21 @@ export struct ReaderView {
     .onClick(() => {
       this.toggleBars();
     });
+  }
+
+  /** 滚动模式下的插图：与分页模式同一个高度公式，保证切换方式时观感一致。 */
+  @Builder
+  scrollImageBlock(block: ReaderBlock) {
+    Image('file://' + block.src)
+      .width('100%')
+      .height(this.pxToVp(PageLayout.imageHeightPx(block, this.pageMetrics())))
+      .objectFit(ImageFit.Contain)
+      .sourceSize({
+        width: Math.max(1, Math.round(this.vpToPx(this.textWidthVp()))),
+        height: Math.max(1, Math.round(PageLayout.imageHeightPx(block, this.pageMetrics()))),
+      })
+      .backgroundColor(ReaderPalette.imageBackground(this.theme))
+      .borderRadius(4);
   }
 
   @Builder
@@ -555,8 +581,9 @@ export struct ReaderView {
       this.chapterIndex = chapter.index;
       this.chapterTitle = chapter.title;
       this.paragraphCount = chapter.paragraphs.length;
-      this.chapterParagraphs = chapter.paragraphs;
-      this.paragraphs.update(chapter.paragraphs);
+      this.chapterBlocks = chapter.blocks;
+      this.blockCount = chapter.blocks.length;
+      this.blocks.update(chapter.blocks);
       this.showBars = false;
       this.cancelBarsAutoHide();
       this.restoreParagraph = paragraphIndex < 0 ? 0 : paragraphIndex;
@@ -592,7 +619,7 @@ export struct ReaderView {
   // ---- 分页 ----
 
   private paginateCurrentChapter(): void {
-    if (this.contentWidthVp <= 0 || this.contentHeightVp <= 0 || this.chapterParagraphs.length === 0) {
+    if (this.contentWidthVp <= 0 || this.contentHeightVp <= 0 || this.chapterBlocks.length === 0) {
       // 首帧还没拿到内容区尺寸（或本章无文字）：等 onAreaChange 再补做
       this.paginationPending = true;
       return;
@@ -619,14 +646,7 @@ export struct ReaderView {
     if (cached !== undefined) {
       pages = cached;
     } else {
-      const metrics: PageMetrics = {
-        widthVp: this.textWidthVp(),
-        heightPx: this.vpToPx(this.textHeightVp()),
-        fontSize: this.fontSize,
-        lineHeight: this.lineHeight,
-        paragraphSpacingPx: this.vpToPx(PARAGRAPH_SPACING),
-      };
-      pages = PageLayout.paginate(this.chapterParagraphs, metrics,
+      pages = PageLayout.paginate(this.chapterBlocks, this.pageMetrics(),
         (text: string, size: number, width: number, lineHeight: number) =>
           this.measureTextHeightPx(text, size, width, lineHeight));
       if (this.pageCache.size >= MAX_PAGE_CACHE) {
@@ -660,7 +680,7 @@ export struct ReaderView {
     }
     this.contentWidthVp = width;
     this.contentHeightVp = height;
-    if (!ReaderFlip.isPaged(this.flipMode) || this.chapterParagraphs.length === 0) {
+    if (!ReaderFlip.isPaged(this.flipMode) || this.chapterBlocks.length === 0) {
       return;
     }
     if (this.paginationPending || this.pageCount === 0) {
@@ -675,6 +695,19 @@ export struct ReaderView {
   private textHeightVp(): number {
     // 扣掉页脚页码占位，避免正文与页码重叠
     return Math.max(1, this.contentHeightVp - CONTENT_TOP_SPACE - CONTENT_BOTTOM_SPACE - PAGE_FOOTER_SPACE);
+  }
+
+  /** 当前正文可用区参数：分页与插图高度都用它，保证两处公式一致。 */
+  private pageMetrics(): PageMetrics {
+    const widthVp = this.textWidthVp();
+    return {
+      widthVp: widthVp,
+      widthPx: this.vpToPx(widthVp),
+      heightPx: this.vpToPx(this.textHeightVp()),
+      fontSize: this.fontSize,
+      lineHeight: this.lineHeight,
+      paragraphSpacingPx: this.vpToPx(PARAGRAPH_SPACING),
+    };
   }
 
   /**
@@ -899,7 +932,9 @@ export struct ReaderView {
   }
 
   private onListScroll(start: number): void {
-    this.reportProgress(start, true);
+    // 滚动模式的 item 是「块」，进度仍按文本段落序号上报
+    const block = this.chapterBlocks[start];
+    this.reportProgress(block === undefined ? 0 : block.paragraphIndex, true);
   }
 
   /** 上报进度；`throttled` 为 true 时按 0.5% 粒度去抖。 */
@@ -998,6 +1033,14 @@ export struct ReaderView {
   private vpToPx(value: number): number {
     try {
       return this.getUIContext().vp2px(value);
+    } catch (_error) {
+      return value;
+    }
+  }
+
+  private pxToVp(value: number): number {
+    try {
+      return this.getUIContext().px2vp(value);
     } catch (_error) {
       return value;
     }

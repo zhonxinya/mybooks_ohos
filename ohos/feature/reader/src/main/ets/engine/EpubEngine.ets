@@ -1,9 +1,10 @@
 import { zlib } from '@kit.BasicServicesKit';
+import { image } from '@kit.ImageKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { BookEngine, ReaderCatalogItem, ReaderChapter } from '../model/ReaderTypes';
+import { BookEngine, ReaderBlock, ReaderBlockKind, ReaderCatalogItem, ReaderChapter } from '../model/ReaderTypes';
 import { BookFile } from './BookFile';
 import { EpubXml } from './EpubXml';
-import { MarkupText } from './MarkupText';
+import { MarkupText, ParsedBlock } from './MarkupText';
 
 const TAG: string = 'EpubEngine';
 
@@ -38,6 +39,8 @@ export class EpubEngine implements BookEngine {
   private readonly spineTitles: string[] = [];
   private readonly catalogItems: ReaderCatalogItem[] = [];
   private readonly cache: Map<number, ReaderChapter> = new Map();
+  /** 图片宽高比缓存（同一张图在目录/封面等处可能被复用）。 */
+  private readonly aspectCache: Map<string, number> = new Map<string, number>();
   /** 章节文件（相对解压根目录，小写）→ spine 序号 */
   private readonly hrefIndex: Map<string, number> = new Map();
   /** 章节文件名（小写）→ spine 序号，用于 TOC href 解析失败时兜底 */
@@ -102,21 +105,30 @@ export class EpubEngine implements BookEngine {
     if (cached !== undefined) {
       return cached;
     }
+    const chapterPath: string = this.spinePaths[safeIndex];
     let paragraphs: string[] = [];
+    let blocks: ReaderBlock[] = [];
     try {
-      const markup = BookFile.readText(this.spinePaths[safeIndex]);
-      paragraphs = MarkupText.toParagraphs(markup);
-      hilog.debug(0x0000, TAG, 'chapter %{public}d: markup=%{public}d paragraphs=%{public}d',
-        safeIndex, markup.length, paragraphs.length);
+      const markup = BookFile.readText(chapterPath);
+      blocks = await this.buildBlocks(MarkupText.toBlocks(markup), BookFile.dirName(chapterPath));
+      for (let i = 0; i < blocks.length; i++) {
+        if (blocks[i].kind === ReaderBlockKind.TEXT) {
+          paragraphs.push(blocks[i].text);
+        }
+      }
+      hilog.debug(0x0000, TAG, 'chapter %{public}d: markup=%{public}d blocks=%{public}d images=%{public}d',
+        safeIndex, markup.length, blocks.length, blocks.length - paragraphs.length);
     } catch (error) {
       hilog.error(0x0000, TAG, 'chapter %{public}d failed: %{public}s',
         safeIndex, (error as Error).message);
       paragraphs = ['（本章内容读取失败）'];
+      blocks = [EpubEngine.textBlock(paragraphs[0], 0)];
     }
     const chapter: ReaderChapter = {
       index: safeIndex,
       title: this.spineTitles[safeIndex],
       paragraphs: paragraphs,
+      blocks: blocks,
     };
     if (this.cache.size >= MAX_CACHED_CHAPTERS) {
       this.cache.clear();
@@ -127,6 +139,75 @@ export class EpubEngine implements BookEngine {
 
   close(): void {
     this.cache.clear();
+  }
+
+  // ---- 正文块（文本 + 插图）----
+
+  /**
+   * 把解析结果转成带绝对路径与宽高比的正文块。
+   * 引用不到或读取失败的图片直接跳过，避免在页面上留下破图占位。
+   */
+  private async buildBlocks(parsed: ParsedBlock[], chapterDir: string): Promise<ReaderBlock[]> {
+    const blocks: ReaderBlock[] = [];
+    let paragraphIndex: number = 0;
+    for (let i = 0; i < parsed.length; i++) {
+      const item: ParsedBlock = parsed[i];
+      if (!item.isImage) {
+        blocks.push(EpubEngine.textBlock(item.text, paragraphIndex));
+        paragraphIndex++;
+        continue;
+      }
+      const src: string = BookFile.join(chapterDir, BookFile.normalizeHref(item.src));
+      if (!BookFile.exists(src)) {
+        hilog.warn(0x0000, TAG, 'image missing: %{public}s', src);
+        continue;
+      }
+      const aspect: number = await this.imageAspect(src);
+      blocks.push({
+        kind: ReaderBlockKind.IMAGE,
+        text: '',
+        src: src,
+        alt: item.alt,
+        aspect: aspect,
+        paragraphIndex: paragraphIndex,
+      });
+    }
+    return blocks;
+  }
+
+  /** 取图片宽高比（宽/高）；失败返回 0，由渲染端按默认比例处理。 */
+  private async imageAspect(path: string): Promise<number> {
+    const cached = this.aspectCache.get(path);
+    if (cached !== undefined) {
+      return cached;
+    }
+    let aspect: number = 0;
+    try {
+      const source = image.createImageSource(path);
+      if (source !== undefined) {
+        const info = await source.getImageInfo();
+        const size = info.size;
+        if (size.width > 0 && size.height > 0) {
+          aspect = size.width / size.height;
+        }
+        source.release();
+      }
+    } catch (error) {
+      hilog.warn(0x0000, TAG, 'image info failed: %{public}s (%{public}s)', path, (error as Error).message);
+    }
+    this.aspectCache.set(path, aspect);
+    return aspect;
+  }
+
+  private static textBlock(text: string, paragraphIndex: number): ReaderBlock {
+    return {
+      kind: ReaderBlockKind.TEXT,
+      text: text,
+      src: '',
+      alt: '',
+      aspect: 0,
+      paragraphIndex: paragraphIndex,
+    };
   }
 
   // ---- container / OPF ----

@@ -8,9 +8,11 @@ const SCRIPT_PATTERN: RegExp = /<script\b[^>]*>[\s\S]*?<\/script\s*>/gi;
 const STYLE_PATTERN: RegExp = /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi;
 const HEAD_PATTERN: RegExp = /<head\b[^>]*>[\s\S]*?<\/head\s*>/gi;
 const COMMENT_PATTERN: RegExp = /<!--[\s\S]*?-->/g;
+/** `<img src=...>` 与 SVG `<image xlink:href=...>`（EPUB 封面常用后者）。 */
+const IMAGE_TAG_PATTERN: RegExp = /<(?:img|image)\b[^>]*>/gi;
 /** 块级标签（`br` 单独处理，它只是行内换行）。 */
 const BLOCK_PATTERN: RegExp =
-  /<\/?(?:p|div|hr|li|ul|ol|tr|td|th|table|h[1-6]|section|article|blockquote|figure|figcaption|pre|body|html)\b[^>]*>/gi;
+  /<\/?(?:p|div|hr|li|ul|ol|tr|td|th|table|h[1-6]|section|article|blockquote|figure|figcaption|pre|body|html|svg)\b[^>]*>/gi;
 const BR_PATTERN: RegExp = /<br\b[^>]*>/gi;
 const TAG_PATTERN: RegExp = /<[^>]*>/g;
 /** 空白（含源码硬换行）→ 单空格。 */
@@ -25,6 +27,18 @@ const TRAILING_QUOTE_CHARS: string = '”"』」\'';
 const BLOCK_BREAK: string = '\u0000';
 /** 行内换行占位符。 */
 const LINE_BREAK: string = '\u0001';
+/** 图片占位符：`<IMAGE_BREAK>序号<IMAGE_BREAK>`，插入在文档原位置。 */
+const IMAGE_BREAK: string = '\u0002';
+
+/** 解析出的块：文本或图片（图片待调用方解析为绝对路径）。 */
+export interface ParsedBlock {
+  /** true = 图片。 */
+  isImage: boolean;
+  text: string;
+  /** 图片的相对引用（未做路径解析）。 */
+  src: string;
+  alt: string;
+}
 
 const NAMED_ENTITIES: Record<string, string> = {
   '&nbsp;': ' ',
@@ -53,10 +67,36 @@ export class MarkupText {
    *   缩进（TXT 转 EPUB 的常见写法）时才算新段，否则视为折行拼回同一段。
    */
   static toParagraphs(markup: string): string[] {
+    const blocks: ParsedBlock[] = MarkupText.toBlocks(markup);
+    const paragraphs: string[] = [];
+    for (let i = 0; i < blocks.length; i++) {
+      if (!blocks[i].isImage && blocks[i].text.length > 0) {
+        paragraphs.push(blocks[i].text);
+      }
+    }
+    return paragraphs;
+  }
+
+  /**
+   * XHTML → 有序块（文本段落 + 图片）。
+   *
+   * 图片标签先在原位置替换成占位符，最后再还原成图片块，
+   * 这样插图能落在文档里的正确位置（而不是被丢在章首或章尾）。
+   */
+  static toBlocks(markup: string): ParsedBlock[] {
     if (markup.length === 0) {
       return [];
     }
-    let text = markup.replace(SCRIPT_PATTERN, BLOCK_BREAK);
+    const images: ParsedBlock[] = [];
+    let text: string = markup.replace(IMAGE_TAG_PATTERN, (tag: string) => {
+      const src: string = MarkupText.imageSrc(tag);
+      if (src.length === 0) {
+        return ' ';
+      }
+      images.push({ isImage: true, text: '', src: src, alt: MarkupText.attr(tag, 'alt') });
+      return `${IMAGE_BREAK}${images.length - 1}${IMAGE_BREAK}`;
+    });
+    text = text.replace(SCRIPT_PATTERN, BLOCK_BREAK);
     text = text.replace(STYLE_PATTERN, BLOCK_BREAK);
     text = text.replace(HEAD_PATTERN, BLOCK_BREAK);
     text = text.replace(COMMENT_PATTERN, BLOCK_BREAK);
@@ -64,16 +104,31 @@ export class MarkupText {
     text = text.replace(BR_PATTERN, LINE_BREAK);
     text = text.replace(TAG_PATTERN, '');
     text = MarkupText.decodeEntities(text);
-    const paragraphs: string[] = [];
-    const blocks: string[] = text.split(BLOCK_BREAK);
-    for (let i = 0; i < blocks.length; i++) {
-      MarkupText.appendBlockParagraphs(blocks[i], paragraphs);
+    const blocks: ParsedBlock[] = [];
+    const parts: string[] = text.split(BLOCK_BREAK);
+    for (let i = 0; i < parts.length; i++) {
+      MarkupText.appendPartBlocks(parts[i], images, blocks);
     }
-    return paragraphs;
+    return blocks;
   }
 
-  /** 处理一个块：按 `<br/>` 折行合并/断段，产出 0..n 个段落。 */
-  private static appendBlockParagraphs(block: string, paragraphs: string[]): void {
+  /** 处理一个块级片段：其中可能夹着图片占位符。 */
+  private static appendPartBlocks(part: string, images: ParsedBlock[], blocks: ParsedBlock[]): void {
+    const pieces: string[] = part.split(IMAGE_BREAK);
+    for (let i = 0; i < pieces.length; i++) {
+      if (i % 2 === 1) {
+        const index: number = Number(pieces[i]);
+        if (!Number.isNaN(index) && index >= 0 && index < images.length) {
+          blocks.push(images[index]);
+        }
+        continue;
+      }
+      MarkupText.appendTextPieces(pieces[i], blocks);
+    }
+  }
+
+  /** 处理一段纯文本：按 `<br/>` 折行合并/断段，产出 0..n 个文本块。 */
+  private static appendTextPieces(block: string, blocks: ParsedBlock[]): void {
     const lines: string[] = block.split(LINE_BREAK);
     let current: string = '';
     for (let i = 0; i < lines.length; i++) {
@@ -87,15 +142,38 @@ export class MarkupText {
         continue;
       }
       if (MarkupText.startsNewParagraph(current, raw)) {
-        paragraphs.push(current);
+        blocks.push({ isImage: false, text: current, src: '', alt: '' });
         current = piece;
       } else {
         current = MarkupText.joinWrapped(current, piece);
       }
     }
     if (current.length > 0) {
-      paragraphs.push(current);
+      blocks.push({ isImage: false, text: current, src: '', alt: '' });
     }
+  }
+
+  /** 取图片引用：`src` 或 `xlink:href` / `href`（SVG `<image>`）。 */
+  private static imageSrc(tag: string): string {
+    const src: string = MarkupText.attr(tag, 'src');
+    if (src.length > 0) {
+      return src;
+    }
+    const xlink: string = MarkupText.attr(tag, 'xlink:href');
+    if (xlink.length > 0) {
+      return xlink;
+    }
+    return MarkupText.attr(tag, 'href');
+  }
+
+  /** 取标签属性（单/双引号都支持）。 */
+  private static attr(tag: string, name: string): string {
+    const doubleQuoted = new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, 'i').exec(tag);
+    if (doubleQuoted !== null) {
+      return doubleQuoted[1];
+    }
+    const singleQuoted = new RegExp(`\\b${name}\\s*=\\s*'([^']*)'`, 'i').exec(tag);
+    return singleQuoted === null ? '' : singleQuoted[1];
   }
 
   /** 上一行以句末标点结尾，或下一行（去掉换行后）带缩进 → 新段。 */

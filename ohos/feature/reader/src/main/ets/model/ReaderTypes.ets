@@ -99,11 +99,38 @@ export interface ReaderCatalogItem {
   title: string;
 }
 
+/** 正文块类型：文本段落或插图。 */
+export enum ReaderBlockKind {
+  TEXT = 0,
+  IMAGE = 1,
+}
+
+/**
+ * 正文块（按文档顺序）。
+ * 图片与文字混排，分页/滚动都按块处理；`paragraphIndex` 让位置与进度仍以「文本段落」
+ * 为基准，保持与 ReaderKit 阅读器的 `location` 语义一致。
+ */
+export interface ReaderBlock {
+  kind: ReaderBlockKind;
+  /** TEXT：段落文本。 */
+  text: string;
+  /** IMAGE：图片的沙箱绝对路径。 */
+  src: string;
+  /** IMAGE：替代文本（缺失时用于占位说明）。 */
+  alt: string;
+  /** IMAGE：宽高比（宽/高）；0 表示未取到，按默认比例渲染。 */
+  aspect: number;
+  /** 该块对应/之前的文本段落序号。 */
+  paragraphIndex: number;
+}
+
 export interface ReaderChapter {
   index: number;
   title: string;
-  /** 已切分好的正文段落，UI 直接逐段渲染。 */
+  /** 仅文本段落（滚动模式的百分比、进度统计仍用它）。 */
   paragraphs: string[];
+  /** 文本 + 图片的有序块，渲染与分页以此为唯一来源。 */
+  blocks: ReaderBlock[];
 }
 
 export interface ReaderLocation {

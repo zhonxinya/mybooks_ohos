@@ -1,4 +1,4 @@
-import { BookEngine, ReaderCatalogItem, ReaderChapter } from '../model/ReaderTypes';
+import { BookEngine, ReaderBlock, ReaderBlockKind, ReaderCatalogItem, ReaderChapter } from '../model/ReaderTypes';
 import { BookFile } from './BookFile';
 
 /**
@@ -33,7 +33,23 @@ export class TxtEngine implements BookEngine {
     const sections = TxtEngine.splitChapters(text);
     for (let i = 0; i < sections.length; i++) {
       const section = sections[i];
-      engine.chapters.push({ index: i, title: section.title, paragraphs: section.paragraphs });
+      const blocks: ReaderBlock[] = [];
+      for (let k = 0; k < section.paragraphs.length; k++) {
+        blocks.push({
+          kind: ReaderBlockKind.TEXT,
+          text: section.paragraphs[k],
+          src: '',
+          alt: '',
+          aspect: 0,
+          paragraphIndex: k,
+        });
+      }
+      engine.chapters.push({
+        index: i,
+        title: section.title,
+        paragraphs: section.paragraphs,
+        blocks: blocks,
+      });
       engine.catalogItems.push({ index: i, title: section.title });
     }
     return engine;
