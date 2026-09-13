@@ -12,8 +12,7 @@ import { ReaderThemeColors } from '../theme/ReaderThemeColors';
 import { TalebookService } from '../services/TalebookService';
 import { ReaderFontService, ReaderFontResolve } from '../services/ReaderFontService';
 import { WindowAbility } from '../entryability/WindowAbility';
-import { ReaderOverlayBar } from '../components/reader/ReaderOverlayBar';
-import { ReaderChrome } from '../components/reader/ReaderChrome';
+import { ReaderChrome, ReaderOverlayBar } from 'reader';
 import {
   READKIT_FLIP_LABELS,
   ReaderFontOption,
@@ -1603,6 +1602,8 @@ struct ReadKitReader {
               canGoPrevChapter: this.canGoPrevChapter(),
               canGoNextChapter: this.canGoNextChapter(),
               activeNav: this.overlayNav,
+              showSearch: true,
+              showAloud: true,
               onSearch: () => {
                 this.getUIContext().getPromptAction().showToast({ message: '正文搜索开发中' });
               },

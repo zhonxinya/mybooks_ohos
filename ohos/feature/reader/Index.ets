@@ -1,6 +1,9 @@
 // 独立阅读器模块对外出口：宿主只需依赖这些符号
 export { ReaderView } from './src/main/ets/ui/ReaderView';
 export { ReaderControlPanel } from './src/main/ets/ui/ReaderControlPanel';
+export { ReaderChrome } from './src/main/ets/ui/ReaderChrome';
+export { ReaderIconButton } from './src/main/ets/ui/ReaderIconButton';
+export { ReaderOverlayBar } from './src/main/ets/ui/ReaderOverlayBar';
 export {
   ReaderChip,
   ReaderPanelButton,
