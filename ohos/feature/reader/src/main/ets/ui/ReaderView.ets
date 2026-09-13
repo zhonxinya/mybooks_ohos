@@ -252,7 +252,7 @@ export struct ReaderView {
           showBookmarks: false,
           showAloud: false,
           onSelectCatalogIndex: (index: number) => this.goToChapter(index),
-          onSettingsChanged: () => this.onPanelSettingsChanged(),
+          onSettingsChanged: (relayout: boolean) => this.onPanelSettingsChanged(relayout),
           onClose: () => {
             this.closePanel();
           },
@@ -281,7 +281,7 @@ export struct ReaderView {
   }
 
   /** 面板里改动的字号/行距/主题/翻页/常亮统一在这里落盘并重排。 */
-  private onPanelSettingsChanged(): void {
+  private onPanelSettingsChanged(relayout: boolean): void {
     const settings: ReaderSettings = {
       fontSize: this.fontSize,
       lineHeight: this.lineHeight,
@@ -289,7 +289,7 @@ export struct ReaderView {
       flipMode: this.flipMode,
       keepScreenOn: this.keepScreenOn,
     };
-    this.applySettings(settings);
+    this.applySettings(settings, relayout);
   }
 
   // ---- 正文 ----
@@ -1006,6 +1006,11 @@ export struct ReaderView {
     if (!ReaderFlip.isPaged(this.flipMode)) {
       return;
     }
+    // 章还没加载、或还没分出任何页时翻页无意义：此时 pageCount=0，下面会把任何点击都当成「越界」而跳章，
+    // 连点几下就连续跳章、每次都停在新章第 1 页（表现为「翻页总是回到第一页」）。
+    if (this.chapterLoading || this.pageCount === 0) {
+      return;
+    }
     // 分片分页还没补完时先补完：否则「未分到的页」会被误判为章末而跳章
     this.drainPagination();
     const target = this.pageIndex + delta;
@@ -1135,11 +1140,11 @@ export struct ReaderView {
    * 应用设置。控制面板通过 `@Link` 直接改本组件的状态，所以这里不能拿「新旧状态」比较，
    * 而是与**上次已生效**的排版参数比较，决定是否需要重新分页或切换阅读形态。
    */
-  private applySettings(settings: ReaderSettings): void {
+  private applySettings(settings: ReaderSettings, relayout: boolean): void {
     const nextFlip = ReaderFlip.normalize(settings.flipMode);
-    const metricsChanged = settings.fontSize !== this.appliedFontSize ||
-      settings.lineHeight !== this.appliedLineHeight;
-    const flipChanged = nextFlip !== this.appliedFlipMode;
+    const metricsChanged = relayout && (settings.fontSize !== this.appliedFontSize ||
+      settings.lineHeight !== this.appliedLineHeight);
+    const flipChanged = relayout && nextFlip !== this.appliedFlipMode;
     this.appliedFontSize = settings.fontSize;
     this.appliedLineHeight = settings.lineHeight;
     this.appliedFlipMode = nextFlip;

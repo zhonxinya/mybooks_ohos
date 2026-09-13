@@ -83,7 +83,7 @@ export struct ReaderControlPanel {
   onRemoveBookmark: (bookmarkId: string) => void = (_id: string) => {};
   onSelectFont: (fontId: string) => void = (_fontId: string) => {};
   /** 字号/行距/主题/翻页变化后：宿主持久化并按需重新排版/定位 */
-  onSettingsChanged: () => void = () => {};
+  onSettingsChanged: (relayout: boolean) => void = (_relayout: boolean) => {};
   onTtsPlay: () => void = () => {};
   onTtsPause: () => void = () => {};
   onTtsStop: () => void = () => {};
@@ -246,7 +246,7 @@ export struct ReaderControlPanel {
               step: 1,
               onChange: (value: number) => {
                 this.fontSize = value;
-                this.onSettingsChanged();
+                this.onSettingsChanged(true);
               },
             });
             ReaderSliderBlock({
@@ -258,7 +258,7 @@ export struct ReaderControlPanel {
               step: 0.1,
               onChange: (value: number) => {
                 this.lineHeight = value;
-                this.onSettingsChanged();
+                this.onSettingsChanged(true);
               },
             });
           }
@@ -270,7 +270,7 @@ export struct ReaderControlPanel {
             selectedIndex: this.theme,
             onSelect: (index: number) => {
               this.theme = index as ReaderTheme;
-              this.onSettingsChanged();
+              this.onSettingsChanged(true);
             },
           });
         }
@@ -283,7 +283,7 @@ export struct ReaderControlPanel {
               onSelect: (index: number) => {
                 if (index >= 0 && index < this.flipValues.length) {
                   this.flipValue = this.flipValues[index];
-                  this.onSettingsChanged();
+                  this.onSettingsChanged(true);
                 }
               },
             });
@@ -320,7 +320,7 @@ export struct ReaderControlPanel {
         isOn: this.keepScreenOn,
         onChange: (value: boolean) => {
           this.keepScreenOn = value;
-          this.onSettingsChanged();
+          this.onSettingsChanged(false);
         },
       });
     }

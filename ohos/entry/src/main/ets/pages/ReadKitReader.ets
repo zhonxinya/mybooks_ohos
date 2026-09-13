@@ -16,6 +16,7 @@ import { ReaderOverlayBar } from '../components/reader/ReaderOverlayBar';
 import { ReaderChrome } from '../components/reader/ReaderChrome';
 import {
   READKIT_FLIP_LABELS,
+  ReaderFontOption,
   READKIT_FLIP_VALUES,
   ReaderBookmark,
   ReaderCatalogItem,
@@ -94,6 +95,8 @@ struct ReadKitReader {
   @State private lineHeight: number = 1.6;
   @State private selectedFontId: string = ReaderFontCatalog.SYSTEM_ID;
   @State private fontDownloading: boolean = false;
+  /** 字体列表：静态清单，提到 build 外，避免每次重建都调用。 */
+  private readonly fontOptions: ReaderFontOption[] = ReaderFontCatalog.listOptions();
   @State private readerTheme: ReaderTheme = ReaderTheme.LIGHT;
   @State private flipMode: string = '0';
   @State @Watch('onKeepScreenOnChanged') private keepScreenOn: boolean = false;
@@ -1530,7 +1533,7 @@ struct ReadKitReader {
                   fontSize: $fontSize,
                   lineHeight: $lineHeight,
                   selectedFontId: this.selectedFontId,
-                  fontOptions: ReaderFontCatalog.listOptions(),
+                  fontOptions: this.fontOptions,
                   theme: $readerTheme,
                   flipLabels: READKIT_FLIP_LABELS,
                   flipValues: READKIT_FLIP_VALUES,
@@ -1574,10 +1577,16 @@ struct ReadKitReader {
                   onSelectFont: (fontId: string) => {
                     void this.selectFont(fontId);
                   },
-                  onSettingsChanged: () => {
-                    this.applySettings(true);
+                  onSettingsChanged: (relayout: boolean) => {
+                    if (relayout) {
+                      // 字号/行距/主题/翻页：重排版后按当前位置重新定位
+                      this.applySettings(true);
+                      void this.reapplyReadingPosition();
+                    } else {
+                      // 仅行为类设置（常亮）：只落盘，避免重排版把正文拉回章首
+                      this.saveReaderPrefs();
+                    }
                     this.syncKeepScreenOn();
-                    void this.reapplyReadingPosition();
                   },
                   onClose: () => {
                     this.closeSubPanel();
