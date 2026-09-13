@@ -1,4 +1,6 @@
 import { common } from '@kit.AbilityKit';
+import { window } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
   READER_FLIP_DEFAULT,
   READER_FLIP_PREF_KEY,
@@ -13,6 +15,9 @@ import {
 } from 'reader';
 import { TalebookService } from '../services/TalebookService';
 import { ReadKitSession } from '../services/ReadKitSession';
+import { WindowAbility } from '../entryability/WindowAbility';
+
+const TAG: string = 'BuiltInReaderPage';
 
 /** 与 `ReaderLauncher` 的 `ReaderOpenParams` 一致。 */
 interface BuiltInReaderParams {
@@ -32,6 +37,7 @@ const MAX_LINE_HEIGHT: number = 3;
 const FONT_SIZE_KEY: string = 'reader_font_size';
 const LINE_HEIGHT_KEY: string = 'reader_line_height';
 const THEME_KEY: string = 'reader_theme';
+const KEEP_SCREEN_ON_KEY: string = 'reader_keep_screen_on';
 /** 主题取值顺序必须与 `ReaderTheme` 枚举一致。 */
 const THEMES: ReaderTheme[] = [ReaderTheme.LIGHT, ReaderTheme.DARK, ReaderTheme.EYE];
 
@@ -46,6 +52,7 @@ const DEFAULT_OPTIONS: ReaderOpenOptions = {
     lineHeight: DEFAULT_LINE_HEIGHT,
     theme: ReaderTheme.LIGHT,
     flipMode: READER_FLIP_DEFAULT,
+    keepScreenOn: false,
   },
 };
 
@@ -69,6 +76,7 @@ struct BuiltInReaderPage {
   private bookId: string = '';
   private bookTitle: string = '';
   private bookFormat: string = '';
+  private keepScreenOn: boolean = false;
   private options: ReaderOpenOptions = DEFAULT_OPTIONS;
   private callbacks: ReaderCallbacks = DEFAULT_CALLBACKS;
 
@@ -79,29 +87,36 @@ struct BuiltInReaderPage {
     this.bookId = params.bookId ?? '';
     this.bookTitle = params.bookTitle ?? '';
     this.bookFormat = params.format ?? '';
+    const settings = BuiltInReaderPage.loadSettings();
+    this.keepScreenOn = settings.keepScreenOn;
     this.options = {
       filePath: this.filePath,
       format: this.bookFormat,
       title: this.bookTitle,
       cacheDir: context.cacheDir,
       location: params.location ?? '',
-      settings: BuiltInReaderPage.loadSettings(),
+      settings: settings,
     };
     this.callbacks = {
       onProgress: (location: ReaderLocation, chapterTitle: string): void => {
         this.persistProgress(location, chapterTitle);
       },
       onClose: (): void => {
-        this.getUIContext().getRouter().back();
+        this.exitReader();
       },
       onSettingsChanged: (settings: ReaderSettings): void => {
         BuiltInReaderPage.saveSettings(settings);
+        this.applyKeepScreenOn(settings.keepScreenOn);
       },
     };
+    void this.enterImmersiveMode();
+    this.applyKeepScreenOn(this.keepScreenOn);
   }
 
   aboutToDisappear(): void {
     ReadKitSession.flushProgress();
+    this.restoreSystemBars();
+    this.applyKeepScreenOn(false);
   }
 
   build() {
@@ -110,6 +125,45 @@ struct BuiltInReaderPage {
     }
     .width('100%')
     .height('100%');
+  }
+
+  /** 沉浸式：全屏布局 + 隐藏状态栏/导航栏（与既有阅读器一致）。 */
+  private async enterImmersiveMode(): Promise<void> {
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    try {
+      await WindowAbility.getInstance().setWindowLayoutFullScreen(true);
+      WindowAbility.getInstance().toggleWindowSystemBar([], context);
+    } catch (error) {
+      hilog.warn(0x0000, TAG, 'enterImmersiveMode failed: %{public}s', (error as Error).message);
+    }
+  }
+
+  /** 退出阅读器：恢复系统栏后返回（恢复动作放这里，保证点返回与手势返回都覆盖）。 */
+  private exitReader(): void {
+    this.restoreSystemBars();
+    this.getUIContext().getRouter().back();
+  }
+
+  private restoreSystemBars(): void {
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      WindowAbility.getInstance().toggleWindowSystemBar(['status', 'navigation'], context);
+      void WindowAbility.getInstance().setWindowLayoutFullScreen(false);
+    } catch (error) {
+      hilog.warn(0x0000, TAG, 'restoreSystemBars failed: %{public}s', (error as Error).message);
+    }
+  }
+
+  /** 阅读时常亮屏幕；离开阅读器时关闭，避免影响其它页面。 */
+  private applyKeepScreenOn(keepOn: boolean): void {
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      window.getLastWindow(context).then((win: window.Window) => {
+        win.setWindowKeepScreenOn(keepOn);
+      }).catch(() => {});
+    } catch (error) {
+      hilog.warn(0x0000, TAG, 'setWindowKeepScreenOn failed: %{public}s', (error as Error).message);
+    }
   }
 
   /** 进度落盘：复用既有的历史/进度通道，location 与 ReaderKit 阅读器同结构。 */
@@ -136,6 +190,7 @@ struct BuiltInReaderPage {
         MIN_LINE_HEIGHT, MAX_LINE_HEIGHT, DEFAULT_LINE_HEIGHT),
       theme: theme,
       flipMode: ReaderFlip.normalize(TalebookService.prefGet(READER_FLIP_PREF_KEY, READER_FLIP_DEFAULT)),
+      keepScreenOn: TalebookService.prefGet(KEEP_SCREEN_ON_KEY, 'false') === 'true',
     };
   }
 
@@ -145,6 +200,7 @@ struct BuiltInReaderPage {
     values[LINE_HEIGHT_KEY] = `${settings.lineHeight}`;
     values[THEME_KEY] = `${settings.theme}`;
     values[READER_FLIP_PREF_KEY] = ReaderFlip.normalize(settings.flipMode);
+    values[KEEP_SCREEN_ON_KEY] = settings.keepScreenOn ? 'true' : 'false';
     TalebookService.prefSetBatch(values);
   }
 

@@ -18,7 +18,7 @@ import { BookEngineFactory } from '../engine/BookEngineFactory';
 import { PageLayout, PageMetrics, ReaderPage } from '../engine/PageLayout';
 import { LazyDataSource } from './LazyDataSource';
 import { ReaderCatalogSheet } from './ReaderCatalogSheet';
-import { ReaderPageView } from './ReaderPageView';
+import { PAGE_FOOTER_SPACE, ReaderPageView } from './ReaderPageView';
 import { ReaderSettingsSheet } from './ReaderSettingsSheet';
 
 const TAG: string = 'ReaderView';
@@ -41,11 +41,14 @@ const TAP_ZONE_RATIO: number = 0.33;
 const PROBE_WIDTH_VP: number = 80;
 /** 分页结果最多缓存几章。 */
 const MAX_PAGE_CACHE: number = 4;
+/** 工具栏显示后自动隐藏的延时（ms）。 */
+const BARS_AUTO_HIDE_MS: number = 4000;
 const DEFAULT_SETTINGS: ReaderSettings = {
   fontSize: 18,
   lineHeight: 1.6,
   theme: ReaderTheme.LIGHT,
   flipMode: READER_FLIP_DEFAULT,
+  keepScreenOn: false,
 };
 const DEFAULT_OPTIONS: ReaderOpenOptions = {
   filePath: '',
@@ -98,6 +101,7 @@ export struct ReaderView {
   @State private lineHeight: number = DEFAULT_SETTINGS.lineHeight;
   @State private theme: ReaderTheme = DEFAULT_SETTINGS.theme;
   @State private flipMode: string = DEFAULT_SETTINGS.flipMode;
+  @State private keepScreenOn: boolean = DEFAULT_SETTINGS.keepScreenOn;
   /** 分页状态。 */
   @State private pageCount: number = 0;
   @State private pageIndex: number = 0;
@@ -128,6 +132,8 @@ export struct ReaderView {
   private contentHeightVp: number = 0;
   /** 测量入参单位换算系数：1 = 入参按 vp/fp，密度值 = 入参按 px。 */
   private measureArgScale: number = 0;
+  /** 工具栏自动隐藏定时器。 */
+  private barTimer: number = -1;
   /**
    * 分页结果缓存：同一章在相同排版参数下不重复测量。
    * 长章节（近 500 段、含跨页切分）测量要 1.5s 量级，来回翻章时缓存收益明显。
@@ -140,6 +146,7 @@ export struct ReaderView {
     this.lineHeight = settings.lineHeight;
     this.theme = settings.theme;
     this.flipMode = ReaderFlip.normalize(settings.flipMode);
+    this.keepScreenOn = settings.keepScreenOn;
     const start = ReaderView.parseLocation(this.options.location);
     this.initialIndex = start.paragraphIndex;
     this.lastParagraph = start.paragraphIndex;
@@ -149,6 +156,7 @@ export struct ReaderView {
   aboutToDisappear(): void {
     this.destroyed = true;
     this.pendingScrollIndex = -1;
+    this.cancelBarsAutoHide();
     if (this.engine !== null) {
       this.engine.close();
       this.engine = null;
@@ -182,6 +190,7 @@ export struct ReaderView {
           onSelect: (index: number) => this.goToChapter(index),
           onClose: () => {
             this.showCatalog = false;
+            this.scheduleBarsAutoHide();
           },
         });
       }
@@ -191,9 +200,11 @@ export struct ReaderView {
           lineHeight: this.lineHeight,
           theme: this.theme,
           flipMode: this.flipMode,
+          keepScreenOn: this.keepScreenOn,
           onSettingsChange: (settings: ReaderSettings) => this.applySettings(settings),
           onClose: () => {
             this.showSettings = false;
+            this.scheduleBarsAutoHide();
           },
         });
       }
@@ -251,6 +262,7 @@ export struct ReaderView {
       ReaderPageView({
         pages: this.pageSource,
         pageIndex: index,
+        pageCount: this.pageCount,
         offsetX: this.layerX(offset),
         layerOrder: this.layerZ(offset),
         fontSize: this.fontSize,
@@ -290,7 +302,7 @@ export struct ReaderView {
       this.onListScroll(start);
     })
     .onClick(() => {
-      this.showBars = !this.showBars;
+      this.toggleBars();
     });
   }
 
@@ -367,7 +379,7 @@ export struct ReaderView {
     .justifyContent(FlexAlign.Center)
     .backgroundColor(ReaderPalette.pageBackground(this.theme))
     .onClick(() => {
-      this.showBars = !this.showBars;
+      this.toggleBars();
     });
   }
 
@@ -406,6 +418,7 @@ export struct ReaderView {
         .fontColor([ReaderPalette.textColor(this.theme)])
         .padding(8)
         .onClick(() => {
+          this.cancelBarsAutoHide();
           this.showCatalog = true;
         });
     }
@@ -447,6 +460,7 @@ export struct ReaderView {
         .fontColor([ReaderPalette.textColor(this.theme)])
         .padding(8)
         .onClick(() => {
+          this.cancelBarsAutoHide();
           this.showSettings = true;
         });
     }
@@ -458,13 +472,43 @@ export struct ReaderView {
     .shadow({ radius: 16, color: '#28000000', offsetX: 0, offsetY: -4 });
   }
 
-  /** 底部进度：分页模式额外显示当前页/总页数。 */
+  /** 底部进度：分页模式额外显示当前页/总页数，并给出全书百分比。 */
   private progressText(): string {
     const chapterPart = `第 ${this.chapterIndex + 1}/${this.catalogSize} 章`;
+    const percentPart = `${Math.round(Math.max(0, this.lastReportedPercent) * 100)}%`;
     if (!ReaderFlip.isPaged(this.flipMode)) {
-      return chapterPart;
+      return `${chapterPart} · ${percentPart}`;
     }
-    return `${chapterPart} · 第 ${this.pageIndex + 1}/${this.pageCount} 页`;
+    return `${chapterPart} · 第 ${this.pageIndex + 1}/${this.pageCount} 页 · ${percentPart}`;
+  }
+
+  // ---- 工具栏显隐 ----
+
+  private toggleBars(): void {
+    this.showBars = !this.showBars;
+    if (this.showBars) {
+      this.scheduleBarsAutoHide();
+    } else {
+      this.cancelBarsAutoHide();
+    }
+  }
+
+  /** 工具栏显示后自动隐藏，避免长时间占住正文（打开面板时不隐藏）。 */
+  private scheduleBarsAutoHide(): void {
+    this.cancelBarsAutoHide();
+    this.barTimer = setTimeout(() => {
+      this.barTimer = -1;
+      if (this.showBars && !this.showCatalog && !this.showSettings) {
+        this.showBars = false;
+      }
+    }, BARS_AUTO_HIDE_MS);
+  }
+
+  private cancelBarsAutoHide(): void {
+    if (this.barTimer >= 0) {
+      clearTimeout(this.barTimer);
+      this.barTimer = -1;
+    }
   }
 
   private chapterNavColor(enabled: boolean): ResourceColor {
@@ -514,6 +558,7 @@ export struct ReaderView {
       this.chapterParagraphs = chapter.paragraphs;
       this.paragraphs.update(chapter.paragraphs);
       this.showBars = false;
+      this.cancelBarsAutoHide();
       this.restoreParagraph = paragraphIndex < 0 ? 0 : paragraphIndex;
       this.pendingLastPage = toLastPage;
       this.pages = [];
@@ -628,7 +673,8 @@ export struct ReaderView {
   }
 
   private textHeightVp(): number {
-    return Math.max(1, this.contentHeightVp - CONTENT_TOP_SPACE - CONTENT_BOTTOM_SPACE);
+    // 扣掉页脚页码占位，避免正文与页码重叠
+    return Math.max(1, this.contentHeightVp - CONTENT_TOP_SPACE - CONTENT_BOTTOM_SPACE - PAGE_FOOTER_SPACE);
   }
 
   /**
@@ -783,7 +829,7 @@ export struct ReaderView {
   private onPagerClick(event: ClickEvent): void {
     const width = this.contentWidthVp;
     if (width <= 0) {
-      this.showBars = !this.showBars;
+      this.toggleBars();
       return;
     }
     const x = event.x;
@@ -795,7 +841,7 @@ export struct ReaderView {
       this.turnPage(1);
       return;
     }
-    this.showBars = !this.showBars;
+    this.toggleBars();
   }
 
   /** 页面层横向位移：覆盖模式只动「上面那一页」，滑动模式两页同步平移。 */
@@ -888,11 +934,13 @@ export struct ReaderView {
     this.lineHeight = settings.lineHeight;
     this.theme = settings.theme;
     this.flipMode = nextFlip;
+    this.keepScreenOn = settings.keepScreenOn;
     const applied: ReaderSettings = {
       fontSize: settings.fontSize,
       lineHeight: settings.lineHeight,
       theme: settings.theme,
       flipMode: nextFlip,
+      keepScreenOn: settings.keepScreenOn,
     };
     this.callbacks.onSettingsChanged(applied);
     if (ReaderFlip.isPaged(nextFlip)) {

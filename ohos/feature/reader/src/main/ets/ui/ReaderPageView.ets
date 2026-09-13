@@ -4,6 +4,8 @@ import { ReaderPage } from '../engine/PageLayout';
 import { LazyDataSource } from './LazyDataSource';
 
 const PARAGRAPH_SPACING: number = 12;
+/** 页脚页码占用的高度（vp），需与分页预算里的扣减保持一致。 */
+export const PAGE_FOOTER_SPACE: number = 20;
 
 /**
  * 单页视图（分页阅读器用）。
@@ -16,6 +18,7 @@ const PARAGRAPH_SPACING: number = 12;
 export struct ReaderPageView {
   pages: LazyDataSource<ReaderPage> = new LazyDataSource<ReaderPage>();
   @Prop pageIndex: number = 0;
+  @Prop pageCount: number = 0;
   @Prop offsetX: number = 0;
   @Prop layerOrder: number = 0;
   @Prop fontSize: number = 18;
@@ -34,6 +37,15 @@ export struct ReaderPageView {
           .fontColor(ReaderPalette.textColor(this.theme))
           .width('100%');
       }, (text: string, index: number) => `${this.pageIndex}_${index}`);
+      if (this.pageCount > 1) {
+        // 页脚页码：占位高度已从分页预算中扣除（PAGE_FOOTER_SPACE）
+        Text(`${this.pageIndex + 1} / ${this.pageCount}`)
+          .fontSize(10)
+          .fontColor(ReaderPalette.hintColor(this.theme))
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .margin({ top: 'auto' });
+      }
     }
     .width('100%')
     .height('100%')

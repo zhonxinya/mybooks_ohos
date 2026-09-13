@@ -89,6 +89,8 @@ export interface ReaderSettings {
   theme: ReaderTheme;
   /** 翻页方式，取值见 `READER_FLIP_*`。 */
   flipMode: string;
+  /** 阅读时常亮屏幕（由宿主用 window API 应用）。 */
+  keepScreenOn: boolean;
 }
 
 export interface ReaderCatalogItem {
