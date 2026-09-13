@@ -51,6 +51,8 @@ const INITIAL_PAGINATION_STEPS: number = 24;
 const PAGINATION_STEPS_PER_FRAME: number = 24;
 /** 每个分页切片的毫秒预算：保证单帧不被分页拖长（分页只能用 UI 线程，measureTextSize 依赖 UIContext）。 */
 const PAGINATION_SLICE_MS: number = 8;
+/** 翻页时为「确认目标页是否存在」允许的分页补算时间上限（ms）：超时就让这次翻页先不生效，避免卡住 UI。 */
+const PAGE_TURN_PAGINATION_MS: number = 8;
 /** 工具栏显示后自动隐藏的延时（ms）。 */
 const BARS_AUTO_HIDE_MS: number = 4000;
 const DEFAULT_SETTINGS: ReaderSettings = {
@@ -72,6 +74,15 @@ const DEFAULT_OPTIONS: ReaderOpenOptions = {
 interface ParsedLocation {
   chapterIndex: number;
   paragraphIndex: number;
+}
+
+/**
+ * 页面层参数。`@Builder` 只有**按引用传参**（单一对象）时才会随状态变化刷新内部 UI，
+ * 因此页码与层偏移必须打包成对象传入，不能用两个 number 参数。
+ */
+interface ReaderLayerSpec {
+  index: number;
+  offset: number;
 }
 
 /**
@@ -315,12 +326,12 @@ export struct ReaderView {
   pagedContent() {
     Stack() {
       if (this.pageIndex > 0 || this.dragDir === -1) {
-        this.pageLayer(this.pageIndex - 1, -1);
+        this.pageLayer({ index: this.pageIndex - 1, offset: -1 });
       }
       if (this.pageIndex < this.pageCount - 1 || this.dragDir === 1) {
-        this.pageLayer(this.pageIndex + 1, 1);
+        this.pageLayer({ index: this.pageIndex + 1, offset: 1 });
       }
-      this.pageLayer(this.pageIndex, 0);
+      this.pageLayer({ index: this.pageIndex, offset: 0 });
     }
     .width('100%')
     .height('100%')
@@ -334,16 +345,23 @@ export struct ReaderView {
     .onClick((event: ClickEvent) => this.onPagerClick(event));
   }
 
+  /**
+   * 单个页面层。
+   *
+   * **必须传单一对象**：ArkUI 的 `@Builder` 按值传参时「状态变量变化不会触发 Builder 内部 UI 刷新」，
+   * 早期写法 `pageLayer(index, offset)`（两个 number）会导致翻页时底栏页码在变、页面内容却永远停在
+   * 首次构建那一页（表现为「翻页失败、始终回到第一页」）。
+   */
   @Builder
-  pageLayer(index: number, offset: number) {
-    if (index >= 0 && index < this.pageCount) {
+  pageLayer(layer: ReaderLayerSpec) {
+    if (layer.index >= 0 && layer.index < this.pageCount) {
       ReaderPageView({
         pages: this.pageSource,
-        pageIndex: index,
+        pageIndex: layer.index,
         pageCount: this.pageCount,
         pageToken: this.paginationToken,
-        offsetX: this.layerX(offset),
-        layerOrder: this.layerZ(offset),
+        offsetX: this.layerX(layer.offset),
+        layerOrder: this.layerZ(layer.offset),
         fontSize: this.fontSize,
         lineHeight: this.lineHeight,
         theme: this.theme,
@@ -822,18 +840,30 @@ export struct ReaderView {
     return page === undefined ? 0 : page.firstParagraph;
   }
 
-  /** 交互发生前先把分页补完，避免「还没分到的页」被误判为越界而跳章。 */
-  private drainPagination(): void {
+  /**
+   * 翻页前补齐分页：**只推进到「够判断目标页是否存在」为止**。
+   *
+   * 不能在这里一次性同步分完剩余整章：长章节（实测 840 章 TXT 的第 1 章有 1216 页，后台分页需 4.7s）
+   * 会让点击卡住数秒（表现为「翻页失败」）；而且分页收尾还会用恢复位置改写当前页（表现为「又回到前面」）。
+   * @returns 目标页是否已存在（false 且 `activePager === null` ⇒ 分页已完成、确实到了章末）
+   */
+  private ensurePagesFor(target: number): boolean {
     const pager = this.activePager;
     if (pager === null || pager.isFinished()) {
-      return;
+      return target < this.pageCount;
     }
-    pager.advance(Number.MAX_SAFE_INTEGER);
+    const deadline: number = Date.now() + PAGE_TURN_PAGINATION_MS;
+    while (!pager.isFinished() && pager.getPages().length <= target && Date.now() < deadline) {
+      pager.advance(PAGINATION_STEPS_PER_FRAME, PAGINATION_SLICE_MS);
+    }
     const pages = pager.getPages().slice();
     this.pages = pages;
     this.pageSource.update(pages);
     this.pageCount = pages.length;
-    this.finishPagination(this.paginationCacheKey(), pages);
+    if (pager.isFinished()) {
+      this.finishPagination(this.paginationCacheKey(), pages);
+    }
+    return target < this.pageCount;
   }
 
   /** 缓存键：章 + 排版参数（字号/行高/正文可用区），任一变化即重新分页。 */
@@ -1006,14 +1036,28 @@ export struct ReaderView {
     if (!ReaderFlip.isPaged(this.flipMode)) {
       return;
     }
-    // 章还没加载、或还没分出任何页时翻页无意义：此时 pageCount=0，下面会把任何点击都当成「越界」而跳章，
+    // 正在加载章节：忽略。此时 pageCount=0，继续往下会把点击判成「越界」而跳章，
     // 连点几下就连续跳章、每次都停在新章第 1 页（表现为「翻页总是回到第一页」）。
-    if (this.chapterLoading || this.pageCount === 0) {
+    if (this.chapterLoading) {
       return;
     }
-    // 分片分页还没补完时先补完：否则「未分到的页」会被误判为章末而跳章
-    this.drainPagination();
+    // 本章没有可渲染内容（空白页、图片都解析不到）：不要卡住，翻页直接跳相邻章
+    if (this.blockCount === 0) {
+      const neighbour = this.chapterIndex + delta;
+      if (neighbour >= 0 && neighbour < this.catalogSize) {
+        void this.loadChapter(neighbour, 0, delta < 0);
+      }
+      return;
+    }
+    // 有内容但还没分出页：稍后即可翻，先忽略这一次
+    if (this.pageCount === 0) {
+      return;
+    }
+    // 用户已手动翻页：此后不再用「恢复位置」改写当前页
+    this.pagerPositionApplied = true;
     const target = this.pageIndex + delta;
+    // 分页还没补完时按预算推进到「够判断目标页是否存在」为止，避免长章一次性同步分完卡住 UI
+    const targetExists = this.ensurePagesFor(target);
     if (target < 0) {
       const previousChapter = this.chapterIndex - 1;
       if (previousChapter >= 0) {
@@ -1021,7 +1065,11 @@ export struct ReaderView {
       }
       return;
     }
-    if (target >= this.pageCount) {
+    if (!targetExists) {
+      // 分页已完成仍越界 ⇒ 真的到了章末；分页未完成（activePager 还在）⇒ 本次先不生效，避免误跳章
+      if (this.activePager !== null) {
+        return;
+      }
       const nextChapter = this.chapterIndex + 1;
       if (nextChapter < this.catalogSize) {
         void this.loadChapter(nextChapter, 0, false);
