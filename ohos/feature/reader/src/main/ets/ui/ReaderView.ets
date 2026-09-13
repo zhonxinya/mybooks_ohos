@@ -46,6 +46,8 @@ const MAX_PAGE_CACHE: number = 4;
 /** 分片分页：首屏同步推进的步数、以及每帧推进的步数（步 ≈ 一个块/一次切分，含 1–4 次测量）。 */
 const INITIAL_PAGINATION_STEPS: number = 24;
 const PAGINATION_STEPS_PER_FRAME: number = 24;
+/** 每个分页切片的毫秒预算：保证单帧不被分页拖长（分页只能用 UI 线程，measureTextSize 依赖 UIContext）。 */
+const PAGINATION_SLICE_MS: number = 8;
 /** 工具栏显示后自动隐藏的延时（ms）。 */
 const BARS_AUTO_HIDE_MS: number = 4000;
 const DEFAULT_SETTINGS: ReaderSettings = {
@@ -684,7 +686,7 @@ export struct ReaderView {
     this.pagerTargetBlock = PageLayout.blockIndexForParagraph(this.chapterBlocks, restoreParagraph);
     this.pagerPositionApplied = false;
     // 首屏：同步推进一小段（通常几页），让用户立刻看到内容；其余按帧补完
-    this.activePager.advance(INITIAL_PAGINATION_STEPS);
+    this.activePager.advance(INITIAL_PAGINATION_STEPS, PAGINATION_SLICE_MS);
     this.publishPagination(cacheKey, this.pagerGeneration);
   }
 
@@ -715,7 +717,7 @@ export struct ReaderView {
       if (running === null || this.destroyed || generation !== this.pagerGeneration) {
         return;
       }
-      running.advance(PAGINATION_STEPS_PER_FRAME);
+      running.advance(PAGINATION_STEPS_PER_FRAME, PAGINATION_SLICE_MS);
       this.publishPagination(cacheKey, generation);
     }, 0);
   }
