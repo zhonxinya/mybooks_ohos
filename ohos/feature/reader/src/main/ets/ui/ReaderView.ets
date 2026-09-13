@@ -6,6 +6,7 @@ import {
   READER_FLIP_NONE,
   READER_FLIP_OPTIONS,
   READER_PANEL_APPEARANCE,
+  READER_PANEL_SETTINGS,
   READER_PANEL_TOC,
   READER_PARAGRAPH_PREFIX,
   ReaderBlock,
@@ -22,12 +23,13 @@ import { ReaderPalette } from '../model/ReaderPalette';
 import { BookEngineFactory } from '../engine/BookEngineFactory';
 import { PageLayout, PageMetrics, PagePager, ReaderPage } from '../engine/PageLayout';
 import { LazyDataSource } from './LazyDataSource';
+import { ReaderChrome } from './ReaderChrome';
 import { ReaderControlPanel } from './ReaderControlPanel';
+import { ReaderOverlayBar } from './ReaderOverlayBar';
 import { PAGE_FOOTER_SPACE, ReaderPageView } from './ReaderPageView';
 
 
 const TAG: string = 'ReaderView';
-const TOP_BAR_HEIGHT: number = 52;
 const CONTENT_HORIZONTAL_SPACE: number = 22;
 /** 正文上下留白：工具栏为浮层，留白保证文字不被浮层遮住。 */
 const CONTENT_TOP_SPACE: number = 44;
@@ -504,11 +506,40 @@ export struct ReaderView {
   @Builder
   overlayBars() {
     Column() {
-      this.topBar();
+      ReaderChrome({
+        bookTitle: this.bookTitle,
+        chapterTitle: this.chapterTitle,
+        chapterProgressText: this.progressText(),
+        theme: this.theme,
+        expanded: this.showBars,
+        // 内置阅读器暂无书签能力：隐藏两个书签入口，避免点了没反应
+        showBookmarkActions: false,
+        onBack: () => this.callbacks.onClose(),
+        onRefresh: () => this.reloadChapter(),
+      });
       // Blank 也必须放行：它是子节点，默认会吃掉中间区域的点击/滑动
       Blank()
         .hitTestBehavior(HitTestMode.None);
-      this.bottomBar();
+      ReaderOverlayBar({
+        theme: this.theme,
+        chapterProgress: this.chapterProgressValue(),
+        canGoPrevChapter: this.chapterIndex > 0,
+        canGoNextChapter: this.chapterIndex + 1 < this.catalogSize,
+        activeNav: this.showPanel ? this.panelTab : '',
+        // 搜索/朗读未实现，先隐藏
+        showSearch: false,
+        showAloud: false,
+        showRefresh: true,
+        showNight: true,
+        onRefresh: () => this.reloadChapter(),
+        onToggleNight: () => this.toggleNightTheme(),
+        onPrevChapter: () => this.goToChapter(this.chapterIndex - 1),
+        onNextChapter: () => this.goToChapter(this.chapterIndex + 1),
+        onChapterProgressChange: (value: number) => this.jumpToChapterProgress(value),
+        onOpenToc: () => this.openPanel(READER_PANEL_TOC),
+        onOpenAppearance: () => this.openPanel(READER_PANEL_APPEARANCE),
+        onOpenSettings: () => this.openPanel(READER_PANEL_SETTINGS),
+      });
     }
     .width('100%')
     .height('100%')
@@ -516,76 +547,58 @@ export struct ReaderView {
     .hitTestBehavior(HitTestMode.None);
   }
 
-  @Builder
-  topBar() {
-    Row({ space: 8 }) {
-      SymbolGlyph($r('sys.symbol.chevron_left'))
-        .fontSize(22)
-        .fontColor([ReaderPalette.textColor(this.theme)])
-        .padding(8)
-        .onClick(() => this.callbacks.onClose());
-      Text(this.bookTitle)
-        .fontSize(16)
-        .fontWeight(FontWeight.Medium)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .fontColor(ReaderPalette.textColor(this.theme))
-        .layoutWeight(1);
-      SymbolGlyph($r('sys.symbol.list_bullet'))
-        .fontSize(20)
-        .fontColor([ReaderPalette.textColor(this.theme)])
-        .padding(8)
-        .onClick(() => {
-          this.openPanel(READER_PANEL_TOC);
-        });
+  /** 本章进度 0~1（分页按页数，滚动按段落数）。 */
+  private chapterProgressValue(): number {
+    if (ReaderFlip.isPaged(this.flipMode)) {
+      return this.pageCount <= 1 ? 0 : this.pageIndex / (this.pageCount - 1);
     }
-    .width('100%')
-    .height(TOP_BAR_HEIGHT)
-    .padding({ left: 8, right: 8 })
-    .alignItems(VerticalAlign.Center)
-    .backgroundColor(ReaderPalette.barBackground(this.theme))
-    .shadow({ radius: 16, color: '#28000000', offsetX: 0, offsetY: 4 });
+    return this.paragraphCount <= 1 ? 0 : this.lastParagraph / (this.paragraphCount - 1);
   }
 
-  @Builder
-  bottomBar() {
-    Row({ space: 8 }) {
-      Text('上一章')
-        .fontSize(14)
-        .fontColor(this.chapterNavColor(this.chapterIndex > 0))
-        .padding(10)
-        .onClick(() => this.goToChapter(this.chapterIndex - 1));
-      Column({ space: 2 }) {
-        Text(this.chapterTitle)
-          .fontSize(13)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .fontColor(ReaderPalette.textColor(this.theme));
-        Text(this.progressText())
-          .fontSize(11)
-          .fontColor(ReaderPalette.hintColor(this.theme));
+  /** 拖动章节进度滑杆：分页按页跳转，滚动按段跳转并滚动到该处。 */
+  private jumpToChapterProgress(value: number): void {
+    const ratio = Math.min(1, Math.max(0, value));
+    if (ReaderFlip.isPaged(this.flipMode)) {
+      if (this.pageCount <= 0) {
+        return;
       }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Center);
-      Text('下一章')
-        .fontSize(14)
-        .fontColor(this.chapterNavColor(this.chapterIndex + 1 < this.catalogSize))
-        .padding(10)
-        .onClick(() => this.goToChapter(this.chapterIndex + 1));
-      SymbolGlyph($r('sys.symbol.gearshape'))
-        .fontSize(20)
-        .fontColor([ReaderPalette.textColor(this.theme)])
-        .padding(8)
-        .onClick(() => {
-          this.openPanel(READER_PANEL_APPEARANCE);
-        });
+      const target = Math.round(ratio * (this.pageCount - 1));
+      this.pageIndex = target;
+      this.reportProgress(this.firstParagraphOf(target), false);
+      return;
     }
-    .width('100%')
-    .height(TOP_BAR_HEIGHT)
-    .padding({ left: 8, right: 8 })
-    .alignItems(VerticalAlign.Center)
-    .backgroundColor(ReaderPalette.barBackground(this.theme))
-    .shadow({ radius: 16, color: '#28000000', offsetX: 0, offsetY: -4 });
+    const paragraph = Math.round(ratio * Math.max(0, this.paragraphCount - 1));
+    this.lastParagraph = paragraph;
+    this.reportProgress(paragraph, false);
+    this.scheduleScroll(paragraph);
+  }
+
+  /** 重新排版本章（清掉解析与分页缓存，回到当前位置）。 */
+  private reloadChapter(): void {
+    if (this.chapterLoading) {
+      return;
+    }
+    const paragraph = this.currentFirstParagraph();
+    this.pageCache.clear();
+    // 清掉引擎的章节缓存，保证真的是「从文件重新解析」
+    const engine = this.engine;
+    if (engine !== null) {
+      engine.close();
+    }
+    void this.loadChapter(this.chapterIndex, paragraph, false);
+  }
+
+  /** 夜间 ⇄ 浅色（主题不影响排版，沿用同一条设置持久化回调）。 */
+  private toggleNightTheme(): void {
+    const next: ReaderTheme = this.theme === ReaderTheme.DARK ? ReaderTheme.LIGHT : ReaderTheme.DARK;
+    const settings: ReaderSettings = {
+      fontSize: this.fontSize,
+      lineHeight: this.lineHeight,
+      theme: next,
+      flipMode: this.flipMode,
+      keepScreenOn: this.keepScreenOn,
+    };
+    this.applySettings(settings, false);
   }
 
   /** 底部进度：分页模式额外显示当前页/总页数，并给出全书百分比。 */
@@ -625,10 +638,6 @@ export struct ReaderView {
       clearTimeout(this.barTimer);
       this.barTimer = -1;
     }
-  }
-
-  private chapterNavColor(enabled: boolean): ResourceColor {
-    return enabled ? ReaderPalette.textColor(this.theme) : ReaderPalette.hintColor(this.theme);
   }
 
   // ---- 打开 / 切章 ----
