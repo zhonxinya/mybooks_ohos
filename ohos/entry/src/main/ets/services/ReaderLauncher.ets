@@ -1,6 +1,7 @@
 import { UIContext } from '@kit.ArkUI';
 import { deviceInfo } from '@kit.BasicServicesKit';
-import { ReaderFormats } from 'reader';
+import { READER_MODE_AUTO, READER_MODE_BUILTIN, READER_MODE_PREF_KEY, ReaderFormats } from 'reader';
+import { TalebookService } from './TalebookService';
 
 /**
  * 打开阅读器的参数（与 `pages/ReadKitReader` 的入参一致）。
@@ -18,9 +19,11 @@ export interface ReaderOpenParams {
 /**
  * 阅读器启动入口（统一守卫）。
  *
- * 优先使用系统 ReaderKit（`pages/ReadKitReader`）；设备不提供 ReaderKit 时，
- * 回退到模块自研的内置阅读器（`pages/BuiltInReaderPage`，见 `feature/reader`），
- * 该阅读器只支持 EPUB / TXT，其余格式仍只能提示用户换设备。
+ * 选择顺序（用户可在「设置 → 阅读 → 阅读器引擎」指定）：
+ * 1. 用户选了「内置阅读器」且格式支持（EPUB / TXT）→ 直接走 `pages/BuiltInReaderPage`；
+ * 2. 否则设备有系统 ReaderKit → `pages/ReadKitReader`；
+ * 3. 无 ReaderKit 但格式支持 → 回退内置阅读器（模块自研，见 `feature/reader`）；
+ * 4. 其余格式（MOBI / AZW3 等）→ 返回 false，由调用方提示。
  *
  * `@kit.ReaderKit` 由系统 HSP（`com.huawei.hmsapp.readerkit`）提供，**不是**本应用的依赖。
  * 环境缺少该 HSP 时，路由到 `pages/ReadKitReader` 会在加载其 `modules.abc` 时失败并
@@ -38,6 +41,11 @@ export class ReaderLauncher {
   /** 系统阅读器与内置阅读器都无法打开时的统一提示。 */
   static readonly UNAVAILABLE_MESSAGE: string =
     '当前环境不提供系统阅读器组件（ReaderKit），内置阅读器仅支持 EPUB / TXT';
+
+  /** 用户是否指定优先使用内置阅读器（设置 → 阅读 → 阅读器引擎）。 */
+  static prefersBuiltin(): boolean {
+    return TalebookService.prefGet(READER_MODE_PREF_KEY, READER_MODE_AUTO) === READER_MODE_BUILTIN;
+  }
 
   /**
    * 当前环境是否提供 ReaderKit。
@@ -76,12 +84,17 @@ export class ReaderLauncher {
    * @throws 内部调用可能抛出异常，由调用方处理
    */
   static open(uiContext: UIContext, params: ReaderOpenParams): boolean {
+    const builtinSupported: boolean = ReaderFormats.supports(params.format);
+    if (builtinSupported && ReaderLauncher.prefersBuiltin()) {
+      uiContext.getRouter().pushUrl({ url: 'pages/BuiltInReaderPage', params: params });
+      return true;
+    }
     if (ReaderLauncher.isAvailable()) {
       uiContext.getRouter().pushUrl({ url: 'pages/ReadKitReader', params: params });
       return true;
     }
     // 无 ReaderKit：EPUB / TXT 交给内置阅读器（自研，不依赖系统组件）
-    if (ReaderFormats.supports(params.format)) {
+    if (builtinSupported) {
       uiContext.getRouter().pushUrl({ url: 'pages/BuiltInReaderPage', params: params });
       return true;
     }

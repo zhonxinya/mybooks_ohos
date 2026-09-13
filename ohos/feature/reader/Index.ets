@@ -2,6 +2,9 @@
 export { ReaderView } from './src/main/ets/ui/ReaderView';
 export {
   BookEngine,
+  READER_MODE_AUTO,
+  READER_MODE_BUILTIN,
+  READER_MODE_PREF_KEY,
   ReaderCallbacks,
   ReaderCatalogItem,
   ReaderChapter,
