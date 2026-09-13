@@ -144,14 +144,21 @@ export class PagePager {
   }
 
   /**
-   * 推进至多 `budget` 个页内片段。
+   * 推进至多 `budget` 个页内片段，并受 `deadlineMs` 毫秒预算约束（0 表示不限时）。
+   *
+   * 分页必须在 UI 线程（`measureTextSize` 需要 UIContext），所以用**步数 + 时间双预算**
+   * 保证单次调用不会长时间占用一帧。
    * @returns 是否已全部分页完成
    */
-  advance(budget: number): boolean {
+  advance(budget: number, deadlineMs: number = 0): boolean {
+    const started: number = Date.now();
     let remaining: number = budget;
     while (remaining > 0 && !this.finished) {
       this.stepOnce();
       remaining--;
+      if (deadlineMs > 0 && Date.now() - started >= deadlineMs) {
+        break;
+      }
     }
     return this.finished;
   }

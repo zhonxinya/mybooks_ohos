@@ -1,21 +1,16 @@
+import { taskpool } from '@kit.ArkTS';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BookEngine, ReaderBlock, ReaderBlockKind, ReaderCatalogItem, ReaderChapter } from '../model/ReaderTypes';
-import { BookFile } from './BookFile';
+import { loadTxtBookTask } from './ReaderTasks';
+import { TxtSectionData } from './TxtParser';
+
+const TAG: string = 'TxtEngine';
 
 /**
- * 章节标题行：中文小说常见写法（第X章/节/回/卷/篇 + 序章/楔子/番外 等）。
- * 限定整行长度，避免把正文里提到「第三章」的句子误判为标题。
- */
-const CHAPTER_PATTERN: RegExp = new RegExp(
-  '^(?:第[0-9零一二三四五六七八九十百千万两]{1,12}[章节回卷篇集幕]' +
-  '|序章|序言|序|楔子|引子|前言|后记|尾声|终章|番外)[^。！？!?]{0,40}$');
-const MAX_TITLE_LENGTH: number = 50;
-/** 无法识别章节时，按固定字数切节，避免整本变成一个巨大章节。 */
-const FALLBACK_CHUNK_CHARS: number = 3000;
-
-/**
- * TXT 引擎：整本读入内存并按标题行切章。
+ * TXT 引擎：整本读取、编码探测与章节切分都通过 `taskpool` 在子线程完成
+ * （几 MB 文本的解析属重活，**不能在 UI 线程同步执行**，见 `ReaderTasks`）。
  *
- * TXT 是纯文本，逐章切分成本极低（几十毫秒级），一次性完成可让翻章零延迟。
+ * 切分结果一次性放入内存，翻章零延迟。
  */
 export class TxtEngine implements BookEngine {
   private readonly bookTitle: string;
@@ -26,11 +21,15 @@ export class TxtEngine implements BookEngine {
     this.bookTitle = bookTitle;
   }
 
-  /** 读取并解析整本 TXT。 */
-  static load(filePath: string, bookTitle: string): TxtEngine {
+  static async load(filePath: string, bookTitle: string): Promise<TxtEngine> {
     const engine = new TxtEngine(bookTitle);
-    const text = BookFile.readText(filePath).replace(/\r\n?/g, '\n');
-    const sections = TxtEngine.splitChapters(text);
+    let sections: TxtSectionData[];
+    try {
+      sections = await taskpool.execute(loadTxtBookTask, filePath) as TxtSectionData[];
+    } catch (error) {
+      hilog.error(0x0000, TAG, 'load failed: %{public}s', (error as Error).message);
+      throw new Error(`TXT 解析失败：${(error as Error).message}`);
+    }
     for (let i = 0; i < sections.length; i++) {
       const section = sections[i];
       const blocks: ReaderBlock[] = [];
@@ -52,6 +51,7 @@ export class TxtEngine implements BookEngine {
       });
       engine.catalogItems.push({ index: i, title: section.title });
     }
+    hilog.info(0x0000, TAG, 'loaded %{public}d chapters', sections.length);
     return engine;
   }
 
@@ -72,88 +72,4 @@ export class TxtEngine implements BookEngine {
     this.chapters.length = 0;
     this.catalogItems.length = 0;
   }
-
-  /** 按标题行切章；识别不到标题时退化为定长切节。 */
-  private static splitChapters(text: string): ReaderChapterText[] {
-    const lines: string[] = text.split('\n');
-    const sections: ReaderChapterText[] = [];
-    let title: string = '';
-    let buffer: string[] = [];
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (TxtEngine.isChapterTitle(line)) {
-        TxtEngine.flush(sections, title, buffer);
-        title = line;
-        buffer = [];
-        continue;
-      }
-      if (line.length > 0) {
-        buffer.push(line);
-      }
-    }
-    TxtEngine.flush(sections, title, buffer);
-    if (sections.length <= 1) {
-      return TxtEngine.chunkByLength(text);
-    }
-    for (let i = 0; i < sections.length; i++) {
-      if (sections[i].title.length === 0) {
-        sections[i].title = `第${i + 1}章`;
-      }
-    }
-    return sections;
-  }
-
-  private static isChapterTitle(line: string): boolean {
-    if (line.length === 0 || line.length > MAX_TITLE_LENGTH) {
-      return false;
-    }
-    return CHAPTER_PATTERN.test(line);
-  }
-
-  private static flush(sections: ReaderChapterText[], title: string, buffer: string[]): void {
-    // 首个标题之前若有正文，单独作为「开始」章节保留，避免丢内容
-    if (title.length === 0 && buffer.length === 0) {
-      return;
-    }
-    sections.push({ title: title.length > 0 ? title : '开始', paragraphs: buffer.slice() });
-  }
-
-  /** 无章节标题时的兜底切分。 */
-  private static chunkByLength(text: string): ReaderChapterText[] {
-    const paragraphs: string[] = [];
-    const lines: string[] = text.split('\n');
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (line.length > 0) {
-        paragraphs.push(line);
-      }
-    }
-    const sections: ReaderChapterText[] = [];
-    let buffer: string[] = [];
-    let length = 0;
-    let part = 1;
-    for (let i = 0; i < paragraphs.length; i++) {
-      buffer.push(paragraphs[i]);
-      length += paragraphs[i].length;
-      if (length >= FALLBACK_CHUNK_CHARS) {
-        sections.push({ title: `第${part}节`, paragraphs: buffer });
-        buffer = [];
-        length = 0;
-        part++;
-      }
-    }
-    if (buffer.length > 0) {
-      sections.push({ title: `第${part}节`, paragraphs: buffer });
-    }
-    if (sections.length === 0) {
-      sections.push({ title: '开始', paragraphs: [] });
-    }
-    return sections;
-  }
-}
-
-/** 切章中间结果。 */
-interface ReaderChapterText {
-  title: string;
-  paragraphs: string[];
 }
