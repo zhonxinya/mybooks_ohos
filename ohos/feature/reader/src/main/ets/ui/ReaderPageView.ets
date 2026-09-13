@@ -71,6 +71,8 @@ export struct ReaderPageView {
               .fontSize(this.fontSize)
               .lineHeight(this.lineHeight * this.fontSize)
               .fontColor(ReaderPalette.textColor(this.theme))
+              // 两端对齐：否则每行右侧参差，视觉上右边留白明显大于左边
+              .textAlign(TextAlign.JUSTIFY)
               .width('100%');
           }
         // key 必须含分页令牌：切章后同页码同下标会与新内容撞 key，ArkUI 会复用旧节点

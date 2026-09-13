@@ -421,6 +421,8 @@ export struct ReaderView {
                 .fontSize(this.fontSize)
                 .lineHeight(this.lineHeight * this.fontSize)
                 .fontColor(ReaderPalette.textColor(this.theme))
+                // 两端对齐：与分页模式一致，避免每行右侧参差
+                .textAlign(TextAlign.JUSTIFY)
                 .width('100%');
             }
           }
