@@ -1399,6 +1399,16 @@ struct BookDetailPage {
                 void this.pickAndUploadFormat();
               });
             }
+            // 删除图书放最后：服务端书籍移入回收站（可恢复），本地导入书籍删除本地文件
+            // 常用页签是打开「更多操作」后的默认视图，管理页签里也保留一份
+            if (this.localOnly || this.bookId > 0) {
+              ListItem() {
+                this.menuItem($r('sys.symbol.trash'), '删除图书', '', () => {
+                  this.closeSheet();
+                  this.confirmDeleteBook();
+                }, true);
+              }
+            }
           }
           .width('100%')
           .height('100%')
