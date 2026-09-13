@@ -11,6 +11,46 @@ export interface ReaderFontOption {
   ext?: string;
 }
 
+/**
+ * 字体 id → google/fonts 仓库内的 ttf/otf 路径（`ofl/` 之后的相对路径）。
+ *
+ * 为什么不直接用 @fontsource 的 woff2：ArkUI 的 `font.registerFont` 只认 ttf/otf，
+ * 传 woff2 会被静默忽略并回退系统字体（内置阅读器换字体就会“没反应”）；
+ * ReaderKit 两者都能读，因此统一用 ttf 作主源、woff2 仅作兜底。
+ * 表里没有的字体（目前只有思源宋体/思源宋体粗，其变量字体超过 jsDelivr 单文件上限）保持 woff2。
+ */
+const GOOGLE_FONTS_TTF: Record<string, string> = {
+  'source_han_sans': 'notosanssc/NotoSansSC%5Bwght%5D.ttf',
+  'source_han_sans_medium': 'notosanssc/NotoSansSC%5Bwght%5D.ttf',
+  'source_han_sans_bold': 'notosanssc/NotoSansSC%5Bwght%5D.ttf',
+  'zcool_xiaowei': 'zcoolxiaowei/ZCOOLXiaoWei-Regular.ttf',
+  'zcool_kuaile': 'zcoolkuaile/ZCOOLKuaiLe-Regular.ttf',
+  'zcool_qingke': 'zcoolqingkehuangyou/ZCOOLQingKeHuangYou-Regular.ttf',
+  'ma_shan_zheng': 'mashanzheng/MaShanZheng-Regular.ttf',
+  'zhi_mang_xing': 'zhimangxing/ZhiMangXing-Regular.ttf',
+  'long_cang': 'longcang/LongCang-Regular.ttf',
+  'liu_jian_mao_cao': 'liujianmaocao/LiuJianMaoCao-Regular.ttf',
+  'noto_sans_tc': 'notosanstc/NotoSansTC%5Bwght%5D.ttf',
+  'noto_serif_tc': 'notoseriftc/NotoSerifTC%5Bwght%5D.ttf',
+  'noto_sans_hk': 'notosanshk/NotoSansHK%5Bwght%5D.ttf',
+  'noto_sans_jp': 'notosansjp/NotoSansJP%5Bwght%5D.ttf',
+  'noto_serif_jp': 'notoserifjp/NotoSerifJP%5Bwght%5D.ttf',
+  'zen_maru_gothic': 'zenmarugothic/ZenMaruGothic-Regular.ttf',
+  'shippori_mincho': 'shipporimincho/ShipporiMincho-Regular.ttf',
+  'sawarabi_mincho': 'sawarabimincho/SawarabiMincho-Regular.ttf',
+  'noto_sans_kr': 'notosanskr/NotoSansKR%5Bwght%5D.ttf',
+  'lora': 'lora/Lora%5Bwght%5D.ttf',
+  'merriweather': 'merriweather/Merriweather%5Bopsz,wdth,wght%5D.ttf',
+  'playfair_display': 'playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf',
+  'ibm_plex_serif': 'ibmplexserif/IBMPlexSerif-Regular.ttf',
+  'ibm_plex_sans': 'ibmplexsans/IBMPlexSans%5Bwdth,wght%5D.ttf',
+  'crimson_pro': 'crimsonpro/CrimsonPro%5Bwght%5D.ttf',
+  'jetbrains_mono': 'jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf',
+  'fira_code': 'firacode/FiraCode%5Bwght%5D.ttf',
+  'caveat': 'caveat/Caveat%5Bwght%5D.ttf',
+  'patrick_hand': 'patrickhand/PatrickHand-Regular.ttf',
+};
+
 function fontsource(
   id: string,
   name: string,
@@ -19,19 +59,28 @@ function fontsource(
   fontName: string,
   ext: string = 'woff2',
 ): ReaderFontOption {
-  const primary = `https://cdn.jsdelivr.net/npm/@fontsource/${pkg}@5.2.5/files/${file}.${ext}`;
-  const mirror = `https://unpkg.com/@fontsource/${pkg}@5.2.5/files/${file}.${ext}`;
-  const mirrors: string[] = [mirror];
-  if (ext === 'woff2') {
-    mirrors.push(`https://cdn.jsdelivr.net/npm/@fontsource/${pkg}@5.2.5/files/${file}.woff`);
+  const woff2 = `https://cdn.jsdelivr.net/npm/@fontsource/${pkg}@5.2.5/files/${file}.woff2`;
+  const ghPath = GOOGLE_FONTS_TTF[id] ?? '';
+  if (ghPath.length === 0) {
+    return {
+      id: id,
+      name: name,
+      url: woff2,
+      mirrors: [`https://unpkg.com/@fontsource/${pkg}@5.2.5/files/${file}.woff2`],
+      fontName: fontName,
+      ext: 'woff2',
+    };
   }
   return {
     id: id,
     name: name,
-    url: primary,
-    mirrors: mirrors,
+    url: `https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/${ghPath}`,
+    mirrors: [
+      `https://fastly.jsdelivr.net/gh/google/fonts@main/ofl/${ghPath}`,
+      woff2,
+    ],
     fontName: fontName,
-    ext: ext,
+    ext: 'ttf',
   };
 }
 
@@ -57,6 +106,16 @@ function githubRelease(
 
 export class ReaderFontCatalog {
   static readonly SYSTEM_ID: string = 'system';
+
+  /**
+   * 该字体是否带 ttf/otf 主源。
+   * ArkUI 的 `font.registerFont` 只支持 ttf/otf，内置阅读器据此过滤掉只有 woff2 的字体
+   * （ReaderKit 阅读器用的是自己的字体栈，woff2 也能读，所以它不过滤）。
+   */
+  static hasTtf(fontId: string): boolean {
+    const option = ReaderFontCatalog.findById(fontId);
+    return option !== null && option.ext === 'ttf';
+  }
 
   private static readonly OPTIONS: ReaderFontOption[] = [
     {

@@ -1,13 +1,16 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { ReaderBlock, ReaderBlockKind, ReaderTheme } from '../model/ReaderTypes';
+import { ReaderBlock, READER_DEFAULT_FONT_FAMILY, ReaderBlockKind, ReaderTheme } from '../model/ReaderTypes';
 import { ReaderPalette } from '../model/ReaderPalette';
 import { PageLayout, PageMetrics, ReaderPage } from '../engine/PageLayout';
 import { LazyDataSource } from './LazyDataSource';
+import { ReaderBattery } from './ReaderBattery';
 
 const TAG: string = 'ReaderPageView';
 const PARAGRAPH_SPACING: number = 12;
-/** 页脚页码占用的高度（vp），需与分页预算里的扣减保持一致。 */
-export const PAGE_FOOTER_SPACE: number = 20;
+/** 阅读区顶部章节名占用的高度（vp），需与分页预算里的扣减保持一致。 */
+export const PAGE_HEADER_SPACE: number = 26;
+/** 底部分隔线 + 页脚（左书名 / 右页码）占用的高度（vp），保持小高度。 */
+export const PAGE_FOOTER_SPACE: number = 26;
 
 /**
  * 单页视图（分页阅读器用）：按块渲染文本段落与插图。
@@ -37,35 +40,80 @@ export struct ReaderPageView {
   /** 正文可用区（与分页预算一致），用于按宽高比换算图片高度。 */
   @Prop pageWidthVp: number = 0;
   @Prop pageHeightVp: number = 0;
+  /** 顶部章节名（阅读区顶部常显）。 */
+  @Prop chapterTitle: string = '';
+  /** 底部左侧书名。 */
+  @Prop bookTitle: string = '';
+  /** 页脚电量（-1 表示未知，不渲染）。 */
+  @Prop batteryLevel: number = -1;
+  @Prop batteryCharging: boolean = false;
+  /** 正文字体家族名（空 = 系统默认；由宿主解析并用 UIContext 注册后传入）。 */
+  @Prop fontFamily: string = '';
 
   build() {
-    Column({ space: PARAGRAPH_SPACING }) {
-      ForEach(this.pageBlocks(), (block: ReaderBlock, index: number) => {
-        if (block.kind === ReaderBlockKind.IMAGE) {
-          this.imageBlock(block);
-        } else {
-          Text(block.text)
-            .fontSize(this.fontSize)
-            .lineHeight(this.lineHeight * this.fontSize)
-            .fontColor(ReaderPalette.textColor(this.theme))
-            .width('100%');
-        }
-      // key 必须含分页令牌：切章后同页码同下标会与新内容撞 key，ArkUI 会复用旧节点
-      // （正文列表 → 图片页 时表现为仍显示上一章的旧文字）
-      }, (block: ReaderBlock, index: number) => `${this.pageToken}_${this.pageIndex}_${index}`);
-      if (this.pageCount > 1) {
-        // 页脚页码：占位高度已从分页预算中扣除（PAGE_FOOTER_SPACE）
-        Text(`${this.pageIndex + 1} / ${this.pageCount}`)
-          .fontSize(10)
+    Column() {
+      // 阅读区顶部：章节名（比页脚字号稍大）
+      if (this.chapterTitle.length > 0) {
+        Text(this.chapterTitle)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
           .fontColor(ReaderPalette.hintColor(this.theme))
           .width('100%')
-          .textAlign(TextAlign.Center)
-          .margin({ top: 'auto' });
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .height(PAGE_HEADER_SPACE);
       }
-    }
+
+      Column({ space: PARAGRAPH_SPACING }) {
+        ForEach(this.pageBlocks(), (block: ReaderBlock, index: number) => {
+          if (block.kind === ReaderBlockKind.IMAGE) {
+            this.imageBlock(block);
+          } else {
+            Text(block.text)
+              .fontSize(this.fontSize)
+              .lineHeight(this.lineHeight * this.fontSize)
+              .fontColor(ReaderPalette.textColor(this.theme))
+              .fontFamily(this.fontFamily.length > 0 ? this.fontFamily : READER_DEFAULT_FONT_FAMILY)
+              // 两端对齐：否则每行右侧参差，视觉上右边留白明显大于左边
+              .textAlign(TextAlign.JUSTIFY)
+              .width('100%');
+          }
+        // key 必须含分页令牌：切章后同页码同下标会与新内容撞 key，ArkUI 会复用旧节点
+        // （正文列表 → 图片页 时表现为仍显示上一章的旧文字）
+        }, (block: ReaderBlock, index: number) => `${this.pageToken}_${this.pageIndex}_${index}`);
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      .clip(true);
+
+      // 底部分隔线 + 页脚：左侧书名、右侧电量与页码；整块高度小
+      Divider()
+        .color(ReaderPalette.dividerColor(this.theme))
+        .strokeWidth(0.5);
+      Row({ space: 10 }) {
+        Text(this.bookTitle.length > 0 ? this.bookTitle : ' ')
+          .fontSize(10)
+          .fontColor(ReaderPalette.hintColor(this.theme))
+          .layoutWeight(1)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+        ReaderBattery({
+          theme: this.theme,
+          level: this.batteryLevel,
+          charging: this.batteryCharging,
+        });
+        if (this.pageCount >= 1) {
+          Text(`${this.pageIndex + 1} / ${this.pageCount}`)
+            .fontSize(10)
+            .fontColor(ReaderPalette.hintColor(this.theme));
+        }
+      }
+      .width('100%')
+      .height(PAGE_FOOTER_SPACE)
+      .alignItems(VerticalAlign.Center);    }
     .width('100%')
     .height('100%')
-    .alignItems(HorizontalAlign.Start)
     .padding({
       left: this.horizontalSpace,
       right: this.horizontalSpace,

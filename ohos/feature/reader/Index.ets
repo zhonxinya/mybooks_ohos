@@ -41,6 +41,7 @@ export {
   ReaderChapter,
   ReaderFlip,
   ReaderFontOption,
+  ReaderFontResolve,
   ReaderFormats,
   ReaderLocation,
   ReaderLocations,

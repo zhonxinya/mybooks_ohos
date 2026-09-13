@@ -100,6 +100,8 @@ export interface ReaderSettings {
   flipMode: string;
   /** 阅读时常亮屏幕（由宿主用 window API 应用）。 */
   keepScreenOn: boolean;
+  /** 正文字体 id（与 ReaderKit 阅读器共用 eader_font_id 偏好；system 表示系统默认）。 */
+  fontId: string;
 }
 
 export interface ReaderCatalogItem {
@@ -166,6 +168,11 @@ export interface ReaderOpenOptions {
   location: string;
   /** 初始阅读设置（宿主从既有偏好读取，与 ReaderKit 阅读器共用同一份偏好）。 */
   settings: ReaderSettings;
+  /**
+   * 可选字体清单（宿主提供，与 ReaderKit 阅读器同一份 ReaderFontCatalog）。
+   * 为空时控制面板不显示字体区块。
+   */
+  fontOptions: ReaderFontOption[];
 }
 
 /** 宿主回调。 */
@@ -176,6 +183,11 @@ export interface ReaderCallbacks {
   onClose: () => void;
   /** 字号/行高/主题变化时回调（由宿主持久化）。 */
   onSettingsChanged: (settings: ReaderSettings) => void;
+  /**
+   * 选中字体：宿主负责下载/缓存（复用 ReaderFontService），返回可注册的字体名与本地文件路径；
+   * 系统默认字体或不可用时返回空路径。模块只做 ArkUI 注册与应用，不参与下载。
+   */
+  onFontSelected: (fontId: string) => Promise<ReaderFontResolve>;
 }
 
 /** 书籍解析引擎：TXT / EPUB 各自实现。 */
@@ -247,6 +259,15 @@ export interface ReaderBookmark {
 export interface ReaderFontOption {
   id: string;
   name: string;
+}
+
+/** 系统默认正文字体家族（未选自定义字体时使用，避免 ArkUI 收到空字符串）。 */
+export const READER_DEFAULT_FONT_FAMILY: string = 'HarmonyOS Sans';
+
+/** 宿主解析出的字体：注册用家族名 + 本地字体文件路径（空表示系统默认）。 */
+export interface ReaderFontResolve {
+  fontName: string;
+  fontPath: string;
 }
 
 /** 朗读状态（控制面板朗读页用）。 */

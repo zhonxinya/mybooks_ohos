@@ -1,3 +1,4 @@
+import { batteryInfo } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
   BookEngine,
@@ -10,10 +11,12 @@ import {
   READER_PANEL_TOC,
   READER_PARAGRAPH_PREFIX,
   ReaderBlock,
+  READER_DEFAULT_FONT_FAMILY,
   ReaderBlockKind,
   ReaderCallbacks,
   ReaderCatalogItem,
   ReaderFlip,
+  ReaderFontResolve,
   ReaderLocation,
   ReaderOpenOptions,
   ReaderSettings,
@@ -23,17 +26,18 @@ import { ReaderPalette } from '../model/ReaderPalette';
 import { BookEngineFactory } from '../engine/BookEngineFactory';
 import { PageLayout, PageMetrics, PagePager, ReaderPage } from '../engine/PageLayout';
 import { LazyDataSource } from './LazyDataSource';
+import { ReaderBattery } from './ReaderBattery';
 import { ReaderChrome } from './ReaderChrome';
 import { ReaderControlPanel } from './ReaderControlPanel';
 import { ReaderOverlayBar } from './ReaderOverlayBar';
-import { PAGE_FOOTER_SPACE, ReaderPageView } from './ReaderPageView';
+import { PAGE_FOOTER_SPACE, PAGE_HEADER_SPACE, ReaderPageView } from './ReaderPageView';
 
 
 const TAG: string = 'ReaderView';
 const CONTENT_HORIZONTAL_SPACE: number = 22;
 /** 正文上下留白：工具栏为浮层，留白保证文字不被浮层遮住。 */
-const CONTENT_TOP_SPACE: number = 44;
-const CONTENT_BOTTOM_SPACE: number = 32;
+const CONTENT_TOP_SPACE: number = 28;
+const CONTENT_BOTTOM_SPACE: number = 18;
 const PARAGRAPH_SPACING: number = 12;
 /** 进度上报粒度：变化超过 0.5% 才回调宿主，避免滚动/翻页中频繁落盘。 */
 const PROGRESS_REPORT_STEP: number = 0.005;
@@ -57,12 +61,15 @@ const PAGINATION_SLICE_MS: number = 8;
 const PAGE_TURN_PAGINATION_MS: number = 8;
 /** 工具栏显示后自动隐藏的延时（ms）。 */
 const BARS_AUTO_HIDE_MS: number = 4000;
+/** 页脚电量的刷新间隔（ms）：系统不提供电量变化订阅，这里按分钟级轮询。 */
+const BATTERY_REFRESH_MS: number = 60000;
 const DEFAULT_SETTINGS: ReaderSettings = {
   fontSize: 18,
   lineHeight: 1.6,
   theme: ReaderTheme.LIGHT,
   flipMode: READER_FLIP_DEFAULT,
   keepScreenOn: false,
+  fontId: 'system',
 };
 const DEFAULT_OPTIONS: ReaderOpenOptions = {
   filePath: '',
@@ -71,6 +78,7 @@ const DEFAULT_OPTIONS: ReaderOpenOptions = {
   cacheDir: '',
   location: '',
   settings: DEFAULT_SETTINGS,
+  fontOptions: [],
 };
 
 interface ParsedLocation {
@@ -106,6 +114,9 @@ export struct ReaderView {
     onProgress: (location: ReaderLocation, chapterTitle: string): void => {},
     onClose: (): void => {},
     onSettingsChanged: (settings: ReaderSettings): void => {},
+    onFontSelected: async (fontId: string): Promise<ReaderFontResolve> => {
+      return { fontName: 'system', fontPath: '' };
+    },
   };
 
   @State private bookTitle: string = '';
@@ -126,6 +137,10 @@ export struct ReaderView {
   @State private fontSize: number = DEFAULT_SETTINGS.fontSize;
   @State private lineHeight: number = DEFAULT_SETTINGS.lineHeight;
   @State private theme: ReaderTheme = DEFAULT_SETTINGS.theme;
+  /** 正文字体：fontId 持久化，fontFamily 是注册后的家族名（空 = 系统默认）。 */
+  @State private fontId: string = DEFAULT_SETTINGS.fontId;
+  @State private fontFamily: string = '';
+  @State private fontDownloading: boolean = false;
   @State private flipMode: string = DEFAULT_SETTINGS.flipMode;
   @State private keepScreenOn: boolean = DEFAULT_SETTINGS.keepScreenOn;
   /** 控制面板朗读页的语速：本阅读器未启用朗读，仅满足面板的 @Link 绑定。 */
@@ -163,6 +178,12 @@ export struct ReaderView {
   private measureArgScale: number = 0;
   /** 工具栏自动隐藏定时器。 */
   private barTimer: number = -1;
+  /** 页脚电量（-1 表示读取失败，不显示）。 */
+  @State private batteryLevel: number = -1;
+  @State private batteryCharging: boolean = false;
+  private batteryTimer: number = -1;
+  /** 已注册进 ArkUI 的字体家族名，避免重复注册。 */
+  private registeredFonts: Set<string> = new Set<string>();
   /** 分片分页：进行中的分页器与调度状态。 */
   private activePager: PagePager | null = null;
   private pagerGeneration: number = 0;
@@ -181,12 +202,19 @@ export struct ReaderView {
   private pageCache: Map<string, ReaderPage[]> = new Map<string, ReaderPage[]>();
 
   aboutToAppear(): void {
+    this.refreshBattery();
+    this.batteryTimer = setInterval(() => {
+      this.refreshBattery();
+    }, BATTERY_REFRESH_MS);
     const settings = this.options.settings;
     this.fontSize = settings.fontSize;
     this.lineHeight = settings.lineHeight;
     this.theme = settings.theme;
     this.flipMode = ReaderFlip.normalize(settings.flipMode);
     this.keepScreenOn = settings.keepScreenOn;
+    this.fontId = settings.fontId.length > 0 ? settings.fontId : DEFAULT_SETTINGS.fontId;
+    // 打开时把已选字体注册进 ArkUI（宿主侧 ensureCached 命中缓存时立即返回）
+    void this.applyFont(this.fontId, false);
     const start = ReaderView.parseLocation(this.options.location);
     this.initialIndex = start.paragraphIndex;
     this.lastParagraph = start.paragraphIndex;
@@ -197,6 +225,10 @@ export struct ReaderView {
     this.destroyed = true;
     this.pendingScrollIndex = -1;
     this.cancelBarsAutoHide();
+    if (this.batteryTimer >= 0) {
+      clearInterval(this.batteryTimer);
+      this.batteryTimer = -1;
+    }
     if (this.engine !== null) {
       this.engine.close();
       this.engine = null;
@@ -253,8 +285,12 @@ export struct ReaderView {
           fontSize: $fontSize,
           lineHeight: $lineHeight,
           theme: $theme,
-          selectedFontId: '',
-          fontOptions: [],
+          selectedFontId: this.fontId,
+          fontOptions: this.options.fontOptions,
+          fontDownloading: this.fontDownloading,
+          onSelectFont: (fontId: string) => {
+            void this.applyFont(fontId, true);
+          },
           flipLabels: ReaderFlip.labels(),
           flipValues: READER_FLIP_OPTIONS,
           flipValue: $flipMode,
@@ -301,6 +337,7 @@ export struct ReaderView {
       theme: this.theme,
       flipMode: this.flipMode,
       keepScreenOn: this.keepScreenOn,
+      fontId: this.fontId,
     };
     this.applySettings(settings, relayout);
   }
@@ -372,40 +409,95 @@ export struct ReaderView {
         bottomSpace: CONTENT_BOTTOM_SPACE,
         pageWidthVp: this.textWidthVp(),
         pageHeightVp: this.textHeightVp(),
+        chapterTitle: this.chapterTitle,
+        bookTitle: this.bookTitle,
+        batteryLevel: this.batteryLevel,
+        batteryCharging: this.batteryCharging,
+        fontFamily: this.fontFamily,
       });
     }
   }
 
   @Builder
   scrollContent() {
-    List({ scroller: this.listScroller, initialIndex: this.initialIndex, space: PARAGRAPH_SPACING }) {
-      LazyForEach(this.blocks, (block: ReaderBlock, index: number) => {
-        ListItem() {
-          if (block.kind === ReaderBlockKind.IMAGE) {
-            this.scrollImageBlock(block);
-          } else {
-            Text(block.text)
-              .fontSize(this.fontSize)
-              .lineHeight(this.lineHeight * this.fontSize)
-              .fontColor(ReaderPalette.textColor(this.theme))
-              .width('100%');
+    Column() {
+      // 阅读区顶部：章节名（与分页模式一致）
+      if (this.chapterTitle.length > 0) {
+        Text(this.chapterTitle)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(ReaderPalette.hintColor(this.theme))
+          .width('100%')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .height(PAGE_HEADER_SPACE)
+          .padding({ left: CONTENT_HORIZONTAL_SPACE, right: CONTENT_HORIZONTAL_SPACE });
+      }
+      List({ scroller: this.listScroller, initialIndex: this.initialIndex, space: PARAGRAPH_SPACING }) {
+        LazyForEach(this.blocks, (block: ReaderBlock, index: number) => {
+          ListItem() {
+            if (block.kind === ReaderBlockKind.IMAGE) {
+              this.scrollImageBlock(block);
+            } else {
+              Text(block.text)
+                .fontSize(this.fontSize)
+                .lineHeight(this.lineHeight * this.fontSize)
+                .fontColor(ReaderPalette.textColor(this.theme))
+                .fontFamily(this.fontFamily.length > 0 ? this.fontFamily : READER_DEFAULT_FONT_FAMILY)
+                // 两端对齐：与分页模式一致，避免每行右侧参差
+                .textAlign(TextAlign.JUSTIFY)
+                .width('100%');
+            }
           }
+        }, (block: ReaderBlock, index: number) => `${this.chapterIndex}_${index}`);
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .padding({
+        left: CONTENT_HORIZONTAL_SPACE,
+        right: CONTENT_HORIZONTAL_SPACE,
+        bottom: CONTENT_BOTTOM_SPACE,
+      })
+      .cachedCount(4)
+      .scrollBar(BarState.Off)
+      .onScrollIndex((start: number, end: number) => {
+        this.onListScroll(start);
+      })
+      .onClick(() => {
+        this.toggleBars();
+      });
+
+      // 底部分隔线 + 页脚：左侧书名，右侧全书进度
+      Column() {
+        Divider()
+          .color(ReaderPalette.dividerColor(this.theme))
+          .strokeWidth(0.5);
+        Row({ space: 10 }) {
+          Text(this.bookTitle.length > 0 ? this.bookTitle : ' ')
+            .fontSize(10)
+            .fontColor(ReaderPalette.hintColor(this.theme))
+            .layoutWeight(1)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+          ReaderBattery({
+            theme: this.theme,
+            level: this.batteryLevel,
+            charging: this.batteryCharging,
+          });
+          Text(`${Math.round(this.lastReportedPercent * 100)}%`)
+            .fontSize(10)
+            .fontColor(ReaderPalette.hintColor(this.theme));
         }
-      }, (block: ReaderBlock, index: number) => `${this.chapterIndex}_${index}`);
+        .width('100%')
+        .height(PAGE_FOOTER_SPACE)
+        .alignItems(VerticalAlign.Center)
+        .padding({ left: CONTENT_HORIZONTAL_SPACE, right: CONTENT_HORIZONTAL_SPACE });
+      }
+      .width('100%');
     }
     .width('100%')
     .height('100%')
-    .padding({
-      left: CONTENT_HORIZONTAL_SPACE,
-      right: CONTENT_HORIZONTAL_SPACE,
-      top: CONTENT_TOP_SPACE,
-      bottom: CONTENT_BOTTOM_SPACE,
-    })
-    .cachedCount(4)
-    .scrollBar(BarState.Off)
-    .onScrollIndex((start: number, end: number) => {
-      this.onListScroll(start);
-    })
+    .padding({ top: CONTENT_TOP_SPACE })
     .onClick(() => {
       this.toggleBars();
     });
@@ -597,6 +689,7 @@ export struct ReaderView {
       theme: next,
       flipMode: this.flipMode,
       keepScreenOn: this.keepScreenOn,
+      fontId: this.fontId,
     };
     this.applySettings(settings, false);
   }
@@ -640,6 +733,88 @@ export struct ReaderView {
     }
   }
 
+  /**
+   * 应用正文字体：宿主解析（下载/缓存）→ 模块用 ArkUI 注册 → 正文改用该家族。
+   * `persist=false` 用于打开时恢复（失败静默回退系统字体）；`true` 用于用户主动切换。
+   */
+  private async applyFont(fontId: string, persist: boolean): Promise<void> {
+    const target = fontId.length > 0 ? fontId : DEFAULT_SETTINGS.fontId;
+    this.fontId = target;
+    const resolved = await this.resolveFont(target);
+    if (resolved === null) {
+      // 下载或注册失败：回退系统字体；用户主动切换时把偏好也回退，避免下次打开又失败
+      this.fontFamily = '';
+      if (persist) {
+        this.fontId = DEFAULT_SETTINGS.fontId;
+        this.notifySettingsChanged();
+      }
+      return;
+    }
+    this.fontFamily = resolved.fontPath.length > 0 ? resolved.fontName : '';
+    if (persist) {
+      // 换字体后正文宽高都变，必须重新测量分页（applySettings 的 relayout 分支）并落盘偏好
+      const settings: ReaderSettings = {
+        fontSize: this.fontSize,
+        lineHeight: this.lineHeight,
+        theme: this.theme,
+        flipMode: this.flipMode,
+        keepScreenOn: this.keepScreenOn,
+        fontId: this.fontId,
+      };
+      this.applySettings(settings, true);
+    }
+  }
+
+  /** 让宿主解析字体（下载/缓存），并按需注册进 ArkUI；失败返回 null。 */
+  private async resolveFont(fontId: string): Promise<ReaderFontResolve | null> {
+    if (fontId === DEFAULT_SETTINGS.fontId) {
+      return { fontName: 'system', fontPath: '' };
+    }
+    this.fontDownloading = true;
+    try {
+      const resolved = await this.callbacks.onFontSelected(fontId);
+      if (resolved.fontPath.length > 0 && !this.registeredFonts.has(resolved.fontName)) {
+        this.getUIContext().getFont().registerFont({
+          familyName: resolved.fontName,
+          familySrc: `file://${resolved.fontPath}`,
+        });
+        this.registeredFonts.add(resolved.fontName);
+      }
+      return resolved;
+    } catch (error) {
+      hilog.warn(0x0000, TAG, 'font resolve failed: %{public}s', (error as Error).message);
+      return null;
+    } finally {
+      this.fontDownloading = false;
+    }
+  }
+
+  /** 把当前设置（含字体）回调给宿主持久化。 */
+  private notifySettingsChanged(): void {
+    const settings: ReaderSettings = {
+      fontSize: this.fontSize,
+      lineHeight: this.lineHeight,
+      theme: this.theme,
+      flipMode: this.flipMode,
+      keepScreenOn: this.keepScreenOn,
+      fontId: this.fontId,
+    };
+    this.callbacks.onSettingsChanged(settings);
+  }
+
+  /**
+   * 读取设备电量供页脚显示（系统 API，开销极小）。
+   * 系统未向普通应用开放电量变化订阅，这里在打开时读一次并按分钟级轮询刷新。
+   */
+  private refreshBattery(): void {
+    try {
+      this.batteryLevel = batteryInfo.batterySOC;
+      this.batteryCharging = batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.ENABLE ||
+        batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.FULL;
+    } catch (_error) {
+      this.batteryLevel = -1;
+    }
+  }
   // ---- 打开 / 切章 ----
 
   private async openBook(start: ParsedLocation): Promise<void> {
@@ -901,7 +1076,7 @@ export struct ReaderView {
 
   private textHeightVp(): number {
     // 扣掉页脚页码占位，避免正文与页码重叠
-    return Math.max(1, this.contentHeightVp - CONTENT_TOP_SPACE - CONTENT_BOTTOM_SPACE - PAGE_FOOTER_SPACE);
+    return Math.max(1, this.contentHeightVp - CONTENT_TOP_SPACE - CONTENT_BOTTOM_SPACE - PAGE_HEADER_SPACE - PAGE_FOOTER_SPACE);
   }
 
   /** 当前正文可用区参数：分页与插图高度都用它，保证两处公式一致。 */
@@ -1216,6 +1391,7 @@ export struct ReaderView {
       theme: settings.theme,
       flipMode: nextFlip,
       keepScreenOn: settings.keepScreenOn,
+      fontId: this.fontId,
     };
     this.callbacks.onSettingsChanged(applied);
     if (ReaderFlip.isPaged(nextFlip)) {
