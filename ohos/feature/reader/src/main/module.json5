@@ -1,0 +1,12 @@
+{
+  "module": {
+    "name": "reader",
+    "type": "har",
+    "description": "MyBooks standalone reader feature",
+    "deviceTypes": [
+      "phone",
+      "tablet",
+      "2in1"
+    ]
+  }
+}

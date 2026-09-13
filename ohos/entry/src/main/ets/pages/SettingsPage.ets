@@ -1,4 +1,5 @@
 import { bundleManager, common } from '@kit.AbilityKit';
+import { READER_MODE_AUTO, READER_MODE_BUILTIN, READER_MODE_PREF_KEY } from 'reader';
 import { HarmonyTopBar, SettingCell } from '../components';
 import { AppTheme } from '../theme/AppTheme';
 import { StorageKeys } from '../common/Constants';
@@ -11,6 +12,7 @@ import { DownloadTaskService } from '../services/DownloadTaskService';
 
 /** 折叠分组键：默认全部折叠，仅展开态渲染子项。 */
 const SECTION_APPEARANCE: string = 'appearance';
+const SECTION_READING: string = 'reading';
 const SECTION_ACCOUNT: string = 'account';
 const SECTION_SERVICE: string = 'service';
 const SECTION_ADMIN: string = 'admin';
@@ -73,6 +75,8 @@ struct SettingsSectionHeader {
 export struct SettingsPage {
   @State themeMode: string = 'system';
   @State showBackButton: boolean = false;
+  /** 阅读器引擎偏好：auto = 有 ReaderKit 用它；builtin = 始终用内置阅读器。 */
+  @State readerMode: string = READER_MODE_AUTO;
   @State versionText: string = '';
   @State isLoggedIn: boolean = false;
   @State librarySummary: string = '';
@@ -88,6 +92,7 @@ export struct SettingsPage {
   aboutToAppear(): void {
     this.themeMode = TalebookService.prefGet(StorageKeys.THEME_MODE, 'system');
     this.showBackButton = TalebookService.prefGet(StorageKeys.SHOW_BACK_BUTTON, 'true') === 'true';
+    this.readerMode = TalebookService.prefGet(READER_MODE_PREF_KEY, READER_MODE_AUTO);
     this.refreshAccount();
     this.refreshBadges();
     this.applySectionParam();
@@ -201,6 +206,31 @@ export struct SettingsPage {
     }).catch(() => {});
   }
 
+  /** 阅读器引擎显示名（分组摘要与弹窗共用）。 */
+  private readerModeLabel(mode: string): string {
+    return mode === READER_MODE_BUILTIN ? '内置阅读器' : '自动';
+  }
+
+  private applyReaderMode(mode: string): void {
+    this.readerMode = mode;
+    TalebookService.prefSet(READER_MODE_PREF_KEY, mode);
+  }
+
+  private showReaderModePicker(): void {
+    this.getUIContext().getPromptAction().showActionMenu({
+      title: '阅读器引擎',
+      buttons: [
+        { text: '自动（优先系统阅读器）', color: '#007DFF' },
+        { text: '内置阅读器（EPUB / TXT）', color: '#007DFF' },
+      ],
+    }).then((result) => {
+      const modes: string[] = [READER_MODE_AUTO, READER_MODE_BUILTIN];
+      if (result.index >= 0 && result.index < modes.length) {
+        this.applyReaderMode(modes[result.index]);
+      }
+    }).catch(() => {});
+  }
+
   /**
    * 外部深链（如 EPUB 修复页的「查看运行中任务」）可带 `section` 参数直达分组，
    * 避免默认折叠后无法直接看到目标内容。未传参时保持“全部折叠”。
@@ -293,6 +323,26 @@ export struct SettingsPage {
                 subtitle: AppTheme.themeModeLabel(this.themeMode),
                 showChevron: true,
                 onTap: () => this.showThemePicker(),
+              });
+            }
+            .width('100%')
+            .borderRadius($r('app.float.card_radius'))
+            .backgroundColor($r('app.color.card_background'));
+          }
+
+          SettingsSectionHeader({
+            title: '阅读',
+            subtitle: this.readerModeLabel(this.readerMode),
+            expanded: this.isExpanded(SECTION_READING),
+            onToggle: () => this.toggleSection(SECTION_READING),
+          });
+          if (this.isExpanded(SECTION_READING)) {
+            Column() {
+              SettingCell({
+                title: '阅读器引擎',
+                subtitle: '内置阅读器不依赖系统 ReaderKit，支持 EPUB / TXT，位置与设置与系统阅读器互通',
+                showChevron: true,
+                onTap: () => this.showReaderModePicker(),
               });
             }
             .width('100%')

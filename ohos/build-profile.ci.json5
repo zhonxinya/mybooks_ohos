@@ -23,6 +23,13 @@
       ]
     },
     {
+      "name": "reader",
+      "srcPath": "./feature/reader",
+      "targets": [
+        { "name": "default" }
+      ]
+    },
+    {
       "name": "entry",
       "srcPath": "./entry",
       "targets": [

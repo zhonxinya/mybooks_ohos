@@ -2,6 +2,7 @@
   "src": [
     "pages/MainTabs",
     "pages/ReadKitReader",
+    "pages/BuiltInReaderPage",
     "pages/BookDetailPage",
     "pages/ReadingHistoryPage",
     "pages/TalebookConfigPage",
