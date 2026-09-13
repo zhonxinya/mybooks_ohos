@@ -1,8 +1,11 @@
 import { zlib } from '@kit.BasicServicesKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BookEngine, ReaderCatalogItem, ReaderChapter } from '../model/ReaderTypes';
 import { BookFile } from './BookFile';
 import { EpubXml } from './EpubXml';
 import { MarkupText } from './MarkupText';
+
+const TAG: string = 'EpubEngine';
 
 const NCX_MEDIA_TYPE: string = 'application/x-dtbncx+xml';
 const XHTML_MEDIA_TYPES: string[] = ['application/xhtml+xml', 'text/html'];
@@ -14,6 +17,12 @@ interface ManifestItem {
   href: string;
   mediaType: string;
   properties: string;
+}
+
+/** TOC 解析中间结果：出现位置 + 值。 */
+interface TocMatch {
+  position: number;
+  value: string;
 }
 
 /**
@@ -42,15 +51,23 @@ export class EpubEngine implements BookEngine {
   static async open(filePath: string, bookTitle: string, cacheDir: string): Promise<EpubEngine> {
     const extractDir = BookFile.join(cacheDir, `reader_epub_${EpubEngine.hashPath(filePath)}`);
     const containerPath = BookFile.join(extractDir, CONTAINER_RELATIVE);
-    if (!BookFile.exists(containerPath)) {
+    const cached = BookFile.exists(containerPath);
+    hilog.info(0x0000, TAG, 'extractDir=%{public}s cached=%{public}s', extractDir, `${cached}`);
+    if (!cached) {
       // 上次解压中断会留下不完整目录，先清掉再解，避免解压报错
       BookFile.removeDir(extractDir);
       BookFile.ensureDir(cacheDir);
+      // decompressFile 要求目标目录已存在，否则报 900002（The input destination file is invalid）
+      BookFile.ensureDir(extractDir);
       try {
         await zlib.decompressFile(filePath, extractDir);
       } catch (error) {
+        hilog.error(0x0000, TAG, 'decompress failed: %{public}s (%{public}s)',
+          filePath, (error as Error).message);
         throw new Error(`EPUB 解压失败：${(error as Error).message}`);
       }
+      hilog.info(0x0000, TAG, 'decompressed %{public}s, container=%{public}s',
+        extractDir, `${BookFile.exists(containerPath)}`);
     }
     const opfRelative = EpubEngine.findOpfPath(BookFile.readText(containerPath));
     if (opfRelative.length === 0) {
@@ -87,8 +104,13 @@ export class EpubEngine implements BookEngine {
     }
     let paragraphs: string[] = [];
     try {
-      paragraphs = MarkupText.toParagraphs(BookFile.readText(this.spinePaths[safeIndex]));
-    } catch (_error) {
+      const markup = BookFile.readText(this.spinePaths[safeIndex]);
+      paragraphs = MarkupText.toParagraphs(markup);
+      hilog.debug(0x0000, TAG, 'chapter %{public}d: markup=%{public}d paragraphs=%{public}d',
+        safeIndex, markup.length, paragraphs.length);
+    } catch (error) {
+      hilog.error(0x0000, TAG, 'chapter %{public}d failed: %{public}s',
+        safeIndex, (error as Error).message);
       paragraphs = ['（本章内容读取失败）'];
     }
     const chapter: ReaderChapter = {
@@ -258,17 +280,37 @@ export class EpubEngine implements BookEngine {
     try {
       const ncxPath = BookFile.join(this.extractDir, BookFile.join(opfDir, ncxHref));
       const ncx = BookFile.readText(ncxPath);
-      // navPoint 可嵌套，按「出现顺序」配对 navLabel 文案与 content src 最稳
-      const labels = EpubXml.captures(ncx, new RegExp('<text\\b[^>]*>([\\s\\S]*?)<\\/text\\s*>', 'gi'));
-      const sources = EpubXml.captures(ncx, new RegExp('<content\\b[^>]*\\bsrc\\s*=\\s*"([^"]+)"', 'gi'));
+      // 不能按下标配对：`<docTitle>` 的 `<text>` 没有对应 `<content src>`，会让整份目录错位一章。
+      // 改为按文档顺序扫描，每个 `content src` 归属它前面最近的 `<text>`（navPoint 可嵌套，此法不受影响）。
+      const labels = EpubEngine.matches(ncx, new RegExp('<text\\b[^>]*>([\\s\\S]*?)<\\/text\\s*>', 'gi'));
+      const sources = EpubEngine.matches(ncx, new RegExp('<content\\b[^>]*\\bsrc\\s*=\\s*"([^"]+)"', 'gi'));
       const tocDir = BookFile.dirName(ncxHref);
-      const count = Math.min(labels.length, sources.length);
-      for (let i = 0; i < count; i++) {
-        EpubEngine.putTitle(titles, this.resolveTocIndex(sources[i], tocDir), MarkupText.stripTags(labels[i]));
+      let labelIndex = 0;
+      let currentLabel = '';
+      for (let i = 0; i < sources.length; i++) {
+        while (labelIndex < labels.length && labels[labelIndex].position < sources[i].position) {
+          currentLabel = MarkupText.stripTags(labels[labelIndex].value);
+          labelIndex++;
+        }
+        EpubEngine.putTitle(titles, this.resolveTocIndex(sources[i].value, tocDir), currentLabel);
       }
     } catch (_error) {
       titles.clear();
     }
+  }
+
+  /** 逐个匹配并记录位置（用 exec 循环，避免依赖 `String.matchAll`）。 */
+  private static matches(xml: string, pattern: RegExp): TocMatch[] {
+    const results: TocMatch[] = [];
+    let match: RegExpExecArray | null = pattern.exec(xml);
+    while (match !== null) {
+      results.push({ position: match.index, value: match[1] });
+      if (match.index === pattern.lastIndex) {
+        pattern.lastIndex++;
+      }
+      match = pattern.exec(xml);
+    }
+    return results;
   }
 
   private static putTitle(titles: Map<number, string>, index: number, title: string): void {

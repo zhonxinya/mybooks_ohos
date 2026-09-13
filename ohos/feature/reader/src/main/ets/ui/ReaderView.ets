@@ -63,6 +63,8 @@ export struct ReaderView {
   @State private chapterIndex: number = 0;
   @State private chapterTitle: string = '';
   @State private catalogSize: number = 0;
+  /** 必须是 @State：空页占位/列表的显隐由它决定，普通字段不会触发重渲染。 */
+  @State private paragraphCount: number = 0;
   @State private showBars: boolean = false;
   @State private showCatalog: boolean = false;
   @State private showSettings: boolean = false;
@@ -75,7 +77,6 @@ export struct ReaderView {
   private catalogSource: LazyDataSource<ReaderCatalogItem> = new LazyDataSource<ReaderCatalogItem>();
   private listScroller: Scroller = new Scroller();
   private initialIndex: number = 0;
-  private paragraphCount: number = 0;
   private pendingScrollIndex: number = -1;
   private lastReportedPercent: number = -1;
   private chapterLoading: boolean = false;
@@ -102,7 +103,18 @@ export struct ReaderView {
 
   build() {
     Stack() {
-      this.readerContent();
+      // 正文列表常驻：状态切换只用叠加层，避免在 if/else 链里销毁重建列表
+      // （实测：列表与空页占位互切时分枝子树不会重建，会出现整屏空白）
+      this.contentList();
+      if (!this.opening && this.errorMessage.length === 0 && this.paragraphCount === 0) {
+        this.emptyChapterView();
+      }
+      if (this.opening) {
+        this.loadingView();
+      }
+      if (this.errorMessage.length > 0) {
+        this.errorView();
+      }
       if (this.showBars && !this.opening && this.errorMessage.length === 0) {
         this.overlayBars();
       }
@@ -137,65 +149,94 @@ export struct ReaderView {
   // ---- 正文 ----
 
   @Builder
-  readerContent() {
-    if (this.opening) {
-      Column({ space: 12 }) {
-        LoadingProgress()
-          .width(36)
-          .height(36)
-          .color(ReaderPalette.accentColor());
-        Text('正在打开…')
-          .fontSize(14)
-          .fontColor(ReaderPalette.hintColor(this.theme));
-      }
-      .width('100%')
-      .height('100%')
-      .justifyContent(FlexAlign.Center);
-    } else if (this.errorMessage.length > 0) {
-      Column({ space: 16 }) {
-        Text(this.errorMessage)
-          .fontSize(15)
-          .textAlign(TextAlign.Center)
-          .fontColor(ReaderPalette.textColor(this.theme))
-          .padding({ left: 32, right: 32 });
-        Text('返回')
-          .fontSize(15)
-          .fontColor(ReaderPalette.accentColor())
-          .padding(10)
-          .onClick(() => this.callbacks.onClose());
-      }
-      .width('100%')
-      .height('100%')
-      .justifyContent(FlexAlign.Center);
-    } else {
-      List({ scroller: this.listScroller, initialIndex: this.initialIndex, space: PARAGRAPH_SPACING }) {
-        LazyForEach(this.paragraphs, (paragraph: string, index: number) => {
-          ListItem() {
-            Text(paragraph)
-              .fontSize(this.fontSize)
-              .lineHeight(this.lineHeight * this.fontSize)
-              .fontColor(ReaderPalette.textColor(this.theme))
-              .width('100%');
-          }
-        }, (paragraph: string, index: number) => `${this.chapterIndex}_${index}`);
-      }
-      .width('100%')
-      .height('100%')
-      .padding({
-        left: CONTENT_HORIZONTAL_SPACE,
-        right: CONTENT_HORIZONTAL_SPACE,
-        top: CONTENT_TOP_SPACE,
-        bottom: CONTENT_BOTTOM_SPACE,
-      })
-      .cachedCount(4)
-      .scrollBar(BarState.Off)
-      .onScrollIndex((start: number, end: number) => {
-        this.onListScroll(start);
-      })
-      .onClick(() => {
-        this.showBars = !this.showBars;
-      });
+  contentList() {
+    List({ scroller: this.listScroller, initialIndex: this.initialIndex, space: PARAGRAPH_SPACING }) {
+      LazyForEach(this.paragraphs, (paragraph: string, index: number) => {
+        ListItem() {
+          Text(paragraph)
+            .fontSize(this.fontSize)
+            .lineHeight(this.lineHeight * this.fontSize)
+            .fontColor(ReaderPalette.textColor(this.theme))
+            .width('100%');
+        }
+      }, (paragraph: string, index: number) => `${this.chapterIndex}_${index}`);
     }
+    .width('100%')
+    .height('100%')
+    .padding({
+      left: CONTENT_HORIZONTAL_SPACE,
+      right: CONTENT_HORIZONTAL_SPACE,
+      top: CONTENT_TOP_SPACE,
+      bottom: CONTENT_BOTTOM_SPACE,
+    })
+    .cachedCount(4)
+    .scrollBar(BarState.Off)
+    .onScrollIndex((start: number, end: number) => {
+      this.onListScroll(start);
+    })
+    .onClick(() => {
+      this.showBars = !this.showBars;
+    });
+  }
+
+  @Builder
+  loadingView() {
+    Column({ space: 12 }) {
+      LoadingProgress()
+        .width(36)
+        .height(36)
+        .color(ReaderPalette.accentColor());
+      Text('正在打开…')
+        .fontSize(14)
+        .fontColor(ReaderPalette.hintColor(this.theme));
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(ReaderPalette.pageBackground(this.theme));
+  }
+
+  @Builder
+  errorView() {
+    Column({ space: 16 }) {
+      Text(this.errorMessage)
+        .fontSize(15)
+        .textAlign(TextAlign.Center)
+        .fontColor(ReaderPalette.textColor(this.theme))
+        .padding({ left: 32, right: 32 });
+      Text('返回')
+        .fontSize(15)
+        .fontColor(ReaderPalette.accentColor())
+        .padding(10)
+        .onClick(() => this.callbacks.onClose());
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(ReaderPalette.pageBackground(this.theme));
+  }
+
+  /**
+   * 纯图片页（封面、插图页）没有文字时给的占位视图。
+   * EPUB 的 cover 页只有 `<img>`，若不提示会整屏空白，用户会以为打开失败。
+   */
+  @Builder
+  emptyChapterView() {
+    Column({ space: 10 }) {
+      Text(this.chapterTitle)
+        .fontSize(16)
+        .fontColor(ReaderPalette.textColor(this.theme));
+      Text('本页没有文字内容（可能是封面或插图页）')
+        .fontSize(13)
+        .fontColor(ReaderPalette.hintColor(this.theme));
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(ReaderPalette.pageBackground(this.theme))
+    .onClick(() => {
+      this.showBars = !this.showBars;
+    });
   }
 
   @Builder

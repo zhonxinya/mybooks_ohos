@@ -1,11 +1,19 @@
 import { fileIo as fs } from '@kit.CoreFileKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { TextCodec } from './TextCodec';
+
+const TAG: string = 'BookFile';
 
 /** 书籍文件的同步读写工具（EPUB 解压后的目录结构也用它访问）。 */
 export class BookFile {
+  /**
+   * 路径是否存在。
+   * 用 `statSync` 而非 `accessSync`：实测（模拟器 6.1.0.115）对**不存在**的路径
+   * `accessSync` 不抛错，会让调用方误判为「已存在」。
+   */
   static exists(path: string): boolean {
     try {
-      fs.accessSync(path);
+      fs.statSync(path);
       return true;
     } catch (_error) {
       return false;
@@ -61,6 +69,7 @@ export class BookFile {
       const readLength = fs.readSync(file.fd, buffer);
       return TextCodec.decode(readLength === size ? buffer : buffer.slice(0, readLength));
     } catch (error) {
+      hilog.error(0x0000, TAG, 'readText failed: %{public}s (%{public}s)', path, (error as Error).message);
       throw new Error(`读取文件失败：${(error as Error).message}`);
     } finally {
       if (file !== null) {
