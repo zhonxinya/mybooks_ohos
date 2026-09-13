@@ -75,6 +75,15 @@ export class ReaderFlip {
     }
     return '覆盖翻页';
   }
+
+  /** 与 `READER_FLIP_OPTIONS` 同序的标签，供控制面板的分段控件使用。 */
+  static labels(): string[] {
+    const labels: string[] = [];
+    for (let i = 0; i < READER_FLIP_OPTIONS.length; i++) {
+      labels.push(ReaderFlip.label(READER_FLIP_OPTIONS[i]));
+    }
+    return labels;
+  }
 }
 
 /** 分页阅读器的可选翻页方式（顺序即设置面板顺序）。 */
@@ -207,4 +216,44 @@ export class ReaderLocations {
     };
     return JSON.stringify(payload);
   }
+}
+
+// ---- 控制面板（两套阅读器共用，见 ui/ReaderControlPanel.ets）----
+
+/** ReaderKit 阅读器的翻页方式取值（面板与内置阅读器共用，仅标签/取值不同）。 */
+export const READKIT_FLIP_VALUES: string[] = ['0', '1'];
+export const READKIT_FLIP_LABELS: string[] = ['仿真翻页', '滚动阅读'];
+
+/** 主题分段控件的标签（顺序与 `ReaderTheme` 枚举一致）。 */
+export const READER_THEME_LABELS: string[] = ['浅色', '深色', '护眼'];
+
+/** 控制面板的标签页键。 */
+export const READER_PANEL_TOC: string = 'toc';
+export const READER_PANEL_APPEARANCE: string = 'appearance';
+export const READER_PANEL_SETTINGS: string = 'settings';
+export const READER_PANEL_BOOKMARKS: string = 'bookmarks';
+export const READER_PANEL_ALOUD: string = 'aloud';
+
+/**
+ * 控制面板里的书签项：只保留展示与回调所需的最小字段，
+ * 宿主用 `id` 反查自己的完整书签对象（ReaderKit 侧是 `ReadKitBookmarkPayload`）。
+ */
+export interface ReaderBookmark {
+  id: string;
+  title: string;
+}
+
+/** 字体选项（控制面板的字体胶囊用；宿主没有字体列表时传空数组即隐藏该区块）。 */
+export interface ReaderFontOption {
+  id: string;
+  name: string;
+}
+
+/** 朗读状态（控制面板朗读页用）。 */
+export type ReaderTtsState = 'idle' | 'playing' | 'paused';
+
+/** 发音人（控制面板朗读页用）。 */
+export interface ReaderTtsVoice {
+  person: number;
+  label: string;
 }

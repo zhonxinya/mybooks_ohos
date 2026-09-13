@@ -4,6 +4,9 @@ import {
   READER_FLIP_COVER,
   READER_FLIP_DEFAULT,
   READER_FLIP_NONE,
+  READER_FLIP_OPTIONS,
+  READER_PANEL_APPEARANCE,
+  READER_PANEL_TOC,
   READER_PARAGRAPH_PREFIX,
   ReaderBlock,
   ReaderBlockKind,
@@ -19,9 +22,9 @@ import { ReaderPalette } from '../model/ReaderPalette';
 import { BookEngineFactory } from '../engine/BookEngineFactory';
 import { PageLayout, PageMetrics, PagePager, ReaderPage } from '../engine/PageLayout';
 import { LazyDataSource } from './LazyDataSource';
-import { ReaderCatalogSheet } from './ReaderCatalogSheet';
+import { ReaderControlPanel } from './ReaderControlPanel';
 import { PAGE_FOOTER_SPACE, ReaderPageView } from './ReaderPageView';
-import { ReaderSettingsSheet } from './ReaderSettingsSheet';
+
 
 const TAG: string = 'ReaderView';
 const TOP_BAR_HEIGHT: number = 52;
@@ -104,13 +107,16 @@ export struct ReaderView {
   /** 当前章的正文块数（含插图），为 0 才显示空页占位。 */
   @State private blockCount: number = 0;
   @State private showBars: boolean = false;
-  @State private showCatalog: boolean = false;
-  @State private showSettings: boolean = false;
+  /** 控制面板（目录/界面/设置）与当前标签页。 */
+  @State private showPanel: boolean = false;
+  @State private panelTab: string = READER_PANEL_TOC;
   @State private fontSize: number = DEFAULT_SETTINGS.fontSize;
   @State private lineHeight: number = DEFAULT_SETTINGS.lineHeight;
   @State private theme: ReaderTheme = DEFAULT_SETTINGS.theme;
   @State private flipMode: string = DEFAULT_SETTINGS.flipMode;
   @State private keepScreenOn: boolean = DEFAULT_SETTINGS.keepScreenOn;
+  /** 控制面板朗读页的语速：本阅读器未启用朗读，仅满足面板的 @Link 绑定。 */
+  @State private ttsSpeed: number = 1.0;
   /** 分页状态。 */
   @State private pageCount: number = 0;
   @State private pageIndex: number = 0;
@@ -123,6 +129,7 @@ export struct ReaderView {
   private engine: BookEngine | null = null;
   private blocks: LazyDataSource<ReaderBlock> = new LazyDataSource<ReaderBlock>();
   private catalogSource: LazyDataSource<ReaderCatalogItem> = new LazyDataSource<ReaderCatalogItem>();
+  private catalogItems: ReaderCatalogItem[] = [];
   private pageSource: LazyDataSource<ReaderPage> = new LazyDataSource<ReaderPage>();
   private listScroller: Scroller = new Scroller();
   private initialIndex: number = 0;
@@ -150,6 +157,10 @@ export struct ReaderView {
   private pagerRestore: number = 0;
   private pagerPositionApplied: boolean = false;
   private paginationStartedAt: number = 0;
+  /** 上次已生效的排版参数：面板用 @Link 改状态后据此判断是否需要重排。 */
+  private appliedFontSize: number = 0;
+  private appliedLineHeight: number = 0;
+  private appliedFlipMode: string = '';
   /**
    * 分页结果缓存：同一章在相同排版参数下不重复测量。
    * 长章节（近 500 段、含跨页切分）测量要 1.5s 量级，来回翻章时缓存收益明显。
@@ -198,36 +209,87 @@ export struct ReaderView {
       if (this.showBars && !this.opening && this.errorMessage.length === 0) {
         this.overlayBars();
       }
-      if (this.showCatalog) {
-        ReaderCatalogSheet({
-          catalog: this.catalogSource,
-          currentIndex: this.chapterIndex,
-          theme: this.theme,
-          onSelect: (index: number) => this.goToChapter(index),
-          onClose: () => {
-            this.showCatalog = false;
-            this.scheduleBarsAutoHide();
-          },
-        });
-      }
-      if (this.showSettings) {
-        ReaderSettingsSheet({
-          fontSize: this.fontSize,
-          lineHeight: this.lineHeight,
-          theme: this.theme,
-          flipMode: this.flipMode,
-          keepScreenOn: this.keepScreenOn,
-          onSettingsChange: (settings: ReaderSettings) => this.applySettings(settings),
-          onClose: () => {
-            this.showSettings = false;
-            this.scheduleBarsAutoHide();
-          },
-        });
+      if (this.showPanel) {
+        this.controlPanelSheet();
       }
     }
     .width('100%')
     .height('100%')
     .backgroundColor(ReaderPalette.pageBackground(this.theme));
+  }
+
+  /**
+   * 控制面板：与 ReaderKit 阅读器共用 `ReaderControlPanel`
+   * （目录 / 界面 / 设置；书签与朗读页本阅读器未启用）。
+   */
+  @Builder
+  controlPanelSheet() {
+    Stack({ alignContent: Alignment.Bottom }) {
+      Column()
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#66000000')
+        .onClick(() => {
+          this.closePanel();
+        });
+      Column() {
+        ReaderControlPanel({
+          sheetOnly: this.panelTab,
+          catalogItems: this.catalogItems,
+          currentCatalogIndex: this.chapterIndex,
+          fontSize: $fontSize,
+          lineHeight: $lineHeight,
+          theme: $theme,
+          selectedFontId: '',
+          fontOptions: [],
+          flipLabels: ReaderFlip.labels(),
+          flipValues: READER_FLIP_OPTIONS,
+          flipValue: $flipMode,
+          keepScreenOn: $keepScreenOn,
+          // 内置阅读器只有「界面」一个入口：把常亮也放进界面页
+          behaviorInAppearance: true,
+          ttsSpeed: $ttsSpeed,
+          showBookmarks: false,
+          showAloud: false,
+          onSelectCatalogIndex: (index: number) => this.goToChapter(index),
+          onSettingsChanged: (relayout: boolean) => this.onPanelSettingsChanged(relayout),
+          onClose: () => {
+            this.closePanel();
+          },
+        });
+      }
+      .width('100%')
+      .height(this.panelHeight());
+    }
+    .width('100%')
+    .height('100%');
+  }
+
+  private panelHeight(): string {
+    return this.panelTab === READER_PANEL_TOC ? '62%' : '46%';
+  }
+
+  private openPanel(tab: string): void {
+    this.panelTab = tab;
+    this.showPanel = true;
+    this.cancelBarsAutoHide();
+  }
+
+  private closePanel(): void {
+    this.showPanel = false;
+    this.scheduleBarsAutoHide();
+  }
+
+  /** 面板里改动的字号/行距/主题/翻页/常亮统一在这里落盘并重排。 */
+  private onPanelSettingsChanged(relayout: boolean): void {
+    const settings: ReaderSettings = {
+      fontSize: this.fontSize,
+      lineHeight: this.lineHeight,
+      theme: this.theme,
+      flipMode: this.flipMode,
+      keepScreenOn: this.keepScreenOn,
+    };
+    this.applySettings(settings, relayout);
   }
 
   // ---- 正文 ----
@@ -456,8 +518,7 @@ export struct ReaderView {
         .fontColor([ReaderPalette.textColor(this.theme)])
         .padding(8)
         .onClick(() => {
-          this.cancelBarsAutoHide();
-          this.showCatalog = true;
+          this.openPanel(READER_PANEL_TOC);
         });
     }
     .width('100%')
@@ -498,8 +559,7 @@ export struct ReaderView {
         .fontColor([ReaderPalette.textColor(this.theme)])
         .padding(8)
         .onClick(() => {
-          this.cancelBarsAutoHide();
-          this.showSettings = true;
+          this.openPanel(READER_PANEL_APPEARANCE);
         });
     }
     .width('100%')
@@ -536,7 +596,7 @@ export struct ReaderView {
     this.cancelBarsAutoHide();
     this.barTimer = setTimeout(() => {
       this.barTimer = -1;
-      if (this.showBars && !this.showCatalog && !this.showSettings) {
+      if (this.showBars && !this.showPanel) {
         this.showBars = false;
       }
     }, BARS_AUTO_HIDE_MS);
@@ -567,6 +627,7 @@ export struct ReaderView {
       this.engine = engine;
       const catalog = engine.getCatalog();
       this.catalogSource.update(catalog);
+      this.catalogItems = catalog;
       this.catalogSize = catalog.length;
       this.bookTitle = this.options.title.length > 0 ? this.options.title : engine.getTitle();
       const target = start.chapterIndex >= 0 && start.chapterIndex < catalog.length ?
@@ -628,7 +689,7 @@ export struct ReaderView {
     if (index < 0 || index >= this.catalogSize || index === this.chapterIndex) {
       return;
     }
-    this.showCatalog = false;
+    this.showPanel = false;
     void this.loadChapter(index, 0, false);
   }
 
@@ -945,6 +1006,11 @@ export struct ReaderView {
     if (!ReaderFlip.isPaged(this.flipMode)) {
       return;
     }
+    // 章还没加载、或还没分出任何页时翻页无意义：此时 pageCount=0，下面会把任何点击都当成「越界」而跳章，
+    // 连点几下就连续跳章、每次都停在新章第 1 页（表现为「翻页总是回到第一页」）。
+    if (this.chapterLoading || this.pageCount === 0) {
+      return;
+    }
     // 分片分页还没补完时先补完：否则「未分到的页」会被误判为章末而跳章
     this.drainPagination();
     const target = this.pageIndex + delta;
@@ -1070,10 +1136,18 @@ export struct ReaderView {
     this.callbacks.onProgress(location, this.chapterTitle);
   }
 
-  private applySettings(settings: ReaderSettings): void {
+  /**
+   * 应用设置。控制面板通过 `@Link` 直接改本组件的状态，所以这里不能拿「新旧状态」比较，
+   * 而是与**上次已生效**的排版参数比较，决定是否需要重新分页或切换阅读形态。
+   */
+  private applySettings(settings: ReaderSettings, relayout: boolean): void {
     const nextFlip = ReaderFlip.normalize(settings.flipMode);
-    const metricsChanged = settings.fontSize !== this.fontSize || settings.lineHeight !== this.lineHeight;
-    const flipChanged = nextFlip !== this.flipMode;
+    const metricsChanged = relayout && (settings.fontSize !== this.appliedFontSize ||
+      settings.lineHeight !== this.appliedLineHeight);
+    const flipChanged = relayout && nextFlip !== this.appliedFlipMode;
+    this.appliedFontSize = settings.fontSize;
+    this.appliedLineHeight = settings.lineHeight;
+    this.appliedFlipMode = nextFlip;
     this.fontSize = settings.fontSize;
     this.lineHeight = settings.lineHeight;
     this.theme = settings.theme;

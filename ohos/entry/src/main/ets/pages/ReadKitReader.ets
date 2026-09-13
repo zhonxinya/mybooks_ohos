@@ -14,7 +14,14 @@ import { ReaderFontService, ReaderFontResolve } from '../services/ReaderFontServ
 import { WindowAbility } from '../entryability/WindowAbility';
 import { ReaderOverlayBar } from '../components/reader/ReaderOverlayBar';
 import { ReaderChrome } from '../components/reader/ReaderChrome';
-import { ReaderControlPanel } from '../components/reader/ReaderControlPanel';
+import {
+  READKIT_FLIP_LABELS,
+  ReaderFontOption,
+  READKIT_FLIP_VALUES,
+  ReaderBookmark,
+  ReaderCatalogItem,
+  ReaderControlPanel,
+} from 'reader';
 import { ReaderTtsService, ReaderTtsProgress, ReaderTtsState, ReaderTtsVoice } from '../services/ReaderTtsService';
 import { HtmlTextUtil } from '../utils/HtmlTextUtil';
 
@@ -74,6 +81,9 @@ struct ReadKitReader {
   private lastChapterName: string = '';
   @State private catalogItems: bookParser.CatalogItem[] = [];
   @State private bookmarks: ReadKitBookmarkPayload[] = [];
+  /** 控制面板用模块类型（目录按下标、书签按 id 回查），与源数据同步维护，避免每次渲染重建数组。 */
+  @State private panelCatalogItems: ReaderCatalogItem[] = [];
+  @State private panelBookmarks: ReaderBookmark[] = [];
   @State private showControlPanel: boolean = false;
   @State private subPanelSheet: string = '';
   @State private overlayNav: string = '';
@@ -85,6 +95,8 @@ struct ReadKitReader {
   @State private lineHeight: number = 1.6;
   @State private selectedFontId: string = ReaderFontCatalog.SYSTEM_ID;
   @State private fontDownloading: boolean = false;
+  /** 字体列表：静态清单，提到 build 外，避免每次重建都调用。 */
+  private readonly fontOptions: ReaderFontOption[] = ReaderFontCatalog.listOptions();
   @State private readerTheme: ReaderTheme = ReaderTheme.LIGHT;
   @State private flipMode: string = '0';
   @State @Watch('onKeepScreenOnChanged') private keepScreenOn: boolean = false;
@@ -284,6 +296,7 @@ struct ReadKitReader {
     if (this.catalogItems.length === 0) {
       try {
         this.catalogItems = this.handler.getCatalogList();
+    this.syncPanelCatalog();
       } catch (_error) {
       }
     }
@@ -543,6 +556,7 @@ struct ReadKitReader {
     this.filePath = params.filePath;
     this.bookFormat = params.format ?? '';
     this.bookmarks = params.bookmarks ?? [];
+    this.syncPanelBookmarks();
     const file = fs.openSync(params.filePath, fs.OpenMode.READ_ONLY);
     fs.closeSync(file);
 
@@ -565,6 +579,7 @@ struct ReadKitReader {
     }
     try {
       this.catalogItems = this.handler.getCatalogList();
+    this.syncPanelCatalog();
     } catch (_error) {
     }
     this.registerDensityChange();
@@ -1043,6 +1058,7 @@ struct ReadKitReader {
     if (sheet === 'toc') {
       try {
         this.catalogItems = this.handler?.getCatalogList() ?? [];
+    this.syncPanelCatalog();
       } catch (error) {
         hilog.error(0x0000, TAG, 'getCatalogList failed: %{public}s', error.message);
       }
@@ -1226,13 +1242,62 @@ struct ReadKitReader {
       } as ReadKitLocationPayload,
     };
     this.bookmarks = [bookmark, ...this.bookmarks];
+    this.syncPanelBookmarks();
     ReadKitSession.handleBookmarkAdded(this.bookId, bookmark);
     this.getUIContext().getPromptAction().showToast({ message: '已添加书签' });
   }
 
   private removeBookmark(bookmark: ReadKitBookmarkPayload): void {
     this.bookmarks = this.bookmarks.filter((item: ReadKitBookmarkPayload) => item.id !== bookmark.id);
+    this.syncPanelBookmarks();
     ReadKitSession.handleBookmarkRemoved(this.bookId, bookmark.id);
+  }
+
+  // ---- 控制面板（模块内共用组件）的数据桥接 ----
+
+  /** 目录：面板用模块的 `ReaderCatalogItem`（下标 + 标题），选中回传下标。 */
+  private syncPanelCatalog(): void {
+    const items: ReaderCatalogItem[] = [];
+    for (let i = 0; i < this.catalogItems.length; i++) {
+      items.push({ index: i, title: this.catalogItems[i].catalogName });
+    }
+    this.panelCatalogItems = items;
+  }
+
+  /** 书签：面板只展示 id/title，选中/删除按 id 回查完整对象。 */
+  private syncPanelBookmarks(): void {
+    const items: ReaderBookmark[] = [];
+    for (let i = 0; i < this.bookmarks.length; i++) {
+      items.push({ id: this.bookmarks[i].id, title: this.bookmarks[i].title });
+    }
+    this.panelBookmarks = items;
+  }
+
+  private openCatalogIndex(index: number): void {
+    const item = this.catalogItems[index];
+    if (item !== undefined) {
+      this.openCatalogItem(item);
+    }
+  }
+
+  private openBookmarkById(id: string): void {
+    const bookmark = this.bookmarks.find((item: ReadKitBookmarkPayload) => item.id === id);
+    if (bookmark === undefined) {
+      return;
+    }
+    try {
+      void this.openBookmark(bookmark);
+    } catch (error) {
+      // openBookmark 内部已处理异常；这里只兜底记录（emitError 自身也可能抛，故不用它）
+      hilog.warn(0x0000, TAG, 'openBookmark failed: %{public}s', (error as Error).message);
+    }
+  }
+
+  private removeBookmarkById(id: string): void {
+    const bookmark = this.bookmarks.find((item: ReadKitBookmarkPayload) => item.id === id);
+    if (bookmark !== undefined) {
+      this.removeBookmark(bookmark);
+    }
   }
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
@@ -1462,15 +1527,20 @@ struct ReadKitReader {
               Column() {
                 ReaderControlPanel({
                   sheetOnly: this.subPanelSheet,
-                  catalogItems: this.catalogItems,
-                  bookmarks: this.bookmarks,
+                  catalogItems: this.panelCatalogItems,
+                  bookmarks: this.panelBookmarks,
                   currentCatalogIndex: this.resolveCurrentCatalogIndex(),
                   fontSize: $fontSize,
                   lineHeight: $lineHeight,
-                  selectedFontId: $selectedFontId,
+                  selectedFontId: this.selectedFontId,
+                  fontOptions: this.fontOptions,
                   theme: $readerTheme,
-                  flipMode: $flipMode,
+                  flipLabels: READKIT_FLIP_LABELS,
+                  flipValues: READKIT_FLIP_VALUES,
+                  flipValue: $flipMode,
                   keepScreenOn: $keepScreenOn,
+                  showBookmarks: true,
+                  showAloud: true,
                   ttsState: this.ttsState,
                   ttsChapterTitle: this.chapterTitle,
                   ttsSpeed: $ttsSpeed,
@@ -1495,22 +1565,28 @@ struct ReadKitReader {
                   onReloadVoices: () => {
                     void this.loadTtsVoices(true);
                   },
-                  onSelectCatalog: (item: bookParser.CatalogItem) => {
-                    this.openCatalogItem(item);
+                  onSelectCatalogIndex: (index: number) => {
+                    this.openCatalogIndex(index);
                   },
-                  onSelectBookmark: (bookmark: ReadKitBookmarkPayload) => {
-                    this.openBookmark(bookmark);
+                  onSelectBookmark: (bookmarkId: string) => {
+                    this.openBookmarkById(bookmarkId);
                   },
-                  onRemoveBookmark: (bookmark: ReadKitBookmarkPayload) => {
-                    this.removeBookmark(bookmark);
+                  onRemoveBookmark: (bookmarkId: string) => {
+                    this.removeBookmarkById(bookmarkId);
                   },
                   onSelectFont: (fontId: string) => {
                     void this.selectFont(fontId);
                   },
-                  onRepaginate: () => {
-                    this.applySettings(true);
+                  onSettingsChanged: (relayout: boolean) => {
+                    if (relayout) {
+                      // 字号/行距/主题/翻页：重排版后按当前位置重新定位
+                      this.applySettings(true);
+                      void this.reapplyReadingPosition();
+                    } else {
+                      // 仅行为类设置（常亮）：只落盘，避免重排版把正文拉回章首
+                      this.saveReaderPrefs();
+                    }
                     this.syncKeepScreenOn();
-                    void this.reapplyReadingPosition();
                   },
                   onClose: () => {
                     this.closeSubPanel();
