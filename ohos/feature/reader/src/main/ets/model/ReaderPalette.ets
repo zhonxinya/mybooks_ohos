@@ -67,6 +67,28 @@ export class ReaderPalette {
     return '#33182431';
   }
 
+  /** 面板分组卡片底色（与面板底色形成层次）。 */
+  static sectionBackground(theme: ReaderTheme): string {
+    if (theme === ReaderTheme.DARK) {
+      return '#333333';
+    }
+    if (theme === ReaderTheme.EYE) {
+      return '#A8D0AB';
+    }
+    return '#EDE3CF';
+  }
+
+  /** 胶囊控件未选中底色。 */
+  static chipIdleBackground(theme: ReaderTheme): string {
+    if (theme === ReaderTheme.DARK) {
+      return '#3A3A3A';
+    }
+    if (theme === ReaderTheme.EYE) {
+      return '#B0D4B3';
+    }
+    return '#E8DCC8';
+  }
+
   /** 目录/设置面板里选中项的底色。 */
   static selectedBackground(theme: ReaderTheme): string {
     if (theme === ReaderTheme.DARK) {
