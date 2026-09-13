@@ -26,14 +26,14 @@ import { LazyDataSource } from './LazyDataSource';
 import { ReaderChrome } from './ReaderChrome';
 import { ReaderControlPanel } from './ReaderControlPanel';
 import { ReaderOverlayBar } from './ReaderOverlayBar';
-import { PAGE_FOOTER_SPACE, ReaderPageView } from './ReaderPageView';
+import { PAGE_FOOTER_SPACE, PAGE_HEADER_SPACE, ReaderPageView } from './ReaderPageView';
 
 
 const TAG: string = 'ReaderView';
 const CONTENT_HORIZONTAL_SPACE: number = 22;
 /** 正文上下留白：工具栏为浮层，留白保证文字不被浮层遮住。 */
-const CONTENT_TOP_SPACE: number = 44;
-const CONTENT_BOTTOM_SPACE: number = 32;
+const CONTENT_TOP_SPACE: number = 28;
+const CONTENT_BOTTOM_SPACE: number = 18;
 const PARAGRAPH_SPACING: number = 12;
 /** 进度上报粒度：变化超过 0.5% 才回调宿主，避免滚动/翻页中频繁落盘。 */
 const PROGRESS_REPORT_STEP: number = 0.005;
@@ -372,40 +372,85 @@ export struct ReaderView {
         bottomSpace: CONTENT_BOTTOM_SPACE,
         pageWidthVp: this.textWidthVp(),
         pageHeightVp: this.textHeightVp(),
+        chapterTitle: this.chapterTitle,
+        bookTitle: this.bookTitle,
       });
     }
   }
 
   @Builder
   scrollContent() {
-    List({ scroller: this.listScroller, initialIndex: this.initialIndex, space: PARAGRAPH_SPACING }) {
-      LazyForEach(this.blocks, (block: ReaderBlock, index: number) => {
-        ListItem() {
-          if (block.kind === ReaderBlockKind.IMAGE) {
-            this.scrollImageBlock(block);
-          } else {
-            Text(block.text)
-              .fontSize(this.fontSize)
-              .lineHeight(this.lineHeight * this.fontSize)
-              .fontColor(ReaderPalette.textColor(this.theme))
-              .width('100%');
+    Column() {
+      // 阅读区顶部：章节名（与分页模式一致）
+      if (this.chapterTitle.length > 0) {
+        Text(this.chapterTitle)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(ReaderPalette.hintColor(this.theme))
+          .width('100%')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .height(PAGE_HEADER_SPACE)
+          .padding({ left: CONTENT_HORIZONTAL_SPACE, right: CONTENT_HORIZONTAL_SPACE });
+      }
+      List({ scroller: this.listScroller, initialIndex: this.initialIndex, space: PARAGRAPH_SPACING }) {
+        LazyForEach(this.blocks, (block: ReaderBlock, index: number) => {
+          ListItem() {
+            if (block.kind === ReaderBlockKind.IMAGE) {
+              this.scrollImageBlock(block);
+            } else {
+              Text(block.text)
+                .fontSize(this.fontSize)
+                .lineHeight(this.lineHeight * this.fontSize)
+                .fontColor(ReaderPalette.textColor(this.theme))
+                .width('100%');
+            }
           }
+        }, (block: ReaderBlock, index: number) => `${this.chapterIndex}_${index}`);
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .padding({
+        left: CONTENT_HORIZONTAL_SPACE,
+        right: CONTENT_HORIZONTAL_SPACE,
+        bottom: CONTENT_BOTTOM_SPACE,
+      })
+      .cachedCount(4)
+      .scrollBar(BarState.Off)
+      .onScrollIndex((start: number, end: number) => {
+        this.onListScroll(start);
+      })
+      .onClick(() => {
+        this.toggleBars();
+      });
+
+      // 底部分隔线 + 页脚：左侧书名，右侧全书进度
+      Column() {
+        Divider()
+          .color(ReaderPalette.dividerColor(this.theme))
+          .strokeWidth(0.5);
+        Row() {
+          Text(this.bookTitle.length > 0 ? this.bookTitle : ' ')
+            .fontSize(10)
+            .fontColor(ReaderPalette.hintColor(this.theme))
+            .layoutWeight(1)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+          Text(`${Math.round(this.lastReportedPercent * 100)}%`)
+            .fontSize(10)
+            .fontColor(ReaderPalette.hintColor(this.theme))
+            .margin({ left: 8 });
         }
-      }, (block: ReaderBlock, index: number) => `${this.chapterIndex}_${index}`);
+        .width('100%')
+        .height(PAGE_FOOTER_SPACE)
+        .alignItems(VerticalAlign.Center)
+        .padding({ left: CONTENT_HORIZONTAL_SPACE, right: CONTENT_HORIZONTAL_SPACE });
+      }
+      .width('100%');
     }
     .width('100%')
     .height('100%')
-    .padding({
-      left: CONTENT_HORIZONTAL_SPACE,
-      right: CONTENT_HORIZONTAL_SPACE,
-      top: CONTENT_TOP_SPACE,
-      bottom: CONTENT_BOTTOM_SPACE,
-    })
-    .cachedCount(4)
-    .scrollBar(BarState.Off)
-    .onScrollIndex((start: number, end: number) => {
-      this.onListScroll(start);
-    })
+    .padding({ top: CONTENT_TOP_SPACE })
     .onClick(() => {
       this.toggleBars();
     });
@@ -901,7 +946,7 @@ export struct ReaderView {
 
   private textHeightVp(): number {
     // 扣掉页脚页码占位，避免正文与页码重叠
-    return Math.max(1, this.contentHeightVp - CONTENT_TOP_SPACE - CONTENT_BOTTOM_SPACE - PAGE_FOOTER_SPACE);
+    return Math.max(1, this.contentHeightVp - CONTENT_TOP_SPACE - CONTENT_BOTTOM_SPACE - PAGE_HEADER_SPACE - PAGE_FOOTER_SPACE);
   }
 
   /** 当前正文可用区参数：分页与插图高度都用它，保证两处公式一致。 */
