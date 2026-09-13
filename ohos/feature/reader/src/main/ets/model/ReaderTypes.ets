@@ -32,12 +32,63 @@ export const READER_MODE_PREF_KEY: string = 'reader_mode';
 export const READER_MODE_AUTO: string = 'auto';
 export const READER_MODE_BUILTIN: string = 'builtin';
 
+/**
+ * 翻页方式（内置阅读器自己的偏好，与 ReaderKit 阅读器的 `reader_flip_mode` 分开，
+ * 因为两者可选效果不同：ReaderKit 有仿真翻页，内置阅读器是自绘翻页）。
+ */
+export const READER_FLIP_PREF_KEY: string = 'reader_flip_mode_builtin';
+/** 覆盖翻页：新页盖住旧页（默认）。 */
+export const READER_FLIP_COVER: string = 'cover';
+/** 左右滑动：新旧页整体平移。 */
+export const READER_FLIP_SLIDE: string = 'slide';
+/** 无动画：点按/滑动后瞬时切换。 */
+export const READER_FLIP_NONE: string = 'none';
+/** 上下滚动：不分页，沿用滚动列表。 */
+export const READER_FLIP_SCROLL: string = 'scroll';
+export const READER_FLIP_DEFAULT: string = READER_FLIP_COVER;
+
+/** 是否为分页模式（除上下滚动外都分页）。 */
+export class ReaderFlip {
+  static isPaged(flipMode: string): boolean {
+    return flipMode !== READER_FLIP_SCROLL;
+  }
+
+  /** 非法值回落到默认，避免偏好被改坏后整页空白。 */
+  static normalize(flipMode: string): string {
+    if (flipMode === READER_FLIP_COVER || flipMode === READER_FLIP_SLIDE ||
+      flipMode === READER_FLIP_NONE || flipMode === READER_FLIP_SCROLL) {
+      return flipMode;
+    }
+    return READER_FLIP_DEFAULT;
+  }
+
+  /** 设置面板显示名。 */
+  static label(flipMode: string): string {
+    if (flipMode === READER_FLIP_SLIDE) {
+      return '左右滑动';
+    }
+    if (flipMode === READER_FLIP_NONE) {
+      return '无动画';
+    }
+    if (flipMode === READER_FLIP_SCROLL) {
+      return '上下滚动';
+    }
+    return '覆盖翻页';
+  }
+}
+
+/** 分页阅读器的可选翻页方式（顺序即设置面板顺序）。 */
+export const READER_FLIP_OPTIONS: string[] =
+  [READER_FLIP_COVER, READER_FLIP_SLIDE, READER_FLIP_NONE, READER_FLIP_SCROLL];
+
 export interface ReaderSettings {
   /** 正文字号，单位 fp。 */
   fontSize: number;
   /** 行高倍数。 */
   lineHeight: number;
   theme: ReaderTheme;
+  /** 翻页方式，取值见 `READER_FLIP_*`。 */
+  flipMode: string;
 }
 
 export interface ReaderCatalogItem {

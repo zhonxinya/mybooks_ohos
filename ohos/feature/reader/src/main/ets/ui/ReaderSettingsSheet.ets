@@ -1,4 +1,4 @@
-import { ReaderSettings, ReaderTheme } from '../model/ReaderTypes';
+import { READER_FLIP_DEFAULT, READER_FLIP_OPTIONS, ReaderFlip, ReaderSettings, ReaderTheme } from '../model/ReaderTypes';
 import { ReaderPalette } from '../model/ReaderPalette';
 
 const MIN_FONT_SIZE: number = 12;
@@ -29,6 +29,7 @@ export struct ReaderSettingsSheet {
   @Prop fontSize: number = 18;
   @Prop lineHeight: number = 1.6;
   @Prop theme: ReaderTheme = ReaderTheme.LIGHT;
+  @Prop flipMode: string = READER_FLIP_DEFAULT;
   onSettingsChange: (settings: ReaderSettings) => void = () => {};
   onClose: () => void = () => {};
 
@@ -52,6 +53,7 @@ export struct ReaderSettingsSheet {
         this.fontSizeRow();
         this.lineHeightRow();
         this.themeRow();
+        this.flipRow();
       }
       .width('100%')
       .padding({ left: 20, right: 20, top: 14, bottom: 28 })
@@ -63,11 +65,12 @@ export struct ReaderSettingsSheet {
   }
 
   /** 当前 draft + 主题组成设置对象回传宿主。 */
-  private emit(theme: ReaderTheme): void {
+  private emit(theme: ReaderTheme, flipMode: string): void {
     const settings: ReaderSettings = {
       fontSize: this.draftFontSize,
       lineHeight: this.draftLineHeight / 10,
       theme: theme,
+      flipMode: flipMode,
     };
     this.onSettingsChange(settings);
   }
@@ -103,7 +106,7 @@ export struct ReaderSettingsSheet {
         .onChange((next: number, mode: SliderChangeMode) => {
           if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
             this.draftFontSize = Math.round(next);
-            this.emit(this.theme);
+            this.emit(this.theme, this.flipMode);
           }
         });
       Text(`${this.draftFontSize}`)
@@ -131,7 +134,7 @@ export struct ReaderSettingsSheet {
         .onChange((next: number, mode: SliderChangeMode) => {
           if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
             this.draftLineHeight = Math.round(next);
-            this.emit(this.theme);
+            this.emit(this.theme, this.flipMode);
           }
         });
       Text((this.draftLineHeight / 10).toFixed(1))
@@ -159,8 +162,30 @@ export struct ReaderSettingsSheet {
             ReaderPalette.selectedBackground(this.theme) : Color.Transparent)
           .borderRadius(8)
           .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-          .onClick(() => this.emit(option.theme));
+          .onClick(() => this.emit(option.theme, this.flipMode));
       }, (option: ThemeOption) => option.label);
+    }
+    .width('100%')
+    .height(44)
+    .alignItems(VerticalAlign.Center);
+  }
+
+  @Builder
+  flipRow() {
+    Row({ space: 8 }) {
+      Text('翻页')
+        .fontSize(14)
+        .fontColor(ReaderPalette.textColor(this.theme));
+      ForEach(READER_FLIP_OPTIONS, (mode: string) => {
+        Text(ReaderFlip.label(mode))
+          .fontSize(13)
+          .fontColor(this.flipMode === mode ? ReaderPalette.accentColor() : ReaderPalette.textColor(this.theme))
+          .backgroundColor(this.flipMode === mode ?
+            ReaderPalette.selectedBackground(this.theme) : Color.Transparent)
+          .borderRadius(8)
+          .padding({ left: 12, right: 12, top: 7, bottom: 7 })
+          .onClick(() => this.emit(this.theme, mode));
+      }, (mode: string) => mode);
     }
     .width('100%')
     .height(44)

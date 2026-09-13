@@ -1,6 +1,9 @@
 import { common } from '@kit.AbilityKit';
 import {
+  READER_FLIP_DEFAULT,
+  READER_FLIP_PREF_KEY,
   ReaderCallbacks,
+  ReaderFlip,
   ReaderLocation,
   ReaderLocations,
   ReaderOpenOptions,
@@ -38,7 +41,12 @@ const DEFAULT_OPTIONS: ReaderOpenOptions = {
   title: '',
   cacheDir: '',
   location: '',
-  settings: { fontSize: DEFAULT_FONT_SIZE, lineHeight: DEFAULT_LINE_HEIGHT, theme: ReaderTheme.LIGHT },
+  settings: {
+    fontSize: DEFAULT_FONT_SIZE,
+    lineHeight: DEFAULT_LINE_HEIGHT,
+    theme: ReaderTheme.LIGHT,
+    flipMode: READER_FLIP_DEFAULT,
+  },
 };
 
 const DEFAULT_CALLBACKS: ReaderCallbacks = {
@@ -127,6 +135,7 @@ struct BuiltInReaderPage {
       lineHeight: BuiltInReaderPage.clamp(Number(TalebookService.prefGet(LINE_HEIGHT_KEY, `${DEFAULT_LINE_HEIGHT}`)),
         MIN_LINE_HEIGHT, MAX_LINE_HEIGHT, DEFAULT_LINE_HEIGHT),
       theme: theme,
+      flipMode: ReaderFlip.normalize(TalebookService.prefGet(READER_FLIP_PREF_KEY, READER_FLIP_DEFAULT)),
     };
   }
 
@@ -135,6 +144,7 @@ struct BuiltInReaderPage {
     values[FONT_SIZE_KEY] = `${settings.fontSize}`;
     values[LINE_HEIGHT_KEY] = `${settings.lineHeight}`;
     values[THEME_KEY] = `${settings.theme}`;
+    values[READER_FLIP_PREF_KEY] = ReaderFlip.normalize(settings.flipMode);
     TalebookService.prefSetBatch(values);
   }
 
