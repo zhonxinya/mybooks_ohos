@@ -2,7 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
-  PageScaffold, EmptyState, LoadingState, IconCircleButton, LazyDataSource,
+  PageScaffold, EmptyState, LoadingState, LazyDataSource,
 } from '../components';
 import { AuthImage } from '../components/AuthImage';
 import {
@@ -12,6 +12,7 @@ import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { WindowAbility } from '../entryability/WindowAbility';
 import { ReaderTheme } from '../models/ReaderTheme';
+import { ReaderChrome } from 'reader';
 import { ReaderThemeColors } from '../theme/ReaderThemeColors';
 import { CoverCache } from '../utils/CoverCache';
 
@@ -401,7 +402,16 @@ struct ComicReaderPage {
       });
 
       if (this.showBar) {
-        this.topBar();
+        // 与电子书阅读器共用同一套顶栏（漫画固定深色主题，页码放章节行）
+        ReaderChrome({
+          bookTitle: this.bookTitle.length > 0 ? this.bookTitle : '漫画',
+          chapterTitle: this.pageIndicator(),
+          theme: ReaderTheme.DARK,
+          expanded: true,
+          showBookmarkActions: false,
+          onBack: () => this.close(),
+          onRefresh: () => this.reloadImages(),
+        });
       }
     }
     .width('100%')
@@ -427,48 +437,6 @@ struct ComicReaderPage {
       }
       .width('100%');
     }
-  }
-
-  @Builder
-  topBar() {
-    Column() {
-      Row() {
-        IconCircleButton({
-          icon: $r('sys.symbol.chevron_left'),
-          variant: 'ghost',
-          iconColor: ReaderThemeColors.textColor(ReaderTheme.DARK),
-          onTap: () => {
-            this.close();
-          },
-        });
-        Text(this.bookTitle.length > 0 ? this.bookTitle : '漫画')
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(ReaderThemeColors.textColor(ReaderTheme.DARK))
-          .layoutWeight(1)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
-        Text(this.pageIndicator())
-          .fontSize(14)
-          .fontColor(ReaderThemeColors.textHint(ReaderTheme.DARK))
-          .margin({ right: 4 });
-        IconCircleButton({
-          icon: $r('sys.symbol.arrow_clockwise'),
-          variant: 'ghost',
-          iconSize: 18,
-          iconColor: ReaderThemeColors.textColor(ReaderTheme.DARK),
-          onTap: () => {
-            this.reloadImages();
-          },
-        });
-      }
-      .width('100%')
-      .padding({ left: 4, right: 4, top: 6, bottom: 6 })
-      .alignItems(VerticalAlign.Center);
-    }
-    .width('100%')
-    .backgroundColor(ReaderThemeColors.overlay(ReaderTheme.DARK))
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP]);
   }
 }
 
