@@ -80,7 +80,7 @@ export struct BooksTabPage {
   }
 
   private mapBook(item: Record<string, Object>): BookSummary {
-    const format = this.collectFormatText(item);
+    const format = this.displayFormat(item);
     const pubdate = String(item['pubdate'] ?? item['timestamp'] ?? '');
     let subtitle = '';
     if (pubdate.length > 0 && pubdate !== '0') {
@@ -97,6 +97,32 @@ export struct BooksTabPage {
       format: format,
       subtitle: subtitle,
     };
+  }
+
+  /**
+   * 卡片角标用的格式：只取真实格式名，取不到就空着（空字符串时角标不渲染）。
+   *
+   * 与 `collectFormatText` 分开的原因：后者会把 `book_type`（服务端实际下发的是 0/1 数值）
+   * 也拼进去，而它同时用于 `isNovelBook` 过滤，不能直接删；直接拿来展示就会得到 `EPUB 0` 这种角标。
+   * 数值字段一律跳过，避免把 `book_type` 之类的数字当成格式名显示出来。
+   */
+  private displayFormat(item: Record<string, Object>): string {
+    const candidates: string[] = [];
+    candidates.push(String(item['format'] ?? ''));
+    const files = item['files'] as Array<Record<string, Object>> | undefined;
+    if (files !== undefined) {
+      for (let i = 0; i < files.length; i++) {
+        candidates.push(String(files[i]['format'] ?? ''));
+      }
+    }
+    candidates.push(String(item['type'] ?? ''));
+    for (let i = 0; i < candidates.length; i++) {
+      const value = candidates[i].trim();
+      if (value.length > 0 && Number.isNaN(Number(value))) {
+        return value;
+      }
+    }
+    return '';
   }
 
   /** 小说：有 epub/txt/mobi/azw；排除有声书与实体书。无格式信息时默认当作电子书收录。 */
@@ -125,7 +151,9 @@ export struct BooksTabPage {
     for (let i = 0; i < items.length; i++) {
       const raw = items[i];
       const summary = this.mapBook(raw);
-      if (this.isNovelBook(raw, summary.format)) {
+      // 过滤必须用完整的 `collectFormatText`（含 book_type），不能改用 summary.format：
+      // 后者已剔除数值字段，会改变「无 files 且 book_type 非 ebook」这类条目的取舍。
+      if (this.isNovelBook(raw, this.collectFormatText(raw))) {
         result.push(summary);
       }
     }

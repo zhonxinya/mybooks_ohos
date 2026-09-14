@@ -1,5 +1,27 @@
 import { AuthImage } from './AuthImage';
 
+/**
+ * 文字区行高与字号（vp / fp）。
+ *
+ * 3 列网格下卡片内宽只有约 107vp，字号不能再按 2 列时的大小走，
+ * 否则一行只放得下五六个汉字，书名基本读不全。
+ */
+const TITLE_LINE_HEIGHT: number = 18;
+const META_LINE_HEIGHT: number = 15;
+const TITLE_FONT_SIZE: number = 13;
+const META_FONT_SIZE: number = 11;
+const LINE_GAP: number = 3;
+const COVER_TEXT_GAP: number = 6;
+
+/**
+ * 网格卡片（3 列封面墙，微信读书那类轻量风格）。
+ *
+ * 纯封面样式：**不带卡片底色、内边距与阴影**，封面与文字直接落在页面背景上，观感更轻。
+ * 封面与页面底色接近时有发丝描边兜底，避免浅色封面"糊"在背景里。
+ *
+ * 文字不预留空行（曾试过把标题固定占两行来让作者行对齐，但短书名时标题与作者之间会空出整行，
+ * 看起来像漏了内容）；标题最多两行、按实际行数自然排布。
+ */
 @Component
 export struct BookGridCard {
   title: string = '';
@@ -23,7 +45,7 @@ export struct BookGridCard {
     } else {
       Column() {
         Text((this.title.length > 0 ? this.title : '?').substring(0, 1))
-          .fontSize(28)
+          .fontSize(26)
           .fontColor($r('app.color.on_brand'));
       }
       .width('100%')
@@ -35,47 +57,58 @@ export struct BookGridCard {
   }
 
   build() {
-    Column({ space: 6 }) {
+    Column({ space: COVER_TEXT_GAP }) {
       Stack({ alignContent: Alignment.TopEnd }) {
         this.coverArea();
         if (this.format.length > 0) {
+          // 角标底色是半透明黑，文字固定白色：`on_brand` 在深色主题下是深色，压在黑底上读不出来
           Text(this.format.toUpperCase())
-            .fontSize(10)
-            .fontColor($r('app.color.on_brand'))
-            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-            .margin({ top: 6, right: 6 })
-            .borderRadius(4)
-            .backgroundColor('#99000000');
+            .fontSize(9)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Color.White)
+            .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+            .margin({ top: 5, right: 5 })
+            .borderRadius(5)
+            .backgroundColor('#B3000000');
         }
       }
-      .width('100%');
+      .width('100%')
+      .borderRadius($r('app.float.cover_radius'))
+      // 发丝描边：浅色封面与页面底色接近时也要有一条界线，避免封面整块"浮白"
+      .border({ width: 0.5, color: $r('app.color.divider') });
 
-      Text(this.title.length > 0 ? this.title : '未知书名')
-        .fontSize(14)
-        .fontColor($r('app.color.text_primary'))
-        .maxLines(2)
-        .textOverflow({ overflow: TextOverflow.Ellipsis });
-      if (this.author.length > 0) {
-        Text(this.author)
-          .fontSize(12)
-          .fontColor($r('app.color.text_secondary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
+      Column({ space: LINE_GAP }) {
+        Text(this.title.length > 0 ? this.title : '未知书名')
+          .fontSize(TITLE_FONT_SIZE)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .lineHeight(TITLE_LINE_HEIGHT)
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%');
+        if (this.author.length > 0) {
+          Text(this.author)
+            .fontSize(META_FONT_SIZE)
+            .fontColor($r('app.color.text_secondary'))
+            .lineHeight(META_LINE_HEIGHT)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%');
+        }
+        if (this.subtitle.length > 0) {
+          Text(this.subtitle)
+            .fontSize(META_FONT_SIZE)
+            .fontColor($r('app.color.text_tertiary'))
+            .lineHeight(META_LINE_HEIGHT)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%');
+        }
       }
-      if (this.subtitle.length > 0) {
-        Text(this.subtitle)
-          .fontSize(11)
-          .fontColor($r('app.color.text_tertiary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
-      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start);
     }
     .width('100%')
-    .height(220)
-    .padding($r('app.float.card_padding'))
-    .borderRadius($r('app.float.card_radius'))
-    .backgroundColor($r('app.color.card_background'))
-    .shadow({ radius: 8, color: '#14000000', offsetX: 0, offsetY: 2 })
     .onClick(() => {
       if (this.onTap) {
         this.onTap();
