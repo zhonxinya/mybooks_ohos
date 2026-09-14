@@ -4,6 +4,8 @@ import {
 } from '../components';
 import { ApiEnvelope, TalebookService } from '../services/TalebookService';
 import { TalebookApi, IndexHomeData, LibraryStatsResponse, LibraryStatsData } from '../services/TalebookApi';
+import { BookListApi, BookListsResponse } from '../services/BookListApi';
+import { BookListSummary, BookListCoverBook, booklistColorHex } from '../models/BookListModels';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { HomeBook, ReadingDashboard, formatDuration } from '../models/HomeModels';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
@@ -49,6 +51,8 @@ export struct BooksTabPage {
   @State newBooks: HomeBook[] = [];
   @State libraryStats: LibraryStatsData | null = null;
   @State readingStats: ReadingDashboard | null = null;
+  /** 首页书单推荐（/api/booklists/homepage，服务端挑置顶 > 我点赞的 > 其余公开，最多 2 个）。 */
+  @State homeBooklists: BookListSummary[] = [];
   @State isRefreshing: boolean = false;
   private lastLoadTime: number = 0;
 
@@ -265,6 +269,17 @@ export struct BooksTabPage {
         })
         .catch(() => {
           this.readingStats = null;
+        });
+    }
+    if (ServerRegistry.supports(ServerFeature.BOOKLISTS)) {
+      // 游客也可访问；服务端未开启 ENABLE_HOMEPAGE_BOOKLISTS 时返回空数组，此处直接不渲染该区块
+      BookListApi.getHomepageBooklists()
+        .then((rsp: BookListsResponse) => {
+          this.homeBooklists = rsp.err === undefined || rsp.err === 'ok'
+            ? BookListApi.parseSummaries(rsp) : [];
+        })
+        .catch(() => {
+          this.homeBooklists = [];
         });
     }
   }
@@ -496,6 +511,9 @@ export struct BooksTabPage {
       if (this.readingStats !== null) {
         this.readingStatsBanner();
       }
+      if (this.homeBooklists.length > 0) {
+        this.booklistSection();
+      }
       if (this.randomBooks.length > 0) {
         this.randomSection();
       }
@@ -616,6 +634,139 @@ export struct BooksTabPage {
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start);
+  }
+
+  @Builder
+  booklistSection() {
+    Column({ space: 4 }) {
+      SectionTitle({
+        title: '推荐书单',
+        actionLabel: '全部书单',
+        onAction: () => {
+          this.getUIContext().getRouter().pushUrl({ url: 'pages/BookListsPage' });
+        },
+      });
+      Scroll() {
+        Row({ space: 12 }) {
+          ForEach(this.homeBooklists, (item: BookListSummary) => {
+            this.booklistCard(item);
+          }, (item: BookListSummary) => `home-booklist-${item.id}-${item.bookCount}-${item.likeCount}-${item.isSticky}`);
+        }
+        .padding({ left: 16, right: 16 });
+      }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .width('100%');
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start);
+  }
+
+  /**
+   * 首页书单卡片：比书单页的 BookListCardItem 更紧凑（固定 3 张封面 + 固定封面区高度），
+   * 避免两张卡片高度不一导致横滑行上下跳动。
+   */
+  @Builder
+  booklistCard(item: BookListSummary) {
+    Column({ space: 6 }) {
+      Row({ space: 4 }) {
+        Text(item.name)
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1);
+        if (!item.isPublic) {
+          SymbolGlyph($r('sys.symbol.lock'))
+            .fontSize(13)
+            .fontColor([$r('app.color.text_tertiary')]);
+        }
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center);
+      Text(item.description.length > 0 ? item.description : '暂无简介')
+        .fontSize(11)
+        .fontColor($r('app.color.text_secondary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .width('100%');
+      Column() {
+        if (item.coverBooks.length === 0) {
+          Text('书单暂无书籍')
+            .fontSize(11)
+            .fontColor($r('app.color.text_tertiary'));
+        } else {
+          Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+            ForEach(item.coverBooks.slice(0, 3), (cover: BookListCoverBook) => {
+              AuthImage({
+                url: cover.thumb.length > 0 ? cover.thumb : cover.img,
+                imageWidth: 46,
+                imageHeight: 63,
+              })
+                .margin({ right: 6 });
+            }, (cover: BookListCoverBook) => `home-bl-${item.id}-${cover.bookId}`);
+          }
+          .width('100%');
+        }
+      }
+      .width('100%')
+      .height(63)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Start);
+      Row({ space: 12 }) {
+        Row({ space: 4 }) {
+          SymbolGlyph($r('sys.symbol.book'))
+            .fontSize(11)
+            .fontColor([$r('app.color.text_tertiary')]);
+          Text(`${item.bookCount}`)
+            .fontSize(11)
+            .fontColor($r('app.color.text_secondary'));
+        }
+        .alignItems(VerticalAlign.Center);
+        Row({ space: 4 }) {
+          SymbolGlyph($r('sys.symbol.heart'))
+            .fontSize(11)
+            .fontColor([$r('app.color.text_tertiary')]);
+          Text(`${item.likeCount}`)
+            .fontSize(11)
+            .fontColor($r('app.color.text_secondary'));
+        }
+        .alignItems(VerticalAlign.Center);
+        Blank().layoutWeight(1);
+        if (item.owner !== null) {
+          Text(item.owner.username)
+            .fontSize(11)
+            .fontColor($r('app.color.text_tertiary'))
+            .maxLines(1)
+            .constraintSize({ maxWidth: 80 });
+        }
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center);
+    }
+    .width(224)
+    .padding(12)
+    .borderRadius($r('app.float.card_radius'))
+    .backgroundColor($r('app.color.card_background'))
+    .border({
+      width: { left: 3 },
+      color: { left: booklistColorHex(item.color) },
+      // 圆角必须写进 border：先 borderRadius 再 border 会重置圆角
+      radius: $r('app.float.card_radius'),
+    })
+    .alignItems(HorizontalAlign.Start)
+    .stateStyles({
+      pressed: {
+        .backgroundColor($r('app.color.surface_pressed'))
+      },
+    })
+    .onClick(() => {
+      this.getUIContext().getRouter().pushUrl({
+        url: 'pages/BookListDetailPage',
+        params: { booklistId: item.id },
+      });
+    });
   }
 
   @Builder

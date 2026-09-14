@@ -1,3 +1,4 @@
+import { promptAction } from '@kit.ArkUI';
 import {
   PageScaffold, FilterChips, FilterChipItem, LoadingState, EmptyState,
   BookListCardItem, IconCircleButton, PrimaryButton,
@@ -18,6 +19,19 @@ const TAB_PUBLIC: number = 0;
 const TAB_LIKED: number = 1;
 const TAB_MINE: number = 2;
 
+/**
+ * 书单卡片的 ForEach key。
+ *
+ * **必须覆盖卡片真正渲染的所有可变字段**：ArkUI 的 ForEach 对 key 不变的项会复用旧组件，
+ * 而 `BookListCardItem.item` 是普通成员（非 @Prop），复用后不会更新。
+ * 早先只拼了 id/likeCount/isPublic，导致「置顶」后卡片不出现「推荐」角标、
+ * 「编辑」改名或改简介后卡片也不刷新。
+ */
+function bookListCardKey(item: BookListSummary): string {
+  return `booklist-${item.id}-${item.name}-${item.description}-${item.isPublic}-${item.isSticky}` +
+    `-${item.bookCount}-${item.viewCount}-${item.likeCount}-${item.likedByMe}`;
+}
+
 @Entry
 @Component
 struct BookListsPage {
@@ -36,7 +50,19 @@ struct BookListsPage {
   @State editColor: string = DEFAULT_BOOKLIST_COLOR;
   @State editIsPublic: boolean = false;
   @State saving: boolean = false;
+  /** 当前账号是否管理员：服务端书单置顶为 `@is_admin`，据此决定菜单里是否出现「置顶」。 */
+  @State isAdmin: boolean = false;
   private lastLoadTime: number = 0;
+  /**
+   * 已实际加载过的 Tab。
+   *
+   * FilterChips 的 `selected` 是 `@Link`：点击时它先把父组件的 activeTab 回写成 value，**之后**才回调 onChange。
+   * 因此 onChange 里不能拿 activeTab 做「是否变化」判断（那时恒相等），必须与本字段比较，
+   * 否则列表永远不会重新加载——切到「点赞」后仍显示「公开书单」的内容。
+   */
+  private loadedTab: number = -1;
+  /** 请求序号：切换 Tab 时旧请求可能后到，用序号丢弃过期响应，避免覆盖新 Tab 的数据。 */
+  private requestSeq: number = 0;
 
   aboutToAppear(): void {
     void this.prepareAndLoad();
@@ -59,11 +85,26 @@ struct BookListsPage {
   }
 
   private async prepareAndLoad(): Promise<void> {
+    this.loadedTab = this.activeTab;
     this.needLogin = false;
     if (this.activeTab !== TAB_PUBLIC && TalebookService.hasAuthCredentials()) {
       await TalebookService.ensureAuthenticated();
     }
+    // 管理员标记只影响管理菜单，不阻塞列表加载
+    void this.loadAdminFlag();
     await this.loadLists(true);
+  }
+
+  private async loadAdminFlag(): Promise<void> {
+    if (!TalebookService.hasAuthCredentials()) {
+      this.isAdmin = false;
+      return;
+    }
+    try {
+      this.isAdmin = await TalebookService.isCurrentUserAdminAsync();
+    } catch (_error) {
+      this.isAdmin = false;
+    }
   }
 
   private async loadLists(reset: boolean): Promise<void> {
@@ -76,31 +117,46 @@ struct BookListsPage {
       this.loadingMore = true;
     }
     const page = this.currentPage;
+    const seq = ++this.requestSeq;
     try {
       if (!TalebookService.ensureTalebookConfigured()) {
         this.errorMessage = '请先配置 Talebook 服务器';
         return;
       }
+      // 只有「公开书单」服务端支持分页（/api/booklists/public 带 page/page_size）；
+      // mine 与 liked 服务端一次性返回全量，因此 hasMore 恒为 false。
       if (this.activeTab === TAB_PUBLIC) {
         const rsp = await BookListApi.getPublicBooklists(page, PaginationConstants.PAGE_SIZE);
+        if (seq !== this.requestSeq) {
+          return;
+        }
         if (!this.applyResult(rsp, reset)) {
           return;
         }
         this.hasMore = this.lists.length < (rsp.total ?? 0);
       } else if (this.activeTab === TAB_LIKED) {
         const rsp = await BookListApi.getLikedBooklists();
+        if (seq !== this.requestSeq) {
+          return;
+        }
         if (!this.applyResult(rsp, reset)) {
           return;
         }
         this.hasMore = false;
       } else {
         const rsp = await BookListApi.getMyBooklists();
+        if (seq !== this.requestSeq) {
+          return;
+        }
         if (!this.applyResult(rsp, reset)) {
           return;
         }
         this.hasMore = false;
       }
     } catch (error) {
+      if (seq !== this.requestSeq) {
+        return;
+      }
       if (reset) {
         this.errorMessage = error instanceof Error ? error.message : `${error}`;
       } else {
@@ -108,9 +164,12 @@ struct BookListsPage {
         this.currentPage = Math.max(1, this.currentPage - 1);
       }
     } finally {
-      this.loading = false;
-      this.loadingMore = false;
-      this.lastLoadTime = Date.now();
+      // 过期请求不得清掉新请求的 loading 标记，否则会闪一下空态
+      if (seq === this.requestSeq) {
+        this.loading = false;
+        this.loadingMore = false;
+        this.lastLoadTime = Date.now();
+      }
     }
   }
 
@@ -129,7 +188,23 @@ struct BookListsPage {
       return false;
     }
     const fetched = BookListApi.parseSummaries(rsp);
-    this.lists = reset ? fetched : this.lists.concat(fetched);
+    // 公开书单按 update_time 排序分页，翻页期间书单被更新会跨页重复，故统一按 id 去重
+    const known = new Set<number>();
+    if (!reset) {
+      for (let i = 0; i < this.lists.length; i++) {
+        known.add(this.lists[i].id);
+      }
+    }
+    const merged: BookListSummary[] = reset ? [] : this.lists.slice();
+    for (let i = 0; i < fetched.length; i++) {
+      const item: BookListSummary = fetched[i];
+      if (known.has(item.id)) {
+        continue;
+      }
+      known.add(item.id);
+      merged.push(item);
+    }
+    this.lists = merged;
     return true;
   }
 
@@ -145,11 +220,14 @@ struct BookListsPage {
   }
 
   private onTabChange(value: number): void {
-    if (value === this.activeTab) {
+    // 不能判断 value === this.activeTab：FilterChips 是 @Link，回写已发生，判断恒真。
+    if (value === this.loadedTab) {
       return;
     }
     this.activeTab = value;
     this.lists = [];
+    this.hasMore = false;
+    this.needLogin = false;
     void this.prepareAndLoad();
   }
 
@@ -265,22 +343,49 @@ struct BookListsPage {
   }
 
   private showManageMenu(item: BookListSummary): void {
+    // 按能力动态组装按钮，并用同序的 action 列表分发（不依赖 index）
+    const buttons: promptAction.Button[] = [];
+    const actions: string[] = [];
+    buttons.push({ text: '编辑', color: '#007DFF' });
+    actions.push('edit');
+    buttons.push({ text: item.isPublic ? '设为私有' : '设为公开', color: '#007DFF' });
+    actions.push('visibility');
+    if (this.isAdmin) {
+      // 服务端 BookListStickyHandler 为 @is_admin，仅管理员暴露该入口
+      buttons.push({ text: item.isSticky ? '取消置顶' : '置顶', color: '#007DFF' });
+      actions.push('sticky');
+    }
+    buttons.push({ text: '删除', color: '#E84026' });
+    actions.push('delete');
     this.getUIContext().getPromptAction().showActionMenu({
       title: item.name,
-      buttons: [
-        { text: '编辑', color: '#007DFF' },
-        { text: item.isPublic ? '设为私有' : '设为公开', color: '#007DFF' },
-        { text: '删除', color: '#E84026' },
-      ],
-    }).then((result) => {
-      if (result.index === 0) {
+      buttons: buttons,
+    } as promptAction.ActionMenuOptions).then((result) => {
+      const action: string = actions[result.index] ?? '';
+      if (action === 'edit') {
         this.openEditSheet(item);
-      } else if (result.index === 1) {
+      } else if (action === 'visibility') {
         void this.toggleVisibility(item);
-      } else if (result.index === 2) {
+      } else if (action === 'sticky') {
+        void this.toggleSticky(item);
+      } else if (action === 'delete') {
         this.confirmDelete(item);
       }
     }).catch(() => {});
+  }
+
+  private async toggleSticky(item: BookListSummary): Promise<void> {
+    try {
+      const rsp = await BookListApi.setSticky(item.id, !item.isSticky);
+      if (rsp.err !== undefined && rsp.err !== 'ok') {
+        this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
+        return;
+      }
+      this.toast(item.isSticky ? '已取消置顶' : '已置顶');
+      void this.loadLists(true);
+    } catch (error) {
+      this.toast(`操作失败：${error}`);
+    }
   }
 
   private async toggleVisibility(item: BookListSummary): Promise<void> {
@@ -401,7 +506,7 @@ struct BookListsPage {
             BookListCardItem({
               item: item,
               showManage: this.activeTab === TAB_MINE && item.isOwner,
-              showRecommendBadge: this.activeTab === TAB_PUBLIC,
+              showRecommendBadge: this.activeTab !== TAB_LIKED,
               onItemTap: () => this.openDetail(item),
               onLikeTap: () => {
                 void this.toggleLike(item);
@@ -409,7 +514,7 @@ struct BookListsPage {
               onManageTap: () => this.showManageMenu(item),
             });
           }
-        }, (item: BookListSummary) => `booklist-${item.id}-${item.likeCount}-${item.isPublic}`);
+        }, (item: BookListSummary) => bookListCardKey(item));
         if (this.loadingMore) {
           ListItem() {
             Text('加载中…')

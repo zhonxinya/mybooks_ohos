@@ -608,6 +608,27 @@ export class TalebookService {
     });
   }
 
+  /**
+   * 当前登录账号是否为管理员（`/api/user/info` 的 `is_admin`）。
+   *
+   * 复用 `getUserInfoCachedAsync` 的缓存，不额外发请求；未登录或取不到时按非管理员处理。
+   * 用于收拢「仅管理员可见」的入口（如书单置顶，服务端 `BookListStickyHandler` 为 `@is_admin`）。
+   */
+  static isCurrentUserAdminAsync(): Promise<boolean> {
+    return TalebookService.getUserInfoCachedAsync().then((envelope: ApiEnvelope): boolean => {
+      const body: Record<string, Object> | null = envelope.body;
+      if (body === null) {
+        return false;
+      }
+      // 服务端两种封装都存在：user/info 直接给字段，部分端点嵌在 user 对象里
+      const user: Record<string, Object> =
+        (body['user'] as Record<string, Object> | undefined) ?? body;
+      const flag: Object | undefined = user['is_admin'];
+      return flag === true || String(flag) === '1' || String(flag) === 'true' ||
+        String(user['role'] ?? '') === 'admin';
+    });
+  }
+
   static ensureAuthenticated(): Promise<boolean> {
     // 每轮会话校验前重置失败原因，避免把上一轮（或切换账号时）的旧原因当成启动结果
     TalebookService.authFailure_ = '';
