@@ -18,6 +18,18 @@ interface BookSummary {
   subtitle: string;
 }
 
+/**
+ * 封面横滑行的入参。
+ *
+ * **必须是单一对象**：ArkUI 的 `@Builder` 按值传参时，状态变量的改变不会刷新 Builder 内部 UI
+ * （早期写法 `coverScroll(books, showRecommender)` 传两个参数按值，导致「换一批」拿到新数据后
+ * 封面行仍显示旧书）。按引用传参（对象字面量）才会随状态变化重建。
+ */
+interface CoverRowSpec {
+  books: HomeBook[];
+  showRecommender: boolean;
+}
+
 
 @Component
 export struct BooksTabPage {
@@ -527,7 +539,7 @@ export struct BooksTabPage {
   newSection() {
     Column({ space: 4 }) {
       SectionTitle({ title: '新书推荐' });
-      this.coverScroll(this.newBooks, false);
+      this.coverScroll({ books: this.newBooks, showRecommender: false });
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start);
@@ -562,7 +574,7 @@ export struct BooksTabPage {
         actionLabel: '换一批',
         onAction: () => this.refreshRandomBooks(),
       });
-      this.coverScroll(this.randomBooks, false);
+      this.coverScroll({ books: this.randomBooks, showRecommender: false });
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start);
@@ -572,18 +584,18 @@ export struct BooksTabPage {
   socialSection() {
     Column({ space: 4 }) {
       SectionTitle({ title: '读者推荐' });
-      this.coverScroll(this.socialBooks, true);
+      this.coverScroll({ books: this.socialBooks, showRecommender: true });
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start);
   }
 
   @Builder
-  coverScroll(books: HomeBook[], showRecommender: boolean) {
+  coverScroll(spec: CoverRowSpec) {
     Scroll() {
       Row({ space: 14 }) {
-        ForEach(books, (book: HomeBook) => {
-          this.coverTile(book, showRecommender);
+        ForEach(spec.books, (book: HomeBook) => {
+          this.coverTile(book, spec.showRecommender);
         }, (book: HomeBook) => `home-${book.id}`);
       }
       .padding({ left: 16, right: 16 });
