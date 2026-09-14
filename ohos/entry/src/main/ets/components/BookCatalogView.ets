@@ -3,6 +3,28 @@ import { BookListItem, BookListItemData } from './BookListItem';
 import { LoadingState } from './LoadingState';
 import { BookCatalogDataSource } from './BookCatalogDataSource';
 
+/**
+ * 网格列数。
+ *
+ * 列数只用这一处定义：表头/加载项的跨列范围由 `GRID_COLUMNS - 1` 推导，
+ * 列模板也由它拼出来。曾在改列数时漏改表头跨列，结果首页那整块推荐区只占前两列宽、被挤到屏幕左侧。
+ */
+const GRID_COLUMNS: number = 3;
+const GRID_COLUMN_GAP: number = 10;
+const GRID_ROW_GAP: number = 14;
+/** 距末尾还剩几项就预加载下一页：3 列下一屏约 9~12 项，留 6 项做提前量。 */
+const LOAD_MORE_THRESHOLD_ITEMS: number = 6;
+
+function buildColumnsTemplate(columns: number): string {
+  const parts: string[] = [];
+  for (let i = 0; i < columns; i++) {
+    parts.push('1fr');
+  }
+  return parts.join(' ');
+}
+
+const GRID_COLUMNS_TEMPLATE: string = buildColumnsTemplate(GRID_COLUMNS);
+
 @Component
 export struct BookCatalogView {
   @Prop @Watch('onItemsChanged') items: BookListItemData[] = [];
@@ -68,7 +90,7 @@ export struct BookCatalogView {
           .padding({ left: 0, right: 0 });
         }
         .columnStart(0)
-        .columnEnd(1)
+        .columnEnd(GRID_COLUMNS - 1)
 
         LazyForEach(this.dataSource, (item: BookListItemData) => {
           GridItem() {
@@ -89,18 +111,18 @@ export struct BookCatalogView {
             LoadingState({ hint: '加载更多...' });
           }
           .columnStart(0)
-          .columnEnd(1)
+          .columnEnd(GRID_COLUMNS - 1)
         }
       }
-      .columnsTemplate('1fr 1fr')
-      .columnsGap(12)
-      .rowsGap(12)
+      .columnsTemplate(GRID_COLUMNS_TEMPLATE)
+      .columnsGap(GRID_COLUMN_GAP)
+      .rowsGap(GRID_ROW_GAP)
       .padding({ left: 16, right: 16, bottom: 16 })
-      .cachedCount(8)
+      .cachedCount(12)
       .layoutWeight(1)
       .width('100%')
       .onScrollIndex((_first: number, last: number) => {
-        if (last >= this.dataSource.totalCount() - 4) {
+        if (last >= this.dataSource.totalCount() - LOAD_MORE_THRESHOLD_ITEMS) {
           this.onLoadMore();
         }
       });
