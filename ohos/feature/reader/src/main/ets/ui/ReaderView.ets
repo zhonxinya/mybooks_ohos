@@ -48,6 +48,8 @@ const PAGE_ANIM_MS: number = 220;
 const PAGE_TURN_RATIO: number = 0.25;
 /** 三区点击：左右各 1/3 翻页，中间切换工具栏。 */
 const TAP_ZONE_RATIO: number = 0.33;
+/** 甩动翻页的速度阈值（vp/s）：拖动距离不够但甩得快也翻页，不必拖满 1/4 屏。 */
+const FLING_VELOCITY_VP: number = 400;
 /** 测量入参单位自校准用的探针宽度（vp）。 */
 const PROBE_WIDTH_VP: number = 80;
 /** 分页结果最多缓存几章。 */
@@ -69,6 +71,7 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   theme: ReaderTheme.LIGHT,
   flipMode: READER_FLIP_DEFAULT,
   keepScreenOn: false,
+  oneHandMode: false,
   fontId: 'system',
 };
 const DEFAULT_OPTIONS: ReaderOpenOptions = {
@@ -143,6 +146,8 @@ export struct ReaderView {
   @State private fontDownloading: boolean = false;
   @State private flipMode: string = DEFAULT_SETTINGS.flipMode;
   @State private keepScreenOn: boolean = DEFAULT_SETTINGS.keepScreenOn;
+  /** 单手模式：点击左右两侧均为下一页，只有滑动才能回上一页。 */
+  @State private oneHandMode: boolean = DEFAULT_SETTINGS.oneHandMode;
   /** 控制面板朗读页的语速：本阅读器未启用朗读，仅满足面板的 @Link 绑定。 */
   @State private ttsSpeed: number = 1.0;
   /** 分页状态。 */
@@ -153,6 +158,8 @@ export struct ReaderView {
   /** 翻页拖拽位移（vp）与方向（-1 上一页 / 0 未拖 / 1 下一页）。 */
   @State private dragOffset: number = 0;
   @State private dragDir: number = 0;
+  /** 拖拽的原始位移（vp）：无动画模式不做位移动画，但离阈值判定仍需真实拖距。 */
+  private dragRaw: number = 0;
 
   private engine: BookEngine | null = null;
   private blocks: LazyDataSource<ReaderBlock> = new LazyDataSource<ReaderBlock>();
@@ -212,6 +219,7 @@ export struct ReaderView {
     this.theme = settings.theme;
     this.flipMode = ReaderFlip.normalize(settings.flipMode);
     this.keepScreenOn = settings.keepScreenOn;
+    this.oneHandMode = settings.oneHandMode === true;
     this.fontId = settings.fontId.length > 0 ? settings.fontId : DEFAULT_SETTINGS.fontId;
     // 打开时把已选字体注册进 ArkUI（宿主侧 ensureCached 命中缓存时立即返回）
     void this.applyFont(this.fontId, false);
@@ -295,6 +303,9 @@ export struct ReaderView {
           flipValues: READER_FLIP_OPTIONS,
           flipValue: $flipMode,
           keepScreenOn: $keepScreenOn,
+          oneHandMode: this.oneHandMode,
+          showOneHandMode: true,
+          onOneHandModeChange: (enabled: boolean) => this.setOneHandMode(enabled),
           // 内置阅读器只有「界面」一个入口：把常亮也放进界面页
           behaviorInAppearance: true,
           ttsSpeed: $ttsSpeed,
@@ -331,15 +342,7 @@ export struct ReaderView {
 
   /** 面板里改动的字号/行距/主题/翻页/常亮统一在这里落盘并重排。 */
   private onPanelSettingsChanged(relayout: boolean): void {
-    const settings: ReaderSettings = {
-      fontSize: this.fontSize,
-      lineHeight: this.lineHeight,
-      theme: this.theme,
-      flipMode: this.flipMode,
-      keepScreenOn: this.keepScreenOn,
-      fontId: this.fontId,
-    };
-    this.applySettings(settings, relayout);
+    this.applySettings(this.currentSettings(), relayout);
   }
 
   // ---- 正文 ----
@@ -378,8 +381,8 @@ export struct ReaderView {
       PanGesture({ direction: PanDirection.Horizontal, distance: 6 })
         .onActionStart(() => this.beginPageDrag())
         .onActionUpdate((event: GestureEvent) => this.updatePageDrag(event.offsetX))
-        .onActionEnd(() => this.endPageDrag())
-        .onActionCancel(() => this.endPageDrag()),
+        .onActionEnd((event: GestureEvent) => this.endPageDrag(event.velocityX))
+        .onActionCancel(() => this.cancelPageDrag()),
     )
     .onClick((event: ClickEvent) => this.onPagerClick(event));
   }
@@ -460,11 +463,11 @@ export struct ReaderView {
       })
       .cachedCount(4)
       .scrollBar(BarState.Off)
-      .onScrollIndex((start: number, end: number) => {
+      .onScrollIndex((start: number) => {
         this.onListScroll(start);
       })
-      .onClick(() => {
-        this.toggleBars();
+      .onClick((event: ClickEvent) => {
+        this.onScrollTap(event);
       });
 
       // 底部分隔线 + 页脚：左侧书名，右侧全书进度
@@ -498,8 +501,8 @@ export struct ReaderView {
     .width('100%')
     .height('100%')
     .padding({ top: CONTENT_TOP_SPACE })
-    .onClick(() => {
-      this.toggleBars();
+    .onClick((event: ClickEvent) => {
+      this.onScrollTap(event);
     });
   }
 
@@ -683,14 +686,8 @@ export struct ReaderView {
   /** 夜间 ⇄ 浅色（主题不影响排版，沿用同一条设置持久化回调）。 */
   private toggleNightTheme(): void {
     const next: ReaderTheme = this.theme === ReaderTheme.DARK ? ReaderTheme.LIGHT : ReaderTheme.DARK;
-    const settings: ReaderSettings = {
-      fontSize: this.fontSize,
-      lineHeight: this.lineHeight,
-      theme: next,
-      flipMode: this.flipMode,
-      keepScreenOn: this.keepScreenOn,
-      fontId: this.fontId,
-    };
+    const settings: ReaderSettings = this.currentSettings();
+    settings.theme = next;
     this.applySettings(settings, false);
   }
 
@@ -753,15 +750,7 @@ export struct ReaderView {
     this.fontFamily = resolved.fontPath.length > 0 ? resolved.fontName : '';
     if (persist) {
       // 换字体后正文宽高都变，必须重新测量分页（applySettings 的 relayout 分支）并落盘偏好
-      const settings: ReaderSettings = {
-        fontSize: this.fontSize,
-        lineHeight: this.lineHeight,
-        theme: this.theme,
-        flipMode: this.flipMode,
-        keepScreenOn: this.keepScreenOn,
-        fontId: this.fontId,
-      };
-      this.applySettings(settings, true);
+      this.applySettings(this.currentSettings(), true);
     }
   }
 
@@ -791,15 +780,21 @@ export struct ReaderView {
 
   /** 把当前设置（含字体）回调给宿主持久化。 */
   private notifySettingsChanged(): void {
+    this.callbacks.onSettingsChanged(this.currentSettings());
+  }
+
+  /** 当前设置快照：所有落盘路径统一走它，避免新增设置项时漏传。 */
+  private currentSettings(): ReaderSettings {
     const settings: ReaderSettings = {
       fontSize: this.fontSize,
       lineHeight: this.lineHeight,
       theme: this.theme,
       flipMode: this.flipMode,
       keepScreenOn: this.keepScreenOn,
+      oneHandMode: this.oneHandMode,
       fontId: this.fontId,
     };
-    this.callbacks.onSettingsChanged(settings);
+    return settings;
   }
 
   /**
@@ -1146,41 +1141,84 @@ export struct ReaderView {
     return linePx * Math.max(1, Math.ceil(text.length / 24));
   }
 
+  // ---- 单手模式 ----
+
+  /**
+   * 单手模式开关。
+   *
+   * 只改点击分区语义（点左右两侧都前进，后退只能靠滑动），不改变排版，
+   * 因此无需重新分页，仅落盘偏好。
+   */
+  private setOneHandMode(enabled: boolean): void {
+    if (this.oneHandMode === enabled) {
+      return;
+    }
+    this.oneHandMode = enabled;
+    this.notifySettingsChanged();
+  }
+
   // ---- 翻页交互 ----
 
   // 命名避开 CustomComponent 内置的 onDragStart/onDragEnd（拖拽事件回调）
   private beginPageDrag(): void {
     this.dragDir = 0;
     this.dragOffset = 0;
+    this.dragRaw = 0;
   }
 
+  /** 跟手位移：无动画模式不做位移，只在抬手时按方向瞬时翻页。 */
   private updatePageDrag(dx: number): void {
-    if (this.flipMode === READER_FLIP_NONE) {
-      return;
-    }
+    const width = this.contentWidthVp;
+    // 钳制在左右各一屏内：拖过头也不会把页面甩出可视区
+    this.dragRaw = Math.min(width, Math.max(-width, dx));
     if (this.dragDir === 0) {
       if (Math.abs(dx) < 2) {
         return;
       }
       this.dragDir = dx < 0 ? 1 : -1;
     }
-    this.dragOffset = dx;
+    if (this.flipMode === READER_FLIP_NONE) {
+      return;
+    }
+    this.dragOffset = this.dragRaw;
   }
 
-  private endPageDrag(): void {
-    if (this.flipMode === READER_FLIP_NONE || this.dragDir === 0) {
-      this.dragDir = 0;
+  /**
+   * 抬手结算：拖动距离超过 `PAGE_TURN_RATIO` 或甩动速度超过阈值都翻页，否则回弹。
+   * `velocity` 为手势速度（vp/s，正 = 向右），方向与拖动方向一致时才算甩页。
+   */
+  private endPageDrag(velocity: number): void {
+    const dir = this.dragDir;
+    if (dir === 0) {
       this.dragOffset = 0;
       return;
     }
     const threshold = this.contentWidthVp * PAGE_TURN_RATIO;
-    const dx = this.dragOffset;
-    if (this.dragDir === 1 && dx <= -threshold) {
-      this.animateTurn(1);
+    const fling = Math.abs(velocity) >= FLING_VELOCITY_VP && velocity * dir < 0;
+    if (!fling && dir * this.dragRaw > -threshold) {
+      this.animateBack();
       return;
     }
-    if (this.dragDir === -1 && dx >= threshold) {
-      this.animateTurn(-1);
+    this.dragRaw = 0;
+    if (this.flipMode === READER_FLIP_NONE) {
+      // 无动画模式：不做位移动画，直接瞬切（含切章）
+      this.dragDir = 0;
+      this.dragOffset = 0;
+      this.turnPage(dir);
+      return;
+    }
+    this.animateTurn(dir);
+  }
+
+  /** 手势被中断（父组件/系统抢走）：回弹，不翻页。 */
+  private cancelPageDrag(): void {
+    if (this.dragDir === 0) {
+      return;
+    }
+    this.dragRaw = 0;
+    if (this.flipMode === READER_FLIP_NONE || this.dragOffset === 0) {
+      this.dragDir = 0;
+      this.dragOffset = 0;
       return;
     }
     this.animateBack();
@@ -1265,7 +1303,29 @@ export struct ReaderView {
     this.reportProgress(page === undefined ? 0 : page.firstParagraph, false);
   }
 
-  /** 三区点击：左 1/3 上一页、右 1/3 下一页、中间切换工具栏。 */
+  /**
+   * 点击翻页：目标页已存在时走左右滑动动效，
+   * 否则交给 `turnPage`（章首章末切章、分页还没补完）。
+   */
+  private turnPageAnimated(delta: number): void {
+    if (this.flipMode === READER_FLIP_NONE || this.chapterLoading || this.blockCount === 0) {
+      this.turnPage(delta);
+      return;
+    }
+    const target = this.pageIndex + delta;
+    if (target < 0 || !this.ensurePagesFor(target)) {
+      this.turnPage(delta);
+      return;
+    }
+    this.pagerPositionApplied = true;
+    this.dragDir = delta > 0 ? 1 : -1;
+    this.animateTurn(delta);
+  }
+
+  /**
+   * 三区点击：左/右 1/3 翻页、中间切换工具栏。
+   * 单手模式下左右两侧都是「下一页」，后退只能靠向右滑动（拇指够不到左侧）。
+   */
   private onPagerClick(event: ClickEvent): void {
     const width = this.contentWidthVp;
     if (width <= 0) {
@@ -1273,15 +1333,13 @@ export struct ReaderView {
       return;
     }
     const x = event.x;
-    if (x < width * TAP_ZONE_RATIO) {
-      this.turnPage(-1);
+    const inMiddle = x > width * TAP_ZONE_RATIO && x < width * (1 - TAP_ZONE_RATIO);
+    if (inMiddle) {
+      this.toggleBars();
       return;
     }
-    if (x > width * (1 - TAP_ZONE_RATIO)) {
-      this.turnPage(1);
-      return;
-    }
-    this.toggleBars();
+    const back = !this.oneHandMode && x <= width * TAP_ZONE_RATIO;
+    this.turnPageAnimated(back ? -1 : 1);
   }
 
   /** 页面层横向位移：覆盖模式只动「上面那一页」，滑动模式两页同步平移。 */
@@ -1344,6 +1402,45 @@ export struct ReaderView {
     this.reportProgress(block === undefined ? 0 : block.paragraphIndex, true);
   }
 
+  /**
+   * 滚动模式的「下一页」：已到列表末尾则切下一章，否则往下翻一屏。
+   * 用 `Scroller.isAtEnd()` 而不是记 `onScrollIndex`：一屏就放完的短章节也要能点着翻到下一章。
+   */
+  private scrollOneScreen(): void {
+    if (this.listAtEnd()) {
+      const next = this.chapterIndex + 1;
+      if (next < this.catalogSize) {
+        void this.loadChapter(next, 0, false);
+      }
+      return;
+    }
+    try {
+      this.listScroller.scrollPage({ next: true });
+    } catch (_error) {
+      // 列表尚未布局完成时忽略；位置由当前滚动位置兜底
+    }
+  }
+
+  private listAtEnd(): boolean {
+    try {
+      return this.listScroller.isAtEnd();
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  /** 滚动模式下的点击：单手模式左右两侧都为下一页，其余仍为切换工具栏。 */
+  private onScrollTap(event: ClickEvent): void {
+    const width = this.contentWidthVp;
+    const inMiddle = width > 0 && event.x > width * TAP_ZONE_RATIO &&
+      event.x < width * (1 - TAP_ZONE_RATIO);
+    if (!this.oneHandMode || inMiddle) {
+      this.toggleBars();
+      return;
+    }
+    this.scrollOneScreen();
+  }
+
   /** 上报进度；`throttled` 为 true 时按 0.5% 粒度去抖。 */
   private reportProgress(paragraphIndex: number, throttled: boolean): void {
     const chapterCount = this.catalogSize > 0 ? this.catalogSize : 1;
@@ -1385,14 +1482,7 @@ export struct ReaderView {
     this.theme = settings.theme;
     this.flipMode = nextFlip;
     this.keepScreenOn = settings.keepScreenOn;
-    const applied: ReaderSettings = {
-      fontSize: settings.fontSize,
-      lineHeight: settings.lineHeight,
-      theme: settings.theme,
-      flipMode: nextFlip,
-      keepScreenOn: settings.keepScreenOn,
-      fontId: this.fontId,
-    };
+    const applied: ReaderSettings = this.currentSettings();
     this.callbacks.onSettingsChanged(applied);
     if (ReaderFlip.isPaged(nextFlip)) {
       if (flipChanged || metricsChanged) {

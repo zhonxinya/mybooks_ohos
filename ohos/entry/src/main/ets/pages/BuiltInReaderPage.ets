@@ -4,6 +4,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
   READER_FLIP_DEFAULT,
   READER_FLIP_PREF_KEY,
+  READER_ONE_HAND_PREF_KEY,
   ReaderCallbacks,
   ReaderFlip,
   ReaderFontOption as ReaderFontOptionView,
@@ -59,6 +60,7 @@ const DEFAULT_OPTIONS: ReaderOpenOptions = {
     theme: ReaderTheme.LIGHT,
     flipMode: READER_FLIP_DEFAULT,
     keepScreenOn: false,
+    oneHandMode: false,
     fontId: 'system',
   },
   fontOptions: [],
@@ -217,6 +219,7 @@ struct BuiltInReaderPage {
       theme: theme,
       flipMode: ReaderFlip.normalize(TalebookService.prefGet(READER_FLIP_PREF_KEY, READER_FLIP_DEFAULT)),
       keepScreenOn: TalebookService.prefGet(KEEP_SCREEN_ON_KEY, 'false') === 'true',
+      oneHandMode: TalebookService.prefGet(READER_ONE_HAND_PREF_KEY, 'false') === 'true',
       fontId: BuiltInReaderPage.loadFontId(),
     };
   }
@@ -234,6 +237,7 @@ struct BuiltInReaderPage {
     values[THEME_KEY] = `${settings.theme}`;
     values[READER_FLIP_PREF_KEY] = ReaderFlip.normalize(settings.flipMode);
     values[KEEP_SCREEN_ON_KEY] = settings.keepScreenOn ? 'true' : 'false';
+    values[READER_ONE_HAND_PREF_KEY] = settings.oneHandMode ? 'true' : 'false';
     values[READER_FONT_ID_KEY] = settings.fontId.length > 0 ?
       settings.fontId : ReaderFontCatalog.SYSTEM_ID;
     TalebookService.prefSetBatch(values);

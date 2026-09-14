@@ -61,6 +61,13 @@ export struct ReaderControlPanel {
   // ---- 设置 ----
   @Link keepScreenOn: boolean;
   /**
+   * 单手模式（点击左右两侧均为下一页，后退靠滑动）。
+   * 目前只有内置阅读器支持，`showOneHandMode=false` 时隐藏该行（ReaderKit 阅读器就不显示）。
+   */
+  @Prop showOneHandMode: boolean = false;
+  @Prop oneHandMode: boolean = false;
+  onOneHandModeChange: (enabled: boolean) => void = (_enabled: boolean) => {};
+  /**
    * 是否把「阅读行为（常亮）」放进「界面」页。
    * ReaderKit 阅读器底部有独立的「设置」入口，用不到；内置阅读器只有「界面」一个入口，
    * 打开它才能触达常亮开关。
@@ -323,6 +330,15 @@ export struct ReaderControlPanel {
           this.onSettingsChanged(false);
         },
       });
+      if (this.showOneHandMode) {
+        ReaderSwitchRow({
+          theme: this.theme,
+          title: '单手模式',
+          subtitle: '点击左右两侧均为下一页，上一页靠向右滑动',
+          isOn: this.oneHandMode,
+          onChange: (value: boolean) => this.onOneHandModeChange(value),
+        });
+      }
     }
   }
 
