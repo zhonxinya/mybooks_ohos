@@ -1,3 +1,4 @@
+import { promptAction } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
@@ -24,6 +25,10 @@ interface SheetBookItem {
 }
 
 const DETAIL_PAGE_SIZE: number = 24;
+
+/** 对齐服务端约束：BookList.name 为 String(100)、description 服务端截断到 500。 */
+const BOOKLIST_NAME_MAX: number = 100;
+const BOOKLIST_DESC_MAX: number = 500;
 
 @Entry
 @Component
@@ -52,6 +57,8 @@ struct BookListDetailPage {
   @State addSearching: boolean = false;
   @State addSearchingMore: boolean = false;
   @State addPage: number = 1;
+  /** 当前账号是否管理员：服务端书单置顶为 `@is_admin`，据此决定菜单里是否出现「置顶」。 */
+  @State isAdmin: boolean = false;
   private lastLoadTime: number = 0;
   private lastAddTime: number = 0;
 
@@ -77,10 +84,24 @@ struct BookListDetailPage {
     if (TalebookService.hasAuthCredentials()) {
       await TalebookService.ensureAuthenticated();
     }
+    // 管理员标记只影响 owner 菜单，不阻塞详情加载
+    void this.loadAdminFlag();
     if (this.booklistId > 0) {
       BookListApi.bumpView(this.booklistId).catch(() => {});
     }
     await this.loadDetail(true);
+  }
+
+  private async loadAdminFlag(): Promise<void> {
+    if (!TalebookService.hasAuthCredentials()) {
+      this.isAdmin = false;
+      return;
+    }
+    try {
+      this.isAdmin = await TalebookService.isCurrentUserAdminAsync();
+    } catch (_error) {
+      this.isAdmin = false;
+    }
   }
 
   private async loadDetail(reset: boolean): Promise<void> {
@@ -252,25 +273,60 @@ struct BookListDetailPage {
     if (this.detail === null) {
       return;
     }
+    // 按能力动态组装按钮，并用同序的 action 列表分发（不依赖 index）
+    const buttons: promptAction.Button[] = [];
+    const actions: string[] = [];
+    buttons.push({ text: '编辑书单', color: '#007DFF' });
+    actions.push('edit');
+    buttons.push({ text: this.detail.isPublic ? '设为私有' : '设为公开', color: '#007DFF' });
+    actions.push('visibility');
+    if (this.isAdmin) {
+      // 服务端 BookListStickyHandler 为 @is_admin，仅管理员暴露该入口
+      buttons.push({ text: this.detail.isSticky ? '取消置顶' : '置顶', color: '#007DFF' });
+      actions.push('sticky');
+    }
+    if (this.detail.isPublic) {
+      // 私有书单没有可分享的落地页，直接不出现该菜单项（原来点了才弹「不支持分享」）
+      buttons.push({ text: '生成分享卡片', color: '#007DFF' });
+      actions.push('share');
+    }
+    buttons.push({ text: '删除书单', color: '#E84026' });
+    actions.push('delete');
     this.getUIContext().getPromptAction().showActionMenu({
       title: this.detail.name,
-      buttons: [
-        { text: '编辑书单', color: '#007DFF' },
-        { text: this.detail.isPublic ? '设为私有' : '设为公开', color: '#007DFF' },
-        { text: '生成分享卡片', color: '#007DFF' },
-        { text: '删除书单', color: '#E84026' },
-      ],
-    }).then((result) => {
-      if (result.index === 0) {
+      buttons: buttons,
+    } as promptAction.ActionMenuOptions).then((result) => {
+      const action: string = actions[result.index] ?? '';
+      if (action === 'edit') {
         this.openEditSheet();
-      } else if (result.index === 1) {
+      } else if (action === 'visibility') {
         void this.toggleVisibility();
-      } else if (result.index === 2) {
+      } else if (action === 'sticky') {
+        void this.toggleSticky();
+      } else if (action === 'share') {
         this.openShareSheet();
-      } else if (result.index === 3) {
+      } else if (action === 'delete') {
         this.confirmDelete();
       }
     }).catch(() => {});
+  }
+
+  private async toggleSticky(): Promise<void> {
+    if (this.detail === null) {
+      return;
+    }
+    const next: boolean = !this.detail.isSticky;
+    try {
+      const rsp = await BookListApi.setSticky(this.detail.id, next);
+      if (rsp.err !== undefined && rsp.err !== 'ok') {
+        this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
+        return;
+      }
+      this.toast(next ? '已置顶' : '已取消置顶');
+      await this.loadDetail(true);
+    } catch (error) {
+      this.toast(`操作失败：${error}`);
+    }
   }
 
   private openShareSheet(): void {
@@ -449,6 +505,7 @@ struct BookListDetailPage {
                 this.toast('已从书单移出');
                 this.books = this.books.filter((item: BookListCoverBook) => item.bookId !== book.bookId);
                 if (this.detail !== null) {
+                  const nextTotal: number = Math.max(0, this.detail.booksTotal - 1);
                   this.detail = {
                     id: this.detail.id, name: this.detail.name, description: this.detail.description,
                     color: this.detail.color, isPublic: this.detail.isPublic,
@@ -457,9 +514,11 @@ struct BookListDetailPage {
                     bookCount: Math.max(0, this.detail.bookCount - 1),
                     owner: this.detail.owner, isOwner: this.detail.isOwner,
                     likedByMe: this.detail.likedByMe, coverBooks: this.detail.coverBooks,
-                    books: this.detail.books, booksTotal: Math.max(0, this.detail.booksTotal - 1),
+                    books: this.detail.books, booksTotal: nextTotal,
                     page: this.detail.page, pageSize: this.detail.pageSize,
                   };
+                  // 已加载数与总数同时变化，必须重算「还有下一页」，否则会少拉一页或多发一次空请求
+                  this.hasMore = this.books.length < nextTotal;
                 }
               } else {
                 this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
@@ -656,6 +715,22 @@ struct BookListDetailPage {
           .onClick(() => this.openBook(book.bookId));
         }
       }, (book: BookListCoverBook) => `book-${book.bookId}`);
+      if (this.books.length === 0 && !this.isOwner()) {
+        // owner 空书单有上面的虚线「添加书籍」格已是引导；非 owner 之前完全空白
+        GridCol({ span: 12 }) {
+          Column({ space: 6 }) {
+            SymbolGlyph($r('sys.symbol.book'))
+              .fontSize(28)
+              .fontColor([$r('app.color.text_tertiary')]);
+            Text('这个书单还没有书籍')
+              .fontSize(13)
+              .fontColor($r('app.color.text_secondary'));
+          }
+          .width('100%')
+          .padding({ top: 24, bottom: 24 })
+          .alignItems(HorizontalAlign.Center);
+        }
+      }
     }
     .width('100%')
     .padding({ left: 16, right: 16 });
@@ -664,15 +739,18 @@ struct BookListDetailPage {
   @Builder
   editSheet() {
     Column({ space: 12 }) {
+      // maxLength 对齐服务端约束，否则超长简介会被服务端静默截断
       TextInput({ text: this.editName, placeholder: '书单名称' })
         .width('100%')
         .height(44)
+        .maxLength(BOOKLIST_NAME_MAX)
         .onChange((value: string) => {
           this.editName = value;
         });
       TextArea({ text: this.editDescription, placeholder: '简介（可选）' })
         .width('100%')
         .height(90)
+        .maxLength(BOOKLIST_DESC_MAX)
         .onChange((value: string) => {
           this.editDescription = value;
         });
@@ -941,6 +1019,9 @@ struct BookListDetailPage {
       }
       .layoutWeight(1)
       .width('100%')
+      // Scroll 默认 align 为 Alignment.Center：内容不足一屏时会把卡片整体推到页面中部，
+      // 书单为空或只有几本书时表现为「标题栏下一大片空白」，必须显式顶对齐。
+      .align(Alignment.TopStart)
       .onReachEnd(() => this.loadMore());
     }
   }

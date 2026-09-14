@@ -581,7 +581,7 @@ export struct BookshelfPage {
     } else if (this.displayRecords.length === 0) {
       EmptyState({
         message: '暂无本地书籍',
-        detail: '上传图书到服务器书库，或导入本地文件；也可用放大镜搜索书库、书本图标搜索 SoNovel',
+        detail: '上传图书到服务器书库，或导入本地文件；也可用放大镜搜索书库、书本图标搜索 SoNovel、文件夹图标查看书单',
         actionLabel: '上传图书',
         onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/BookUploadPage' }),
       });
