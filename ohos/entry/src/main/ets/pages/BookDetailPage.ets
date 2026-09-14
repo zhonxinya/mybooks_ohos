@@ -23,6 +23,9 @@ const PUSH_DEVICE_TYPES: string[] = [
   'kindle', 'duokan', 'ireader', 'hanwang', 'boox', 'dangdang', 'purelibro', 'ftp', 'koreader',
 ];
 
+/** 对齐服务端约束：「加入书单」面板新建书单时，BookList.name 为 String(100)。 */
+const BOOKLIST_NAME_MAX: number = 100;
+
 interface BookDetailSuggestion {
   id: number;
   title: string;
@@ -1945,6 +1948,8 @@ struct BookDetailPage {
         TextInput({ placeholder: '新建书单名称', text: this.newBooklistName })
           .layoutWeight(1)
           .height(40)
+          // 对齐服务端 BookList.name 的 String(100) 上限，与书单页/详情页表单一致
+          .maxLength(BOOKLIST_NAME_MAX)
           .onChange((value: string) => {
             this.newBooklistName = value;
           });
