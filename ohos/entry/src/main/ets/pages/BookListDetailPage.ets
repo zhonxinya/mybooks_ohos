@@ -26,6 +26,10 @@ interface SheetBookItem {
 
 const DETAIL_PAGE_SIZE: number = 24;
 
+/** 对齐服务端约束：BookList.name 为 String(100)、description 服务端截断到 500。 */
+const BOOKLIST_NAME_MAX: number = 100;
+const BOOKLIST_DESC_MAX: number = 500;
+
 @Entry
 @Component
 struct BookListDetailPage {
@@ -735,15 +739,18 @@ struct BookListDetailPage {
   @Builder
   editSheet() {
     Column({ space: 12 }) {
+      // maxLength 对齐服务端约束，否则超长简介会被服务端静默截断
       TextInput({ text: this.editName, placeholder: '书单名称' })
         .width('100%')
         .height(44)
+        .maxLength(BOOKLIST_NAME_MAX)
         .onChange((value: string) => {
           this.editName = value;
         });
       TextArea({ text: this.editDescription, placeholder: '简介（可选）' })
         .width('100%')
         .height(90)
+        .maxLength(BOOKLIST_DESC_MAX)
         .onChange((value: string) => {
           this.editDescription = value;
         });
