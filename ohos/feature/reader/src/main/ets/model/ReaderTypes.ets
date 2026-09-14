@@ -37,6 +37,10 @@ export const READER_MODE_BUILTIN: string = 'builtin';
  * 因为两者可选效果不同：ReaderKit 有仿真翻页，内置阅读器是自绘翻页）。
  */
 export const READER_FLIP_PREF_KEY: string = 'reader_flip_mode_builtin';
+/**
+ * 单手模式偏好键。只有内置阅读器实现该模式（点击分区语义不同），因此不与 ReaderKit 共用键名。
+ */
+export const READER_ONE_HAND_PREF_KEY: string = 'reader_one_hand_mode_builtin';
 /** 覆盖翻页：新页盖住旧页（默认）。 */
 export const READER_FLIP_COVER: string = 'cover';
 /** 左右滑动：新旧页整体平移。 */
@@ -100,7 +104,13 @@ export interface ReaderSettings {
   flipMode: string;
   /** 阅读时常亮屏幕（由宿主用 window API 应用）。 */
   keepScreenOn: boolean;
-  /** 正文字体 id（与 ReaderKit 阅读器共用 eader_font_id 偏好；system 表示系统默认）。 */
+  /**
+   * 单手模式：点击左右两侧均为下一页（拇指不必够到左侧），后退只能靠向右滑动；
+   * 上下滚动模式下两侧点击改为往下翻一屏。
+   */
+  oneHandMode: boolean;
+  /** 正文字体 id（与 ReaderKit 阅读器共用 
+eader_font_id 偏好；system 表示系统默认）。 */
   fontId: string;
 }
 
