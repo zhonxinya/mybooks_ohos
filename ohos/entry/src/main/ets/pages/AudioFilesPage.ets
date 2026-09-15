@@ -1,6 +1,7 @@
 import {
-  PageScaffold, EmptyState, LoadingState, SettingCell,
-  PrimaryButton, SecondaryButton, DangerButton, LazyDataSource
+  PageScaffold, EmptyState, LoadingState, AuthImage,
+  PrimaryButton, SecondaryButton, DangerButton, LazyDataSource,
+  QuickActionGrid, QuickActionItem,
 } from '../components';
 import {
   TalebookApi, ApiMessageResult, apiErrorMessage
@@ -17,6 +18,9 @@ interface VoiceOption {
   gender: string;
   language: string;
 }
+
+/** 快捷操作宫格一行的高度（QuickActionGrid 内部的 Grid 不设高会撑满剩余空间）。 */
+const QUICK_ACTION_ROW_HEIGHT: number = 114;
 
 const VOICE_OPTIONS: VoiceOption[] = [
   { voiceName: 'zh-CN-liaoning-XiaobeiNeural', displayName: '晓北（辽宁）', gender: '女声', language: 'zh-CN' },
@@ -398,6 +402,25 @@ struct AudioFilesPage {
     return `${Math.round(size / 1024)} KB`;
   }
 
+  /** 全部音频合计大小（列表头展示）。 */
+  private totalSizeText(): string {
+    let bytes = 0;
+    for (const file of this.files) {
+      bytes += file.size;
+    }
+    return this.formatSize(bytes);
+  }
+
+  /** 当前音色的展示名（用于快捷操作与按钮文案）。 */
+  private voiceLabel(): string {
+    const option = VOICE_OPTIONS.find((item: VoiceOption) => item.voiceName === this.selectedVoice);
+    return option !== undefined ? option.displayName : '默认';
+  }
+
+  private fileTitle(file: AudioFileInfo, index: number): string {
+    return file.filename.length > 0 ? file.filename : `音频 ${index + 1}`;
+  }
+
   build() {
     Column() {
       PageScaffold({
@@ -467,14 +490,117 @@ struct AudioFilesPage {
       LoadingState({});
     } else {
       Column({ space: 12 }) {
-        if (this.conversionHint.length > 0 || this.converting) {
-          Text(this.converting
-            ? `转换中：${this.conversionHint}`
-            : this.conversionHint)
-            .fontSize(13)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%');
+        this.bookCard();
+        this.statusBanner();
+        this.primaryAction();
+        this.quickActions();
+
+        if (this.files.length === 0) {
+          EmptyState({
+            message: this.errorMessage.length > 0 ? this.errorMessage : '暂无音频文件',
+            detail: '点上方「开始语音转换」为该书籍生成音频。',
+          });
+        } else {
+          this.listHeader();
+          List({ space: 8 }) {
+            LazyForEach(this.filesSource, (file: AudioFileInfo, index: number) => {
+              ListItem() {
+                this.fileRow(file, index);
+              }
+            }, (file: AudioFileInfo, index: number) => `${file.filename}_${index}`);
+          }
+          .layoutWeight(1)
+          .width('100%')
+          .scrollBar(BarState.Off);
+          DangerButton({
+            label: '删除全部音频',
+            buttonEnabled: !this.busy,
+            onTap: () => {
+              this.confirmDelete();
+            },
+          });
         }
+      }
+      .padding({ left: 16, right: 16, top: 8, bottom: 16 })
+      .width('100%')
+      .height('100%');
+    }
+  }
+
+  /** 书籍信息卡：封面 + 书名/作者 + 音频概览（数量/总大小/是否已购买）。 */
+  @Builder
+  bookCard() {
+    Row({ space: 12 }) {
+      if (this.bookCover.length > 0) {
+        AuthImage({
+          url: this.bookCover,
+          imageWidth: 56,
+          imageHeight: 76,
+          radius: $r('app.float.cover_radius'),
+        });
+      }
+      Column({ space: 5 }) {
+        Text(this.bookTitle.length > 0 ? this.bookTitle : '音频文件')
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+        if (this.bookAuthor.length > 0) {
+          Text(this.bookAuthor)
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        }
+        Row({ space: 8 }) {
+          Text(this.files.length > 0
+            ? `${this.files.length} 个音频 · 共 ${this.totalSizeText()}`
+            : '还没有音频')
+            .fontSize(12)
+            .fontColor($r('app.color.text_tertiary'));
+          if (this.isPaid) {
+            Text('已购买')
+              .fontSize(11)
+              .fontColor($r('app.color.success'))
+              .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+              .borderRadius($r('app.float.badge_radius'))
+              .backgroundColor($r('app.color.success_light'));
+          }
+        };
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1);
+    }
+    .width('100%')
+    .padding($r('app.float.card_padding'))
+    .borderRadius($r('app.float.card_radius'))
+    .backgroundColor($r('app.color.card_background'));
+  }
+
+  /**
+   * 状态横幅：把原来散落的 6 行小字（转换中/进度/正在转换/失败/已购买/操作结果）收进一块，
+   * 失败用浅红、进行中用浅蓝，进度条与章节文案跟在横幅里。
+   */
+  @Builder
+  statusBanner() {
+    if (this.conversionError.length > 0) {
+      Column({ space: 4 }) {
+        Text(`转换失败：${this.conversionError}`)
+          .fontSize(12)
+          .fontColor($r('app.color.error'))
+          .width('100%');
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+      .borderRadius($r('app.float.chip_radius'))
+      .backgroundColor($r('app.color.error_light'));
+    } else if (this.converting || this.conversionHint.length > 0) {
+      Column({ space: 8 }) {
+        Text(this.converting ? `转换中：${this.conversionHint}` : this.conversionHint)
+          .fontSize(12)
+          .fontColor($r('app.color.brand_primary'))
+          .width('100%');
         if (this.converting && this.totalChapters > 0) {
           Progress({
             value: this.convertedChapters,
@@ -482,7 +608,9 @@ struct AudioFilesPage {
             type: ProgressType.Linear,
           })
             .width('100%')
-            .color($r('app.color.brand_primary'));
+            .height(4)
+            .color($r('app.color.brand_primary'))
+            .backgroundColor($r('app.color.divider'));
           Text(`已完成 ${this.convertedChapters}/${this.totalChapters} 章`)
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
@@ -496,108 +624,154 @@ struct AudioFilesPage {
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .width('100%');
         }
-        if (this.conversionError.length > 0) {
-          Text(`转换失败：${this.conversionError}`)
-            .fontSize(12)
-            .fontColor($r('app.color.error'))
-            .width('100%');
-        }
-        if (this.isPaid) {
-          Text('已购买音频')
-            .fontSize(12)
-            .fontColor($r('app.color.success'))
-            .width('100%');
-        }
-        if (this.actionHint.length > 0) {
-          Text(this.actionHint)
-            .fontSize(12)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%');
-        }
-
-        this.actionButtons();
-
-        if (this.files.length === 0) {
-          EmptyState({
-            message: this.errorMessage.length > 0 ? this.errorMessage : '暂无音频文件',
-          });
-        } else {
-          List() {
-            LazyForEach(this.filesSource, (file: AudioFileInfo) => {
-              ListItem() {
-                SettingCell({
-                  title: file.filename.length > 0 ? file.filename :
-                    `音频 ${this.files.indexOf(file) + 1}`,
-                  subtitle: this.formatSize(file.size),
-                  showChevron: true,
-                  onTap: () => {
-                    this.onFileTap(file, this.files.indexOf(file));
-                  },
-                });
-              }
-            }, (file: AudioFileInfo, index: number) => `${file.filename}_${index}`);
-          }
-          .layoutWeight(1)
-          .divider({ strokeWidth: 0.5, color: $r('app.color.divider') });
-        }
       }
-      .padding({ left: 16, right: 16, top: 8, bottom: 16 })
       .width('100%')
-      .height('100%');
+      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+      .borderRadius($r('app.float.chip_radius'))
+      .backgroundColor($r('app.color.brand_primary_light'));
+    } else if (this.actionHint.length > 0) {
+      Text(this.actionHint)
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+        .borderRadius($r('app.float.chip_radius'))
+        .backgroundColor($r('app.color.card_background'));
     }
   }
 
+  /** 主操作：开始/取消语音转换（开始按钮带上当前音色，避免再去猜用哪个音色）。 */
   @Builder
-  actionButtons() {
-    Column({ space: 8 }) {
-      if (this.converting) {
-        SecondaryButton({
-          label: this.busy ? '处理中…' : '取消转换',
-          buttonEnabled: !this.busy,
-          onTap: () => {
-            void this.cancelConversion();
-          },
-        });
-      } else {
-        PrimaryButton({
-          label: this.busy ? '处理中…' : '开始语音转换',
-          buttonEnabled: !this.busy,
-          onTap: () => {
-            void this.startConversion();
-          },
-        });
-      }
+  primaryAction() {
+    if (this.converting) {
       SecondaryButton({
-        label: '购买音频',
+        label: this.busy ? '处理中…' : '取消转换',
         buttonEnabled: !this.busy,
         onTap: () => {
+          void this.cancelConversion();
+        },
+      });
+    } else {
+      PrimaryButton({
+        label: this.busy ? '处理中…' : `开始语音转换 · ${this.voiceLabel()}`,
+        buttonEnabled: !this.busy,
+        onTap: () => {
+          this.startConversion();
+        },
+      });
+    }
+  }
+
+  /** 次级操作收进四宫格，替掉原来 5 个占满整行的大按钮。 */
+  private quickActionItems(): QuickActionItem[] {
+    return [
+      {
+        icon: $r('sys.symbol.speaker'),
+        label: `音色 · ${this.voiceLabel()}`,
+        onTap: () => {
+          if (this.busy) {
+            return;
+          }
+          this.showVoiceSheet = true;
+        },
+      },
+      {
+        icon: $r('sys.symbol.cart'),
+        label: this.isPaid ? '已购买' : '购买音频',
+        onTap: () => {
+          if (this.isPaid) {
+            this.toast('已购买音频');
+            return;
+          }
           void this.purchase();
         },
-      });
-      SecondaryButton({
+      },
+      {
+        icon: $r('sys.symbol.archivebox_fill'),
         label: '打包下载',
-        buttonEnabled: !this.busy && this.files.length > 0,
         onTap: () => {
+          if (this.files.length === 0) {
+            this.toast('暂无可下载的音频');
+            return;
+          }
           void this.createCollection();
         },
-      });
-      SecondaryButton({
+      },
+      {
+        icon: $r('sys.symbol.arrow_clockwise'),
         label: '刷新',
-        buttonEnabled: !this.busy,
         onTap: () => {
           void this.reloadAll();
         },
-      });
-      if (this.files.length > 0) {
-        DangerButton({
-          label: '删除全部音频',
-          buttonEnabled: !this.busy,
-          onTap: () => {
-            this.confirmDelete();
-          },
-        });
-      }
+      },
+    ];
+  }
+
+  @Builder
+  quickActions() {
+    // QuickActionGrid 内部的 Grid 不设高时会撑满 Column 的剩余空间，把下面的列表整段挤出屏幕，
+    // 所以这里套一层固定为一行的容器（图标 48 + 间距 6 + 文案 16 + 单元格内边距 16 + 网格内边距 28）。
+    Column() {
+      QuickActionGrid({ items: this.quickActionItems() });
     }
-    .width('100%');
+    .width('100%')
+    .height(QUICK_ACTION_ROW_HEIGHT);
+  }
+
+  /** 列表头：与页面 16vp 边距对齐（不用 SectionTitle，它自带左右 16 会造成双重缩进）。 */
+  @Builder
+  listHeader() {
+    Row() {
+      Text('音频章节')
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'));
+      Blank();
+      Text(`${this.files.length} 个 · 共 ${this.totalSizeText()}`)
+        .fontSize(12)
+        .fontColor($r('app.color.text_tertiary'));
+    }
+    .width('100%')
+    .padding({ top: 2, bottom: 2 });
+  }
+
+  @Builder
+  fileRow(file: AudioFileInfo, index: number) {
+    Row({ space: 12 }) {
+      Column() {
+        SymbolGlyph($r('sys.symbol.play_circle'))
+          .fontSize(20)
+          .fontColor([$r('app.color.brand_primary')]);
+      }
+      .width(36)
+      .height(36)
+      .justifyContent(FlexAlign.Center)
+      .borderRadius(18)
+      .backgroundColor($r('app.color.brand_primary_light'));
+
+      Column({ space: 3 }) {
+        Text(this.fileTitle(file, index))
+          .fontSize(15)
+          .fontColor($r('app.color.text_primary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+        Text(`${index + 1}${this.formatSize(file.size).length > 0 ? ` · ${this.formatSize(file.size)}` : ''}`)
+          .fontSize(12)
+          .fontColor($r('app.color.text_tertiary'));
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1);
+
+      SymbolGlyph($r('sys.symbol.chevron_right'))
+        .fontSize(16)
+        .fontColor([$r('app.color.text_tertiary')]);
+    }
+    .width('100%')
+    .padding($r('app.float.card_padding'))
+    .borderRadius($r('app.float.card_radius'))
+    .backgroundColor($r('app.color.card_background'))
+    .onClick(() => {
+      this.onFileTap(file, index);
+    });
   }
 }
