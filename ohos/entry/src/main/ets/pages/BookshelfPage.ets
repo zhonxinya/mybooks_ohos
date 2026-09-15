@@ -442,9 +442,19 @@ export struct BookshelfPage {
     });
   }
 
+  /** 顶栏右侧：账号切换按钮 + 当前本数（账号放上方，便于快速切换）。 */
+  @Builder
+  topBarActions() {
+    Row({ space: 8 }) {
+      this.accountButton();
+      this.countBadge();
+    }
+    .alignItems(VerticalAlign.Center);
+  }
+
   /**
    * 账号按钮：显示当前账号名，点击打开切换面板；只有一个书库账号时提示而非静默无反应。
-   * 放在工具栏最左（远离右侧“搜索/书单/上传”等操作，避免误触）。
+   * 位置在标题栏右侧（页面最上方），点一下即可切换。
    */
   @Builder
   accountButton() {
@@ -491,7 +501,6 @@ export struct BookshelfPage {
   @Builder
   toolbarRow() {
     Row({ space: 8 }) {
-      this.accountButton();
       Blank().layoutWeight(1);
       this.iconToolButton($r('sys.symbol.magnifyingglass'), () => {
         this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookBookSearchPage' });
@@ -684,7 +693,7 @@ export struct BookshelfPage {
       HarmonyTopBar({
         title: '书架',
         action: () => {
-          this.countBadge();
+          this.topBarActions();
         },
       });
       Column() {
