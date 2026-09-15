@@ -1,17 +1,23 @@
 import { common } from '@kit.AbilityKit';
 import {
   HarmonyTopBar, BookListItemData, FilterChips, FilterChipItem,
-  EmptyState, LoadingState, IconCircleButton, BookCatalogView, AuthImage,
+  EmptyState, LoadingState, IconCircleButton, BookCatalogView, AuthImage, AccountPicker,
 } from '../components';
 import { DownloadRecord, ReadingHistoryItem, TalebookService, ApiEnvelope } from '../services/TalebookService';
 import { ReaderLauncher, ReaderOpenParams } from '../services/ReaderLauncher';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { AccountManager } from '../services/AccountManager';
 import { LocalBookService } from '../services/LocalBookService';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { DateFormat } from '../utils/DateFormat';
 import { BookViewMode } from '../utils/BookViewMode';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { mapTalebookBook } from '../utils/BookMapper';
+
+/** 书架页底部面板类型。 */
+const SHEET_NONE: string = 'none';
+const SHEET_MANAGE: string = 'manage';
+const SHEET_ACCOUNT: string = 'account';
 
 @Component
 export struct BookshelfPage {
@@ -22,8 +28,12 @@ export struct BookshelfPage {
   @State importing: boolean = false;
   @State isListMode: boolean = false;
   @State @Watch('onSelectedTabChanged') selectedTab: number = 0;
-  /** 长按书籍弹出的管理面板（详情 / 阅读 / 删除）。 */
-  @State showManage: boolean = false;
+  /**
+   * 底部面板开关（同一节点只能挂一个 bindSheet，链式挂多个时只有第一个生效）。
+   * 长按书籍 → 书籍管理；工具栏账号按钮 → 切换账号。
+   */
+  @State showSheet: boolean = false;
+  @State sheetKind: string = SHEET_NONE;
   @State manageId: string = '';
   @State manageTitle: string = '';
   @State manageSubtitle: string = '';
@@ -316,11 +326,13 @@ export struct BookshelfPage {
     this.manageCover = item.cover ?? '';
     this.manageReadLabel = record !== undefined && this.progressText(record).length > 0 ?
       '继续阅读' : '开始阅读';
-    this.showManage = true;
+    this.sheetKind = SHEET_MANAGE;
+    this.showSheet = true;
   }
 
   private closeManagePanel(): void {
-    this.showManage = false;
+    this.sheetKind = SHEET_NONE;
+    this.showSheet = false;
   }
 
   /** 服务端书库图书（数字 bookId）按 bookId 远程取详情；本地导入书 bookId 为 `local_<uuid>`，只能看本地信息。 */
@@ -428,6 +440,62 @@ export struct BookshelfPage {
       iconColor: $r('app.color.text_secondary'),
       onTap: onTap,
     });
+  }
+
+  /** 顶栏右侧：账号切换按钮 + 当前本数（账号放上方，便于快速切换）。 */
+  @Builder
+  topBarActions() {
+    Row({ space: 8 }) {
+      this.accountButton();
+      this.countBadge();
+    }
+    .alignItems(VerticalAlign.Center);
+  }
+
+  /**
+   * 账号按钮：显示当前账号名，点击打开切换面板；只有一个书库账号时提示而非静默无反应。
+   * 位置在标题栏右侧（页面最上方），点一下即可切换。
+   */
+  @Builder
+  accountButton() {
+    Row({ space: 6 }) {
+      SymbolGlyph($r('sys.symbol.person'))
+        .fontSize(16)
+        .fontColor([$r('app.color.text_secondary')]);
+      Text(this.currentAccountLabel())
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .constraintSize({ maxWidth: 120 });
+    }
+    .height(36)
+    .padding({ left: 12, right: 12 })
+    .borderRadius($r('app.float.chip_radius'))
+    .backgroundColor($r('app.color.card_background'))
+    .alignItems(VerticalAlign.Center)
+    .stateStyles({
+      pressed: {
+        .backgroundColor($r('app.color.surface_pressed'))
+      },
+    })
+    .onClick(() => this.openAccountSwitcher());
+  }
+
+  private currentAccountLabel(): string {
+    const name: string = AccountManager.activeDisplayName();
+    return name.length > 0 ? name : '未配置账号';
+  }
+
+  private openAccountSwitcher(): void {
+    if (AccountManager.switchableAccounts().length <= 1) {
+      this.getUIContext().getPromptAction().showToast({
+        message: '只有一个书库账号，可在「设置 → 账号与服务器」新增账号',
+      });
+      return;
+    }
+    this.sheetKind = SHEET_ACCOUNT;
+    this.showSheet = true;
   }
 
   @Builder
@@ -625,7 +693,7 @@ export struct BookshelfPage {
       HarmonyTopBar({
         title: '书架',
         action: () => {
-          this.countBadge();
+          this.topBarActions();
         },
       });
       Column() {
@@ -641,11 +709,27 @@ export struct BookshelfPage {
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.page_background'))
-    .bindSheet($$this.showManage, this.manageSheet(), {
-      height: SheetSize.FIT_CONTENT,
+    .bindSheet($$this.showSheet, this.sheetContent(), {
+      height: this.sheetIsAccount() ? SheetSize.FIT_CONTENT : SheetSize.FIT_CONTENT,
       dragBar: true,
       showClose: true,
-      title: { title: '书籍管理' },
+      title: { title: this.sheetIsAccount() ? '切换账号' : '书籍管理' },
+      onDisappear: () => {
+        this.sheetKind = SHEET_NONE;
+      },
     });
+  }
+
+  private sheetIsAccount(): boolean {
+    return this.sheetKind === SHEET_ACCOUNT;
+  }
+
+  @Builder
+  sheetContent() {
+    if (this.sheetIsAccount()) {
+      AccountPicker({ show: $showSheet });
+    } else {
+      this.manageSheet();
+    }
   }
 }
