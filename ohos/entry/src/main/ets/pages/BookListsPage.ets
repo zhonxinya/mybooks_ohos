@@ -179,7 +179,7 @@ struct BookListsPage {
 
   private applyResult(rsp: BookListsPageResponse | BookListsResponse, reset: boolean): boolean {
     if (rsp.err !== undefined && rsp.err !== 'ok') {
-      if (rsp.err === 'user.need_login') {
+      if (TalebookService.isLoginRequiredResult(rsp.err, rsp.msg)) {
         this.needLogin = true;
         return true;
       }
@@ -239,7 +239,7 @@ struct BookListsPage {
     try {
       const rsp = await BookListApi.toggleLike(item.id);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
-        if (rsp.err === 'user.need_login') {
+        if (TalebookService.isLoginRequiredResult(rsp.err, rsp.msg)) {
           this.toast('请先在「账号与服务器」中配置账号，应用会自动登录');
           this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' });
           return;

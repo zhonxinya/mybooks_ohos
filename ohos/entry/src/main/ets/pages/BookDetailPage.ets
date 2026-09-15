@@ -1008,14 +1008,14 @@ struct BookDetailPage {
       if (item.containsBook) {
         const rsp = await BookListApi.removeBook(item.id, this.bookId);
         if (rsp.err !== undefined && rsp.err !== 'ok') {
-          this.toast(apiErrorMessage(rsp));
+          this.handleBooklistFailure(rsp);
           return;
         }
         this.toast('已从书单移出');
       } else {
         const rsp = await BookListApi.addBooks(item.id, [this.bookId]);
         if (rsp.err !== undefined && rsp.err !== 'ok') {
-          this.toast(apiErrorMessage(rsp));
+          this.handleBooklistFailure(rsp);
           return;
         }
         this.toast('已加入书单');
@@ -1044,7 +1044,7 @@ struct BookDetailPage {
     try {
       const rsp = await BookListApi.createBooklist(name, '', 'marine', false);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
-        this.toast(apiErrorMessage(rsp));
+        this.handleBooklistFailure(rsp);
         return;
       }
       const created = rsp.booklist as Record<string, Object> | undefined;
@@ -1054,7 +1054,7 @@ struct BookDetailPage {
         // 加入失败必须让用户看到：原先忽略返回值，服务端拒绝时仍提示「已创建并加入书单」
         const addRsp = await BookListApi.addBooks(newId, [this.bookId]);
         if (addRsp.err !== undefined && addRsp.err !== 'ok') {
-          this.toast(apiErrorMessage(addRsp));
+          this.handleBooklistFailure(addRsp);
           await this.openBooklistSheet();
           return;
         }
@@ -1064,6 +1064,26 @@ struct BookDetailPage {
     } catch (error) {
       this.toast(`创建失败：${error}`);
     }
+  }
+
+  /**
+   * 书单操作失败提示：未登录时给出可操作的入口，而不是把服务端原文「请先登录」丢给用户。
+   * 判定用 `TalebookService.isLoginRequiredResult()`（同时认 user.need_login 与「请先登录」文案）。
+   */
+  private handleBooklistFailure(rsp: ApiMessageResult): void {
+    if (TalebookService.isLoginRequiredResult(rsp.err, rsp.msg)) {
+      this.getUIContext().showAlertDialog({
+        title: '需要登录',
+        message: '服务端会话已失效，请重新登录后再加入书单。',
+        primaryButton: {
+          value: '去账号与服务器',
+          action: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
+        },
+        secondaryButton: { value: '取消', action: () => {} },
+      });
+      return;
+    }
+    this.toast(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '操作失败');
   }
 
   @Builder

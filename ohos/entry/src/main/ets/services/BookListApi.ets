@@ -84,7 +84,7 @@ export class BookListApi {
       loggedIn = await TalebookService.ensureAuthenticated();
     }
     const rsp = await run();
-    if (!retried && TalebookService.isLoginRequiredResult(rsp)) {
+    if (!retried && TalebookService.isLoginRequiredResult(rsp.err, rsp.msg)) {
       // 会话失效：重新登录后重试一次
       if (!loggedIn) {
         loggedIn = await TalebookService.ensureAuthenticated();

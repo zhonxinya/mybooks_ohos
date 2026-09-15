@@ -118,12 +118,6 @@ export interface DownloadTask {
 
 const TAG: string = 'TalebookService';
 
-/** 判定「未登录」所需的最小响应结构（避免 import TalebookApi 造成循环依赖）。 */
-interface LoginCheckable {
-  err?: string;
-  msg?: string;
-}
-
 export class TalebookService {
   private static initialized: boolean = false;
   private static downloadsCache: DownloadRecord[] | null = null;
@@ -296,16 +290,11 @@ export class TalebookService {
    * （服务端重启会换掉 secure cookie 签名密钥，本地 `cookies.txt` 随即失效），
    * 因此需要按**服务端实际回复**判定，而不是只看 `hasAuthCredentials()`。
    */
-  static isLoginRequiredResult(result: LoginCheckable | null | undefined): boolean {
-    if (result === null || result === undefined) {
-      return false;
-    }
-    const err = result.err ?? '';
+  static isLoginRequiredResult(err?: string, msg?: string): boolean {
     if (err === 'user.need_login') {
       return true;
     }
-    const msg = result.msg ?? '';
-    return msg.indexOf('请先登录') >= 0;
+    return msg !== undefined && msg.indexOf('请先登录') >= 0;
   }
 
   static setBaseUrl(service: string, url: string): void {
