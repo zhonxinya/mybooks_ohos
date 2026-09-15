@@ -30,6 +30,12 @@ const DETAIL_PAGE_SIZE: number = 24;
 const BOOKLIST_NAME_MAX: number = 100;
 const BOOKLIST_DESC_MAX: number = 500;
 
+/** 底部面板类型：同一节点只挂一个 bindSheet，靠它切换内容（见 build() 注释）。 */
+const SHEET_NONE: string = 'none';
+const SHEET_EDIT: string = 'edit';
+const SHEET_ADD: string = 'add';
+const SHEET_SHARE: string = 'share';
+
 @Entry
 @Component
 struct BookListDetailPage {
@@ -42,14 +48,13 @@ struct BookListDetailPage {
   @State hasMore: boolean = false;
   @State errorMessage: string = '';
   @State order: string = 'desc';
-  @State showEditSheet: boolean = false;
+  @State showSheet: boolean = false;
+  @State sheetKind: string = SHEET_NONE;
   @State editName: string = '';
   @State editDescription: string = '';
   @State editColor: string = DEFAULT_BOOKLIST_COLOR;
   @State editIsPublic: boolean = false;
   @State saving: boolean = false;
-  @State showAddSheet: boolean = false;
-  @State showShareSheet: boolean = false;
   @State shareUrl: string = '';
   @State shareSaving: boolean = false;
   @State addKeyword: string = '';
@@ -208,7 +213,8 @@ struct BookListDetailPage {
     this.editDescription = this.detail.description;
     this.editColor = this.detail.color;
     this.editIsPublic = this.detail.isPublic;
-    this.showEditSheet = true;
+    this.sheetKind = SHEET_EDIT;
+    this.showSheet = true;
   }
 
   private async saveSheet(): Promise<void> {
@@ -233,7 +239,8 @@ struct BookListDetailPage {
         return;
       }
       this.toast('已保存');
-      this.showEditSheet = false;
+      this.sheetKind = SHEET_NONE;
+      this.showSheet = false;
       await this.loadDetail(true);
     } catch (error) {
       this.toast(`保存失败：${error}`);
@@ -337,7 +344,8 @@ struct BookListDetailPage {
     const base = TalebookService.secureGet('talebook_url');
     const normalized = base.endsWith('/') ? base.substring(0, base.length - 1) : base;
     this.shareUrl = `${normalized}/booklist/${this.booklistId}`;
-    this.showShareSheet = true;
+    this.sheetKind = SHEET_SHARE;
+    this.showSheet = true;
   }
 
   private async saveShareCard(): Promise<void> {
@@ -392,7 +400,8 @@ struct BookListDetailPage {
     this.addKeyword = '';
     this.addResults = [];
     this.addPage = 1;
-    this.showAddSheet = true;
+    this.sheetKind = SHEET_ADD;
+    this.showSheet = true;
   }
 
   private async searchBooksForAdd(page: number): Promise<void> {
@@ -905,24 +914,44 @@ struct BookListDetailPage {
     }
     .width('100%')
     .height('100%')
-    .bindSheet($$this.showEditSheet, this.editSheet(), {
-      height: SheetSize.FIT_CONTENT,
+    // 三个面板合并为**一个** bindSheet：同一节点上链式挂多个 bindSheet 时只有第一个生效，
+    // 表现为「编辑书单弹得出、添加书籍/分享卡片点了没反应」。用面板枚举做单一开关。
+    .bindSheet($$this.showSheet, this.sheetContent(), {
+      height: this.sheetSize(),
       dragBar: true,
       showClose: true,
-      title: { title: '编辑书单' },
-    })
-    .bindSheet($$this.showAddSheet, this.addSheet(), {
-      height: SheetSize.MEDIUM,
-      dragBar: true,
-      showClose: true,
-      title: { title: '添加书籍' },
-    })
-    .bindSheet($$this.showShareSheet, this.shareSheet(), {
-      height: SheetSize.FIT_CONTENT,
-      dragBar: true,
-      showClose: true,
-      title: { title: '书单分享卡片' },
+      title: { title: this.sheetTitle() },
+      onDisappear: () => {
+        // 关闭后回到「无面板」，避免下次打开时沿用上一个面板
+        this.sheetKind = SHEET_NONE;
+      },
     });
+  }
+
+  private sheetTitle(): string {
+    if (this.sheetKind === SHEET_ADD) {
+      return '添加书籍';
+    }
+    if (this.sheetKind === SHEET_SHARE) {
+      return '书单分享卡片';
+    }
+    return '编辑书单';
+  }
+
+  private sheetSize(): SheetSize {
+    // 添加书籍需要搜索框 + 结果列表，给中等高度；其余按内容自适应
+    return this.sheetKind === SHEET_ADD ? SheetSize.MEDIUM : SheetSize.FIT_CONTENT;
+  }
+
+  @Builder
+  sheetContent() {
+    if (this.sheetKind === SHEET_ADD) {
+      this.addSheet();
+    } else if (this.sheetKind === SHEET_SHARE) {
+      this.shareSheet();
+    } else {
+      this.editSheet();
+    }
   }
 
   @Builder
