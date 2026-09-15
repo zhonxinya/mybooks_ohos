@@ -540,13 +540,12 @@ struct BookUploadPage {
         });
         const startRsp: UploadBatchStartResponse = await TalebookApi.uploadBookBatch(files);
         if (startRsp.err !== undefined && startRsp.err !== 'ok') {
-          // 服务端返回业务错误时透传其 msg 原文（如"服务器扫描导入目录未配置"）
+          // 服务端返回业务错误（如「保存上传文件失败」「服务器扫描导入目录未配置」）说明批量通道
+          // 整体不可用：透传 msg 原文，并回退逐个调用单文件接口，避免只报错不落书。
           const msg = apiErrorMessage(startRsp).length > 0 ? apiErrorMessage(startRsp) : '批量上传失败';
-          this.batchHint = `批量上传失败：${msg}`;
-          this.toast(msg);
-          for (const item of smallQueue) {
-            this.patchItem(item.id, ITEM_FAILED, msg, 0, '');
-          }
+          this.batchHint = `批量上传失败，回退单文件上传：${msg}`;
+          this.toast(`批量上传失败，正在逐个重试：${msg}`);
+          await this.uploadIndividually(smallQueue);
         } else {
           const importId = Number(startRsp.import_id ?? 0);
           if (importId > 0) {
@@ -564,34 +563,11 @@ struct BookUploadPage {
           }
         }
       } catch (e) {
-        // 批量接口失败：透传原因，再回退逐个 uploadBookFile
+        // 批量接口请求本身失败：透传原因，再回退逐个 uploadBookFile
         const reason = errorText(e);
         this.batchHint = `批量接口不可用，回退单文件上传：${reason}`;
         this.toast(`批量上传失败，正在逐个重试：${reason}`);
-        for (const item of smallQueue) {
-          const cur = this.items.find((x: UploadItem) => x.id === item.id);
-          if (cur === undefined) {
-            continue;
-          }
-          if (cur.status !== ITEM_UPLOADING && cur.status !== ITEM_PENDING &&
-            cur.status !== ITEM_FAILED) {
-            continue;
-          }
-          this.patchItem(item.id, ITEM_UPLOADING, '', 0, '');
-          try {
-            const rsp: UploadBookResponse = await TalebookApi.uploadBookFile(item.localPath, item.name);
-            if (rsp.err === 'ok') {
-              this.patchItem(item.id, ITEM_SUCCESS, '上传成功', Number(rsp.book_id ?? 0), '');
-              BookUploadService.removeStagedFile(item.localPath);
-              BookUploadService.markLibraryDirty();
-            } else {
-              const msg = apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '上传失败';
-              this.patchItem(item.id, ITEM_FAILED, msg, Number(rsp.book_id ?? 0), '');
-            }
-          } catch (e2) {
-            this.patchItem(item.id, ITEM_FAILED, errorText(e2), 0, '');
-          }
-        }
+        await this.uploadIndividually(smallQueue);
       }
     }
 
@@ -605,6 +581,34 @@ struct BookUploadPage {
     }
 
     this.uploading = false;
+  }
+
+  /** 逐个走单文件接口（POST /api/book/upload）上传，用于批量通道不可用时兜底。 */
+  private async uploadIndividually(queue: UploadItem[]): Promise<void> {
+    for (const item of queue) {
+      const cur = this.items.find((x: UploadItem) => x.id === item.id);
+      if (cur === undefined) {
+        continue;
+      }
+      if (cur.status !== ITEM_UPLOADING && cur.status !== ITEM_PENDING &&
+        cur.status !== ITEM_FAILED) {
+        continue;
+      }
+      this.patchItem(item.id, ITEM_UPLOADING, '', 0, '');
+      try {
+        const rsp: UploadBookResponse = await TalebookApi.uploadBookFile(item.localPath, item.name);
+        if (rsp.err === 'ok') {
+          this.patchItem(item.id, ITEM_SUCCESS, '上传成功', Number(rsp.book_id ?? 0), '');
+          BookUploadService.removeStagedFile(item.localPath);
+          BookUploadService.markLibraryDirty();
+        } else {
+          const msg = apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '上传失败';
+          this.patchItem(item.id, ITEM_FAILED, msg, Number(rsp.book_id ?? 0), '');
+        }
+      } catch (e) {
+        this.patchItem(item.id, ITEM_FAILED, errorText(e), 0, '');
+      }
+    }
   }
 
   private statusLabel(item: UploadItem): string {
@@ -759,7 +763,8 @@ struct BookUploadPage {
               .borderRadius($r('app.float.card_radius'))
               .backgroundColor($r('app.color.card_background'));
             }
-          }, (item: UploadItem) => `upload-${item.id}`);
+          }, (item: UploadItem) =>
+          `upload-${item.id}-${item.status}-${item.progress}-${item.progressText}-${item.message}`);
         }
         .width('100%')
         .layoutWeight(1)
