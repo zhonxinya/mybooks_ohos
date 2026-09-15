@@ -106,14 +106,9 @@ export enum ServerFeature {
   ADMIN_BOOK_REVIEWS = 'admin_book_reviews',
   ADMIN_RESOURCES = 'admin_resources',
   ADMIN_SYSLOG = 'admin_syslog',
-  ADMIN_STAMP = 'admin_stamp',
-  ADMIN_THANKS_NOTES = 'admin_thanks_notes',
-  ADMIN_TOKEN = 'admin_token',
-  ADMIN_BOOKBARN = 'admin_bookbarn',
   ADMIN_AUDIO_IMPORT = 'admin_audio_import',
   ADMIN_BATCH_ADD = 'admin_batch_add',
   ADMIN_BARCODE = 'admin_barcode',
-  ADMIN_AI_TEST = 'admin_ai_test',
   /**
    * 管理端导入（扫描 → 导入工作流）。
    * mybooks：按文件路径导入（`/api/admin/import/{list,run,cancel,delete}`，`filelist` + `force`）。
@@ -124,7 +119,6 @@ export enum ServerFeature {
   ADMIN_TOOLBOX = 'admin_toolbox',
   ADMIN_LIBRARY_STATS = 'admin_library_stats',
   ADMIN_SYSINFO = 'admin_sysinfo',
-  ADMIN_RELEASE_NOTES = 'admin_release_notes',
   ADMIN_TASKS_RUNNING = 'admin_tasks_running',
   ADMIN_INSTALL = 'admin_install',
   ADMIN_USERS = 'admin_users',
@@ -137,6 +131,24 @@ export enum ServerFeature {
    * 与 ADMIN_BOOK_BATCH（mybooks 专有的整套书籍批处理）分开声明，使 talebook 也能用此单项。
    */
   ADMIN_BOOK_FILL = 'admin_book_fill',
+  /** 重启服务端（mybooks `/api/admin/restart`；talebook 上游无此接口，重启请在部署侧操作）。 */
+  ADMIN_RESTART = 'admin_restart',
+  /** 测试邮件配置（mybooks `/api/admin/testmail`；talebook 上游无此接口）。 */
+  ADMIN_MAIL_TEST = 'admin_mail_test',
+  /** 测试 AI 连接（mybooks `/api/admin/ai/test`；talebook 上游无此接口）。 */
+  ADMIN_AI_TEST = 'admin_ai_test',
+  /** 申请书栈授权 Token（mybooks `/api/admin/bookbarn/token/apply`）。 */
+  ADMIN_BOOKBARN = 'admin_bookbarn',
+  /** 上传 SSL 证书（talebook `/api/admin/ssl`）。 */
+  ADMIN_SSL = 'admin_ssl',
+  /** 生成 MCP Token（mybooks `/api/admin/token`）。 */
+  ADMIN_TOKEN = 'admin_token',
+  /** 图章状态与上传（mybooks `/api/admin/stamp`）。 */
+  ADMIN_STAMP = 'admin_stamp',
+  /** 服务端更新说明（mybooks `/api/admin/release/notes`）。 */
+  ADMIN_RELEASE_NOTES = 'admin_release_notes',
+  /** 致谢名单（mybooks `/api/admin/thanks/notes`）。 */
+  ADMIN_THANKS_NOTES = 'admin_thanks_notes',
   /**
    * 管理端书籍批量操作（删除/刷新元数据/AI 更新/EPUB 转换/类型互转/批量裁剪封面等）。
    * mybooks 提供全套 `/api/admin/books/*` 与 `/api/admin/book/*`；talebook 上游无对应接口，
@@ -358,6 +370,8 @@ export class MyBooksProfile extends ServerProfile {
       ServerFeature.ADMIN_BOOK_DELETE,
       ServerFeature.ADMIN_BOOK_FILL,
       ServerFeature.ADMIN_BOOK_BATCH,
+      ServerFeature.ADMIN_RESTART,
+      ServerFeature.ADMIN_MAIL_TEST,
       ServerFeature.ADMIN_SETTINGS,
       ServerFeature.ADMIN_BOOKS,
       ServerFeature.ADMIN_MEMOS,
@@ -418,6 +432,13 @@ export class TalebookProfile extends ServerProfile {
       // 批量元数据填充 `/api/admin/book/fill` 与批量删除 `/api/admin/book/delete`
       ServerFeature.ADMIN_BOOK_FILL,
       ServerFeature.ADMIN_BOOK_DELETE,
+      // SSL 证书上传：talebook `/api/admin/ssl`（mybooks 的证书与重启走部署侧，无此端点）
+      ServerFeature.ADMIN_SSL,
+      // 管理员设置：talebook 同样提供 `/api/admin/settings`（GET 读、POST 写同一端点），
+      // 未声明会导致「设置 → 管理 → 管理员设置」整项被误隐藏。
+      // 该页里 mybooks 专有的附属卡片（系统信息/图章/MCP Token/书栈/邮件与 AI 测试/重启）
+      // 由各自能力单独门控，不会因本项声明而出现。
+      ServerFeature.ADMIN_SETTINGS,
     ]);
   }
 }

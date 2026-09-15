@@ -3,6 +3,7 @@ import {
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, ApiMessageResult } from '../services/TalebookApi';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { UserMemoItem, memoStageLabel, memoTypeLabel } from '../models/UserModels';
 
 @Entry
@@ -15,8 +16,15 @@ struct UserMemosPage {
   @State newMemoType: number = 0;
   @State newMemoContent: string = '';
   @State submitting: boolean = false;
+  /** 用户留言（/api/user/memo）为 mybooks 专有端点。 */
+  @State supported: boolean = true;
 
   aboutToAppear(): void {
+    this.supported = ServerRegistry.supports(ServerFeature.USER_MEMO);
+    if (!this.supported) {
+      this.loading = false;
+      return;
+    }
     void this.load();
   }
 
@@ -39,6 +47,10 @@ struct UserMemosPage {
   }
 
   private async load(): Promise<void> {
+    if (!ServerRegistry.supports(ServerFeature.USER_MEMO)) {
+      this.loading = false;
+      return;
+    }
     this.loading = this.memos.length === 0;
     this.loadError = '';
     try {
@@ -56,6 +68,9 @@ struct UserMemosPage {
   }
 
   private async submit(): Promise<void> {
+    if (!ServerRegistry.supports(ServerFeature.USER_MEMO)) {
+      return;
+    }
     const content = this.newMemoContent.trim();
     if (content.length === 0) {
       this.toast('留言内容不能为空');
@@ -84,17 +99,19 @@ struct UserMemosPage {
 
   @Builder
   createMemoAction() {
-    IconCircleButton({
-      icon: $r('sys.symbol.plus'),
-      variant: 'soft',
-      iconSize: 18,
-      buttonSize: 32,
-      onTap: () => {
-        this.newMemoContent = '';
-        this.newMemoType = 0;
-        this.showCreateSheet = true;
-      },
-    });
+    if (this.supported) {
+      IconCircleButton({
+        icon: $r('sys.symbol.plus'),
+        variant: 'soft',
+        iconSize: 18,
+        buttonSize: 32,
+        onTap: () => {
+          this.newMemoContent = '';
+          this.newMemoType = 0;
+          this.showCreateSheet = true;
+        },
+      });
+    }
   }
 
   build() {
@@ -122,7 +139,9 @@ struct UserMemosPage {
 
   @Builder
   listBody() {
-    if (this.loading) {
+    if (!this.supported) {
+      EmptyState({ message: `${ServerRegistry.profile().displayName} 服务端不支持用户留言` });
+    } else if (this.loading) {
       LoadingState({});
     } else if (this.loadError.length > 0) {
       EmptyState({ message: this.loadError });

@@ -2,6 +2,7 @@ import { common, Want } from '@kit.AbilityKit';
 import { PageScaffold, LoadingState, EmptyState } from '../components';
 import { TalebookApi } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 
 @Entry
 @Component
@@ -9,12 +10,23 @@ struct AdminResourcesPage {
   @State resources: Record<string, Object>[] = [];
   @State loading: boolean = true;
   @State loadError: string = '';
+  /** 资源导航（/api/admin/resources）为 mybooks 专有端点。 */
+  @State supported: boolean = true;
 
   aboutToAppear(): void {
+    this.supported = ServerRegistry.supports(ServerFeature.ADMIN_RESOURCES);
+    if (!this.supported) {
+      this.loading = false;
+      return;
+    }
     void this.load();
   }
 
   private async load(): Promise<void> {
+    if (!this.supported) {
+      this.loading = false;
+      return;
+    }
     this.loading = true;
     this.loadError = '';
     try {
@@ -65,7 +77,9 @@ struct AdminResourcesPage {
 
   @Builder
   pageContent() {
-    if (this.loading) {
+    if (!this.supported) {
+      EmptyState({ message: `${ServerRegistry.profile().displayName} 服务端不支持资源导航` });
+    } else if (this.loading) {
       LoadingState({});
     } else if (this.loadError.length > 0) {
       EmptyState({ message: this.loadError });

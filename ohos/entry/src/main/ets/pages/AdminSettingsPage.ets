@@ -4,6 +4,7 @@ import { PageScaffold, LoadingState, EmptyState, PrimaryButton, SecondaryButton,
 import { TalebookApi } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { BookUploadService } from '../services/BookUploadService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 
 interface SelectOptionDef {
   text: string;
@@ -364,8 +365,12 @@ struct AdminSettingsPage {
       if (this.str('site_icon').length === 0) {
         this.settings['site_icon'] = 'favicon_0';
       }
-      void this.refreshSysInfo();
-      void this.refreshStampStatus();
+      if (this.supports(ServerFeature.ADMIN_SYSINFO)) {
+        void this.refreshSysInfo();
+      }
+      if (this.supports(ServerFeature.ADMIN_STAMP)) {
+        void this.refreshStampStatus();
+      }
       void this.refreshServerNotes();
     } catch (e) {
       this.loadError = `加载设置失败：${e}`;
@@ -377,6 +382,14 @@ struct AdminSettingsPage {
 
   private isExpanded(key: string): boolean {
     return this.expandedKeys.indexOf(key) >= 0;
+  }
+
+  /**
+   * 能力门控：本页多数附属卡片（系统信息/图章/MCP Token/书栈/AI 测试等）只有 MyBooks 服务端提供，
+   * talebook 上对应端点不存在（404）。统一在这里判定，既不渲染必然失败的入口，也不发起请求。
+   */
+  private supports(feature: ServerFeature): boolean {
+    return ServerRegistry.supports(feature);
   }
 
   private toggleExpand(key: string): void {
@@ -393,6 +406,9 @@ struct AdminSettingsPage {
   }
 
   private async refreshSysInfo(): Promise<void> {
+    if (!this.supports(ServerFeature.ADMIN_SYSINFO)) {
+      return;
+    }
     try {
       const rsp = await TalebookApi.getSysInfo();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
@@ -421,6 +437,9 @@ struct AdminSettingsPage {
   }
 
   private async refreshStampStatus(): Promise<void> {
+    if (!this.supports(ServerFeature.ADMIN_STAMP)) {
+      return;
+    }
     try {
       const rsp = await TalebookApi.getStampStatus();
       this.stampExists = rsp.exists === true;
@@ -429,24 +448,28 @@ struct AdminSettingsPage {
     }
   }
 
-  /** 服务端更新说明与致谢名单（失败静默，不阻塞页面）。 */
+  /** 服务端更新说明与致谢名单（失败静默，不阻塞页面；talebook 无这两个端点，直接跳过）。 */
   private async refreshServerNotes(): Promise<void> {
-    try {
-      this.releaseNotes = await TalebookApi.getReleaseNotes();
-    } catch (_e) {
-      this.releaseNotes = '';
+    if (this.supports(ServerFeature.ADMIN_RELEASE_NOTES)) {
+      try {
+        this.releaseNotes = await TalebookApi.getReleaseNotes();
+      } catch (_e) {
+        this.releaseNotes = '';
+      }
     }
-    try {
-      const rsp = await TalebookApi.getThanksNotes();
-      this.thanksNames = rsp.names ?? [];
-    } catch (_e) {
-      this.thanksNames = [];
+    if (this.supports(ServerFeature.ADMIN_THANKS_NOTES)) {
+      try {
+        const rsp = await TalebookApi.getThanksNotes();
+        this.thanksNames = rsp.names ?? [];
+      } catch (_e) {
+        this.thanksNames = [];
+      }
     }
   }
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async uploadStampImage(): Promise<void> {
-    if (this.stampBusy) {
+    if (this.stampBusy || !this.supports(ServerFeature.ADMIN_STAMP)) {
       return;
     }
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -472,7 +495,7 @@ struct AdminSettingsPage {
   }
 
   private async generateToken(): Promise<void> {
-    if (this.tokenBusy) {
+    if (this.tokenBusy || !this.supports(ServerFeature.ADMIN_TOKEN)) {
       return;
     }
     this.tokenBusy = true;
@@ -503,7 +526,7 @@ struct AdminSettingsPage {
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async uploadSslPair(): Promise<void> {
-    if (this.sslBusy) {
+    if (this.sslBusy || !this.supports(ServerFeature.ADMIN_SSL)) {
       return;
     }
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -553,7 +576,7 @@ struct AdminSettingsPage {
   }
 
   private async doApplyBookbarn(): Promise<void> {
-    if (this.bookbarnBusy) {
+    if (this.bookbarnBusy || !this.supports(ServerFeature.ADMIN_BOOKBARN)) {
       return;
     }
     this.bookbarnBusy = true;
@@ -604,6 +627,9 @@ struct AdminSettingsPage {
   }
 
   private restartServer(): void {
+    if (!this.supports(ServerFeature.ADMIN_RESTART)) {
+      return;
+    }
     this.getUIContext().showAlertDialog({
       title: '确认重启服务',
       message: '确定要立即重启服务吗？当前正在执行的后台任务（如导入、转换、联网更新信息等）将会被中断。',
@@ -623,6 +649,9 @@ struct AdminSettingsPage {
   }
 
   private testEmail(): void {
+    if (!this.supports(ServerFeature.ADMIN_MAIL_TEST)) {
+      return;
+    }
     const server = this.str('smtp_server');
     const username = this.str('smtp_username');
     const password = this.str('smtp_password');
@@ -644,6 +673,9 @@ struct AdminSettingsPage {
   }
 
   private testAI(): void {
+    if (!this.supports(ServerFeature.ADMIN_AI_TEST)) {
+      return;
+    }
     const apiUrl = this.str('AI_API_URL');
     const apiKey = this.str('AI_DEEPSEEK_API_KEY');
     const apiModel = this.str('AI_MODEL');
@@ -905,12 +937,15 @@ struct AdminSettingsPage {
   @Builder
   saveBar() {
     Row({ space: 12 }) {
-      SecondaryButton({
-        label: '重启服务',
-        buttonEnabled: !this.saving && !this.loading,
-        fullWidth: false,
-        onTap: () => this.restartServer(),
-      }).layoutWeight(1);
+      // 重启端点只有 MyBooks 提供；talebook 请在其部署侧重启
+      if (this.supports(ServerFeature.ADMIN_RESTART)) {
+        SecondaryButton({
+          label: '重启服务',
+          buttonEnabled: !this.saving && !this.loading,
+          fullWidth: false,
+          onTap: () => this.restartServer(),
+        }).layoutWeight(1);
+      }
       PrimaryButton({
         label: this.saving ? '保存中…' : '保存设置',
         buttonEnabled: !this.saving && !this.loading,
@@ -941,7 +976,7 @@ struct AdminSettingsPage {
     } else {
       Scroll() {
         Column({ space: 12 }) {
-          if (this.sysInfoSummary.length > 0) {
+          if (this.supports(ServerFeature.ADMIN_SYSINFO) && this.sysInfoSummary.length > 0) {
             Column({ space: 4 }) {
               Text('系统信息')
                 .fontSize(13)
@@ -1158,61 +1193,71 @@ struct AdminSettingsPage {
           this.categoryEditor();
         }
         if (card.title === '扩展功能') {
-          Text(this.stampExists ? '当前已有图章文件' : '尚未上传图章')
-            .fontSize(13)
-            .fontColor($r('app.color.text_secondary'));
-          SecondaryButton({
-            label: this.stampBusy ? '上传中…' : '上传图章 PNG',
-            compact: true,
-            fullWidth: false,
-            buttonEnabled: !this.stampBusy,
-            onTap: () => {
-              void this.uploadStampImage();
-            },
-          });
-        }
-        if (card.title === '高级配置项') {
-          if (this.adminTokenPreview.length > 0) {
-            Text(this.adminTokenPreview)
-              .fontSize(12)
-              .fontColor($r('app.color.text_primary'));
-          }
-          Row({ space: 8 }) {
+          // 图章文件是 MyBooks 专有存储，talebook 无上传端点
+          if (this.supports(ServerFeature.ADMIN_STAMP)) {
+            Text(this.stampExists ? '当前已有图章文件' : '尚未上传图章')
+              .fontSize(13)
+              .fontColor($r('app.color.text_secondary'));
             SecondaryButton({
-              label: this.tokenBusy ? '生成中…' : '生成 MCP Token',
+              label: this.stampBusy ? '上传中…' : '上传图章 PNG',
               compact: true,
               fullWidth: false,
-              buttonEnabled: !this.tokenBusy,
+              buttonEnabled: !this.stampBusy,
               onTap: () => {
-                void this.generateToken();
+                void this.uploadStampImage();
               },
             });
+          }
+        }
+        if (card.title === '高级配置项') {
+          // MCP Token 与 SSL 上传为服务端专有端点：talebook 的证书管理在「服务端维护」页，两者不同时存在
+          if (this.supports(ServerFeature.ADMIN_TOKEN)) {
+            if (this.adminTokenPreview.length > 0) {
+              Text(this.adminTokenPreview)
+                .fontSize(12)
+                .fontColor($r('app.color.text_primary'));
+            }
+            Row({ space: 8 }) {
+              SecondaryButton({
+                label: this.tokenBusy ? '生成中…' : '生成 MCP Token',
+                compact: true,
+                fullWidth: false,
+                buttonEnabled: !this.tokenBusy,
+                onTap: () => {
+                  void this.generateToken();
+                },
+              });
+              SecondaryButton({
+                label: '复制 Token',
+                compact: true,
+                fullWidth: false,
+                buttonEnabled: this.adminTokenPreview.length > 0,
+                onTap: () => this.copyText(this.adminTokenPreview),
+              });
+            }
+          }
+          if (this.supports(ServerFeature.ADMIN_SSL)) {
             SecondaryButton({
-              label: '复制 Token',
+              label: this.sslBusy ? '上传中…' : '上传 SSL 证书',
               compact: true,
               fullWidth: false,
-              buttonEnabled: this.adminTokenPreview.length > 0,
-              onTap: () => this.copyText(this.adminTokenPreview),
+              buttonEnabled: !this.sslBusy,
+              onTap: () => {
+                void this.uploadSslPair();
+              },
             });
           }
-          SecondaryButton({
-            label: this.sslBusy ? '上传中…' : '上传 SSL 证书',
-            compact: true,
-            fullWidth: false,
-            buttonEnabled: !this.sslBusy,
-            onTap: () => {
-              void this.uploadSslPair();
-            },
-          });
         }
         if (card.title === '书栈服务') {
-          SecondaryButton({
-            label: this.bookbarnBusy ? '申请中…' : '申请书栈 Token',
-            compact: true,
-            fullWidth: false,
-            buttonEnabled: !this.bookbarnBusy,
-            onTap: () => this.applyBookbarn(),
-          });
+          if (this.supports(ServerFeature.ADMIN_BOOKBARN)) {
+            SecondaryButton({
+              label: this.bookbarnBusy ? '申请中…' : '申请书栈 Token',
+              compact: true,
+              fullWidth: false,
+              buttonEnabled: !this.bookbarnBusy,
+              onTap: () => this.applyBookbarn(),
+            });
+          }
         }
       }
     }
@@ -1391,12 +1436,14 @@ struct AdminSettingsPage {
         this.fieldView(text('smtp_username', 'SMTP用户名（例如 user@126.com）'));
         this.fieldView(text('smtp_password', 'SMTP密码', false, true));
         this.fieldView(select('smtp_encryption', 'SMTP安全性', SMTP_ENCRYPTION));
-        SecondaryButton({
-          label: '测试邮件',
-          compact: true,
-          fullWidth: false,
-          onTap: () => this.testEmail(),
-        });
+        if (this.supports(ServerFeature.ADMIN_MAIL_TEST)) {
+          SecondaryButton({
+            label: '测试邮件',
+            compact: true,
+            fullWidth: false,
+            onTap: () => this.testEmail(),
+          });
+        }
       }
     }
     .width('100%')
@@ -1495,26 +1542,29 @@ struct AdminSettingsPage {
 
   @Builder
   aiCard() {
-    Column({ space: 10 }) {
-      this.sectionTitle('AI助手', '配置AI助手相关功能（Beta）。');
-      if (this.isExpanded('AI助手')) {
-        this.fieldView(bool('AI_ENABLED', '启用AI助手'));
-        this.fieldView(bool('AI_ALLOW_SET_CATEGORY', '使用AI生成的书籍分类'));
-        this.fieldView(text('AI_API_URL', 'AI接口地址（OpenAPI 兼容接口地址）'));
-        this.fieldView(text('AI_MODEL', 'AI模型'));
-        this.fieldView(text('AI_DEEPSEEK_API_KEY', 'API密钥', false, true));
-        SecondaryButton({
-          label: '测试AI设置',
-          compact: true,
-          fullWidth: false,
-          onTap: () => this.testAI(),
-        });
+    // talebook 上游无 `/api/admin/ai/test`：不显示连接测试入口，配置项仍可编辑与保存
+    if (this.supports(ServerFeature.ADMIN_AI_TEST)) {
+      Column({ space: 10 }) {
+        this.sectionTitle('AI助手', '配置AI助手相关功能（Beta）。');
+        if (this.isExpanded('AI助手')) {
+          this.fieldView(bool('AI_ENABLED', '启用AI助手'));
+          this.fieldView(bool('AI_ALLOW_SET_CATEGORY', '使用AI生成的书籍分类'));
+          this.fieldView(text('AI_API_URL', 'AI接口地址（OpenAPI 兼容接口地址）'));
+          this.fieldView(text('AI_MODEL', 'AI模型'));
+          this.fieldView(text('AI_DEEPSEEK_API_KEY', 'API密钥', false, true));
+          SecondaryButton({
+            label: '测试AI设置',
+            compact: true,
+            fullWidth: false,
+            onTap: () => this.testAI(),
+          });
+        }
       }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .padding($r('app.float.page_padding'))
+      .borderRadius($r('app.float.card_radius'))
+      .backgroundColor($r('app.color.card_background'));
     }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-    .padding($r('app.float.page_padding'))
-    .borderRadius($r('app.float.card_radius'))
-    .backgroundColor($r('app.color.card_background'));
   }
 }

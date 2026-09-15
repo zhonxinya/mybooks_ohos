@@ -326,13 +326,16 @@ struct AdminUsersPage {
 
   @Builder
   addUserAction() {
-    IconCircleButton({
-      icon: $r('sys.symbol.plus'),
-      variant: 'ghost',
-      onTap: () => {
-        this.showAddSheet = true;
-      },
-    });
+    // 新增用户端点只有 MyBooks 提供：talebook 上整个入口不显示（不再靠提交时报错兜底）
+    if (ServerRegistry.supports(ServerFeature.ADMIN_USER_CREATE)) {
+      IconCircleButton({
+        icon: $r('sys.symbol.plus'),
+        variant: 'ghost',
+        onTap: () => {
+          this.showAddSheet = true;
+        },
+      });
+    }
   }
 
   @Builder

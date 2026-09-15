@@ -89,6 +89,11 @@ struct BookUploadPage {
   }
 
   private async addByIsbn(): Promise<void> {
+    // ISBN 联网添加为 MyBooks 专有端点；入口已隐藏，这里兜底防止残留入口发起 404
+    if (!ServerRegistry.supports(ServerFeature.BOOK_ISBN_ADD)) {
+      this.toast(`${ServerRegistry.profile().displayName} 服务端不支持按 ISBN 添加实体书`);
+      return;
+    }
     const isbn = this.isbnInput.replace(/[-\s]/g, '');
     if (isbn.length === 0) {
       this.isbnError = '请输入 ISBN 号';
@@ -126,7 +131,8 @@ struct BookUploadPage {
 
   /** 选择条码图片 -> 服务端识别 ISBN -> 回填输入框（POST /api/admin/barcode）。 */
   private async scanBarcode(): Promise<void> {
-    if (this.scanningBarcode) {
+    // 条码识别端点为 MyBooks 专有；入口已隐藏，这里兜底防止残留入口发起 404
+    if (this.scanningBarcode || !ServerRegistry.supports(ServerFeature.ADMIN_BARCODE)) {
       return;
     }
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -704,13 +710,16 @@ struct BookUploadPage {
           .layoutWeight(1)
           .maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
-        TextButton({
-          label: '添加实体书',
-          onTap: () => {
-            this.isbnError = '';
-            this.showIsbnSheet = true;
-          },
-        });
+        // 添加实体书（ISBN 联网查询）为 MyBooks 专有端点，talebook 上不显示该入口
+        if (ServerRegistry.supports(ServerFeature.BOOK_ISBN_ADD)) {
+          TextButton({
+            label: '添加实体书',
+            onTap: () => {
+              this.isbnError = '';
+              this.showIsbnSheet = true;
+            },
+          });
+        }
         TextButton({
           label: '选择文件',
           onTap: () => {
@@ -828,15 +837,18 @@ struct BookUploadPage {
           .fontColor($r('app.color.error'))
           .width('100%');
       }
-      SecondaryButton({
-        label: this.scanningBarcode ? '正在识别…' : '扫描条码识别 ISBN',
-        buttonEnabled: !this.scanningBarcode && !this.addingBook,
-        onTap: () => {
-          this.scanBarcode().catch((e: Object) => {
-            this.toast(`扫码失败：${e}`);
-          });
-        },
-      });
+      // 条码识别端点（/api/admin/barcode）只有 MyBooks 提供
+      if (ServerRegistry.supports(ServerFeature.ADMIN_BARCODE)) {
+        SecondaryButton({
+          label: this.scanningBarcode ? '正在识别…' : '扫描条码识别 ISBN',
+          buttonEnabled: !this.scanningBarcode && !this.addingBook,
+          onTap: () => {
+            this.scanBarcode().catch((e: Object) => {
+              this.toast(`扫码失败：${e}`);
+            });
+          },
+        });
+      }
       PrimaryButton({
         label: this.addingBook ? '正在添加…' : '联网查询并添加',
         buttonEnabled: !this.addingBook && !this.scanningBarcode,

@@ -162,7 +162,8 @@ struct UserSettingsPage {
   }
 
   private async pickAndUploadAvatar(): Promise<void> {
-    if (this.uploadingAvatar) {
+    // 头像上传（/api/user/avatar）为 mybooks 专有端点，入口已按能力隐藏，这里兜底
+    if (this.uploadingAvatar || !ServerRegistry.supports(ServerFeature.USER_AVATAR)) {
       return;
     }
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;

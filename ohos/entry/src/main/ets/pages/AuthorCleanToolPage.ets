@@ -6,6 +6,7 @@ import {
   MetaListResponse, MetaNameCount
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 
 @Entry
 @Component
@@ -96,6 +97,10 @@ struct AuthorCleanToolPage {
     const q = this.searchQuery.trim().length > 0 ? this.searchQuery.trim() : this.authorName.trim();
     if (q.length === 0) {
       this.setMsg('请先输入要搜索的作者关键字', true);
+      return;
+    }
+    if (!ServerRegistry.supports(ServerFeature.AUTHOR_SEARCH)) {
+      this.setMsg(`${ServerRegistry.profile().displayName} 服务端不支持作者搜索`, true);
       return;
     }
     this.busy = true;

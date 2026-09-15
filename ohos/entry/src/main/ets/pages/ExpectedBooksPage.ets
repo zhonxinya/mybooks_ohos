@@ -3,6 +3,7 @@ import {
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, ApiMessageResult } from '../services/TalebookApi';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { ExpectedItemModel } from '../models/UserModels';
 
 @Entry
@@ -16,8 +17,15 @@ struct ExpectedBooksPage {
   @State newAuthor: string = '';
   @State newPublisher: string = '';
   @State submitting: boolean = false;
+  /** 求书期望（/api/user/expected）为 mybooks 专有端点。 */
+  @State supported: boolean = true;
 
   aboutToAppear(): void {
+    this.supported = ServerRegistry.supports(ServerFeature.USER_EXPECTED);
+    if (!this.supported) {
+      this.loading = false;
+      return;
+    }
     void this.load();
   }
 
@@ -30,6 +38,10 @@ struct ExpectedBooksPage {
   }
 
   private async load(): Promise<void> {
+    if (!ServerRegistry.supports(ServerFeature.USER_EXPECTED)) {
+      this.loading = false;
+      return;
+    }
     this.loading = this.items.length === 0;
     this.loadError = '';
     try {
@@ -47,6 +59,9 @@ struct ExpectedBooksPage {
   }
 
   private async submit(): Promise<void> {
+    if (!ServerRegistry.supports(ServerFeature.USER_EXPECTED)) {
+      return;
+    }
     const title = this.newTitle.trim();
     if (title.length === 0) {
       this.toast('书名不能为空');
@@ -101,18 +116,21 @@ struct ExpectedBooksPage {
 
   @Builder
   addAction() {
-    IconCircleButton({
-      icon: $r('sys.symbol.plus'),
-      variant: 'soft',
-      iconSize: 18,
-      buttonSize: 32,
-      onTap: () => {
-        this.newTitle = '';
-        this.newAuthor = '';
-        this.newPublisher = '';
-        this.showAddSheet = true;
-      },
-    });
+    // 不支持的服务端不显示登记入口（列表本身已在 listBody 里降级为提示）
+    if (this.supported) {
+      IconCircleButton({
+        icon: $r('sys.symbol.plus'),
+        variant: 'soft',
+        iconSize: 18,
+        buttonSize: 32,
+        onTap: () => {
+          this.newTitle = '';
+          this.newAuthor = '';
+          this.newPublisher = '';
+          this.showAddSheet = true;
+        },
+      });
+    }
   }
 
   build() {
@@ -140,7 +158,9 @@ struct ExpectedBooksPage {
 
   @Builder
   listBody() {
-    if (this.loading) {
+    if (!this.supported) {
+      EmptyState({ message: `${ServerRegistry.profile().displayName} 服务端不支持求书期望` });
+    } else if (this.loading) {
       LoadingState({});
     } else if (this.loadError.length > 0) {
       EmptyState({ message: this.loadError });

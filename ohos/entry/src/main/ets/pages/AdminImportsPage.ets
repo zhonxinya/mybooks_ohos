@@ -2,6 +2,7 @@ import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem,
   PrimaryButton, SecondaryButton } from '../components';
 import { TalebookApi, ApiMessageResult, ImportStatusResponse } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationHelper } from '../utils/PaginationHelper';
 
 const IMPORT_PAGE_SIZE: number = 20;
@@ -23,10 +24,17 @@ struct AdminImportsPage {
   @State working: boolean = false;
   @State importStatusText: string = '';
   @State statusDetail: string = '';
+  /** 导入工作流为 mybooks 专有（filelist + force），talebook 走扫描记录按 hash 导入，不支持该页。 */
+  @State supported: boolean = true;
   private lastLoadTime: number = 0;
   private statusPollTimer: number = -1;
 
   aboutToAppear(): void {
+    this.supported = ServerRegistry.supports(ServerFeature.ADMIN_IMPORT);
+    if (!this.supported) {
+      this.loading = false;
+      return;
+    }
     void this.loadImports(true);
   }
 
@@ -112,6 +120,9 @@ struct AdminImportsPage {
   }
 
   private async refreshImportStatus(continuePoll: boolean = false): Promise<void> {
+    if (!this.supported) {
+      return;
+    }
     try {
       const rsp: ImportStatusResponse = await TalebookApi.getImportStatus();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
@@ -149,6 +160,10 @@ struct AdminImportsPage {
   }
 
   private async loadImports(reset: boolean = true): Promise<void> {
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_IMPORT)) {
+      this.loading = false;
+      return;
+    }
     if (reset) {
       this.currentPage = 1;
       this.hasMore = true;
@@ -221,6 +236,9 @@ struct AdminImportsPage {
     if (this.working) {
       return;
     }
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_IMPORT)) {
+      return;
+    }
     this.working = true;
     TalebookApi.runAdminImport('"all"', false)
       .then((rsp: ApiMessageResult) => {
@@ -236,6 +254,9 @@ struct AdminImportsPage {
 
   private cancelImport(): void {
     if (this.working) {
+      return;
+    }
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_IMPORT)) {
       return;
     }
     this.working = true;
@@ -255,6 +276,9 @@ struct AdminImportsPage {
     if (this.working) {
       return;
     }
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_IMPORT)) {
+      return;
+    }
     const path = JSON.stringify(String(item['path'] ?? ''));
     this.working = true;
     TalebookApi.runAdminImport(`[${path}]`, true)
@@ -270,6 +294,9 @@ struct AdminImportsPage {
   }
 
   private deleteRecord(item: Record<string, Object>): void {
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_IMPORT)) {
+      return;
+    }
     const hash = String(item['hash'] ?? '');
     this.getUIContext().showAlertDialog({
       title: '删除导入记录',
@@ -329,41 +356,45 @@ struct AdminImportsPage {
 
   @Builder
   pageContent() {
-    Column() {
-      this.summaryCard();
-      FilterChips({
-        items: [
-          { label: '全部', value: 0 },
-          { label: '待处理', value: 1 },
-          { label: '已导入', value: 2 },
-        ] as FilterChipItem[],
-        selected: $selectedFilter,
-        onChange: (value: number) => this.onFilterChange(value),
-      });
-      if (this.loading) {
-        LoadingState({});
-      } else if (this.items.length === 0) {
-        EmptyState({ message: '暂无导入记录' });
-      } else {
-        List({ space: 8 }) {
-          ForEach(this.items, (item: Record<string, Object>) => {
-            ListItem() {
-              this.itemRow(item);
-            }
-          }, (item: Record<string, Object>) => `import-${Number(item['id'] ?? 0)}`);
-          if (this.loadingMore) {
-            ListItem() {
-              LoadingState({ hint: '加载更多...' });
+    if (!this.supported) {
+      EmptyState({ message: `${ServerRegistry.profile().displayName} 服务端不支持导入管理` });
+    } else {
+      Column() {
+        this.summaryCard();
+        FilterChips({
+          items: [
+            { label: '全部', value: 0 },
+            { label: '待处理', value: 1 },
+            { label: '已导入', value: 2 },
+          ] as FilterChipItem[],
+          selected: $selectedFilter,
+          onChange: (value: number) => this.onFilterChange(value),
+        });
+        if (this.loading) {
+          LoadingState({});
+        } else if (this.items.length === 0) {
+          EmptyState({ message: '暂无导入记录' });
+        } else {
+          List({ space: 8 }) {
+            ForEach(this.items, (item: Record<string, Object>) => {
+              ListItem() {
+                this.itemRow(item);
+              }
+            }, (item: Record<string, Object>) => `import-${Number(item['id'] ?? 0)}`);
+            if (this.loadingMore) {
+              ListItem() {
+                LoadingState({ hint: '加载更多...' });
+              }
             }
           }
+          .layoutWeight(1)
+          .width('100%')
+          .onReachEnd(() => this.loadMore());
         }
-        .layoutWeight(1)
-        .width('100%')
-        .onReachEnd(() => this.loadMore());
       }
+      .width('100%')
+      .height('100%');
     }
-    .width('100%')
-    .height('100%');
   }
 
   @Builder

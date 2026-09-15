@@ -66,8 +66,60 @@
 `服务端主题` 在「设置 → 外观」；
 `书内标注/TXT 工具/阅读进度与属性/漫画阅读` 在书籍详情的「更多」面板；`我的标注` 在个人中心。
 
-### 尚未适配
+### 能力门控收口（2026-09-15）
 
+「服务端不支持的配置菜单与功能不显示」这一约定由两件事保证：**入口显隐**（界面层）
+与**调用兜底**（方法层）。本轮补齐了此前只做对了一半的地方：
+
+| 位置 | 补齐内容 |
+|---|---|
+| `AdminSettingsPage` 管理设置 | 系统信息（`ADMIN_SYSINFO`）、图章上传（`ADMIN_STAMP`）、更新说明（`ADMIN_RELEASE_NOTES`）、致谢名单（`ADMIN_THANKS_NOTES`）、MCP Token（`ADMIN_TOKEN`）、书栈 Token（`ADMIN_BOOKBARN`）、AI 测试（`ADMIN_AI_TEST`）、测试邮件（`ADMIN_MAIL_TEST`）、重启服务（`ADMIN_RESTART`）、SSL 上传（`ADMIN_SSL`）逐项门控：卡片/按钮不渲染，加载方法也提前返回，不再发起必然 404 的请求 |
+| `AdminUsersPage` 用户管理 | 新增用户（`ADMIN_USER_CREATE`）此前仅在提交时报错兜底，现按能力隐藏「+」入口 |
+| `BookUploadPage` 上传图书 | 「添加实体书」（`BOOK_ISBN_ADD`）与「扫描条码识别 ISBN」（`ADMIN_BARCODE`）入口按能力隐藏，处理函数加兜底 |
+| `BookDetailPage` 书籍详情 | 想读（`BOOK_WANTS`）、私藏（`BOOK_SET_SOLE`）处理函数加兜底，避免入口残留时发起失败请求 |
+
+新增能力枚举（`ServerProfile.ets`）：`ADMIN_RESTART`、`ADMIN_MAIL_TEST`、`ADMIN_SSL`
+（`ADMIN_AI_TEST`/`ADMIN_BOOKBARN`/`ADMIN_TOKEN`/`ADMIN_STAMP`/`ADMIN_RELEASE_NOTES`/`ADMIN_THANKS_NOTES`
+此前已在枚举中但从未被判定）。
+
+审计方式（可复跑）：
+
+```bash
+python3 scripts/audit_server_gates.py            # 退出码 0 = 无未门控缺口（静态）
+node scripts/check_server_gates_runtime.js       # 退出码 0 = 能力表运行时断言全通过
+```
+
+`check_server_gates_runtime.js` 把 `ServerProfile.ets`（及其唯一依赖 `Constants.ets`）去类型后
+当 CommonJS 跑起来，直接断言「哪一端支持哪些能力」以及 `ServerRegistry` 切换后的端点/分页/元数据键，
+共约 100 条断言；它不开设备、不连服务端，因此可在 CI 中作为门控回归的守门人。
+
+`audit_server_gates.py` 则做静态扫描：读 `ServerProfile.ets` 得到两端各自声明的能力集合，
+再按内置表登记的「单端独有能力 → 独有 API」（当前 52 项、73 个调用点）逐调用点回溯到宿主方法/Builder，
+检查是否出现对应 `ServerFeature`：只在 `!supports(...)` 降级提示里出现记为 `WARN`，完全没有门控记为 `FAIL`。
+门控既可以写成 `!ServerRegistry.supports(F)`，也可以写成字段承载式
+（`this.supported = ServerRegistry.supports(F)` + 调用点 `if (!this.supported)`），脚本两者都认。
+维护新能力时，把 (能力, 独有 API 方法) 追加进脚本的 `FEATURE_APIS` 表即可。
+（`BOOK_SCOPE` / `BOOK_MEDIA_TYPE` 无独立端点，随 shelf 接口的 `scope` / `media_type` 字段，
+由 `ReadingProgressPage` 的字段门控处理，故不登记。）
+
+无头构建（Linux / Command Line Tools，签名另见 README）：
+
+```bash
+bash scripts/build-hap.sh          # 产物 ohos/entry/build/default/outputs/default/entry-default-unsigned.hap
+```
+
+### 单端独有页面的整页降级
+
+除入口显隐外，纯单端页面按文档约定整页渲染 `EmptyState` 且不发起任何请求：
+
+| 页面 | 能力 | 表现 |
+|---|---|---|
+| `AdminImportsPage` / `AdminToolboxPage` | `ADMIN_IMPORT` / `ADMIN_TOOLBOX` | 「服务端不支持导入管理 / 工具箱」 |
+| `AdminBookReviewsPage` / `AdminMemosPage` / `AdminResourcesPage` | `ADMIN_BOOK_REVIEWS` / `ADMIN_MEMOS` / `ADMIN_RESOURCES` | 「服务端不支持评论审核 / 用户留言管理 / 资源导航」 |
+| `ExpectedBooksPage` / `UserMemosPage` | `USER_EXPECTED` / `USER_MEMO` | 「服务端不支持求书期望 / 用户留言」（右上角新增入口同步隐藏） |
+
+
+### 尚未适配
 - talebook 管理端 OPDS 源的**增/改/删**：上游为 `POST/PUT/DELETE /api/admin/opds/sources`，本轮仅实现列表浏览（`PUT` 通道已具备，如需要可补）。
 - talebook 极验（geetest）型验证码：需浏览器 JS SDK，`CaptchaApi.isEnabled` 仅对 `image` 型返回 true。
 - 在线书库「连载状态」写接口 `/api/network/status`（仅过渡命名空间存在），未封装。

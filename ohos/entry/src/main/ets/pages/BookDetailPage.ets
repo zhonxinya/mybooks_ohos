@@ -518,6 +518,10 @@ struct BookDetailPage {
   }
 
   private async toggleWants(): Promise<void> {
+    // 入口已按能力隐藏；此处兜底，避免入口残留时发起必然 404 的请求
+    if (!ServerRegistry.supports(ServerFeature.BOOK_WANTS)) {
+      return;
+    }
     const next = !this.isWants;
     try {
       await TalebookService.ensureAuthenticated();
@@ -535,7 +539,8 @@ struct BookDetailPage {
   }
 
   private async aiFill(): Promise<void> {
-    if (this.aiFilling) {
+    // AI 补全（/api/book/{id}/aifill）为 mybooks 专有端点，入口已按能力隐藏，这里兜底
+    if (this.aiFilling || !ServerRegistry.supports(ServerFeature.BOOK_AIFILL)) {
       return;
     }
     this.aiFilling = true;
@@ -793,6 +798,10 @@ struct BookDetailPage {
   }
 
   private async toggleSole(): Promise<void> {
+    // 私藏（sole）为 MyBooks 专有端点；入口已隐藏，这里兜底防止残留入口发起 404
+    if (!ServerRegistry.supports(ServerFeature.BOOK_SET_SOLE)) {
+      return;
+    }
     try {
       await TalebookService.ensureAuthenticated();
       const rsp = await TalebookApi.setSole(this.bookId);
@@ -808,7 +817,8 @@ struct BookDetailPage {
   }
 
   private async updateTags(): Promise<void> {
-    if (this.formatBusy) {
+    // 标签更新（/api/book/{id}/tags）为 mybooks 专有端点，入口已按能力隐藏，这里兜底
+    if (this.formatBusy || !ServerRegistry.supports(ServerFeature.BOOK_TAGS_EDIT)) {
       return;
     }
     this.formatBusy = true;
@@ -879,6 +889,10 @@ struct BookDetailPage {
   }
 
   private async openReviewSheet(): Promise<void> {
+    // 书评接口为 mybooks 专有；入口已按能力隐藏，这里兜底
+    if (!ServerRegistry.supports(ServerFeature.BOOK_REVIEWS)) {
+      return;
+    }
     this.openSheet('review');
     try {
       await TalebookService.ensureAuthenticated();
@@ -894,7 +908,7 @@ struct BookDetailPage {
   }
 
   private async submitReview(): Promise<void> {
-    if (this.submittingReview) {
+    if (this.submittingReview || !ServerRegistry.supports(ServerFeature.BOOK_REVIEWS)) {
       return;
     }
     if (this.reviewStars <= 0) {
