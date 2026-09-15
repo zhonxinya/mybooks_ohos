@@ -213,6 +213,10 @@ struct ReadingHistoryPage {
   }
 
   private confirmClearOnlineHistory(): void {
+    // 在线历史清空为 mybooks 专有端点，入口已按能力隐藏，这里兜底
+    if (!ServerRegistry.supports(ServerFeature.USER_ONLINE_HISTORY)) {
+      return;
+    }
     this.getUIContext().showAlertDialog({
       title: '清空在线阅读历史',
       message: '确定清空服务端的在线阅读历史吗？该操作不可恢复。',

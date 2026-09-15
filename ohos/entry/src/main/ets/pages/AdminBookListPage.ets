@@ -314,6 +314,10 @@ struct AdminBookListPage {
 
   /** 选中书籍的更多批量操作（第二级菜单） */
   private showMoreSelectionActions(ids: number[]): void {
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_BOOK_BATCH)) {
+      this.toast(`${ServerRegistry.profile().displayName} 服务端不支持批量工具`);
+      return;
+    }
     this.getUIContext().getPromptAction().showActionMenu({
       title: '更多批量操作',
       buttons: [
@@ -368,10 +372,13 @@ struct AdminBookListPage {
       actions.push('update-all-meta');
       buttons.push({ text: '全部更新标题排序', color: '#007DFF' });
       actions.push('update-title-sort');
-      buttons.push({ text: '更新全部动态封面', color: '#007DFF' });
-      actions.push('update-dynamic-cover');
-      buttons.push({ text: '重置全部封面', color: '#007DFF' });
-      actions.push('reset-cover');
+      // 动态封面与重置封面走 `/api/admin/book/*`，与裁剪封面同属 MyBooks 专有端点
+      if (ServerRegistry.supports(ServerFeature.BOOK_CROP_COVER)) {
+        buttons.push({ text: '更新全部动态封面', color: '#007DFF' });
+        actions.push('update-dynamic-cover');
+        buttons.push({ text: '重置全部封面', color: '#007DFF' });
+        actions.push('reset-cover');
+      }
       buttons.push({ text: '清理无效条目', color: '#E84026' });
       actions.push('clear-invalid');
     }

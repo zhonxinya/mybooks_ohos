@@ -215,7 +215,8 @@ struct ReadingBooksPage {
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async removeSelected(action: string): Promise<void> {
-    if (this.removing) {
+    // 批量移除状态（batch-remove-state）为 mybooks 专有端点，入口已按能力隐藏，这里兜底
+    if (this.removing || !ServerRegistry.supports(ServerFeature.STATE_BATCH_REMOVE)) {
       return;
     }
     this.removing = true;

@@ -2,6 +2,7 @@ import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem,
   SecondaryButton } from '../components';
 import { TalebookApi, ApiMessageResult, ToolboxStoreIndexResponse } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 
 @Entry
 @Component
@@ -14,8 +15,15 @@ struct AdminToolboxPage {
   @State workingId: string = '';
   @State selectedTab: number = 0;
   @State storeHint: string = '';
+  /** 工具箱（工具启停/安装/商店）为 mybooks 专有端点。 */
+  @State supported: boolean = true;
 
   aboutToAppear(): void {
+    this.supported = ServerRegistry.supports(ServerFeature.ADMIN_TOOLBOX);
+    if (!this.supported) {
+      this.loading = false;
+      return;
+    }
     void this.loadInstalled();
   }
 
@@ -37,6 +45,10 @@ struct AdminToolboxPage {
   }
 
   private async loadInstalled(): Promise<void> {
+    if (!this.supported) {
+      this.loading = false;
+      return;
+    }
     this.loading = this.tools.length === 0;
     this.loadError = '';
     try {
@@ -56,6 +68,10 @@ struct AdminToolboxPage {
   }
 
   private async loadStore(forceRefresh: boolean): Promise<void> {
+    if (!this.supported) {
+      this.loading = false;
+      return;
+    }
     this.loading = this.storeTools.length === 0;
     this.loadError = '';
     this.storeHint = '';
@@ -90,6 +106,9 @@ struct AdminToolboxPage {
   }
 
   private setToolEnabled(tool: Record<string, Object>, enable: boolean): void {
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_TOOLBOX)) {
+      return;
+    }
     const toolId = String(tool['id'] ?? '');
     if (toolId.length === 0 || this.workingId.length > 0) {
       return;
@@ -108,6 +127,9 @@ struct AdminToolboxPage {
   }
 
   private uninstallTool(tool: Record<string, Object>): void {
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_TOOLBOX)) {
+      return;
+    }
     const toolId = String(tool['id'] ?? '');
     const name = String(tool['name'] ?? toolId);
     if (toolId.length === 0 || this.workingId.length > 0) {
@@ -138,6 +160,9 @@ struct AdminToolboxPage {
   }
 
   private installStoreTool(tool: Record<string, Object>): void {
+    if (!ServerRegistry.supports(ServerFeature.ADMIN_TOOLBOX)) {
+      return;
+    }
     const toolId = String(tool['tool_id'] ?? tool['id'] ?? '');
     if (toolId.length === 0 || this.workingId.length > 0) {
       return;
@@ -302,6 +327,15 @@ struct AdminToolboxPage {
 
   @Builder
   pageContent() {
+    if (!this.supported) {
+      EmptyState({ message: `${ServerRegistry.profile().displayName} 服务端不支持工具箱` });
+    } else {
+      this.toolboxContent();
+    }
+  }
+
+  @Builder
+  toolboxContent() {
     Column() {
       FilterChips({
         items: [

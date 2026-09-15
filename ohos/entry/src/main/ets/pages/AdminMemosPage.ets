@@ -1,6 +1,7 @@
 import { PageScaffold, LoadingState, EmptyState, PrimaryButton } from '../components';
 import { TalebookApi, ApiMessageResult } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 
 @Entry
 @Component
@@ -14,8 +15,15 @@ struct AdminMemosPage {
   @State replyName: string = '';
   @State replyContent: string = '';
   @State replyMemo: Record<string, Object> = {};
+  /** 用户留言管理（/api/admin/memos）为 mybooks 专有端点。 */
+  @State supported: boolean = true;
 
   aboutToAppear(): void {
+    this.supported = ServerRegistry.supports(ServerFeature.ADMIN_MEMOS);
+    if (!this.supported) {
+      this.loading = false;
+      return;
+    }
     void this.load();
   }
 
@@ -28,6 +36,10 @@ struct AdminMemosPage {
   }
 
   private async load(): Promise<void> {
+    if (!this.supported) {
+      this.loading = false;
+      return;
+    }
     this.loading = this.memos.length === 0;
     this.loadError = '';
     try {
@@ -88,7 +100,7 @@ struct AdminMemosPage {
   }
 
   private submitReply(): void {
-    if (this.saving) {
+    if (this.saving || !this.supported) {
       return;
     }
     this.saving = true;
@@ -182,7 +194,9 @@ struct AdminMemosPage {
 
   @Builder
   pageContent() {
-    if (this.loading) {
+    if (!this.supported) {
+      EmptyState({ message: `${ServerRegistry.profile().displayName} 服务端不支持用户留言管理` });
+    } else if (this.loading) {
       LoadingState({});
     } else if (this.loadError.length > 0) {
       EmptyState({ message: this.loadError });

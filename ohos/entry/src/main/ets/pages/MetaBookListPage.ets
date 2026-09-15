@@ -178,6 +178,10 @@ struct MetaBookListPage {
         return;
       }
       if (this.metaType === 'category') {
+        if (!ServerRegistry.supports(ServerFeature.CATEGORIES)) {
+          this.errorMessage = `${ServerRegistry.profile().displayName} 服务端不支持书籍分类`;
+          return;
+        }
         const categories: MetaItem[] = await TalebookApi.getCategories();
         this.items = categories;
         this.pins = [];
@@ -244,6 +248,10 @@ struct MetaBookListPage {
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private async togglePin(name: string, pinned: boolean): Promise<void> {
+    // 置顶（pin/unpin）为 mybooks 专有端点；入口已按能力隐藏，这里兜底
+    if (!ServerRegistry.supports(ServerFeature.USER_PIN)) {
+      return;
+    }
     try {
       await TalebookService.ensureAuthenticated();
       const rsp = pinned ? await TalebookApi.unpinItem(this.pinItemType(), name) :

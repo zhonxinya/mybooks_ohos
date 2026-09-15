@@ -1,6 +1,7 @@
 import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem } from '../components';
 import { TalebookApi, ApiMessageResult } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationHelper } from '../utils/PaginationHelper';
 
 interface StatusOption {
@@ -28,9 +29,16 @@ struct AdminBookReviewsPage {
   @State hasMore: boolean = true;
   @State totalCount: number = 0;
   @State selectedStatus: number = 0;
+  /** 评论审核（/api/admin/book-reviews）为 mybooks 专有端点。 */
+  @State supported: boolean = true;
   private lastLoadTime: number = 0;
 
   aboutToAppear(): void {
+    this.supported = ServerRegistry.supports(ServerFeature.ADMIN_BOOK_REVIEWS);
+    if (!this.supported) {
+      this.loading = false;
+      return;
+    }
     void this.loadReviews(true);
   }
 
@@ -72,6 +80,10 @@ struct AdminBookReviewsPage {
   }
 
   private async loadReviews(reset: boolean = true): Promise<void> {
+    if (!this.supported) {
+      this.loading = false;
+      return;
+    }
     if (reset) {
       this.currentPage = 1;
       this.hasMore = true;
@@ -122,6 +134,9 @@ struct AdminBookReviewsPage {
   }
 
   private doModerate(review: Record<string, Object>, action: string): void {
+    if (!this.supported) {
+      return;
+    }
     TalebookApi.moderateAdminReview(Number(review['id'] ?? 0), action)
       .then((rsp: ApiMessageResult) => {
         if (rsp.err === undefined || rsp.err === 'ok') {
@@ -187,6 +202,15 @@ struct AdminBookReviewsPage {
 
   @Builder
   pageContent() {
+    if (!this.supported) {
+      EmptyState({ message: `${ServerRegistry.profile().displayName} 服务端不支持评论审核` });
+    } else {
+      this.reviewsContent();
+    }
+  }
+
+  @Builder
+  reviewsContent() {
     Column() {
       FilterChips({
         items: STATUS_OPTIONS.map((option: StatusOption): FilterChipItem => {

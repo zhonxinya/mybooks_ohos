@@ -13,3 +13,5 @@
 **/oh-package-lock.json5
 /third_party/curl_build
 /third_party/mbedtls_build
+# 上板验证现场证据（截图 / uitest dumpLayout 输出），不入库
+/.dsh-verify

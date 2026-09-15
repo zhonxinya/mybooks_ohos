@@ -134,33 +134,43 @@ export struct SettingsPage {
   }
 
   private async loadAdminOverview(): Promise<void> {
-    if (!ServerRegistry.supports(ServerFeature.ADMIN_LIBRARY_STATS)) {
-      // 当前服务端无书库统计/后台任务接口，不发起必然失败的请求
+    const statsSupported: boolean = ServerRegistry.supports(ServerFeature.ADMIN_LIBRARY_STATS);
+    const tasksSupported: boolean = ServerRegistry.supports(ServerFeature.ADMIN_TASKS_RUNNING);
+    if (!statsSupported && !tasksSupported) {
+      // 当前服务端既无书库统计也无后台任务接口，不发起必然失败的请求
       this.adminOverviewLoading = false;
       return;
     }
     this.adminOverviewLoading = true;
     try {
       await TalebookService.ensureAuthenticated();
-      const statsRsp: LibraryStatsResponse = await TalebookApi.getLibraryStats();
-      if (statsRsp.err === undefined || statsRsp.err === 'ok') {
-        const s = statsRsp.stats;
-        if (s !== undefined) {
-          const total = Number(s.total_books ?? 0);
-          const ebook = Number(s.ebook_count ?? 0);
-          const physical = Number(s.physical_count ?? 0);
-          const monthE = Number(s.month_ebook_count ?? 0);
-          const monthP = Number(s.month_physical_count ?? 0);
-          this.librarySummary =
-            `共 ${total} 本（电子 ${ebook} / 实体 ${physical}）· 本月新增电子 ${monthE}、实体 ${monthP}`;
-        } else {
-          this.librarySummary = '暂无书库统计';
-        }
+      if (!statsSupported) {
+        this.librarySummary = '';
       } else {
-        this.librarySummary = statsRsp.msg !== undefined && statsRsp.msg.length > 0
-          ? statsRsp.msg : '书库统计不可用';
+        const statsRsp: LibraryStatsResponse = await TalebookApi.getLibraryStats();
+        if (statsRsp.err === undefined || statsRsp.err === 'ok') {
+          const s = statsRsp.stats;
+          if (s !== undefined) {
+            const total = Number(s.total_books ?? 0);
+            const ebook = Number(s.ebook_count ?? 0);
+            const physical = Number(s.physical_count ?? 0);
+            const monthE = Number(s.month_ebook_count ?? 0);
+            const monthP = Number(s.month_physical_count ?? 0);
+            this.librarySummary =
+              `共 ${total} 本（电子 ${ebook} / 实体 ${physical}）· 本月新增电子 ${monthE}、实体 ${monthP}`;
+          } else {
+            this.librarySummary = '暂无书库统计';
+          }
+        } else {
+          this.librarySummary = statsRsp.msg !== undefined && statsRsp.msg.length > 0
+            ? statsRsp.msg : '书库统计不可用';
+        }
       }
 
+      if (!tasksSupported) {
+        this.runningTasksSummary = '';
+        return;
+      }
       const tasksRsp: AdminRunningTasksResponse = await TalebookApi.getAdminRunningTasks();
       if (tasksRsp.err === undefined || tasksRsp.err === 'ok') {
         const tasks = tasksRsp.tasks ?? [];
@@ -184,8 +194,12 @@ export struct SettingsPage {
           ? tasksRsp.msg : '任务状态不可用';
       }
     } catch (_e) {
-      this.librarySummary = '书库统计加载失败';
-      this.runningTasksSummary = '后台任务加载失败';
+      if (statsSupported) {
+        this.librarySummary = '书库统计加载失败';
+      }
+      if (tasksSupported) {
+        this.runningTasksSummary = '后台任务加载失败';
+      }
     } finally {
       this.adminOverviewLoading = false;
     }
@@ -295,7 +309,9 @@ export struct SettingsPage {
 
   private adminSectionSubtitle(): string {
     if (!ServerRegistry.supports(ServerFeature.ADMIN_LIBRARY_STATS)) {
-      return '服务端管理入口';
+      // 管理概览（书库统计/后台任务）只有 MyBooks 提供：不渲染永远加载失败的一行，
+      // 但在副标题里点明当前服务端与「不可用的项已隐藏」，避免用户以为功能丢了
+      return `${ServerRegistry.profile().displayName}：不可用的管理项已隐藏`;
     }
     return this.librarySummary.length > 0 ? this.librarySummary : '服务端管理入口与统计';
   }
