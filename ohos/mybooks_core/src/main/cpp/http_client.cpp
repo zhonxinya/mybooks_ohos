@@ -1,9 +1,11 @@
 #include "http_client.h"
+#include <hilog/log.h>
 
 #include <curl/curl.h>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <sys/stat.h>
 
 namespace mybooks {
 
@@ -254,19 +256,34 @@ HttpResponse HttpClient::uploadFiles(const std::string &pathOrUrl,
     for (const auto &file : files) {
         curl_mimepart *part = curl_mime_addpart(mime);
         const std::string &partField = file.fieldName.empty() ? fileFieldName : file.fieldName;
+        // 上传诊断：确认 multipart 字段名、文件名与宿主文件是否真实存在（hilog -T MyBooksHttp）
+        struct stat st{};
+        int statRc = stat(file.filePath.c_str(), &st);
+        OH_LOG_Print(LOG_APP, LOG_INFO, 0xD002, "MyBooksHttp",
+                     "upload part field=%{public}s name=%{public}s path=%{public}s "
+                     "stat=%{public}d size=%{public}lld",
+                     partField.c_str(), file.fileName.c_str(), file.filePath.c_str(), statRc,
+                     static_cast<long long>(st.st_size));
         curl_mime_name(part, partField.c_str());
         curl_mime_filedata(part, file.filePath.c_str());
         curl_mime_filename(part, file.fileName.c_str());
     }
     for (const auto &kv : fields) {
         curl_mimepart *field = curl_mime_addpart(mime);
+        OH_LOG_Print(LOG_APP, LOG_INFO, 0xD002, "MyBooksHttp",
+                     "upload field name=%{public}s value=%{public}s",
+                     kv.first.c_str(), kv.second.c_str());
         curl_mime_name(field, kv.first.c_str());
         curl_mime_data(field, kv.second.c_str(), CURL_ZERO_TERMINATED);
     }
+    OH_LOG_Print(LOG_APP, LOG_INFO, 0xD002, "MyBooksHttp", "upload POST %{public}s (files=%{public}zu)",
+                 url.c_str(), files.size());
     curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    // 不要在这里再设 CURLOPT_POST：MIMEPOST 已把 method 置为 HTTPREQ_POST_MIME，
+    // 覆盖成 HTTPREQ_POST 会让 curl 改用 application/x-www-form-urlencoded 且空 body，
+    // 服务端 multipart 解析拿不到文件字段（表现为「文件不存在或未选择文件」）。
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 15000);
     // 批量图书上传可能更大，读超时放宽到 20 分钟
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1200000L);
@@ -311,6 +328,10 @@ HttpResponse HttpClient::uploadFiles(const std::string &pathOrUrl,
         response.statusCode = static_cast<int>(status);
         response.body = responseBody;
     }
+    // 上传诊断：curl 结果 + HTTP 状态 + 响应体前 800 字节（hilog -T MyBooksHttp）
+    OH_LOG_Print(LOG_APP, LOG_INFO, 0xD002, "MyBooksHttp",
+                 "upload resp curl=%{public}d http=%{public}d body=%{public}s",
+                 static_cast<int>(code), response.statusCode, responseBody.substr(0, 800).c_str());
 
     curl_mime_free(mime);
     curl_slist_free_all(headers);
