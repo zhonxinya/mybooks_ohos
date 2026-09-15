@@ -42,6 +42,13 @@ export enum ServerFeature {
   USER_ONLINE_HISTORY = 'user_online_history',
   /** 作者/标签置顶（mybooks `/api/user/pin|unpin`）。 */
   USER_PIN = 'user_pin',
+  /**
+   * 一键清空站内消息（mybooks `POST /api/user/messages/clear`）。
+   *
+   * talebook 上游**没有**该路由（只有 `GET/POST /api/user/messages`），因此不声明：
+   * 客户端在 talebook 上改用「逐条标记已读」等价实现（见 `NotificationPage.clearAll`）。
+   */
+  USER_MESSAGES_CLEAR = 'user_messages_clear',
   READING_DASHBOARD = 'reading_dashboard',
   // 书单与社交
   BOOKLISTS = 'booklists',
@@ -315,6 +322,7 @@ export class MyBooksProfile extends ServerProfile {
       ServerFeature.USER_MEMO,
       ServerFeature.USER_ONLINE_HISTORY,
       ServerFeature.USER_PIN,
+      ServerFeature.USER_MESSAGES_CLEAR,
       ServerFeature.READING_DASHBOARD,
       ServerFeature.BOOKLISTS,
       ServerFeature.BOOK_REVIEWS,
