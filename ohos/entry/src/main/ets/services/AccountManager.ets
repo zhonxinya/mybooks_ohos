@@ -18,6 +18,13 @@ import { TalebookService, AuthAttempt } from './TalebookService';
  * 3. 丢弃 ArkTS 侧的内存缓存与会话恢复状态
  * 4. 广播切换事件，由页面重启导航栈重新渲染
  */
+/** 账号切换结果：登录尝试、切换后的账号记录、是否按服务器实际类型自愈。 */
+export interface AccountSwitchOutcome {
+  attempt: AuthAttempt;
+  record: AccountRecord | null;
+  corrected: boolean;
+}
+
 export class AccountManager {
   /** 切换事件的 AppStorage 键，供需要在原地刷新的页面监听。 */
   static readonly SWITCH_TICK_KEY: string = 'accountSwitchTick';
@@ -233,6 +240,49 @@ export class AccountManager {
     // 未读消息属账号级数据，登录完成后刷新，避免沿用上一账号的角标
     NotificationService.refreshUnreadCount();
     return attempt;
+  }
+
+  /**
+   * 需要展示在「快速切换」里的书库账号：排除 SoNovel（它只是全局第三方书源地址，
+   * 不参与书库身份切换），并按保存顺序返回。
+   */
+  static switchableAccounts(): AccountRecord[] {
+    const records = AccountStore.list();
+    const result: AccountRecord[] = [];
+    for (let i = 0; i < records.length; i++) {
+      if (records[i].serverKind !== ServerKind.SONOVEL) {
+        result.push(records[i]);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * 切换账号的**完整流程**（唯一的切换入口，配置页与快速切换都走它）。
+   *
+   * 顺序不能改：
+   * 1. `activate` 应用身份并自动登录（登录必须先完成，`refreshUnreadCount` 会并发发起另一轮登录，
+   *    与登录共用同一个 cookie jar，顺序反了会偶发失败）；
+   * 2. 登录成功后再按服务器实际响应自愈 `serverKind`（用户选错类型时整类端点会走错）；
+   *    登录失败则跳过探测，避免对不可达的服务器再发一轮请求。
+   *
+   * 返回：`record` 为切换后的账号，`corrected` 表示发生了类型自愈。
+   */
+  static async switchTo(id: string): Promise<AccountSwitchOutcome> {
+    const record = AccountStore.find(id);
+    if (record === null) {
+      const missing: AccountSwitchOutcome = {
+        attempt: { ok: false, reason: '账号不存在' }, record: null, corrected: false,
+      };
+      return missing;
+    }
+    const attempt = await AccountManager.activate(id);
+    let corrected = false;
+    if (attempt.ok) {
+      corrected = await AccountManager.syncServerKindByProbe();
+    }
+    const outcome: AccountSwitchOutcome = { attempt: attempt, record: record, corrected: corrected };
+    return outcome;
   }
 
   /** 广播账号切换，供 AppStorage 监听方原地刷新（主要靠调用方重启导航栈重渲染）。 */

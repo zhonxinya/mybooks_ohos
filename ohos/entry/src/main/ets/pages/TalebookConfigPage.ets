@@ -1,5 +1,5 @@
 import { PageScaffold, PrimaryButton, SecondaryButton } from '../components';
-import { AccountManager } from '../services/AccountManager';
+import { AccountManager, AccountSwitchOutcome } from '../services/AccountManager';
 import { AccountStore } from '../services/AccountStore';
 import { ServerKind, ServerRegistry } from '../services/ServerProfile';
 import { TalebookService } from '../services/TalebookService';
@@ -241,23 +241,21 @@ struct TalebookConfigPage {
     try {
       const record = AccountStore.find(id);
       const name = record === null ? '' : AccountManager.displayNameOf(record);
-      const attempt = await AccountManager.activate(id);
-      // 按服务器实际响应自愈类型：用户选错（如把 talebook 选成 MyBooks）时，
-      // 管理概览等功能会整类走错，这里自动纠正后再重建导航栈
-      const corrected: boolean = await AccountManager.syncServerKindByProbe();
-      if (attempt.ok) {
+      // 切换流程（含类型自愈）由 AccountManager 统一实现，快速切换与配置页共用同一套语义
+      const outcome: AccountSwitchOutcome = await AccountManager.switchTo(id);
+      if (outcome.attempt.ok) {
         // 整栈重建：各页面 aboutToAppear 会读取新账号配置并重新请求
         this.getUIContext().getRouter().clear();
         this.getUIContext().getRouter().replaceUrl({ url: 'pages/MainTabs' });
-        this.toast(corrected
+        this.toast(outcome.corrected
           ? `${successHint}：${name}（已按服务器实际类型识别为 ${ServerRegistry.profile().displayName}）`
           : `${successHint}：${name}`);
         return;
       }
       // 自动登录失败：登录页已移除，这里**留在本页**提示（页面若被 replaceUrl 销毁，红字与 toast 用户都看不到），
       // 用户可立即核对并重新保存该账号
-      this.toast(`已切换到 ${name}：${attempt.reason}`);
-      this.message = `自动登录失败（${name}）：${attempt.reason}。请核对地址、用户名与密码后重新保存。`;
+      this.toast(`已切换到 ${name}：${outcome.attempt.reason}`);
+      this.message = `自动登录失败（${name}）：${outcome.attempt.reason}。请核对地址、用户名与密码后重新保存。`;
       this.isError = true;
     } finally {
       this.busy = false;
