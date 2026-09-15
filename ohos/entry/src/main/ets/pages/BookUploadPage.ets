@@ -611,7 +611,8 @@ struct BookUploadPage {
     }
   }
 
-  private statusLabel(item: UploadItem): string {
+  /** 条目状态文案（文件大小另外单独展示，不再混在一行里）。 */
+  private statusWord(item: UploadItem): string {
     if (item.status === ITEM_UPLOADING) {
       return item.progressText.length > 0 ? `上传中… ${item.progressText}` : '上传中…';
     }
@@ -621,12 +622,12 @@ struct BookUploadPage {
     if (item.status === ITEM_FAILED) {
       return '失败';
     }
-    return BookUploadService.formatSize(item.size);
+    return '待上传';
   }
 
   private statusColor(item: UploadItem): ResourceColor {
     if (item.status === ITEM_UPLOADING) {
-      return $r('app.color.text_secondary');
+      return $r('app.color.brand_primary');
     }
     if (item.status === ITEM_SUCCESS) {
       return $r('app.color.success');
@@ -637,6 +638,158 @@ struct BookUploadPage {
     return $r('app.color.text_secondary');
   }
 
+  /** 状态图标底色：与文字色同色系的浅色块，避免用 Opacity/Clip 触发离屏合成。 */
+  private statusBackground(item: UploadItem): ResourceColor {
+    if (item.status === ITEM_SUCCESS) {
+      return $r('app.color.success_light');
+    }
+    if (item.status === ITEM_FAILED) {
+      return $r('app.color.error_light');
+    }
+    return $r('app.color.brand_primary_light');
+  }
+
+  private statusIcon(item: UploadItem): Resource {
+    if (item.status === ITEM_SUCCESS) {
+      return $r('sys.symbol.checkmark_circle_fill');
+    }
+    if (item.status === ITEM_FAILED) {
+      return $r('sys.symbol.xmark');
+    }
+    return $r('sys.symbol.doc_text');
+  }
+
+  /** 顶部提示条配色：batchHint 是纯文本状态位，按文案判定失败/成功/其余。 */
+  private hintTone(): string {
+    if (this.batchHint.includes('失败') || this.batchHint.includes('错误')) {
+      return 'error';
+    }
+    if (this.batchHint.includes('已提交') || this.batchHint.includes('完成')) {
+      return 'success';
+    }
+    return 'info';
+  }
+
+  private hintBackground(): ResourceColor {
+    const tone = this.hintTone();
+    if (tone === 'error') {
+      return $r('app.color.error_light');
+    }
+    if (tone === 'success') {
+      return $r('app.color.success_light');
+    }
+    return $r('app.color.brand_primary_light');
+  }
+
+  private hintColor(): ResourceColor {
+    const tone = this.hintTone();
+    if (tone === 'error') {
+      return $r('app.color.error');
+    }
+    if (tone === 'success') {
+      return $r('app.color.success');
+    }
+    return $r('app.color.brand_primary');
+  }
+
+  /** 已选文件合计大小，用于列表标题行的「共 X」。 */
+  private totalSizeText(): string {
+    let bytes = 0;
+    for (const item of this.items) {
+      bytes += item.size;
+    }
+    return BookUploadService.formatSize(bytes);
+  }
+
+  @Builder
+  hintBanner() {
+    if (this.batchHint.length > 0) {
+      Text(this.batchHint)
+        .fontSize(12)
+        .fontColor(this.hintColor())
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+        .borderRadius($r('app.float.chip_radius'))
+        .backgroundColor(this.hintBackground())
+        .maxLines(3)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .margin({ left: 16, right: 16, top: 8 });
+    }
+  }
+
+  /** 选择文件卡：空态与「继续添加」共用同一块，点击整卡即拉起系统文件选择器。 */
+  @Builder
+  pickCard() {
+    Column({ space: 6 }) {
+      Column() {
+        SymbolGlyph($r('sys.symbol.arrowshape_turn_up_right'))
+          .fontSize(26)
+          .fontColor([$r('app.color.on_brand')]);
+      }
+      .width(56)
+      .height(56)
+      .justifyContent(FlexAlign.Center)
+      .borderRadius(28)
+      .backgroundColor($r('app.color.brand_primary'))
+      .margin({ bottom: 6 });
+
+      Text(this.items.length === 0 ? '选择书籍文件' : '继续添加文件')
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'));
+      Text('支持 EPUB / MOBI / AZW3 / TXT / PDF / DOCX，可多选')
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'));
+      Text('小文件走批量上传，超过 8MB 自动分块')
+        .fontSize(12)
+        .fontColor($r('app.color.text_tertiary'));
+
+      // 添加实体书（ISBN 联网查询）为 MyBooks 专有端点，talebook 上不显示该入口
+      if (ServerRegistry.supports(ServerFeature.BOOK_ISBN_ADD)) {
+        TextButton({
+          label: '添加实体书（ISBN）',
+          onTap: () => {
+            this.isbnError = '';
+            this.showIsbnSheet = true;
+          },
+        });
+      }
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 24, bottom: 16 })
+    .borderRadius($r('app.float.card_radius'))
+    .backgroundColor($r('app.color.card_background'))
+    .border({
+      width: 1,
+      color: $r('app.color.divider'),
+      radius: $r('app.float.card_radius'),
+    })
+    .onClick(() => {
+      if (this.uploading) {
+        return;
+      }
+      this.addFiles().catch((e: Object) => {
+        this.toast(`选择文件失败：${e}`);
+      });
+    });
+  }
+
+  @Builder
+  listHeader() {
+    Row() {
+      Text(this.uploading ? '上传中，请勿离开本页' : '已选文件')
+        .fontSize(12)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_secondary'));
+      Blank();
+      Text(`${this.items.length} 个 · 共 ${this.totalSizeText()} · 待上传 ${this.pendingCount()}`)
+        .fontSize(12)
+        .fontColor($r('app.color.text_tertiary'));
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 4, bottom: 6 });
+  }
+
   @Builder
   itemMeta(item: UploadItem) {
     Text(item.name)
@@ -644,10 +797,17 @@ struct BookUploadPage {
       .fontColor($r('app.color.text_primary'))
       .maxLines(1)
       .textOverflow({ overflow: TextOverflow.Ellipsis });
-    Text(this.statusLabel(item))
-      .fontSize(12)
-      .fontColor(this.statusColor(item))
-      .maxLines(1);
+    Row({ space: 8 }) {
+      Text(this.statusWord(item))
+        .fontSize(11)
+        .fontColor(this.statusColor(item))
+        .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+        .borderRadius($r('app.float.badge_radius'))
+        .backgroundColor(this.statusBackground(item));
+      Text(BookUploadService.formatSize(item.size))
+        .fontSize(12)
+        .fontColor($r('app.color.text_tertiary'));
+    };
     if (item.status === ITEM_UPLOADING && item.progress > 0) {
       Progress({ value: item.progress, total: 100, type: ProgressType.Linear })
         .width('100%')
@@ -655,7 +815,8 @@ struct BookUploadPage {
         .color($r('app.color.brand_primary'))
         .backgroundColor($r('app.color.divider'));
     }
-    if (item.message.length > 0) {
+    // 成功/待上传不再重复状态文案，只在失败时展示服务端返回的原因
+    if (item.status === ITEM_FAILED && item.message.length > 0) {
       Text(item.message)
         .fontSize(12)
         .fontColor($r('app.color.error'))
@@ -691,85 +852,59 @@ struct BookUploadPage {
         });
       }
     }
+    .width('100%')
+    .justifyContent(FlexAlign.End);
   }
 
   @Builder
   uploadContent() {
     Column() {
-      if (this.batchHint.length > 0) {
-        Text(this.batchHint)
-          .fontSize(12)
-          .fontColor($r('app.color.on_brand'))
+      this.hintBanner();
+      Column({ space: 10 }) {
+        this.pickCard();
+        if (this.items.length > 0) {
+          this.listHeader();
+          List({ space: 8 }) {
+            ForEach(this.items, (item: UploadItem) => {
+              ListItem() {
+                Column({ space: 6 }) {
+                  Row({ space: 12 }) {
+                    Column() {
+                      SymbolGlyph(this.statusIcon(item))
+                        .fontSize(20)
+                        .fontColor([this.statusColor(item)]);
+                    }
+                    .width(36)
+                    .height(36)
+                    .justifyContent(FlexAlign.Center)
+                    .borderRadius(18)
+                    .backgroundColor(this.statusBackground(item));
+
+                    Column({ space: 4 }) {
+                      this.itemMeta(item);
+                    }
+                    .alignItems(HorizontalAlign.Start)
+                    .layoutWeight(1);
+                  }
+                  .width('100%');
+
+                  this.itemActions(item);
+                }
+                .width('100%')
+                .padding($r('app.float.card_padding'))
+                .borderRadius($r('app.float.card_radius'))
+                .backgroundColor($r('app.color.card_background'));
+              }
+            }, (item: UploadItem) =>
+            `upload-${item.id}-${item.status}-${item.progress}-${item.progressText}-${item.message}`);
+          }
           .width('100%')
-          .padding({ left: 16, right: 16, top: 4 })
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
-      }
-      Row({ space: 8 }) {
-        Text(this.uploading
-          ? (this.batchImportId > 0 ? '批量导入中，可取消或等待完成' : '正在上传，请勿离开本页')
-          : '小文件走批量上传；超过 8MB 仍分块上传')
-          .fontSize(12)
-          .fontColor($r('app.color.text_secondary'))
           .layoutWeight(1)
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
-        // 添加实体书（ISBN 联网查询）为 MyBooks 专有端点，talebook 上不显示该入口
-        if (ServerRegistry.supports(ServerFeature.BOOK_ISBN_ADD)) {
-          TextButton({
-            label: '添加实体书',
-            onTap: () => {
-              this.isbnError = '';
-              this.showIsbnSheet = true;
-            },
-          });
+          .padding({ bottom: 8 });
         }
-        TextButton({
-          label: '选择文件',
-          onTap: () => {
-            this.addFiles().catch((e: Object) => {
-              this.toast(`选择文件失败：${e}`);
-            });
-          },
-        });
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 8, bottom: 8 });
-
-      if (this.items.length === 0) {
-        Column({ space: 12 }) {
-          Text('📚')
-            .fontSize(48);
-          Text('还没有选择书籍文件')
-            .fontSize(14)
-            .fontColor($r('app.color.text_secondary'));
-        }
-        .width('100%')
-        .padding({ top: 80 })
-      } else {
-        List({ space: 8 }) {
-          ForEach(this.items, (item: UploadItem) => {
-            ListItem() {
-              Row({ space: 10 }) {
-                Column({ space: 3 }) {
-                  this.itemMeta(item);
-                }
-                .alignItems(HorizontalAlign.Start)
-                .layoutWeight(1);
-                this.itemActions(item);
-              }
-              .width('100%')
-              .padding(12)
-              .borderRadius($r('app.float.card_radius'))
-              .backgroundColor($r('app.color.card_background'));
-            }
-          }, (item: UploadItem) =>
-          `upload-${item.id}-${item.status}-${item.progress}-${item.progressText}-${item.message}`);
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .padding({ left: 16, right: 16 });
-      }
+      .padding({ left: 16, right: 16, top: 8 });
     }
     .width('100%')
     .height('100%');
