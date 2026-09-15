@@ -10,6 +10,7 @@ import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { HomeBook, ReadingDashboard, formatDuration } from '../models/HomeModels';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
 interface BookSummary {
   id: number;
@@ -54,6 +55,8 @@ export struct BooksTabPage {
   /** 首页书单推荐（/api/booklists/homepage，服务端挑置顶 > 我点赞的 > 其余公开，最多 2 个）。 */
   @State homeBooklists: BookListSummary[] = [];
   @State isRefreshing: boolean = false;
+  /** 下拉刷新的重入保护：isRefreshing 由 Refresh 组件先置 true，不能拿它判断重入。 */
+  private refreshInFlight: boolean = false;
   private lastLoadTime: number = 0;
 
   aboutToAppear(): void {
@@ -360,20 +363,37 @@ export struct BooksTabPage {
     this.loadBooks(false);
   }
 
-  /** 下拉刷新：不清空现有列表，避免闪白 */
+  /**
+   * 下拉刷新：不清空现有列表，避免闪白。
+   *
+   * 注意：ArkUI 的 Refresh 在进入刷新态时会**先**把双向绑定的 refreshing 置为 true，再回调
+   * onRefreshing；所以这里不能用 `this.isRefreshing` 判断重入（那会导致每次下拉都直接返回，
+   * 且 isRefreshing 永远回不到 false，Refresh 认为一直在刷新、后续下拉全部被忽略）。
+   * 重入保护改用独立的 refreshInFlight 标记。
+   */
   private async pullRefresh(): Promise<void> {
-    if (this.isRefreshing || this.loading) {
+    if (this.refreshInFlight) {
       return;
     }
+    this.refreshInFlight = true;
+    // 组件已置 true，这里显式写一次：保证「提前 return」的路径也处于一致的刷新态
     this.isRefreshing = true;
-    this.currentPage = 1;
-    this.hasMore = true;
-    this.errorMessage = '';
-    this.emptyActionLabel = '';
-    TalebookService.invalidateNavCache();
     try {
+      if (this.loading) {
+        // 首屏加载还没结束：本次下拉不重复发请求，但仍要收起指示器
+        hilog.info(0x0000, 'PULLREFRESH', 'novels: skipped, initial load in flight');
+        return;
+      }
+      this.currentPage = 1;
+      this.hasMore = true;
+      this.errorMessage = '';
+      this.emptyActionLabel = '';
+      TalebookService.invalidateNavCache();
       await this.fetchBooksAsync(true, 1);
+      hilog.info(0x0000, 'PULLREFRESH', 'novels: done books=%{public}d random=%{public}d err=%{public}s',
+        this.allBooks.length, this.randomBooks.length, this.errorMessage);
     } finally {
+      this.refreshInFlight = false;
       this.isRefreshing = false;
       this.loading = false;
       this.loadingMore = false;

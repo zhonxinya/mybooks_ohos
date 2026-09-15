@@ -18,6 +18,7 @@ import {
 import {
   NetworkLibraryApi, ONLINE_STATUS_SERIAL, ONLINE_STATUS_FINISHED, ONLINE_STATUS_UNKNOWN,
 } from '../services/NetworkLibraryApi';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
 import { mapTalebookBook } from '../utils/BookMapper';
@@ -29,6 +30,8 @@ struct OnlineLibraryPage {
   @State loading: boolean = true;
   @State loadingMore: boolean = false;
   @State isRefreshing: boolean = false;
+  /** 下拉刷新的重入保护：isRefreshing 由 Refresh 组件先置 true，不能拿它判断重入。 */
+  private refreshInFlight: boolean = false;
   @State isListMode: boolean = false;
   @State catalogItems: BookListItemData[] = [];
   @State currentPage: number = 1;
@@ -137,14 +140,28 @@ struct OnlineLibraryPage {
     void this.loadBooks(false);
   }
 
+  /**
+   * 下拉刷新。Refresh 组件在进入刷新态时会先把双向绑定的 isRefreshing 置 true 再回调
+   * onRefreshing，所以不能用它判断重入（否则每次下拉都直接返回、且 isRefreshing 再也回不到
+   * false，后续下拉会被 Refresh 全部忽略）。重入保护用独立的 refreshInFlight。
+   * @throws 内部调用可能抛出异常，由调用方处理
+   */
   private async pullRefresh(): Promise<void> {
-    if (this.isRefreshing || this.loading) {
+    if (this.refreshInFlight) {
       return;
     }
+    this.refreshInFlight = true;
     this.isRefreshing = true;
     try {
+      if (this.loading) {
+        // 首屏/上一轮加载未结束：不重复请求，但仍要收起指示器
+        hilog.info(0x0000, 'PULLREFRESH', 'online: skipped, previous load in flight');
+        return;
+      }
       await this.loadBooks(true);
+      hilog.info(0x0000, 'PULLREFRESH', 'online: done items=%{public}d', this.catalogItems.length);
     } finally {
+      this.refreshInFlight = false;
       this.isRefreshing = false;
     }
   }
