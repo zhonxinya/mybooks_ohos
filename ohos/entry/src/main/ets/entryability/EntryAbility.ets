@@ -14,13 +14,15 @@ import { ReadKitSession } from '../services/ReadKitSession';
 import { AppTheme } from '../theme/AppTheme';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { UpdateService } from '../services/UpdateService';
+import { AudioPlaybackService, publishAudioLaunch } from '../services/AudioPlaybackService';
 
 const TAG: string = 'EntryAbility';
 
 export default class EntryAbility extends UIAbility {
   /** @throws 内部调用可能抛出异常，由调用方处理 */
-  onCreate(_want: Want, _launchParam: AbilityConstant.LaunchParam): void {
+  onCreate(want: Want, _launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, TAG, 'Ability onCreate');
+    publishAudioLaunch(want);
     WindowAbility.getInstance().initContext(this.context);
     TalebookService.init(this.context.filesDir);
     TalebookCoreService.ensureInitialized(this.context);
@@ -53,6 +55,12 @@ export default class EntryAbility extends UIAbility {
 
   onDestroy(): void {
     hilog.info(0x0000, TAG, 'Ability onDestroy');
+    AudioPlaybackService.getInstance().release();
+  }
+
+  /** 应用已在运行时，从播控中心卡片再次点入：走 onNewWant，同样落到 AppStorage 交给 MainTabs 处理。 */
+  onNewWant(want: Want, _launchParam: AbilityConstant.LaunchParam): void {
+    publishAudioLaunch(want);
   }
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */

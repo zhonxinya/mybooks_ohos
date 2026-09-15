@@ -3,6 +3,7 @@ import { BooksTabPage } from './BooksTabPage';
 import { SettingsPage } from './SettingsPage';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { ReleaseInfo, UpdateCheckResult, UpdateService } from '../services/UpdateService';
+import { consumeAudioLaunch, AudioLaunchRequest } from '../services/AudioPlaybackService';
 
 @Entry
 @Component
@@ -14,6 +15,8 @@ struct MainTabs {
   @StorageProp('authFailureReason') @Watch('onAuthFailureChanged') authFailure: string = '';
   /** 服务端类型被自愈纠正后的提示（值为纠正后的服务端展示名）。 */
   @StorageProp('serverKindNotice') @Watch('onAuthFailureChanged') serverKindNotice: string = '';
+  /** 播控中心卡片回跳请求（键名同 AudioPlaybackService.AUDIO_LAUNCH_KEY，装饰器只接受字面量） */
+  @StorageProp('audioPlayerLaunch') @Watch('onAudioLaunchChanged') audioLaunch: string = '';
   private tabsController: TabsController = new TabsController();
 
   /**
@@ -45,9 +48,45 @@ struct MainTabs {
   onPageShow(): void {
     // 兜底：EntryAbility 先于本页写入失败原因时，@Watch 不会触发，这里主动提示一次
     this.reportAuthFailure();
+    // 冷启动时回跳请求已在 AppStorage 里，@Watch 不会触发，这里主动消费一次
+    this.onAudioLaunchChanged();
     // 仅书架页可见时刷新，避免在设置/小说 Tab 或后台误触发整表重建
     if (this.currentIndex === 0) {
       BookshelfRefresh.notify();
+    }
+  }
+
+  /**
+   * 播控中心卡片点击「回到播放页」：EntryAbility 把 want 参数写进 AppStorage，这里负责跳转。
+   * 播放器本身归 AudioPlaybackService，已在播放页时只需回到前台，不再压栈重复页面。
+   */
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
+  private onAudioLaunchChanged(): void {
+    if (this.audioLaunch.length === 0) {
+      return;
+    }
+    const request: AudioLaunchRequest | null = consumeAudioLaunch();
+    if (request === null) {
+      return;
+    }
+    try {
+      if (this.getUIContext().getRouter().getState().name === 'AudioPlayerPage') {
+        return;
+      }
+      this.getUIContext().getRouter().pushUrl({
+        url: 'pages/AudioPlayerPage',
+        params: {
+          bookId: request.bookId,
+          title: request.title,
+          author: request.author,
+          cover: request.cover,
+          startIndex: request.index,
+          resume: true,
+        },
+      }).catch(() => {
+      });
+    } catch (_error) {
+      // 跳转失败不影响播放（播放已由服务接管）
     }
   }
 
