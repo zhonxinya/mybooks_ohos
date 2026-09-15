@@ -183,7 +183,7 @@ struct BookListDetailPage {
     try {
       const rsp = await BookListApi.toggleLike(this.detail.id);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
-        if (rsp.err === 'user.need_login') {
+        if (TalebookService.isLoginRequiredResult(rsp.err, rsp.msg)) {
           this.toast('请先在「账号与服务器」中配置账号，应用会自动登录');
           this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' });
           return;

@@ -282,6 +282,21 @@ export class TalebookService {
     return err === 'ok';
   }
 
+  /**
+   * 服务端是否明确回复「未登录」。
+   *
+   * 上游 `BaseHandler.auth`（mybooks/talebook 同一套）在会话失效时返回
+   * `{"err":"user.need_login","msg":"请先登录"}`。客户端本地存有凭据不代表服务端会话仍有效
+   * （服务端重启会换掉 secure cookie 签名密钥，本地 `cookies.txt` 随即失效），
+   * 因此需要按**服务端实际回复**判定，而不是只看 `hasAuthCredentials()`。
+   */
+  static isLoginRequiredResult(err?: string, msg?: string): boolean {
+    if (err === 'user.need_login') {
+      return true;
+    }
+    return msg !== undefined && msg.indexOf('请先登录') >= 0;
+  }
+
   static setBaseUrl(service: string, url: string): void {
     entry.setBaseUrl(service, url);
   }
