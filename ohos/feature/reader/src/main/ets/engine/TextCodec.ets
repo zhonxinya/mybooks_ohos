@@ -36,8 +36,14 @@ export class TextCodec {
     return TextCodec.decodeAs(bytes, 'utf-8');
   }
 
-  private static decodeAs(bytes: Uint8Array, encoding: string): string {
+  /** 按显式编码解码（调用方已知编码时用，例如 MOBI 头里的代码页）。 */
+  static decodeAs(bytes: Uint8Array, encoding: string): string {
     return util.TextDecoder.create(encoding).decodeToString(bytes);
+  }
+
+  /** 对字节切片做探测式解码（`decode` 的入参是整块 ArrayBuffer，切片场景用这个）。 */
+  static decodeBytes(bytes: Uint8Array): string {
+    return TextCodec.decode(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
   }
 
   /** 严格 UTF-8 校验：出现非法序列即判定为非 UTF-8（ASCII 视为合法）。 */

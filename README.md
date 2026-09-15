@@ -14,9 +14,9 @@ HarmonyOS 原生多源聚合阅读器（ArkTS UI + C++ 核心层），是 [MyBoo
 - **ArkTS**：页面、导航、Reader Kit 阅读器 UI
 - **C++ NAPI**（`ohos/entry/src/main/cpp/`）：HTTP、Cookie、持久化、Talebook/SoNovel API
 - **Reader Kit**：EPUB / TXT / MOBI / AZW / AZW3 原生阅读
-- **内置阅读器**（`ohos/feature/reader/` 独立 HAR 模块）：自研 EPUB / TXT 阅读，**不依赖系统
+- **内置阅读器**（`ohos/feature/reader/` 独立 HAR 模块）：自研 EPUB / TXT / MOBI 阅读，**不依赖系统
   ReaderKit**，因此在 DevEco 模拟器与未预装 ReaderKit 的发行版上同样可读书。
-  设备无 ReaderKit 时由 `ReaderLauncher` 自动回退到它（MOBI / AZW3 仍需华为手机）；
+  设备无 ReaderKit 时由 `ReaderLauncher` 自动回退到它（AZW3/KF8 与带 DRM 的文件仍需华为手机）；
   也可在「设置 → 阅读 → 阅读器引擎」选择**内置阅读器**，在任意设备上强制使用它。
 
 ## 关联项目
@@ -115,7 +115,7 @@ volumes:
    可保存多个账号，也可为同一服务器添加不同用户；列表内可**切换 / 编辑 / 删除**。
 2. 设置 → 服务 → SoNovel 服务：配置 SoNovel 服务器地址（可选，全局设置不随账号切换）
 3. 设置 → 阅读 → 阅读器引擎：选「自动」优先用系统 Reader Kit，或选「内置阅读器」强制使用自研阅读器
-   （EPUB / TXT，不依赖 Reader Kit，模拟器与未预装 Reader Kit 的发行版也能读书）
+   （EPUB / TXT / MOBI，不依赖 Reader Kit，模拟器与未预装 Reader Kit 的发行版也能读书）
 4. 书架页查看本地下载书籍，点击阅读打开阅读器
 
 客户端同时支持两套服务端（差异由 `ohos/entry/src/main/ets/services/ServerProfile.ets` 统一承载）

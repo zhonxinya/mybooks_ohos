@@ -2,6 +2,8 @@ import { BookFile } from './BookFile';
 import { EpubStructure, EpubStructureData } from './EpubStructure';
 import { imageAspect } from './ImageAspect';
 import { MarkupText, ParsedBlock } from './MarkupText';
+import { MobiChapter } from './MobiChapter';
+import { MobiDoc, MobiDocData, MobiInfo, MobiSection } from './MobiDoc';
 import { TxtParser, TxtSectionData } from './TxtParser';
 import { ReaderBlock, ReaderBlockKind } from '../model/ReaderTypes';
 
@@ -76,4 +78,39 @@ export function loadEpubChapterTask(chapterPath: string, chapterDir: string): Re
 @Concurrent
 export function loadTxtBookTask(filePath: string): TxtSectionData[] {
   return TxtParser.load(filePath);
+}
+
+/**
+ * 打开 MOBI：读 PDB 头 → 记录表 → 记录 0 → 正文记录，解压并切章。
+ *
+ * 只读需要的区间（正文记录在文件里是连续的，一次读完再按记录表切片），
+ * 因此即使 MOBI 有几十 MB 插图，内存里也只留正文。
+ */
+@Concurrent
+export function loadMobiDocTask(filePath: string): MobiDocData {
+  const head: Uint8Array = new Uint8Array(BookFile.readRange(filePath, 0, MobiDoc.HEADER_BYTES));
+  const recordCount: number = MobiDoc.recordCount(head);
+  const list: Uint8Array = new Uint8Array(BookFile.readRange(filePath, MobiDoc.HEADER_BYTES, recordCount * 8));
+  const records: number[] = MobiDoc.recordOffsets(list, recordCount, BookFile.size(filePath));
+  const record0: Uint8Array = new Uint8Array(BookFile.readRange(filePath, records[0], records[1] - records[0]));
+  const info: MobiInfo = MobiDoc.parse(records, record0);
+  const textFrom: number = records[1];
+  const textTo: number = records[info.textRecordCount + 1];
+  const payload: Uint8Array = new Uint8Array(BookFile.readRange(filePath, textFrom, textTo - textFrom));
+  const text: Uint8Array = MobiDoc.assembleText(payload, textFrom, records, info);
+  const sections: MobiSection[] = MobiDoc.sections(info, text);
+  if (sections.length === 0 || text.length === 0) {
+    throw new Error('这本书没有可阅读的正文');
+  }
+  // 只把正文本身带回去（Uint8Array 可能是更大缓冲的视图，必须精确拷贝）
+  const exact: ArrayBuffer = new ArrayBuffer(text.length);
+  new Uint8Array(exact).set(text);
+  return { info: info, records: records, text: exact, sections: sections };
+}
+
+/** 解析 MOBI 的一章：按 `recindex` 落盘插图 → HTML 转文本/图片块。 */
+@Concurrent
+export function loadMobiChapterTask(filePath: string, imageDir: string, records: number[],
+  firstResource: number, section: ArrayBuffer, codepage: number): ReaderBlock[] {
+  return MobiChapter.load(filePath, imageDir, records, firstResource, section, codepage);
 }
