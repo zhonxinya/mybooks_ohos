@@ -25,6 +25,11 @@ const PROVIDER_LABELS: Record<string, string> = {
   'weixin': '微信',
 };
 
+/** 底部面板类型：同一节点只挂一个 bindSheet，靠它切换内容（见 build() 注释）。 */
+const SHEET_NONE: string = 'none';
+const SHEET_EDIT: string = 'edit';
+const SHEET_ADD: string = 'add';
+
 @Entry
 @Component
 struct AdminUsersPage {
@@ -36,8 +41,8 @@ struct AdminUsersPage {
   @State totalCount: number = 0;
   @State quotaEnabled: boolean = false;
   @State saving: boolean = false;
-  @State showEditSheet: boolean = false;
-  @State showAddSheet: boolean = false;
+  @State showSheet: boolean = false;
+  @State sheetKind: string = SHEET_NONE;
   @State editId: number = -1;
   @State editName: string = '';
   @State editActive: boolean = true;
@@ -196,7 +201,8 @@ struct AdminUsersPage {
     this.editCategories = String(user['limit_categories'] ?? '');
     this.editTags = String(user['limit_tags'] ?? '');
     this.editQuota = String(user['download_daily_quota'] ?? -1);
-    this.showEditSheet = true;
+    this.sheetKind = SHEET_EDIT;
+    this.showSheet = true;
   }
 
   private saveEdit(): void {
@@ -229,7 +235,8 @@ struct AdminUsersPage {
         this.saving = false;
         if (rsp.err === undefined || rsp.err === 'ok') {
           this.toast('已保存');
-          this.showEditSheet = false;
+          this.sheetKind = SHEET_NONE;
+          this.showSheet = false;
           void this.loadUsers(true);
         } else {
           this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
@@ -276,7 +283,8 @@ struct AdminUsersPage {
         this.saving = false;
         if (rsp.err === undefined || rsp.err === 'ok') {
           this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '用户添加成功');
-          this.showAddSheet = false;
+          this.sheetKind = SHEET_NONE;
+          this.showSheet = false;
           this.newUsername = '';
           this.newNickname = '';
           this.newEmail = '';
@@ -316,12 +324,30 @@ struct AdminUsersPage {
     }
     .width('100%')
     .height('100%')
-    .bindSheet($$this.showEditSheet, this.editSheet(), {
+    // 同一节点只能挂一个 bindSheet（链式挂多个时只有第一个生效）：
+    // 原先「编辑用户」挂在根节点、「添加用户」挂在 listContent 上，后者永远弹不出来。
+    .bindSheet($$this.showSheet, this.sheetContent(), {
       height: SheetSize.FIT_CONTENT,
       dragBar: true,
       showClose: true,
-      title: { title: `编辑用户 · ${this.editName}` },
+      title: { title: this.sheetTitle() },
+      onDisappear: () => {
+        this.sheetKind = SHEET_NONE;
+      },
     });
+  }
+
+  private sheetTitle(): string {
+    return this.sheetKind === SHEET_ADD ? '添加用户' : `编辑用户 · ${this.editName}`;
+  }
+
+  @Builder
+  sheetContent() {
+    if (this.sheetKind === SHEET_ADD) {
+      this.addSheet();
+    } else {
+      this.editSheet();
+    }
   }
 
   @Builder
@@ -332,7 +358,8 @@ struct AdminUsersPage {
         icon: $r('sys.symbol.plus'),
         variant: 'ghost',
         onTap: () => {
-          this.showAddSheet = true;
+          this.sheetKind = SHEET_ADD;
+          this.showSheet = true;
         },
       });
     }
@@ -373,13 +400,7 @@ struct AdminUsersPage {
       }
     }
     .width('100%')
-    .height('100%')
-    .bindSheet($$this.showAddSheet, this.addSheet(), {
-      height: SheetSize.FIT_CONTENT,
-      dragBar: true,
-      showClose: true,
-      title: { title: '添加用户' },
-    });
+    .height('100%');
   }
 
   @Builder

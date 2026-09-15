@@ -1051,7 +1051,13 @@ struct BookDetailPage {
       const newId = created === undefined ? 0 : Number(created['id'] ?? 0);
       this.newBooklistName = '';
       if (newId > 0) {
-        await BookListApi.addBooks(newId, [this.bookId]);
+        // 加入失败必须让用户看到：原先忽略返回值，服务端拒绝时仍提示「已创建并加入书单」
+        const addRsp = await BookListApi.addBooks(newId, [this.bookId]);
+        if (addRsp.err !== undefined && addRsp.err !== 'ok') {
+          this.toast(apiErrorMessage(addRsp));
+          await this.openBooklistSheet();
+          return;
+        }
       }
       this.toast('已创建并加入书单');
       await this.openBooklistSheet();
