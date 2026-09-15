@@ -6,8 +6,10 @@ import { StorageKeys } from '../common/Constants';
 import { TalebookService } from '../services/TalebookService';
 import { NotificationService } from '../services/NotificationService';
 import { TalebookApi, LibraryStatsResponse, AdminRunningTasksResponse } from '../services/TalebookApi';
-import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
-import { AccountManager } from '../services/AccountManager';
+import { ServerFeature, ServerKind, ServerRegistry } from '../services/ServerProfile';
+import { AccountManager, AccountSwitchOutcome } from '../services/AccountManager';
+import { AccountStore } from '../services/AccountStore';
+import { AccountRecord } from '../models/AccountModels';
 import { DownloadTaskService } from '../services/DownloadTaskService';
 
 /** 折叠分组键：默认全部折叠，仅展开态渲染子项。 */
@@ -98,6 +100,10 @@ export struct SettingsPage {
   @StorageProp('downloadTasksTick') @Watch('refreshBadges') downloadTasksTick: number = 0;
   @State activeTaskCount: number = 0;
   @State expandedSections: string[] = [];
+  /** 切换账号进行中：防止重复触发（面板连点）。 */
+  @State switching: boolean = false;
+  /** 账号快速切换面板开关。 */
+  @State showSwitcher: boolean = false;
   /** 可升级的版本号（由 UpdateService 经 AppStorage 发布，空串表示无提示）。 */
   @StorageProp('update_hint_version') updateAvailableVersion: string = '';
 
@@ -131,6 +137,51 @@ export struct SettingsPage {
       return '新增服务器与账号';
     }
     return active.length > 0 ? `共 ${count} 个账号 · 当前 ${active}` : `共 ${count} 个账号`;
+  }
+
+  /** 可快速切换的书库账号（排除 SoNovel；只有一个账号时不显示入口）。 */
+  private switchCandidates(): AccountRecord[] {
+    return AccountManager.switchableAccounts();
+  }
+
+  private switchSubtitle(): string {
+    const candidates = this.switchCandidates();
+    const names: string[] = [];
+    for (let i = 0; i < candidates.length; i++) {
+      names.push(AccountManager.displayNameOf(candidates[i]));
+    }
+    return names.join(' / ');
+  }
+
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
+  private async switchAccount(record: AccountRecord): Promise<void> {
+    if (this.switching || AccountStore.isActive(record.id)) {
+      return;
+    }
+    this.switching = true;
+    const name: string = AccountManager.displayNameOf(record);
+    this.getUIContext().getPromptAction().showToast({ message: `正在切换到 ${name}…` });
+    try {
+      const outcome: AccountSwitchOutcome = await AccountManager.switchTo(record.id);
+      if (!outcome.attempt.ok) {
+        this.getUIContext().getPromptAction().showToast({
+          message: `切换到 ${name} 失败：${outcome.attempt.reason}。可在「账号与服务器」中核对地址与密码`,
+        });
+        return;
+      }
+      // 切换成功后整栈重建：各页面 aboutToAppear 会读取新账号配置并重新拉取数据
+      this.getUIContext().getRouter().clear();
+      this.getUIContext().getRouter().replaceUrl({ url: 'pages/MainTabs' });
+      this.getUIContext().getPromptAction().showToast({
+        message: outcome.corrected
+          ? `已切换到 ${name}（服务端类型识别为 ${ServerRegistry.profile().displayName}）`
+          : `已切换到 ${name}`,
+      });
+    } catch (error) {
+      this.getUIContext().getPromptAction().showToast({ message: `切换失败：${error}` });
+    } finally {
+      this.switching = false;
+    }
   }
 
   private async loadAdminOverview(): Promise<void> {
@@ -401,6 +452,17 @@ export struct SettingsPage {
                 showChevron: true,
                 onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/NotificationPage' }),
               });
+              if (this.switchCandidates().length > 1) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '切换账号',
+                  subtitle: this.switchSubtitle(),
+                  showChevron: true,
+                  onTap: () => {
+                    this.showSwitcher = true;
+                  },
+                });
+              }
             }
             .width('100%')
             .borderRadius($r('app.float.card_radius'))
@@ -707,6 +769,96 @@ export struct SettingsPage {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.page_background'));
+    .backgroundColor($r('app.color.page_background'))
+    // 账号切换面板：只有一个账号时入口不显示，这里也不渲染
+    .bindSheet($$this.showSwitcher, this.accountSwitcherSheet(), {
+      height: SheetSize.FIT_CONTENT,
+      dragBar: true,
+      showClose: true,
+      title: { title: '切换账号' },
+    });
+  }
+
+  /**
+   * 快速切换账号面板。
+   *
+   * 用 Sheet 而不是 ActionMenu：原生 ActionMenu 在条目较多时超出屏幕且不可滚动
+   * （实测 2 个账号已贴近底部），而这里的账号数没有上限。
+   */
+  @Builder
+  accountSwitcherSheet() {
+    Scroll() {
+      Column() {
+        ForEach(this.switchCandidates(), (record: AccountRecord, index: number) => {
+          if (index > 0) {
+            Divider().color($r('app.color.divider')).strokeWidth(0.5);
+          }
+          this.accountSwitchRow(record);
+        }, (record: AccountRecord) => `switch-${record.id}-${AccountStore.isActive(record.id)}`);
+      }
+      .width('100%')
+      .borderRadius($r('app.float.card_radius'))
+      .backgroundColor($r('app.color.card_background'));
+    }
+    .width('100%')
+    .constraintSize({ maxHeight: 420 })
+    .padding({ left: 16, right: 16, bottom: 8 });
+  }
+
+  @Builder
+  accountSwitchRow(record: AccountRecord) {
+    Row({ space: 12 }) {
+      Column({ space: 4 }) {
+        Row({ space: 6 }) {
+          Text(AccountManager.displayNameOf(record))
+            .fontSize(16)
+            .fontColor($r('app.color.text_primary'));
+          if (AccountStore.isActive(record.id)) {
+            Text('当前')
+              .fontSize(11)
+              .fontColor($r('app.color.on_brand'))
+              .backgroundColor($r('app.color.brand_primary'))
+              .borderRadius($r('app.float.badge_radius'))
+              .padding({ left: 6, right: 6, top: 1, bottom: 1 });
+          }
+        }
+        .width('100%');
+        Text(this.accountRowSubtitle(record))
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1);
+
+      if (!AccountStore.isActive(record.id)) {
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(14)
+          .fontColor([$r('app.color.text_tertiary')]);
+      }
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 14, bottom: 14 })
+    .alignItems(VerticalAlign.Center)
+    .stateStyles({
+      pressed: {
+        .backgroundColor($r('app.color.surface_pressed'))
+      },
+    })
+    .onClick(() => {
+      if (AccountStore.isActive(record.id)) {
+        this.showSwitcher = false;
+        return;
+      }
+      this.showSwitcher = false;
+      void this.switchAccount(record);
+    });
+  }
+
+  /** 账号行副标题：服务端类型 + 主机（不显示用户名以外的凭据信息）。 */
+  private accountRowSubtitle(record: AccountRecord): string {
+    const host: string = record.url.length > 0 ? record.url : '未设置地址';
+    return `${record.serverKind === ServerKind.TALEBOOK ? 'Talebook' : 'MyBooks'} · ${host}`;
   }
 }
