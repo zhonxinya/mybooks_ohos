@@ -30,6 +30,8 @@ struct AudioPlayerPage {
   private audioDir: string = '';
   private switching: boolean = false;
   private sliderDragging: boolean = false;
+  /** 当前播放文件保持打开的 fd（AVPlayer 通过 fdSrc 播放本地文件）。 */
+  private localFd: number = -1;
 
   aboutToAppear(): void {
     const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
@@ -55,7 +57,7 @@ struct AudioPlayerPage {
     }
     const keep = new Set<string>();
     for (let i = Math.max(0, this.currentIndex - 1); i <= Math.min(this.files.length - 1, this.currentIndex + 1); i++) {
-      keep.add(this.files[i].filename);
+      keep.add(this.remoteName(this.files[i]));
     }
     try {
       if (!fs.accessSync(this.audioDir)) {
@@ -113,8 +115,20 @@ struct AudioPlayerPage {
     }
   }
 
-  private localPath(filename: string): string {
-    return `${this.audioDir}/${filename}`;
+  /**
+   * 服务端返回的 `filename` 是 `os.path.splitext()` 去掉扩展名后的名字，真实文件名（含
+   * .mp3/.m4a 等）只在 `url` 字段里；拿 filename 直接请求会 500/404（已实测）。因此下载
+   * 与落盘统一用 url 的最后一段。
+   */
+  private remoteName(file: AudioFileInfo): string {
+    const url: string = file.url ?? '';
+    const slash = url.lastIndexOf('/');
+    const name = slash >= 0 ? url.substring(slash + 1) : url;
+    return name.length > 0 ? name : file.filename;
+  }
+
+  private localPath(file: AudioFileInfo): string {
+    return `${this.audioDir}/${this.remoteName(file)}`;
   }
 
   private hasLocalFile(path: string): boolean {
@@ -126,8 +140,8 @@ struct AudioPlayerPage {
   }
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
-  private async ensureLocalFile(filename: string): Promise<string> {
-    const path = this.localPath(filename);
+  private async ensureLocalFile(file: AudioFileInfo): Promise<string> {
+    const path = this.localPath(file);
     if (this.hasLocalFile(path)) {
       return path;
     }
@@ -138,7 +152,7 @@ struct AudioPlayerPage {
     } catch (_error) {
       fs.mkdirSync(this.audioDir, true);
     }
-    const envelope = await TalebookService.downloadAudioFileAsync(this.bookId, filename, path);
+    const envelope = await TalebookService.downloadAudioFileAsync(this.bookId, this.remoteName(file), path);
     if (!TalebookService.isApiSuccess(envelope)) {
       throw new Error(envelope.error.length > 0 ? envelope.error : '下载失败');
     }
@@ -160,23 +174,42 @@ struct AudioPlayerPage {
     this.sliderValue = 0;
     try {
       const file = this.files[index];
-      const path = await this.ensureLocalFile(file.filename);
+      const path = await this.ensureLocalFile(file);
       if (this.avPlayer === null) {
         this.avPlayer = await media.createAVPlayer();
         this.bindPlayerEvents();
+      } else {
+        // AVPlayer 的 url/fdSrc 只能在 idle 态赋值，切曲前必须先 reset 回 idle
+        await this.avPlayer.reset();
       }
-      this.avPlayer.url = `file://${path}`;
-      await this.avPlayer.prepare();
-      await this.avPlayer.setSpeed(this.speed);
-      await this.avPlayer.play();
-      this.isPlaying = true;
+      // AVPlayer 不接受 file:// 路径（实测报 401 "not fd:// or network address"），本地文件要用
+      // fdSrc 传文件描述符；fd 在播放期间保持打开。赋 fdSrc 后播放器是**异步**进入 initialized
+      // 的，所以这里不直接 prepare：交给 stateChange('initialized') 去驱动（同步 prepare 会报
+      // "current state is not stopped or initialized, unsupport prepare operation"）。
+      this.closeLocalFd();
+      const opened = fs.openSync(path, fs.OpenMode.READ_ONLY);
+      this.localFd = opened.fd;
+      this.avPlayer.fdSrc = { fd: opened.fd };
     } catch (error) {
       this.toast(`播放失败：${error}`);
       this.isPlaying = false;
-    } finally {
       this.trackLoading = false;
+    } finally {
       this.switching = false;
     }
+  }
+
+  /** 关闭当前播放文件的 fd（AVPlayer 已 reset/release 后调用）。 */
+  private closeLocalFd(): void {
+    if (this.localFd < 0) {
+      return;
+    }
+    try {
+      fs.closeSync(this.localFd);
+    } catch (_error) {
+      // 已关闭或无效 fd：忽略
+    }
+    this.localFd = -1;
   }
 
   private bindPlayerEvents(): void {
@@ -185,7 +218,17 @@ struct AudioPlayerPage {
       return;
     }
     player.on('stateChange', (state: media.AVPlayerState) => {
-      if (state === 'completed') {
+      if (state === 'initialized') {
+        // 赋 fdSrc/url 之后播放器异步进入 initialized，必须等这个事件再 prepare。
+        // prepare/play 在这版 SDK 里返回 void（非 Promise），失败通过 'error' 事件/error 态上报。
+        player.prepare();
+      } else if (state === 'prepared') {
+        player.setSpeed(this.speed);
+        player.play();
+      } else if (state === 'playing') {
+        this.isPlaying = true;
+        this.trackLoading = false;
+      } else if (state === 'completed') {
         this.isPlaying = false;
         if (this.currentIndex < this.files.length - 1) {
           void this.loadTrack(this.currentIndex + 1);
@@ -195,6 +238,7 @@ struct AudioPlayerPage {
         }
       } else if (state === 'error') {
         this.isPlaying = false;
+        this.trackLoading = false;
       }
     });
     player.on('timeUpdate', (time: number) => {
@@ -221,6 +265,7 @@ struct AudioPlayerPage {
     if (this.avPlayer !== null) {
       this.avPlayer.release();
       this.avPlayer = null;
+      this.closeLocalFd();
     }
   }
 

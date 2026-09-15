@@ -3,6 +3,8 @@
 #include "curl/curl.h"
 #include "path_util.h"
 
+#include <hilog/log.h>
+
 #include <cerrno>
 #include <cstdio>
 #include <fstream>
@@ -272,6 +274,18 @@ HttpResponse performCurlDownload(const std::string &url, const std::string &dest
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
         result.statusCode = static_cast<int>(status);
         if (result.statusCode < 200 || result.statusCode >= 300) {
+            // 下载诊断：确认实际请求的 URL 与服务端状态码（404 说明文件路径拼错）
+            std::string head;
+            std::ifstream failed(destPath, std::ios::binary);
+            if (failed) {
+                char buf[161] = {0};
+                failed.read(buf, 160);
+                head.assign(buf, static_cast<size_t>(failed.gcount()));
+                failed.close();
+            }
+            OH_LOG_Print(LOG_APP, LOG_INFO, 0xD002, "MyBooksHttp",
+                         "download FAILED http=%{public}d url=%{public}s dest=%{public}s body=%{public}s",
+                         result.statusCode, url.c_str(), destPath.c_str(), head.c_str());
             remove(destPath.c_str());
             result.error = "下载失败，HTTP " + std::to_string(result.statusCode);
         } else {
