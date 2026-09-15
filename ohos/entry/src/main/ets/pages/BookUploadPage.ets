@@ -181,11 +181,18 @@ struct BookUploadPage {
     return `${h1.toString(16)}${h2.toString(16)}`;
   }
 
-  /** 大文件分块上传：逐块写临时文件后上传，服务端收齐后自动合并导入。
-   *  已上传的分块保留在缓存目录，中断后再次上传会先重传缺失分块（断点续传）。
+  /**
+   * 大文件分块上传：逐块写临时文件后上传，服务端按 file_hash 暂存、收齐后在最后一块的响应里
+   * 完成合并导入并返回 book_id。
+   *
+   * 注意：**不能**靠「本地分块文件是否还在」来判断某一块已经传过。旧实现在缓存目录里留着分块
+   * 做「断点续传」，结果同一个文件重传时每一块都被当成「已上传」跳过：一个请求都不发、服务端
+   * 也没合并，界面却报「上传成功」（大文件尤其容易踩到：第一次失败留下了分块，之后怎么点都是
+   * 假的成功）。现在改成用完即删、每次老老实实把所有分块重发一遍。
+   *
    * @throws 内部调用可能抛出异常，由调用方处理
    */
-  private async uploadChunked(item: UploadItem): Promise<void> {
+  private async uploadChunked(item: UploadItem): Promise<boolean> {
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const chunkDir = `${context.cacheDir}/upload/chunks`;
     try {
@@ -201,10 +208,6 @@ struct BookUploadPage {
     try {
       for (let i = 0; i < totalChunks; i++) {
         const chunkPath = `${chunkDir}/${hash}_${i}`;
-        if (fs.accessSync(chunkPath)) {
-          // 该分块之前已上传成功，跳过（断点续传）
-          continue;
-        }
         const start = i * CHUNK_SIZE;
         const length = Math.min(CHUNK_SIZE, item.size - start);
         const buf = new ArrayBuffer(length);
@@ -218,18 +221,30 @@ struct BookUploadPage {
         }
         this.patchItem(item.id, ITEM_UPLOADING, '', 0, `分块 ${i + 1}/${totalChunks}`,
           Math.round(((i + 1) / totalChunks) * 100));
-        const rsp: UploadBookResponse = await TalebookApi.uploadBookChunk(chunkPath, item.name,
-          i, totalChunks, hash);
-        if (rsp.err !== 'ok') {
+        let rsp: UploadBookResponse;
+        try {
+          rsp = await TalebookApi.uploadBookChunk(chunkPath, item.name, i, totalChunks, hash);
+        } finally {
+          // 临时分块用完即删：不留在缓存里，重传时才不会误判成「已上传」
+          BookUploadService.removeStagedFile(chunkPath);
+        }
+        if (rsp.err !== undefined && rsp.err !== 'ok') {
           const msg = apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '分块上传失败';
           this.patchItem(item.id, ITEM_FAILED, msg, Number(rsp.book_id ?? 0), '');
-          return;
+          return false;
+        }
+        if (Number(rsp.book_id ?? 0) > 0) {
+          // 最后一块：服务端已合并并导入（同名同格式已存在时也会带回 book_id，同样算已上传）
+          this.patchItem(item.id, ITEM_SUCCESS, '', Number(rsp.book_id ?? 0), '');
+          BookUploadService.removeStagedFile(item.localPath);
+          BookUploadService.markLibraryDirty();
+          return true;
         }
       }
-      // 收齐分块后服务端在最后一个分块请求中完成合并导入并返回 book_id
-      this.patchItem(item.id, ITEM_SUCCESS, '上传成功', 0, '');
-      BookUploadService.removeStagedFile(item.localPath);
-      BookUploadService.markLibraryDirty();
+      // 分块都返回 ok 却没拿到 book_id：服务端并没有真正合并（例如它那边已经合并过并把临时
+      // 分块删了），此时报失败而不是「上传成功」，避免用户以为传上去了。
+      this.patchItem(item.id, ITEM_FAILED, '服务端未完成合并，请重试', 0, '');
+      return false;
     } finally {
       fs.closeSync(src.fd);
     }
@@ -289,7 +304,15 @@ struct BookUploadPage {
           progress: 100,
         } as UploadItem;
       }
-      if (st === 'invalid' || st === 'missed' || st === 'drop' || st === 'permission' || st === 'failed') {
+      // exist=同名同格式已存在；drop=重复文件（同一批次里已处理过/ISBN 已存在）
+      if (st === 'exist' || st === 'drop') {
+        return {
+          id: item.id, name: item.name, size: item.size, localPath: item.localPath,
+          status: ITEM_SUCCESS, message: st === 'exist' ? '已存在该格式' : '重复文件，已跳过',
+          bookId: bookId, progressText: '', progress: 100,
+        } as UploadItem;
+      }
+      if (st === 'invalid' || st === 'missed' || st === 'permission' || st === 'failed') {
         return {
           id: item.id, name: item.name, size: item.size, localPath: item.localPath,
           status: ITEM_FAILED, message: `导入失败：${st}`, bookId: bookId, progressText: '',
@@ -556,7 +579,7 @@ struct BookUploadPage {
           } else {
             // 无 import_id：视为同步完成
             for (const item of smallQueue) {
-              this.patchItem(item.id, ITEM_SUCCESS, '上传成功', 0, '');
+              this.patchItem(item.id, ITEM_SUCCESS, '', 0, '');
               BookUploadService.removeStagedFile(item.localPath);
             }
             BookUploadService.markLibraryDirty();
@@ -574,7 +597,14 @@ struct BookUploadPage {
     for (const item of largeQueue) {
       this.patchItem(item.id, ITEM_UPLOADING, '', 0, '');
       try {
-        await this.uploadChunked(item);
+        const chunkedOk = await this.uploadChunked(item);
+        if (!chunkedOk) {
+          // 分块通道失败时回退整包上传：部分服务端的 /api/book/upload/chunk 在导入「新书」时
+          // 直接抛错（BookUploadChunk._add_new_book() takes 3 positional arguments but 4 were
+          // given），分块对这类服务器永远传不上去，但整包 /api/book/upload 是好的。
+          this.patchItem(item.id, ITEM_UPLOADING, '', 0, '分块失败，改为整包上传');
+          await this.uploadIndividually([item]);
+        }
       } catch (e) {
         this.patchItem(item.id, ITEM_FAILED, errorText(e), 0, '');
       }
@@ -597,8 +627,10 @@ struct BookUploadPage {
       this.patchItem(item.id, ITEM_UPLOADING, '', 0, '');
       try {
         const rsp: UploadBookResponse = await TalebookApi.uploadBookFile(item.localPath, item.name);
-        if (rsp.err === 'ok') {
-          this.patchItem(item.id, ITEM_SUCCESS, '上传成功', Number(rsp.book_id ?? 0), '');
+        if (rsp.err === 'ok' || rsp.err === 'samebook') {
+          // samebook：服务端已有同名同格式的书，属于「已上传」而不是失败
+          this.patchItem(item.id, ITEM_SUCCESS, rsp.err === 'samebook' ? '已存在该格式' : '',
+            Number(rsp.book_id ?? 0), '');
           BookUploadService.removeStagedFile(item.localPath);
           BookUploadService.markLibraryDirty();
         } else {
@@ -815,11 +847,11 @@ struct BookUploadPage {
         .color($r('app.color.brand_primary'))
         .backgroundColor($r('app.color.divider'));
     }
-    // 成功/待上传不再重复状态文案，只在失败时展示服务端返回的原因
-    if (item.status === ITEM_FAILED && item.message.length > 0) {
+    // 只在文案能补充信息时展示（成功/待上传的状态词已经显示，避免重复一行「上传成功」）
+    if (item.message.length > 0 && item.message !== this.statusWord(item)) {
       Text(item.message)
         .fontSize(12)
-        .fontColor($r('app.color.error'))
+        .fontColor(item.status === ITEM_FAILED ? $r('app.color.error') : $r('app.color.text_secondary'))
         .maxLines(2)
         .textOverflow({ overflow: TextOverflow.Ellipsis });
     }
