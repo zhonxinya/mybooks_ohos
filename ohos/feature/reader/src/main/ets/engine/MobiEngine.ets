@@ -29,6 +29,8 @@ export class MobiEngine implements BookEngine {
   private readonly records: number[];
   private readonly text: Uint8Array;
   private readonly sections: MobiSection[];
+  /** KF8 的 `flow → 图片资源序号` 换算表（KF7 为空）。 */
+  private readonly flowResources: number[];
   private readonly bookTitle: string;
   private readonly catalogItems: ReaderCatalogItem[] = [];
   private readonly cache: Map<number, ReaderChapter> = new Map();
@@ -41,6 +43,7 @@ export class MobiEngine implements BookEngine {
     this.records = data.records;
     this.text = new Uint8Array(data.text);
     this.sections = data.sections;
+    this.flowResources = data.flowResources;
     for (let i = 0; i < data.sections.length; i++) {
       this.catalogItems.push({ index: i, title: data.sections[i].title });
     }
@@ -80,7 +83,8 @@ export class MobiEngine implements BookEngine {
     let blocks: ReaderBlock[] = [];
     try {
       blocks = await taskpool.execute(loadMobiChapterTask, this.filePath, this.imageDir, this.records,
-        this.info.firstResource, bytes.buffer as ArrayBuffer, this.info.codepage) as ReaderBlock[];
+        this.info.firstResource, bytes.buffer as ArrayBuffer, this.info.codepage,
+        this.flowResources) as ReaderBlock[];
     } catch (error) {
       hilog.error(0x0000, TAG, 'chapter %{public}d failed: %{public}s', safeIndex, (error as Error).message);
       blocks = [MobiEngine.textBlock('（本章内容读取失败）')];

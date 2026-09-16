@@ -14,9 +14,9 @@ import { ReaderBlock, ReaderBlockKind } from '../model/ReaderTypes';
  */
 export class MobiChapter {
   static load(filePath: string, imageDir: string, records: number[], firstResource: number,
-    section: ArrayBuffer, codepage: number): ReaderBlock[] {
+    section: ArrayBuffer, codepage: number, flowResources: number[]): ReaderBlock[] {
     const html: string = MobiDoc.decodeSection(new Uint8Array(section), codepage);
-    const wanted: number[] = MobiDoc.imageRecords(html);
+    const wanted: number[] = MobiDoc.imageRecords(html, flowResources);
     const paths: Map<number, string> = new Map<number, string>();
     for (let i = 0; i < wanted.length; i++) {
       const path: string = MobiImages.ensure(filePath, imageDir, records, firstResource, wanted[i]);
@@ -24,7 +24,8 @@ export class MobiChapter {
         paths.set(wanted[i], path);
       }
     }
-    const parsed: ParsedBlock[] = MarkupText.toBlocks(MobiDoc.replaceImageRecords(html, paths));
+    const parsed: ParsedBlock[] = MarkupText.toBlocks(
+      MobiDoc.replaceImageRecords(html, paths, flowResources));
     const blocks: ReaderBlock[] = [];
     let paragraphIndex: number = 0;
     for (let i = 0; i < parsed.length; i++) {

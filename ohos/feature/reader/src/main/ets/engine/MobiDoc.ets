@@ -8,13 +8,17 @@
  * - Palm Database 头 78 字节 + 每条记录 8 字节的记录表（偏移 4 + 属性 1 + UID 3）；
  *   记录表之后另有 2 字节填充，第一条记录数据从 `78 + 8 * N + 2` 开始；
  * - 记录 0 = PalmDOC 头（16 字节）+ MOBI 头（'MOBI' 起算）+ EXTH（元数据）；
- * - 记录 1..textRecordCount = 压缩正文；其后是图片等资源记录；
+ * - 记录 1..textRecordCount = 压缩正文（PalmDOC 或 HUFF/CDIC）；其后是图片等资源记录；
+ * - 版本 8（KF8 / AZW3）的正文是「骨架 + 片段」，还要读 FDST 与骨架/片段/NCX 索引，
+ *   见 `MobiKf8`；
  * - 目录（KF7）通常是一个 HTML 目录页，条目形如 `<a filepos=0000030995>第一章</a>`，
  *   `filepos` 是**正文字节偏移**，所以章节切分全按字节做，避免与字符偏移混淆。
  */
 import { TextCodec } from './TextCodec';
 import { MarkupText } from './MarkupText';
 import { PalmDoc } from './PalmDoc';
+import { HuffCdic } from './HuffCdic';
+import { MobiKf8, MobiKf8Parts, MobiKf8TocItem } from './MobiKf8';
 
 /** PDB 头长度（记录表紧随其后）。 */
 const PDB_HEADER_BYTES: number = 78;
@@ -55,7 +59,8 @@ export interface MobiInfo {
   codepage: number;
   /** 首个资源（图片）记录号；`recindex` 相对它计数（从 1 开始）。 */
   firstResource: number;
-  /** HUFF/CDIC 记录条数（非 0 表示用了 Huffman 压缩）。 */
+  /** HUFF 表记录号与记录条数（含 HUFF 表本身；compress=17480 时使用）。 */
+  huffOffset: number;
   huffCount: number;
   /** 每条记录尾部数据块个数。 */
   trailers: number;
@@ -63,7 +68,19 @@ export interface MobiInfo {
   multibyte: boolean;
   /** KF8 部分的起始记录号（0 表示纯 KF7）。 */
   kf8Boundary: number;
+  /** 是否为 KF8（MOBI 8）正文：走骨架 + 片段拼装，而不是 KF7 的整篇 HTML。 */
+  kf8: boolean;
+  /** KF8 的 FDST 记录号与 flow 数。 */
+  fdstOffset: number;
+  fdstCount: number;
+  /** KF8 的骨架 / 片段 / NCX 索引记录号（0xFFFFFFFF/越界表示没有）。 */
+  skeletonIndex: number;
+  fragmentIndex: number;
+  ncxIndex: number;
 }
+
+/** 索引记录号缺失时的取值（MOBI 头里以 0xFFFFFFFF 表示「无此索引」）。 */
+export const MOBI_NO_RECORD: number = 0xFFFFFFFF;
 
 /** 章节（按正文字节范围切分）。 */
 export interface MobiSection {
@@ -77,6 +94,8 @@ export interface MobiSection {
 /** 解析一本书所需的全部结果（也是 taskpool 任务的返回结构）。 */
 export interface MobiDocData {
   info: MobiInfo;
+  /** KF8：`flow → 图片资源序号` 的换算表（KF7 为空数组）。 */
+  flowResources: number[];
   /** 记录偏移表，长度 = 记录数 + 1（末位为文件长度）。 */
   records: number[];
   /** 解压后的正文（长度 = info.textLength）。 */
@@ -130,10 +149,17 @@ export class MobiDoc {
       version: MobiDoc.u32(record0, 0x24),
       codepage: MobiDoc.u32(record0, 0x1C),
       firstResource: MobiDoc.u32(record0, 0x6C),
+      huffOffset: MobiDoc.u32(record0, 0x70),
       huffCount: MobiDoc.u32(record0, 0x74),
       trailers: 0,
       multibyte: false,
       kf8Boundary: 0,
+      kf8: false,
+      fdstOffset: 0,
+      fdstCount: 0,
+      skeletonIndex: 0,
+      fragmentIndex: 0,
+      ncxIndex: MobiDoc.u32(record0, 0xF4),
     };
     const headerLength: number = MobiDoc.u32(record0, 0x14);
     const titleOffset: number = MobiDoc.u32(record0, 0x54);
@@ -151,6 +177,14 @@ export class MobiDoc {
     if (boundary !== null && boundary.length >= 4) {
       info.kf8Boundary = MobiDoc.u32(boundary, 0);
     }
+    // 版本 8 且没有 KF7 部分（EXTH 121 才表示「前后两部分」）= 纯 KF8 正文
+    info.kf8 = info.version >= 8 && info.kf8Boundary === 0;
+    if (info.kf8 && headerLength >= 0x108) {
+      info.fdstOffset = MobiDoc.u32(record0, 0xC0);
+      info.fdstCount = MobiDoc.u32(record0, 0xC4);
+      info.skeletonIndex = MobiDoc.u32(record0, 0xFC);
+      info.fragmentIndex = MobiDoc.u32(record0, 0xF8);
+    }
     MobiDoc.validate(info, records);
     return info;
   }
@@ -160,15 +194,13 @@ export class MobiDoc {
     if (info.encryption !== 0) {
       throw new Error('这本书带有 DRM 保护，内置阅读器无法打开');
     }
-    if (info.compression === PalmDoc.COMPRESSION_HUFF || info.huffCount > 0) {
-      throw new Error('这本书使用 HUFF/CDIC 压缩，内置阅读器暂不支持');
-    }
     if (info.compression !== PalmDoc.COMPRESSION_PALMDOC &&
-      info.compression !== PalmDoc.COMPRESSION_NONE) {
+      info.compression !== PalmDoc.COMPRESSION_NONE &&
+      info.compression !== PalmDoc.COMPRESSION_HUFF) {
       throw new Error(`不支持的 MOBI 压缩方式（${info.compression}）`);
     }
-    if (info.version >= 8 && info.kf8Boundary === 0) {
-      throw new Error('这本书是 KF8（AZW3）格式，内置阅读器暂不支持');
+    if (info.compression === PalmDoc.COMPRESSION_HUFF && info.huffCount <= 0) {
+      throw new Error('这本书使用 HUFF/CDIC 压缩，但缺少 HUFF 表');
     }
     if (info.textRecordCount <= 0 || info.textLength <= 0) {
       throw new Error('这本书没有可阅读的正文');
@@ -182,7 +214,8 @@ export class MobiDoc {
    * 拼装正文：按记录表逐条裁剪尾部数据 → 解压 → 顺序拼接，并截断到头部声明的长度。
    * `payload` 是正文记录在文件中的连续字节，`base` 为其起始文件偏移。
    */
-  static assembleText(payload: Uint8Array, base: number, records: number[], info: MobiInfo): Uint8Array {
+  static assembleText(payload: Uint8Array, base: number, records: number[], info: MobiInfo,
+    huff: HuffCdic | null): Uint8Array {
     const out: Uint8Array = new Uint8Array(info.textLength);
     let written: number = 0;
     const count: number = Math.min(info.textRecordCount, records.length - 1);
@@ -195,6 +228,11 @@ export class MobiDoc {
       let chunk: Uint8Array = PalmDoc.trimRecord(payload.subarray(from, to), info.trailers, info.multibyte);
       if (info.compression === PalmDoc.COMPRESSION_PALMDOC) {
         chunk = PalmDoc.decompress(chunk);
+      } else if (info.compression === PalmDoc.COMPRESSION_HUFF) {
+        if (huff === null) {
+          throw new Error('缺少 HUFF/CDIC 解压表');
+        }
+        chunk = huff.unpack(chunk);
       }
       const size: number = Math.min(chunk.length, out.length - written);
       out.set(chunk.subarray(0, size), written);
@@ -295,6 +333,66 @@ export class MobiDoc {
     return sections;
   }
 
+  /**
+   * KF8 章节：每个骨架部件一章（部件本身就是原始 XHTML 文件），
+   * 标题优先取 NCX 里指向该部件的条目，取不到时用部件开头的标题或首段。
+   */
+  static kf8Sections(parts: number[][], fragmentParts: number[], toc: MobiKf8TocItem[],
+    text: Uint8Array, codepage: number): MobiSection[] {
+    const sections: MobiSection[] = [];
+    for (let i = 0; i < parts.length; i++) {
+      const start: number = parts[i][0];
+      const end: number = parts[i][1];
+      if (end <= start) {
+        continue;
+      }
+      let title: string = '';
+      for (let k = 0; k < toc.length; k++) {
+        const fragment: number = toc[k].fragment;
+        // NCX 的 fid 是片段行号，先换算成部件序号再比对
+        if (fragment >= 0 && fragment < fragmentParts.length && fragmentParts[fragment] === i) {
+          title = toc[k].title;
+          break;
+        }
+      }
+      if (title.length === 0) {
+        title = MobiDoc.headingTitle(text, start, end, codepage, sections.length);
+      }
+      sections.push({
+        title: title.length > MAX_TITLE_LENGTH ? title.substring(0, MAX_TITLE_LENGTH) : title,
+        start: start,
+        end: end,
+      });
+    }
+    return sections;
+  }
+
+  /**
+   * 取一节开头的标题：标题标签 → `<title>` → 首段文字。
+   * 先整段丢掉 `<head>`（含 `<title>`/`<style>`），否则封面页的标题会变成一堆 meta 属性。
+   */
+  private static headingTitle(text: Uint8Array, start: number, end: number, codepage: number,
+    index: number): string {
+    const size: number = Math.min(end - start, TITLE_SAMPLE_BYTES);
+    const raw: string = MobiDoc.decode(text.subarray(start, start + size), codepage);
+    const heading: RegExpExecArray | null = /<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i.exec(raw);
+    if (heading !== null) {
+      const title: string = MobiDoc.cleanLabel(heading[1]);
+      if (title.length > 0) {
+        return title;
+      }
+    }
+    const documentTitle: RegExpExecArray | null = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(raw);
+    if (documentTitle !== null) {
+      const title: string = MobiDoc.cleanLabel(documentTitle[1]);
+      if (title.length > 0) {
+        return title;
+      }
+    }
+    const title: string = MobiDoc.cleanLabel(raw.replace(/<head[\s\S]*?<\/head>/i, ' '));
+    return title.length > 0 ? title : `第${index + 1}节`;
+  }
+
   /** 把「章节起点列表」补成首尾相接的章节区间。 */
   private static layout(marks: MobiSection[], textLength: number): MobiSection[] {
     const unique: MobiSection[] = [];
@@ -356,18 +454,18 @@ export class MobiDoc {
     return MobiDoc.decode(bytes.subarray(start), codepage);
   }
 
-  /** 章节里引用到的图片资源序号（HTML `recindex`，按出现顺序去重）。 */
-  static imageRecords(html: string): number[] {
-    const tags: RegExp = /<img\b[^>]*>/gi;
+  /**
+   * 章节里引用到的图片资源序号（按出现顺序去重）。
+   * KF7 用 `recindex="5"`，KF8 用 `kindle:embed:003K`（base32 编码），两者都归一到「资源序号」。
+   */
+  static imageRecords(html: string, flowResources: number[]): number[] {
+    const tags: RegExp = /<(?:img|image)\b[^>]*>/gi;
     const out: number[] = [];
     let match: RegExpExecArray | null = tags.exec(html);
     while (match !== null) {
-      const recindex: RegExpExecArray | null = /recindex\s*=\s*"?(\d+)"?/i.exec(match[0]);
-      if (recindex !== null) {
-        const value: number = Number.parseInt(recindex[1], 10);
-        if (!Number.isNaN(value) && value > 0 && out.indexOf(value) < 0) {
-          out.push(value);
-        }
+      const value: number = MobiDoc.imageIndex(match[0], flowResources);
+      if (value > 0 && out.indexOf(value) < 0) {
+        out.push(value);
       }
       match = tags.exec(html);
     }
@@ -375,20 +473,50 @@ export class MobiDoc {
   }
 
   /**
+   * 从图片标签里取资源序号，取不到返回 -1。三种写法都要认：
+   * - KF7：`recindex="5"`；
+   * - KF8：`kindle:embed:000O`（base32 编码的资源序号）；
+   * - KF8 插图包装：`kindle:flow:0004?mime=image/svg+xml`（真正的图在 flow 里，
+   *   由 `flowResources` 换算成资源序号）。
+   */
+  private static imageIndex(tag: string, flowResources: number[]): number {
+    const recindex: RegExpExecArray | null = /recindex\s*=\s*"?(\d+)"?/i.exec(tag);
+    if (recindex !== null) {
+      const value: number = Number.parseInt(recindex[1], 10);
+      return Number.isNaN(value) ? -1 : value;
+    }
+    const embed: RegExpExecArray | null = /kindle:embed:([0-9A-Va-v]+)/.exec(tag);
+    if (embed !== null) {
+      return MobiKf8.base32(embed[1]);
+    }
+    const flow: RegExpExecArray | null = /kindle:flow:([0-9A-Va-v]+)/.exec(tag);
+    if (flow === null) {
+      return -1;
+    }
+    const index: number = MobiKf8.base32(flow[1]);
+    return index >= 0 && index < flowResources.length ? flowResources[index] : -1;
+  }
+
+  /**
    * 把 `<img recindex=...>` 换成沙箱里的真实图片路径。
    * 解不出的图片（记录缺失/格式未知）直接去掉标签，避免正文里留下空占位。
    */
-  static replaceImageRecords(html: string, paths: Map<number, string>): string {
-    return html.replace(/<img\b[^>]*>/gi, (tag: string): string => {
-      const recindex: RegExpExecArray | null = /recindex\s*=\s*"?(\d+)"?/i.exec(tag);
-      if (recindex === null) {
+  static replaceImageRecords(html: string, paths: Map<number, string>,
+    flowResources: number[]): string {
+    return html.replace(/<(?:img|image)\b[^>]*>/gi, (tag: string): string => {
+      const value: number = MobiDoc.imageIndex(tag, flowResources);
+      if (value <= 0) {
         return tag;
       }
-      const path: string | undefined = paths.get(Number.parseInt(recindex[1], 10));
+      const path: string | undefined = paths.get(value);
       if (path === undefined) {
         return '';
       }
-      return tag.replace(/recindex\s*=\s*"?\d+"?/i, `src="${path}"`);
+      if (/recindex\s*=/i.test(tag)) {
+        return tag.replace(/recindex\s*=\s*"?\d+"?/i, `src="${path}"`);
+      }
+      // KF8：把 src / xlink:href 里的 kindle:embed / kindle:flow 引用（含 ?mime= 后缀）换成沙箱路径
+      return tag.replace(/kindle:(?:embed|flow):[0-9A-Va-v]+(\?[^"'\s>]*)?/i, path);
     });
   }
 

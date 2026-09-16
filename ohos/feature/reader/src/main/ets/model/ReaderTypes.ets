@@ -26,7 +26,7 @@ export const READER_PARAGRAPH_PREFIX: string = 'builtin:';
 /**
  * 阅读器引擎偏好（宿主写入 preferences，`ReaderLauncher` 读取）：
  * - `auto`：设备有系统 ReaderKit 就用它，否则回退内置阅读器；
- * - `builtin`：只要格式支持（EPUB / TXT / MOBI）就用内置阅读器，便于在任意设备上使用自研渲染。
+ * - `builtin`：只要格式支持（EPUB / TXT / MOBI / AZW / AZW3）就用内置阅读器，便于在任意设备上使用自研渲染。
  */
 export const READER_MODE_PREF_KEY: string = 'reader_mode';
 export const READER_MODE_AUTO: string = 'auto';
@@ -214,8 +214,10 @@ export class ReaderFormats {
   static readonly TXT: string = 'txt';
   static readonly EPUB: string = 'epub';
   static readonly MOBI: string = 'mobi';
-  /** 老版 Kindle 格式，与 MOBI 同容器（KF7/PalmDOC）；AZW3（KF8）仍不支持。 */
+  /** 老版 Kindle 格式，与 MOBI 同容器（KF7 / PalmDOC / HUFF-CDIC）。 */
   static readonly AZW: string = 'azw';
+  /** KF8（MOBI 8）容器：正文为「骨架 + 片段」，图片走 kindle:embed。 */
+  static readonly AZW3: string = 'azw3';
 
   /** 归一化：去空格、去前导点、转小写。 */
   static normalize(format: string): string {
@@ -226,7 +228,7 @@ export class ReaderFormats {
   static supports(format: string): boolean {
     const value = ReaderFormats.normalize(format);
     return value === ReaderFormats.TXT || value === ReaderFormats.EPUB ||
-      value === ReaderFormats.MOBI || value === ReaderFormats.AZW;
+      value === ReaderFormats.MOBI || value === ReaderFormats.AZW || value === ReaderFormats.AZW3;
   }
 }
 

@@ -46,6 +46,16 @@ export class TextCodec {
     return TextCodec.decode(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
   }
 
+  /** 按 MOBI 头里的代码页解码（65001 = UTF-8，其余按 Windows-1252）。 */
+  static decodeCodepage(bytes: Uint8Array, codepage: number): string {
+    const encoding: string = codepage === 65001 || codepage === 65002 ? 'utf-8' : 'windows-1252';
+    try {
+      return TextCodec.decodeAs(bytes, encoding);
+    } catch (_error) {
+      return TextCodec.decodeBytes(bytes);
+    }
+  }
+
   /** 严格 UTF-8 校验：出现非法序列即判定为非 UTF-8（ASCII 视为合法）。 */
   private static isUtf8(bytes: Uint8Array): boolean {
     let i = 0;

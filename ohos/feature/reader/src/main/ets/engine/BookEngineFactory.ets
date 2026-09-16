@@ -18,8 +18,9 @@ export class BookEngineFactory {
     if (format === ReaderFormats.TXT) {
       return TxtEngine.load(options.filePath, options.title);
     }
-    // MOBI 与 AZW 是同一个 PalmDOC/MOBI 容器，共用一套解析
-    if (format === ReaderFormats.MOBI || format === ReaderFormats.AZW) {
+    // MOBI / AZW / AZW3 是同一个 Palm 容器（AZW3 为 KF8 正文），共用一套解析
+    if (format === ReaderFormats.MOBI || format === ReaderFormats.AZW ||
+      format === ReaderFormats.AZW3) {
       return MobiEngine.open(options.filePath, options.title, options.cacheDir);
     }
     throw new Error(`内置阅读器暂不支持 ${format.toUpperCase()} 格式`);

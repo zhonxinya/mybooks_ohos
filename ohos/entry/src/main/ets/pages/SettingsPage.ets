@@ -264,7 +264,7 @@ export struct SettingsPage {
       title: '阅读器引擎',
       buttons: [
         { text: '自动（优先系统阅读器）', color: '#007DFF' },
-        { text: '内置阅读器（EPUB / TXT / MOBI）', color: '#007DFF' },
+        { text: '内置阅读器（EPUB / TXT / MOBI / AZW3）', color: '#007DFF' },
       ],
     }).then((result) => {
       const modes: string[] = [READER_MODE_AUTO, READER_MODE_BUILTIN];
@@ -385,7 +385,7 @@ export struct SettingsPage {
             Column() {
               SettingCell({
                 title: '阅读器引擎',
-                subtitle: '内置阅读器不依赖系统 ReaderKit，支持 EPUB / TXT / MOBI，位置与设置与系统阅读器互通',
+                subtitle: '内置阅读器不依赖系统 ReaderKit，支持 EPUB / TXT / MOBI / AZW / AZW3，位置与设置与系统阅读器互通',
                 showChevron: true,
                 onTap: () => this.showReaderModePicker(),
               });
