@@ -264,10 +264,22 @@ struct AdminToolboxPage {
     }
   }
 
+  /**
+   * 是否可启停/卸载：服务端只允许非内置工具（`type=tool`，zip 安装的），
+   * 内置工具（`type=builtin`）调 enable/disable/uninstall 一律 403「内置工具不支持启用/禁用」。
+   */
+  private isManageable(tool: Record<string, Object>): boolean {
+    return String(tool['type'] ?? '') === 'tool';
+  }
+
   /** 长按卡片：管理菜单（启用/停用、卸载）。打开工具走单击，不再占菜单位置。 */
   private showInstalledActions(tool: Record<string, Object>): void {
     const toolId = String(tool['id'] ?? '');
     if (toolId.length === 0 || this.workingId.length > 0) {
+      return;
+    }
+    if (!this.isManageable(tool)) {
+      this.toast('内置工具随服务端版本提供，不支持启停或卸载');
       return;
     }
     const disabled = String(tool['status'] ?? '') === 'disabled';
@@ -312,6 +324,11 @@ struct AdminToolboxPage {
         this.openToolPage(toolId);
       }
     }).catch(() => {});
+  }
+
+  /** 卡片底部的版本与作者行。 */
+  private versionLine(tool: Record<string, Object>): string {
+    return `版本 ${String(tool['revision'] ?? '')} · ${String(tool['author'] ?? '')}`;
   }
 
   private statusLabel(status: string): string {
@@ -445,7 +462,7 @@ struct AdminToolboxPage {
           .textOverflow({ overflow: TextOverflow.Ellipsis });
       }
 
-      Text(`版本 ${String(tool['revision'] ?? '')} · ${String(tool['author'] ?? '')} · 单击进入，长按管理`)
+      Text(this.versionLine(tool) + (this.isManageable(tool) ? ' · 单击进入，长按管理' : ' · 单击进入'))
         .fontSize(12)
         .fontColor($r('app.color.text_tertiary'));
     }
