@@ -417,26 +417,28 @@ export class MobiDoc {
 
   /** 把「章节起点列表」补成首尾相接的章节区间。 */
   private static layout(marks: MobiSection[], textLength: number): MobiSection[] {
-    const unique: MobiSection[] = [];
+    // 变量名不用 unique：老版本 ArkTS 编译器把 unique 当上下文关键字，
+    // 写 `unique.length` 会直接报 “Type expected” 编译失败（CI 工具链 6.1.0.816 复现）
+    const deduped: MobiSection[] = [];
     for (let i = 0; i < marks.length; i++) {
-      if (unique.length === 0 || marks[i].start > unique[unique.length - 1].start) {
-        unique.push(marks[i]);
+      if (deduped.length === 0 || marks[i].start > deduped[deduped.length - 1].start) {
+        deduped.push(marks[i]);
       }
     }
     const sections: MobiSection[] = [];
-    if (unique.length === 0) {
+    if (deduped.length === 0) {
       return sections;
     }
     // 第一个目录项之前的正文（封面/版权页）单独成章，但只有 `<head>` 时不值得占一章
-    if (unique[0].start >= MIN_LEAD_BYTES) {
-      sections.push({ title: START_TITLE, start: 0, end: unique[0].start });
+    if (deduped[0].start >= MIN_LEAD_BYTES) {
+      sections.push({ title: START_TITLE, start: 0, end: deduped[0].start });
     }
-    for (let i = 0; i < unique.length; i++) {
-      const end: number = i + 1 < unique.length ? unique[i + 1].start : textLength;
-      if (end <= unique[i].start) {
+    for (let i = 0; i < deduped.length; i++) {
+      const end: number = i + 1 < deduped.length ? deduped[i + 1].start : textLength;
+      if (end <= deduped[i].start) {
         continue;
       }
-      sections.push({ title: unique[i].title, start: unique[i].start, end: end });
+      sections.push({ title: deduped[i].title, start: deduped[i].start, end: end });
     }
     if (sections.length === 0) {
       sections.push({ title: START_TITLE, start: 0, end: textLength });
