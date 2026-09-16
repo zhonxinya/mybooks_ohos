@@ -331,12 +331,20 @@ struct AdminToolboxPage {
     return `版本 ${String(tool['revision'] ?? '')} · ${String(tool['author'] ?? '')}`;
   }
 
-  private statusLabel(status: string): string {
-    return status === 'disabled' ? '已禁用' : '已启用';
+  /** 卡片右上角徽标：内置工具服务端恒为启用且不可启停，标「内置」比「已启用」更准确。 */
+  private statusBadge(tool: Record<string, Object>): string {
+    if (!this.isManageable(tool)) {
+      return '内置';
+    }
+    return String(tool['status'] ?? '') === 'disabled' ? '已禁用' : '已启用';
   }
 
-  private statusColor(status: string): ResourceColor {
-    return status === 'disabled' ? $r('app.color.text_tertiary') : $r('app.color.on_brand');
+  private statusBadgeColor(tool: Record<string, Object>): ResourceColor {
+    if (!this.isManageable(tool)) {
+      return $r('app.color.text_tertiary');
+    }
+    return String(tool['status'] ?? '') === 'disabled' ?
+      $r('app.color.text_tertiary') : $r('app.color.on_brand');
   }
 
   build() {
@@ -445,9 +453,9 @@ struct AdminToolboxPage {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1);
-        Text(this.workingId === String(tool['id'] ?? '') ? '处理中' : this.statusLabel(String(tool['status'] ?? '')))
+        Text(this.workingId === String(tool['id'] ?? '') ? '处理中' : this.statusBadge(tool))
           .fontSize(11)
-          .fontColor(this.statusColor(String(tool['status'] ?? '')))
+          .fontColor(this.statusBadgeColor(tool))
           .backgroundColor($r('app.color.page_background'))
           .borderRadius(4)
           .padding({ left: 6, right: 6, top: 2, bottom: 2 });
