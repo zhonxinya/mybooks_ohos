@@ -129,6 +129,7 @@ export function loadMobiDocTask(filePath: string): MobiDocData {
   if (sections.length === 0 || text.length === 0) {
     throw new Error('这本书没有可阅读的正文');
   }
+  MobiDoc.checkText(text);
   // 只把正文本身带回去（Uint8Array 可能是更大缓冲的视图，必须精确拷贝）
   const exact: ArrayBuffer = new ArrayBuffer(text.length);
   new Uint8Array(exact).set(text);

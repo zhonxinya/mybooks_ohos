@@ -241,6 +241,28 @@ export class MobiDoc {
     return written === out.length ? out : out.subarray(0, written);
   }
 
+  /**
+   * 正文自检：正文是 HTML/纯文本，控制字符应当极少。
+   *
+   * 解压算法与文件不兼容（例如 HUFF/CDIC 码表有我们还没覆盖的形态）时，
+   * 解出来的是随机字节——与其把乱码铺满屏幕，不如在打开阶段就给出明确提示。
+   */
+  static checkText(text: Uint8Array): void {
+    if (text.length === 0) {
+      return;
+    }
+    let controls: number = 0;
+    for (let i = 0; i < text.length; i++) {
+      const byte: number = text[i];
+      if (byte < 0x20 && byte !== 0x09 && byte !== 0x0A && byte !== 0x0D) {
+        controls++;
+      }
+    }
+    if (controls * 100 > text.length) {
+      throw new Error('正文解压结果异常（压缩格式不兼容或文件已损坏）');
+    }
+  }
+
   /** 章节切分：优先用目录页的 `filepos` 条目，取不到时按 `<mbp:pagebreak>` 切。 */
   static sections(info: MobiInfo, text: Uint8Array): MobiSection[] {
     const marks: MobiSection[] = MobiDoc.tocSections(info, text);

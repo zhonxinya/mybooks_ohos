@@ -189,15 +189,11 @@ function checkBook(path, modules) {
     problems.push('抽样的章节都解析不出内容');
   }
   // 正文是 HTML/文本，不该出现大量控制字符；解压算法出错时这里会立刻暴露
-  let controls = 0;
-  for (let i = 0; i < text.length; i++) {
-    const byte = text[i];
-    if (byte < 0x20 && byte !== 0x09 && byte !== 0x0A && byte !== 0x0D) {
-      controls++;
-    }
-  }
-  if (text.length > 0 && controls / text.length > 0.01) {
-    problems.push(`正文里控制字符占比过高（${(controls / text.length * 100).toFixed(1)}%），解压可能出错`);
+  // （与设备端 MobiDoc.checkText 同一判定，阈值 1%）
+  try {
+    MobiDoc.checkText(text);
+  } catch (error) {
+    problems.push(error.message);
   }
   return { info, sections, text, blocks, images, problems, samples, tocCount: doc.tocCount };
 }
