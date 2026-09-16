@@ -82,6 +82,67 @@ export class BookFile {
     }
   }
 
+  /** 文件大小（读不到时返回 0）。 */
+  static size(path: string): number {
+    try {
+      return fs.statSync(path).size;
+    } catch (_error) {
+      return 0;
+    }
+  }
+
+  /**
+   * 读取文件的指定区间（MOBI 按记录偏移随机读取用，避免把整本书读进内存）。
+   * 区间会被夹到文件范围内；越界时返回空缓冲。
+   */
+  static readRange(path: string, offset: number, length: number): ArrayBuffer {
+    let file: fs.File | null = null;
+    try {
+      const total = fs.statSync(path).size;
+      const start = Math.max(0, Math.min(offset, total));
+      const end = Math.max(start, Math.min(offset + length, total));
+      const buffer = new ArrayBuffer(end - start);
+      if (end > start) {
+        file = fs.openSync(path, fs.OpenMode.READ_ONLY);
+        // 参数 offset 是「文件指针 + offset」；刚打开时文件指针为 0，即从 start 起读
+        fs.readSync(file.fd, buffer, { offset: start, length: end - start });
+      }
+      return buffer;
+    } catch (error) {
+      throw new Error(`读取文件失败：${(error as Error).message}`);
+    } finally {
+      if (file !== null) {
+        try {
+          fs.closeSync(file);
+        } catch (_error) {
+          // 关闭失败不影响已读到的内容
+        }
+      }
+    }
+  }
+
+  /**
+   * 写入字节（MOBI 图片资源落地用）。
+   * 目标目录需已存在（用 `ensureDir` 创建），本方法只管写文件本身。
+   */
+  static writeBytes(path: string, data: ArrayBuffer): void {
+    let file: fs.File | null = null;
+    try {
+      file = fs.openSync(path, fs.OpenMode.CREATE | fs.OpenMode.READ_WRITE | fs.OpenMode.TRUNC);
+      fs.writeSync(file.fd, data);
+    } catch (error) {
+      throw new Error(`写入文件失败：${(error as Error).message}`);
+    } finally {
+      if (file !== null) {
+        try {
+          fs.closeSync(file);
+        } catch (_error) {
+          // 关闭失败不影响已写入的内容
+        }
+      }
+    }
+  }
+
   /** 拼接路径，避免调用方各自处理分隔符。 */
   static join(base: string, relative: string): string {
     if (relative.length === 0) {

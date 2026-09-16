@@ -1,6 +1,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BookEngine, ReaderFormats, ReaderOpenOptions } from '../model/ReaderTypes';
 import { EpubEngine } from './EpubEngine';
+import { MobiEngine } from './MobiEngine';
 import { TxtEngine } from './TxtEngine';
 
 const TAG: string = 'BookEngineFactory';
@@ -16,6 +17,11 @@ export class BookEngineFactory {
     }
     if (format === ReaderFormats.TXT) {
       return TxtEngine.load(options.filePath, options.title);
+    }
+    // MOBI / AZW / AZW3 是同一个 Palm 容器（AZW3 为 KF8 正文），共用一套解析
+    if (format === ReaderFormats.MOBI || format === ReaderFormats.AZW ||
+      format === ReaderFormats.AZW3) {
+      return MobiEngine.open(options.filePath, options.title, options.cacheDir);
     }
     throw new Error(`内置阅读器暂不支持 ${format.toUpperCase()} 格式`);
   }
