@@ -183,7 +183,20 @@ struct AdminToolboxPage {
       });
   }
 
-    private openToolPage(toolId: string): void {
+  /**
+   * 单击卡片：直接进入工具页面。
+   * 已停用的工具进去也是报错，这里给一句提示，启用入口在长按菜单里。
+   */
+  private openInstalledTool(tool: Record<string, Object>): void {
+    const toolId = String(tool['id'] ?? '');
+    if (String(tool['status'] ?? '') === 'disabled') {
+      this.toast('工具已停用，长按卡片可启用');
+      return;
+    }
+    this.openToolPage(toolId);
+  }
+
+  private openToolPage(toolId: string): void {
     if (toolId === 'mimo_tts') {
       this.getUIContext().getRouter().pushUrl({ url: 'pages/MimoTtsToolPage' }).catch(() => {});
       return;
@@ -251,33 +264,29 @@ struct AdminToolboxPage {
     }
   }
 
+  /**
+   * 是否可启停/卸载：服务端只允许非内置工具（`type=tool`，zip 安装的），
+   * 内置工具（`type=builtin`）调 enable/disable/uninstall 一律 403「内置工具不支持启用/禁用」。
+   */
+  private isManageable(tool: Record<string, Object>): boolean {
+    return String(tool['type'] ?? '') === 'tool';
+  }
+
+  /** 长按卡片：管理菜单（启用/停用、卸载）。打开工具走单击，不再占菜单位置。 */
   private showInstalledActions(tool: Record<string, Object>): void {
     const toolId = String(tool['id'] ?? '');
-    const disabled = String(tool['status'] ?? '') === 'disabled';
-    const enableText = disabled ? '启用工具' : '停用工具';
-    if (toolId === 'mimo_tts' || toolId === 'epub_beautify' || toolId === 'chinese_converter' || toolId === 'bookbarn_acceptor' || toolId === 'minify_pdf' || toolId === 'epub_fixer' || toolId === 'epub_split' || toolId === 'text_replace' || toolId === 'txt_encoding_fixer' || toolId === 'formats_pruning' || toolId === 'author_clean' || toolId === 'text_processor' || toolId === 'merge_formats_tool' || toolId === 'merge_formats' || toolId === 'rare_book_downloader' || toolId === 'review_book_language') {
-      this.getUIContext().getPromptAction().showActionMenu({
-        title: String(tool['name'] ?? ''),
-        buttons: [
-          { text: '打开工具', color: '#007DFF' },
-          { text: enableText, color: '#007DFF' },
-          { text: '卸载工具', color: '#E84026' },
-        ],
-      }).then((result) => {
-        if (result.index === 0) {
-          this.openToolPage(toolId);
-        } else if (result.index === 1) {
-          this.setToolEnabled(tool, disabled);
-        } else if (result.index === 2) {
-          this.uninstallTool(tool);
-        }
-      }).catch(() => {});
+    if (toolId.length === 0 || this.workingId.length > 0) {
       return;
     }
+    if (!this.isManageable(tool)) {
+      this.toast('内置工具随服务端版本提供，不支持启停或卸载');
+      return;
+    }
+    const disabled = String(tool['status'] ?? '') === 'disabled';
     this.getUIContext().getPromptAction().showActionMenu({
       title: String(tool['name'] ?? ''),
       buttons: [
-        { text: enableText, color: '#007DFF' },
+        { text: disabled ? '启用工具' : '停用工具', color: '#007DFF' },
         { text: '卸载工具', color: '#E84026' },
       ],
     }).then((result) => {
@@ -289,26 +298,53 @@ struct AdminToolboxPage {
     }).catch(() => {});
   }
 
+  /** 长按商店卡片：管理菜单；未安装时只有一个动作，直接安装不再弹菜单。 */
   private showStoreActions(tool: Record<string, Object>): void {
-    const installed = Boolean(tool['installed']);
+    const toolId = String(tool['tool_id'] ?? tool['id'] ?? '');
+    if (toolId.length === 0) {
+      return;
+    }
+    if (!Boolean(tool['installed'])) {
+      this.installStoreTool(tool);
+      return;
+    }
+    if (this.workingId.length > 0) {
+      return;
+    }
     this.getUIContext().getPromptAction().showActionMenu({
-      title: String(tool['name'] ?? tool['tool_id'] ?? ''),
+      title: String(tool['name'] ?? toolId),
       buttons: [
-        { text: installed ? '更新 / 重装' : '安装', color: '#007DFF' },
+        { text: '更新 / 重装', color: '#007DFF' },
+        { text: '打开工具', color: '#007DFF' },
       ],
     }).then((result) => {
       if (result.index === 0) {
         this.installStoreTool(tool);
+      } else if (result.index === 1) {
+        this.openToolPage(toolId);
       }
     }).catch(() => {});
   }
 
-  private statusLabel(status: string): string {
-    return status === 'disabled' ? '已禁用' : '已启用';
+  /** 卡片底部的版本与作者行。 */
+  private versionLine(tool: Record<string, Object>): string {
+    return `版本 ${String(tool['revision'] ?? '')} · ${String(tool['author'] ?? '')}`;
   }
 
-  private statusColor(status: string): ResourceColor {
-    return status === 'disabled' ? $r('app.color.text_tertiary') : $r('app.color.on_brand');
+  /** 卡片右上角徽标：内置工具服务端恒为启用且不可启停，标「内置」比「已启用」更准确。 */
+  private statusBadge(tool: Record<string, Object>): string {
+    if (!this.isManageable(tool)) {
+      return '内置';
+    }
+    return String(tool['status'] ?? '') === 'disabled' ? '已禁用' : '已启用';
+  }
+
+  private statusBadgeColor(tool: Record<string, Object>): ResourceColor {
+    if (!this.isManageable(tool)) {
+      return $r('app.color.text_tertiary');
+    }
+    return String(tool['status'] ?? '') === 'disabled' ?
+      $r('app.color.text_tertiary') : $r('app.color.on_brand');
   }
 
   build() {
@@ -417,9 +453,9 @@ struct AdminToolboxPage {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1);
-        Text(this.workingId === String(tool['id'] ?? '') ? '处理中' : this.statusLabel(String(tool['status'] ?? '')))
+        Text(this.workingId === String(tool['id'] ?? '') ? '处理中' : this.statusBadge(tool))
           .fontSize(11)
-          .fontColor(this.statusColor(String(tool['status'] ?? '')))
+          .fontColor(this.statusBadgeColor(tool))
           .backgroundColor($r('app.color.page_background'))
           .borderRadius(4)
           .padding({ left: 6, right: 6, top: 2, bottom: 2 });
@@ -434,7 +470,7 @@ struct AdminToolboxPage {
           .textOverflow({ overflow: TextOverflow.Ellipsis });
       }
 
-      Text(`版本 ${String(tool['revision'] ?? '')} · ${String(tool['author'] ?? '')} · 点按管理`)
+      Text(this.versionLine(tool) + (this.isManageable(tool) ? ' · 单击进入，长按管理' : ' · 单击进入'))
         .fontSize(12)
         .fontColor($r('app.color.text_tertiary'));
     }
@@ -448,7 +484,11 @@ struct AdminToolboxPage {
         .backgroundColor($r('app.color.surface_pressed'))
       },
     })
-    .onClick(() => this.showInstalledActions(tool));
+    .onClick(() => this.openInstalledTool(tool))
+    .gesture(
+      LongPressGesture({ repeat: false })
+        .onAction(() => this.showInstalledActions(tool)),
+    );
   }
 
   @Builder
@@ -480,7 +520,7 @@ struct AdminToolboxPage {
 
       Text(`最新 ${String(tool['latest_revision'] ?? tool['revision'] ?? '')}`
         + (Boolean(tool['installed']) ? ` · 本地 ${String(tool['installed_revision'] ?? '')}` : '')
-        + ' · 点按安装')
+        + (Boolean(tool['installed']) ? ' · 单击更新，长按管理' : ' · 单击安装，长按管理'))
         .fontSize(12)
         .fontColor($r('app.color.text_tertiary'));
     }
@@ -494,6 +534,10 @@ struct AdminToolboxPage {
         .backgroundColor($r('app.color.surface_pressed'))
       },
     })
-    .onClick(() => this.showStoreActions(tool));
+    .onClick(() => this.installStoreTool(tool))
+    .gesture(
+      LongPressGesture({ repeat: false })
+        .onAction(() => this.showStoreActions(tool)),
+    );
   }
 }
