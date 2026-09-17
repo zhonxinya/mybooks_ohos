@@ -43,7 +43,6 @@
 
 | 功能组 | 服务端 | 页面（路由） | API 服务文件 |
 |---|---|---|---|
-| 数据同步 | mybooks | `SyncPage` | `SyncApi` |
 | 批量添加实体书 | mybooks | `AdminBatchAddPage` | `AdminImportApi` |
 | 有声书导入 | mybooks | `AdminAudioImportPage` | `AdminImportApi` |
 | TXT 读取/解析/路径/位置 | mybooks | `TxtBookPage` | `AdminImportApi` |
@@ -62,9 +61,11 @@
 | OPDS 源 | talebook | `AdminOpdsPage` | `AdminOpdsApi` |
 | 服务端维护 | talebook | `AdminMaintenancePage` | `AdminMaintenanceApi` |
 
-入口位置：`数据同步/网络书库/我的书架/在线书库` 与各管理项已统一收进「设置」页的**可折叠分组**（默认折叠）；
+入口位置：`网络书库/我的书架/在线书库` 与各管理项已统一收进「设置」页的**可折叠分组**（默认折叠）；
 `服务端主题` 在「设置 → 外观」；
 `书内标注/TXT 工具/阅读进度与属性/漫画阅读` 在书籍详情的「更多」面板；`我的标注` 在个人中心。
+
+> 2026-09-17：「数据同步」菜单入口与 `SyncPage`/`SyncApi` 已整体移除（`ServerFeature.SYNC` 能力声明保留）。
 
 ### 能力门控收口（2026-09-15）
 

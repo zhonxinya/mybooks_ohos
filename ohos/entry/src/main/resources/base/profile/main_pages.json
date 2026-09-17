@@ -52,7 +52,6 @@
     "pages/UserMemosPage",
     "pages/ExpectedBooksPage",
     "pages/AudioPlayerPage",
-    "pages/SyncPage",
     "pages/AuthorMetaPage",
     "pages/AnnotationsPage",
     "pages/BookAnnotationsPage",
