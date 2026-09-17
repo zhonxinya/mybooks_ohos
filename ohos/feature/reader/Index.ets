@@ -2,6 +2,8 @@
 export { ReaderView } from './src/main/ets/ui/ReaderView';
 export { ReaderControlPanel } from './src/main/ets/ui/ReaderControlPanel';
 export { ReaderChrome } from './src/main/ets/ui/ReaderChrome';
+export { ReaderClock } from './src/main/ets/ui/ReaderClock';
+export { ReaderBattery } from './src/main/ets/ui/ReaderBattery';
 export { ReaderIconButton } from './src/main/ets/ui/ReaderIconButton';
 export { ReaderOverlayBar } from './src/main/ets/ui/ReaderOverlayBar';
 export {
@@ -26,6 +28,7 @@ export {
   READER_MODE_BUILTIN,
   READER_MODE_PREF_KEY,
   READER_ONE_HAND_PREF_KEY,
+  READER_SELECT_MODE_PREF_KEY,
   READER_PANEL_ALOUD,
   READER_PANEL_APPEARANCE,
   READER_PANEL_BOOKMARKS,
@@ -34,6 +37,7 @@ export {
   READER_THEME_LABELS,
   READKIT_FLIP_LABELS,
   READKIT_FLIP_VALUES,
+  ReaderAnnotation,
   ReaderBlock,
   ReaderBlockKind,
   ReaderBookmark,

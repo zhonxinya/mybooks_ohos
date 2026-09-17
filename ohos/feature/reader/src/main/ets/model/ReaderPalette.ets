@@ -92,7 +92,9 @@ export class ReaderPalette {
   /** 目录/设置面板里选中项的底色。 */
   static selectedBackground(theme: ReaderTheme): string {
     if (theme === ReaderTheme.DARK) {
-      return '#3A3A3A';
+      // 不能和 chipIdleBackground 的 '#3A3A3A' 同色：面板里的分段控件（翻页方式/主题/字体）
+      // 只靠底色区分选中项，同色就等于深色模式下看不出当前选的是哪一项。
+      return '#3D4A66';
     }
     if (theme === ReaderTheme.EYE) {
       return '#C5E8C8';
@@ -113,5 +115,19 @@ export class ReaderPalette {
 
   static accentColor(): string {
     return '#007DFF';
+  }
+
+  /**
+   * 划线批注的高亮底色（半透明，压在正文文字下面）。
+   * 三套主题分别取暖黄/青绿/靛蓝，保证与各自纸面底色都拉开对比。
+   */
+  static annotationColor(theme: ReaderTheme): string {
+    if (theme === ReaderTheme.DARK) {
+      return '#594A6B8A';
+    }
+    if (theme === ReaderTheme.EYE) {
+      return '#5981C784';
+    }
+    return '#59FFE082';
   }
 }

@@ -1,4 +1,4 @@
-import { BusinessError } from '@kit.BasicServicesKit';
+import { BusinessError, batteryInfo } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { display, window } from '@kit.ArkUI';
 import { fileIo as fs } from '@kit.CoreFileKit';
@@ -12,7 +12,7 @@ import { ReaderThemeColors } from '../theme/ReaderThemeColors';
 import { TalebookService } from '../services/TalebookService';
 import { ReaderFontService, ReaderFontResolve } from '../services/ReaderFontService';
 import { WindowAbility } from '../entryability/WindowAbility';
-import { ReaderChrome, ReaderOverlayBar } from 'reader';
+import { ReaderChrome, ReaderClock, ReaderBattery, ReaderOverlayBar } from 'reader';
 import {
   READKIT_FLIP_LABELS,
   ReaderFontOption,
@@ -61,6 +61,11 @@ const SCRIM_FADE_MS: number = 280;
 const HINT_FADE_MS: number = 200;
 const READER_OVERLAY_TOP_PADDING_VP: number = 48;
 const READER_OVERLAY_BOTTOM_PADDING_VP: number = 12;
+/** 页脚电量刷新间隔（ms）：与内置阅读器一致，一分钟一次足够。 */
+const BATTERY_REFRESH_MS: number = 60000;
+/** 阅读页顶部章节名 / 页脚的字号（与内置阅读器同一套：15 / 10）。 */
+const READER_HEADER_FONT_SIZE: number = 15;
+const READER_FOOTER_FONT_SIZE: number = 10;
 const START_TIMEOUT_MS: number = 15000;
 const START_TIMEOUT_MSG: string = '打开阅读器超时';
 const RENDER_TIMEOUT_MSG: string = '渲染超时';
@@ -89,6 +94,9 @@ struct ReadKitReader {
   @State private bookTitle: string = '';
   @State private chapterTitle: string = '';
   @State private pageIndicatorText: string = '';
+  /** 页脚电量（-1 表示读取失败，不显示）；与内置阅读器页脚一致。 */
+  @State private batteryLevel: number = -1;
+  @State private batteryCharging: boolean = false;
   @State @Watch('onReadyChanged') private ready: boolean = false;
   @State private fontSize: number = 18;
   @State private lineHeight: number = 1.6;
@@ -99,6 +107,8 @@ struct ReadKitReader {
   @State private readerTheme: ReaderTheme = ReaderTheme.LIGHT;
   @State private flipMode: string = '0';
   @State @Watch('onKeepScreenOnChanged') private keepScreenOn: boolean = false;
+  /** 仅供 `ReaderControlPanel` 的 `@Link` 绑定（本页不展示选词开关，ReaderKit 阅读器无此能力）。 */
+  @State private selectMode: boolean = false;
   @StorageLink('windowWidth') @Watch('onWindowDimensionsChanged') private windowWidth: number = 0;
   @StorageLink('windowHeight') @Watch('onWindowDimensionsChanged') private windowHeight: number = 0;
   private sessionId: string = '';
@@ -139,9 +149,14 @@ struct ReadKitReader {
   private ttsPageTurnTimer: number = -1;
   private ttsChapterStartTimer: number = -1;
   private pendingTtsChapterIndex: number = -1;
+  private batteryTimer: number = -1;
 
   aboutToAppear(): void {
     this.loadReaderPrefs();
+    this.refreshBattery();
+    this.batteryTimer = setInterval(() => {
+      this.refreshBattery();
+    }, BATTERY_REFRESH_MS);
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     ReaderFontService.init(context.filesDir);
     this.restoreResolvedFont();
@@ -1316,6 +1331,10 @@ struct ReadKitReader {
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   aboutToDisappear(): void {
     this.destroyed = true;
+    if (this.batteryTimer >= 0) {
+      clearInterval(this.batteryTimer);
+      this.batteryTimer = -1;
+    }
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.exitImmersiveMode(context);
     if (this.lastResourceIndex >= 0) {
@@ -1352,18 +1371,24 @@ struct ReadKitReader {
     this.controller.releaseBook();
   }
 
+  /**
+   * 阅读页顶部：章节名 + 右上角时间。
+   * 与内置阅读器同一套版式（章节名 15、右侧 HH:mm），两套阅读器观感一致。
+   */
   @Builder
   readingTopBar() {
-    Column() {
+    Row({ space: 8 }) {
       Text(this.chapterTitle.length > 0 ? this.chapterTitle : this.bookTitle)
-        .fontSize(31)
+        .fontSize(READER_HEADER_FONT_SIZE)
         .fontWeight(FontWeight.Medium)
-        .fontColor(ReaderThemeColors.textColor(this.readerTheme))
+        .fontColor(ReaderThemeColors.textHint(this.readerTheme))
+        .layoutWeight(1)
         .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%');
+        .textOverflow({ overflow: TextOverflow.Ellipsis });
+      ReaderClock({ theme: this.readerTheme });
     }
     .width('100%')
+    .alignItems(VerticalAlign.Center)
     .padding({
       left: 20,
       right: 20,
@@ -1392,22 +1417,56 @@ struct ReadKitReader {
     .transition(TransitionEffect.OPACITY.animation({ duration: HINT_FADE_MS, curve: Curve.EaseOut }));
   }
 
+  /**
+   * 阅读页页脚：左侧书名、右侧电量与页码（与内置阅读器的页脚同版式）。
+   * 页码文本由 ReaderKit 的 pageFooterContent 解析而来，拿不到时只显示书名与电量。
+   */
   @Builder
   readingBottomHint() {
-    if (this.pageIndicatorText.length > 0) {
-      Text(this.pageIndicatorText)
-        .fontSize(12)
-        .fontColor(ReaderThemeColors.textHint(this.readerTheme))
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%')
-        .textAlign(TextAlign.Center)
-        .padding({
-          left: 20,
-          right: 20,
-          bottom: READER_OVERLAY_BOTTOM_PADDING_VP,
-        })
-        .hitTestBehavior(HitTestMode.None);
+    Column() {
+      Divider()
+        .color(ReaderThemeColors.divider(this.readerTheme))
+        .strokeWidth(0.5);
+      Row({ space: 10 }) {
+        Text(this.bookTitle.length > 0 ? this.bookTitle : ' ')
+          .fontSize(READER_FOOTER_FONT_SIZE)
+          .fontColor(ReaderThemeColors.textHint(this.readerTheme))
+          .layoutWeight(1)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+        ReaderBattery({
+          theme: this.readerTheme,
+          level: this.batteryLevel,
+          charging: this.batteryCharging,
+        });
+        if (this.pageIndicatorText.length > 0) {
+          Text(this.pageIndicatorText)
+            .fontSize(READER_FOOTER_FONT_SIZE)
+            .fontColor(ReaderThemeColors.textHint(this.readerTheme))
+            .maxLines(1);
+        }
+      }
+      .width('100%')
+      .height(26)
+      .alignItems(VerticalAlign.Center);
+    }
+    .width('100%')
+    .padding({
+      left: 20,
+      right: 20,
+      bottom: READER_OVERLAY_BOTTOM_PADDING_VP,
+    })
+    .hitTestBehavior(HitTestMode.None);
+  }
+
+  /** 页脚电量：读不到时置 -1，页脚不渲染电量块。 */
+  private refreshBattery(): void {
+    try {
+      this.batteryLevel = batteryInfo.batterySOC;
+      this.batteryCharging = batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.ENABLE ||
+        batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.FULL;
+    } catch (_error) {
+      this.batteryLevel = -1;
     }
   }
 
@@ -1538,6 +1597,9 @@ struct ReadKitReader {
                   flipValues: READKIT_FLIP_VALUES,
                   flipValue: $flipMode,
                   keepScreenOn: $keepScreenOn,
+                  // 选词复制只有内置阅读器实现（本页 showOneHandMode=false，开关不显示），
+                  // 这里只为满足 `@Link` 的必填绑定给一个本地状态。
+                  selectMode: $selectMode,
                   showBookmarks: true,
                   showAloud: true,
                   ttsState: this.ttsState,

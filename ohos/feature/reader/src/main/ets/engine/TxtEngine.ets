@@ -46,7 +46,7 @@ export class TxtEngine implements BookEngine {
       engine.chapters.push({
         index: i,
         title: section.title,
-        paragraphs: section.paragraphs,
+        paragraphCount: section.paragraphs.length,
         blocks: blocks,
       });
       engine.catalogItems.push({ index: i, title: section.title });

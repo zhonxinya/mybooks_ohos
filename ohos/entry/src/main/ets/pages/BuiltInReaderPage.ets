@@ -2,8 +2,10 @@ import { common } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
+  ReaderAnnotation,
   READER_FLIP_DEFAULT,
   READER_FLIP_PREF_KEY,
+  READER_SELECT_MODE_PREF_KEY,
   READER_ONE_HAND_PREF_KEY,
   ReaderCallbacks,
   ReaderFlip,
@@ -59,11 +61,13 @@ const DEFAULT_OPTIONS: ReaderOpenOptions = {
     lineHeight: DEFAULT_LINE_HEIGHT,
     theme: ReaderTheme.LIGHT,
     flipMode: READER_FLIP_DEFAULT,
+    selectMode: false,
     keepScreenOn: false,
     oneHandMode: false,
     fontId: 'system',
   },
   fontOptions: [],
+  annotations: [],
 };
 
 const DEFAULT_CALLBACKS: ReaderCallbacks = {
@@ -73,6 +77,7 @@ const DEFAULT_CALLBACKS: ReaderCallbacks = {
   onFontSelected: async (fontId: string): Promise<ReaderFontResolve> => {
     return { fontName: 'system', fontPath: '' };
   },
+  onAnnotationsChanged: (annotations: ReaderAnnotation[]): void => {},
 };
 
 /**
@@ -112,6 +117,7 @@ struct BuiltInReaderPage {
       location: params.location ?? '',
       settings: settings,
       // 内置阅读器用 ArkUI 原生字体栈：只列带 ttf/otf 源的字体（woff2 加载不了会静默回退）
+      annotations: BuiltInReaderPage.loadAnnotations(this.bookId),
       fontOptions: ReaderFontCatalog.listOptions()
         .filter((option: ReaderFontOption): boolean => {
           return option.id === ReaderFontCatalog.SYSTEM_ID || ReaderFontCatalog.hasTtf(option.id);
@@ -131,6 +137,9 @@ struct BuiltInReaderPage {
       onFontSelected: async (fontId: string): Promise<ReaderFontResolve> => {
         const resolved = await ReaderFontService.ensureCached(fontId);
         return { fontName: resolved.fontName, fontPath: resolved.fontPath };
+      },
+      onAnnotationsChanged: (annotations: ReaderAnnotation[]): void => {
+        BuiltInReaderPage.saveAnnotations(this.bookId, annotations);
       },
       onSettingsChanged: (settings: ReaderSettings): void => {
         BuiltInReaderPage.saveSettings(settings);
@@ -220,6 +229,7 @@ struct BuiltInReaderPage {
       flipMode: ReaderFlip.normalize(TalebookService.prefGet(READER_FLIP_PREF_KEY, READER_FLIP_DEFAULT)),
       keepScreenOn: TalebookService.prefGet(KEEP_SCREEN_ON_KEY, 'false') === 'true',
       oneHandMode: TalebookService.prefGet(READER_ONE_HAND_PREF_KEY, 'false') === 'true',
+      selectMode: TalebookService.prefGet(READER_SELECT_MODE_PREF_KEY, 'false') === 'true',
       fontId: BuiltInReaderPage.loadFontId(),
     };
   }
@@ -238,9 +248,41 @@ struct BuiltInReaderPage {
     values[READER_FLIP_PREF_KEY] = ReaderFlip.normalize(settings.flipMode);
     values[KEEP_SCREEN_ON_KEY] = settings.keepScreenOn ? 'true' : 'false';
     values[READER_ONE_HAND_PREF_KEY] = settings.oneHandMode ? 'true' : 'false';
+    values[READER_SELECT_MODE_PREF_KEY] = settings.selectMode ? 'true' : 'false';
     values[READER_FONT_ID_KEY] = settings.fontId.length > 0 ?
       settings.fontId : ReaderFontCatalog.SYSTEM_ID;
     TalebookService.prefSetBatch(values);
+  }
+
+  /**
+   * 读取某本书的划线批注。
+   *
+   * 按书分键存成一段 JSON（与其它阅读偏好同一套偏好存储）；解析失败按「没有批注」处理，
+   * 不能让一条坏数据把阅读页打开都拦掉。
+   */
+  private static loadAnnotations(bookId: string): ReaderAnnotation[] {
+    const raw = TalebookService.prefGet(BuiltInReaderPage.annotationKey(bookId), '');
+    if (raw.length === 0) {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(raw) as ReaderAnnotation[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      hilog.warn(0x0000, TAG, 'loadAnnotations failed: %{public}s', (error as Error).message);
+      return [];
+    }
+  }
+
+  /** 落盘划线批注（阅读器已在内存里限了条数上限，这里按原样写）。 */
+  private static saveAnnotations(bookId: string, annotations: ReaderAnnotation[]): void {
+    const values: Record<string, string> = {};
+    values[BuiltInReaderPage.annotationKey(bookId)] = JSON.stringify(annotations);
+    TalebookService.prefSetBatch(values);
+  }
+
+  private static annotationKey(bookId: string): string {
+    return `reader_annotations_${bookId}`;
   }
 
   private static clamp(value: number, min: number, max: number, fallback: number): number {

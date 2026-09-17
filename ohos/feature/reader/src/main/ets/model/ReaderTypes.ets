@@ -41,10 +41,22 @@ export const READER_FLIP_PREF_KEY: string = 'reader_flip_mode_builtin';
  * 单手模式偏好键。只有内置阅读器实现该模式（点击分区语义不同），因此不与 ReaderKit 共用键名。
  */
 export const READER_ONE_HAND_PREF_KEY: string = 'reader_one_hand_mode_builtin';
+/**
+ * 选词复制偏好键。开启后正文可长按选中/复制，**开启期间滑动不翻页**。
+ *
+ * 为什么要一个模式开关：ArkUI 里 `Text` 一旦设为可选中（`copyOption`），点按与拖动都会被它自己
+ * 吃掉，父组件的翻页手势再也收不到事件（实测矩阵见 `ReaderView` 的手势注释）——
+ * 「可选中正文」与「拖动翻页」只能靠模式切换二选一。
+ */
+export const READER_SELECT_MODE_PREF_KEY: string = 'reader_select_mode_builtin';
 /** 覆盖翻页：新页盖住旧页（默认）。 */
 export const READER_FLIP_COVER: string = 'cover';
+/** 仿真翻页：当前页沿折痕逐步卷起、折痕处投影阴影，下层新页随之露出。 */
+export const READER_FLIP_SIM: string = 'sim';
 /** 左右滑动：新旧页整体平移。 */
 export const READER_FLIP_SLIDE: string = 'slide';
+/** 淡入淡出：目标页在原文之上渐显，跟手时透明度即进度。 */
+export const READER_FLIP_FADE: string = 'fade';
 /** 无动画：点按/滑动后瞬时切换。 */
 export const READER_FLIP_NONE: string = 'none';
 /** 上下滚动：不分页，沿用滚动列表。 */
@@ -59,7 +71,8 @@ export class ReaderFlip {
 
   /** 非法值回落到默认，避免偏好被改坏后整页空白。 */
   static normalize(flipMode: string): string {
-    if (flipMode === READER_FLIP_COVER || flipMode === READER_FLIP_SLIDE ||
+    if (flipMode === READER_FLIP_COVER || flipMode === READER_FLIP_SIM ||
+      flipMode === READER_FLIP_SLIDE || flipMode === READER_FLIP_FADE ||
       flipMode === READER_FLIP_NONE || flipMode === READER_FLIP_SCROLL) {
       return flipMode;
     }
@@ -68,8 +81,14 @@ export class ReaderFlip {
 
   /** 设置面板显示名。 */
   static label(flipMode: string): string {
+    if (flipMode === READER_FLIP_SIM) {
+      return '仿真翻页';
+    }
     if (flipMode === READER_FLIP_SLIDE) {
       return '左右滑动';
+    }
+    if (flipMode === READER_FLIP_FADE) {
+      return '淡入淡出';
     }
     if (flipMode === READER_FLIP_NONE) {
       return '无动画';
@@ -92,7 +111,8 @@ export class ReaderFlip {
 
 /** 分页阅读器的可选翻页方式（顺序即设置面板顺序）。 */
 export const READER_FLIP_OPTIONS: string[] =
-  [READER_FLIP_COVER, READER_FLIP_SLIDE, READER_FLIP_NONE, READER_FLIP_SCROLL];
+  [READER_FLIP_COVER, READER_FLIP_SIM, READER_FLIP_SLIDE, READER_FLIP_FADE,
+    READER_FLIP_NONE, READER_FLIP_SCROLL];
 
 export interface ReaderSettings {
   /** 正文字号，单位 fp。 */
@@ -109,6 +129,8 @@ export interface ReaderSettings {
    * 上下滚动模式下两侧点击改为往下翻一屏。
    */
   oneHandMode: boolean;
+  /** 选词复制：正文可长按选中/复制；开启期间滑动不翻页。 */
+  selectMode: boolean;
   /** 正文字体 id（与 ReaderKit 阅读器共用 
 eader_font_id 偏好；system 表示系统默认）。 */
   fontId: string;
@@ -148,8 +170,12 @@ export interface ReaderBlock {
 export interface ReaderChapter {
   index: number;
   title: string;
-  /** 仅文本段落（滚动模式的百分比、进度统计仍用它）。 */
-  paragraphs: string[];
+  /**
+   * 文本段落数量（滚动模式的百分比、进度统计用它）。
+   * 早先这里存的是整章段落文本数组，与 `blocks` 里的字符串重复持有（同一批 string 再存一个数组），
+   * 对一本几千段的书是纯冗余，改为只留计数。
+   */
+  paragraphCount: number;
   /** 文本 + 图片的有序块，渲染与分页以此为唯一来源。 */
   blocks: ReaderBlock[];
 }
@@ -183,6 +209,26 @@ export interface ReaderOpenOptions {
    * 为空时控制面板不显示字体区块。
    */
   fontOptions: ReaderFontOption[];
+  /** 已保存的划线批注（宿主按书读取后传入）。 */
+  annotations: ReaderAnnotation[];
+}
+
+/**
+ * 一条划线批注。
+ *
+ * 锚点用「章序号 + 段落序号 + 选中的原文」，**不用字符下标**：分页器会把放不下的段落切成
+ * 多块（`PageLayout.consumeText` 只取放得下的前缀），下标在改字号/横竖屏重新分页后会错位，
+ * 而原文片段跟着段落走，重排后照样能定位。
+ */
+export interface ReaderAnnotation {
+  /** 章序号（与 `ReaderChapter.index` 一致）。 */
+  chapterIndex: number;
+  /** 段落序号（`ReaderBlock.paragraphIndex`）。 */
+  paragraphIndex: number;
+  /** 选中的原文：既用来在段落文本里定位，也用于面板展示。 */
+  text: string;
+  /** 创建时间（ms），用于排序。 */
+  createdAt: number;
 }
 
 /** 宿主回调。 */
@@ -198,6 +244,11 @@ export interface ReaderCallbacks {
    * 系统默认字体或不可用时返回空路径。模块只做 ArkUI 注册与应用，不参与下载。
    */
   onFontSelected: (fontId: string) => Promise<ReaderFontResolve>;
+  /**
+   * 划线批注增删时回调（由宿主持久化；宿主自行按书分键）。
+   * 缺省实现为空函数，宿主不实现时批注只存在于本次会话。
+   */
+  onAnnotationsChanged: (annotations: ReaderAnnotation[]) => void;
 }
 
 /** 书籍解析引擎：TXT / EPUB 各自实现。 */

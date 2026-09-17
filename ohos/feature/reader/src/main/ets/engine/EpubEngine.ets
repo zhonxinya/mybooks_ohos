@@ -7,7 +7,9 @@ import { EpubStructure, EpubStructureData } from './EpubStructure';
 import { loadEpubChapterTask, loadEpubStructureTask, prepareExtractDirTask } from './ReaderTasks';
 
 const TAG: string = 'EpubEngine';
-const MAX_CACHED_CHAPTERS: number = 6;
+// 章节文本驻留上限：6 章对长篇小说是几十 MB 级的常驻（每章 blocks 都带全文），
+// 降到 3 章足够覆盖「往回翻一章再翻回来」的常见路径，跳章重解析走 taskpool 不卡 UI。
+const MAX_CACHED_CHAPTERS: number = 3;
 
 /**
  * EPUB 引擎：`zlib` 解压到缓存目录 → 逐章取文。
@@ -91,16 +93,16 @@ export class EpubEngine implements BookEngine {
         safeIndex, (error as Error).message);
       blocks = [EpubEngine.textBlock('（本章内容读取失败）', 0)];
     }
-    const paragraphs: string[] = [];
+    let paragraphCount: number = 0;
     for (let i = 0; i < blocks.length; i++) {
       if (blocks[i].kind === ReaderBlockKind.TEXT) {
-        paragraphs.push(blocks[i].text);
+        paragraphCount++;
       }
     }
     const chapter: ReaderChapter = {
       index: safeIndex,
       title: this.spineTitles[safeIndex],
-      paragraphs: paragraphs,
+      paragraphCount: paragraphCount,
       blocks: blocks,
     };
     if (this.cache.size >= MAX_CACHED_CHAPTERS) {

@@ -67,6 +67,8 @@ export struct ReaderControlPanel {
   @Prop showOneHandMode: boolean = false;
   @Prop oneHandMode: boolean = false;
   onOneHandModeChange: (enabled: boolean) => void = (_enabled: boolean) => {};
+  /** 选词复制：正文可长按选中/复制；开启期间滑动不翻页。 */
+  @Link selectMode: boolean;
   /**
    * 是否把「阅读行为（常亮）」放进「界面」页。
    * ReaderKit 阅读器底部有独立的「设置」入口，用不到；内置阅读器只有「界面」一个入口，
@@ -337,6 +339,16 @@ export struct ReaderControlPanel {
           subtitle: '点击左右两侧均为下一页，上一页靠向右滑动',
           isOn: this.oneHandMode,
           onChange: (value: boolean) => this.onOneHandModeChange(value),
+        });
+        ReaderSwitchRow({
+          theme: this.theme,
+          title: '选词复制',
+          subtitle: '长按正文选中文字并复制；开启期间滑动不翻页',
+          isOn: this.selectMode,
+          onChange: (value: boolean) => {
+            this.selectMode = value;
+            this.onSettingsChanged(false);
+          },
         });
       }
     }
