@@ -400,32 +400,24 @@ export function foldFrontPath(
       }
     }
   }
-  if (firstOnLine < 0 || secondOnLine < 0 || curve.bulge <= 0.2) {
+  if (firstOnLine < 0 || secondOnLine < 0) {
     return polygonPath(poly);
   }
-  // 沿多边形顺序输出，把「弦上两点之间的那段直边」替换成 Q 曲线
-  const fmt = (v: number): string => `${Math.round(v * 10) / 10}`;
+  // 旋转顶点顺序，让「折痕那条边」成为最后一条边（闭合边），再把闭合边换成二次贝塞尔。
+  // 注意：折痕边可能是 first->second，也可能是 second->first（绕多边形一圈）。
+  // 早期「边遍历边插 Q」的写法在后一种情形下会不断跳回 first 顶点 ⇒ 死循环，
+  // 每帧拼出越来越长的路径字符串（现象：后向拖动时内存每秒涨 ~90MB 直到进程被杀）。
+  const adjacentForward: boolean = secondOnLine === (firstOnLine + 1) % count;
+  const startIndex: number = adjacentForward ? secondOnLine : firstOnLine;
   let path: string = '';
-  let started: boolean = false;
-  for (let step = 0; step <= count; step++) {
-    const i: number = step % count;
-    const px: number = poly[i * 2];
-    const py: number = poly[i * 2 + 1];
-    if (!started) {
-      path += `M${fmt(px)} ${fmt(py)} `;
-      started = true;
-    } else {
-      path += `L${fmt(px)} ${fmt(py)} `;
-    }
-    if (i === firstOnLine) {
-      // 从弦上第一点起，用贝塞尔画到弦上第二点
-      path += `Q${fmt(curve.cx)} ${fmt(curve.cy)} ${fmt(poly[secondOnLine * 2])} ${fmt(poly[secondOnLine * 2 + 1])} `;
-      // 跳过中间被替代的顶点
-      step = secondOnLine - 1;
-      if (step < i) {
-        break;
-      }
-    }
+  for (let k = 0; k < count; k++) {
+    const idx: number = (startIndex + k) % count;
+    path += `${k === 0 ? 'M' : 'L'}${round1(poly[idx * 2])} ${round1(poly[idx * 2 + 1])} `;
+  }
+  if (curve.bulge > 0.2) {
+    // 闭合边就是折痕：用 Q 凸出去，终点回到路径起点
+    path += `Q${round1(curve.cx)} ${round1(curve.cy)} ` +
+      `${round1(poly[startIndex * 2])} ${round1(poly[startIndex * 2 + 1])} `;
   }
   return `${path}Z`;
 }
@@ -497,4 +489,9 @@ export function foldBandSegments(
 function bezierAt(p0: number, c: number, p1: number, t: number): number {
   const u: number = 1 - t;
   return u * u * p0 + 2 * u * t * c + t * t * p1;
+}
+
+/** 路径坐标保留一位小数：字符串更短、日志也更好读。 */
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
 }
