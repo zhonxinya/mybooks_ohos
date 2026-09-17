@@ -622,6 +622,12 @@ export struct ReaderView {
   }
 
   /**
+   * 纸背：把当前页副本裁到「被卷起的一侧」，再整层绕折痕旋转 180°。
+   * 旋转轴取折痕方向、旋转中心取折痕上的点，180° 不带透视 ⇒ 正好是关于折痕的镜像，
+   * 于是这段纸翻过来盖在未卷走的一侧上，露出镜像的纸背（纸张卷曲的关键一笔）。
+   * 裁剪作用在组件自身坐标系、旋转变换作用在裁剪之后，所以裁的是「源区域」。
+   */
+  /**
    * 折痕处的三段渐变：落在新页上的投影、当前页一侧的卷边柱面、柱面高光细线。
    * 三条带子都沿折痕摆放并按折痕角度旋转，所以斜折痕时阴影与卷边同样贴合。
    * 自动降级后只保留裁切（省掉全屏合成），折痕依然跟手。
@@ -662,7 +668,7 @@ export struct ReaderView {
           angle: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
             this.dragOffset, this.dragOffsetY, SIM_ROLL_VP, false, SIM_ROLL_VP / 2).rotationDeg,
         })
-        .zIndex(4);
+        .zIndex(5);
       Column()
         .width(SIM_ROLL_GLINT_VP)
         .height(bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
@@ -682,7 +688,7 @@ export struct ReaderView {
             this.dragOffset, this.dragOffsetY, SIM_ROLL_GLINT_VP, false,
             SIM_ROLL_VP * SIM_ROLL_CREST_RATIO).rotationDeg,
         })
-        .zIndex(5);
+        .zIndex(6);
     }
   }
 
@@ -1708,6 +1714,12 @@ export struct ReaderView {
     }
     this.pagerPositionApplied = true;
     this.dragDir = delta > 0 ? 1 : -1;
+    // 点按翻页没有按下点：折痕几何是按「按下点 + 位移」算的，这里补一个等效按下点
+    // ——抓住要翻的那一边的页边中点（下一页 ⇒ 右边缘中点，上一页 ⇒ 左边缘中点），
+    // 折痕才会从该边扫到另一边；不补的话按下点是 (0,0)，折痕算到屏幕外，动画期间看不到卷页。
+    this.touchX = delta > 0 ? this.contentWidthVp : 0;
+    this.touchY = this.contentHeightVp / 2;
+    this.dragOffsetY = 0;
     this.frameWatch.start(this.getUIContext(), () => this.onMeasuredJank());
     this.animateTurn(delta);
   }
@@ -1742,7 +1754,9 @@ export struct ReaderView {
   private layerX(offset: number): number {
     const width = this.contentWidthVp;
     const dx = this.dragOffset;
-    if (this.flipMode === READER_FLIP_FADE) {
+    // 淡入淡出与仿真都不做横向平移：仿真的「动」全部由折痕裁剪 + 纸背镜像表达，
+    // 这里若还跟着拖位移，纸面会一边滑动一边折（页面内容会整体左移）。
+    if (this.flipMode === READER_FLIP_FADE || this.flipMode === READER_FLIP_SIM) {
       return 0;
     }
     if (this.flipMode === READER_FLIP_COVER) {
