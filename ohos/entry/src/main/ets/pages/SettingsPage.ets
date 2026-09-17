@@ -457,15 +457,6 @@ export struct SettingsPage {
                 showChevron: true,
                 onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/DownloadManagerPage' }),
               });
-              if (ServerRegistry.supports(ServerFeature.SYNC)) {
-                Divider().color($r('app.color.divider')).strokeWidth(0.5);
-                SettingCell({
-                  title: '数据同步',
-                  subtitle: '拉取 / 推送 / 批注导入',
-                  showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/SyncPage' }),
-                });
-              }
               if (ServerRegistry.supports(ServerFeature.NETWORK_LIBRARY)) {
                 Divider().color($r('app.color.divider')).strokeWidth(0.5);
                 SettingCell({
