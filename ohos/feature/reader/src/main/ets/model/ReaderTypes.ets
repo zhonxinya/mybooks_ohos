@@ -41,6 +41,14 @@ export const READER_FLIP_PREF_KEY: string = 'reader_flip_mode_builtin';
  * 单手模式偏好键。只有内置阅读器实现该模式（点击分区语义不同），因此不与 ReaderKit 共用键名。
  */
 export const READER_ONE_HAND_PREF_KEY: string = 'reader_one_hand_mode_builtin';
+/**
+ * 选词复制偏好键。开启后正文可长按选中/复制，**开启期间滑动不翻页**。
+ *
+ * 为什么要一个模式开关：ArkUI 里 `Text` 一旦设为可选中（`copyOption`），点按与拖动都会被它自己
+ * 吃掉，父组件的翻页手势再也收不到事件（实测矩阵见 `ReaderView` 的手势注释）——
+ * 「可选中正文」与「拖动翻页」只能靠模式切换二选一。
+ */
+export const READER_SELECT_MODE_PREF_KEY: string = 'reader_select_mode_builtin';
 /** 覆盖翻页：新页盖住旧页（默认）。 */
 export const READER_FLIP_COVER: string = 'cover';
 /** 仿真翻页：当前页沿折痕逐步卷起、折痕处投影阴影，下层新页随之露出。 */
@@ -121,6 +129,8 @@ export interface ReaderSettings {
    * 上下滚动模式下两侧点击改为往下翻一屏。
    */
   oneHandMode: boolean;
+  /** 选词复制：正文可长按选中/复制；开启期间滑动不翻页。 */
+  selectMode: boolean;
   /** 正文字体 id（与 ReaderKit 阅读器共用 
 eader_font_id 偏好；system 表示系统默认）。 */
   fontId: string;
@@ -199,6 +209,26 @@ export interface ReaderOpenOptions {
    * 为空时控制面板不显示字体区块。
    */
   fontOptions: ReaderFontOption[];
+  /** 已保存的划线批注（宿主按书读取后传入）。 */
+  annotations: ReaderAnnotation[];
+}
+
+/**
+ * 一条划线批注。
+ *
+ * 锚点用「章序号 + 段落序号 + 选中的原文」，**不用字符下标**：分页器会把放不下的段落切成
+ * 多块（`PageLayout.consumeText` 只取放得下的前缀），下标在改字号/横竖屏重新分页后会错位，
+ * 而原文片段跟着段落走，重排后照样能定位。
+ */
+export interface ReaderAnnotation {
+  /** 章序号（与 `ReaderChapter.index` 一致）。 */
+  chapterIndex: number;
+  /** 段落序号（`ReaderBlock.paragraphIndex`）。 */
+  paragraphIndex: number;
+  /** 选中的原文：既用来在段落文本里定位，也用于面板展示。 */
+  text: string;
+  /** 创建时间（ms），用于排序。 */
+  createdAt: number;
 }
 
 /** 宿主回调。 */
@@ -214,6 +244,11 @@ export interface ReaderCallbacks {
    * 系统默认字体或不可用时返回空路径。模块只做 ArkUI 注册与应用，不参与下载。
    */
   onFontSelected: (fontId: string) => Promise<ReaderFontResolve>;
+  /**
+   * 划线批注增删时回调（由宿主持久化；宿主自行按书分键）。
+   * 缺省实现为空函数，宿主不实现时批注只存在于本次会话。
+   */
+  onAnnotationsChanged: (annotations: ReaderAnnotation[]) => void;
 }
 
 /** 书籍解析引擎：TXT / EPUB 各自实现。 */

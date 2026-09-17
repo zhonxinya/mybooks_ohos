@@ -116,4 +116,18 @@ export class ReaderPalette {
   static accentColor(): string {
     return '#007DFF';
   }
+
+  /**
+   * 划线批注的高亮底色（半透明，压在正文文字下面）。
+   * 三套主题分别取暖黄/青绿/靛蓝，保证与各自纸面底色都拉开对比。
+   */
+  static annotationColor(theme: ReaderTheme): string {
+    if (theme === ReaderTheme.DARK) {
+      return '#594A6B8A';
+    }
+    if (theme === ReaderTheme.EYE) {
+      return '#5981C784';
+    }
+    return '#59FFE082';
+  }
 }

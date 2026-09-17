@@ -107,6 +107,8 @@ struct ReadKitReader {
   @State private readerTheme: ReaderTheme = ReaderTheme.LIGHT;
   @State private flipMode: string = '0';
   @State @Watch('onKeepScreenOnChanged') private keepScreenOn: boolean = false;
+  /** 仅供 `ReaderControlPanel` 的 `@Link` 绑定（本页不展示选词开关，ReaderKit 阅读器无此能力）。 */
+  @State private selectMode: boolean = false;
   @StorageLink('windowWidth') @Watch('onWindowDimensionsChanged') private windowWidth: number = 0;
   @StorageLink('windowHeight') @Watch('onWindowDimensionsChanged') private windowHeight: number = 0;
   private sessionId: string = '';
@@ -1595,6 +1597,9 @@ struct ReadKitReader {
                   flipValues: READKIT_FLIP_VALUES,
                   flipValue: $flipMode,
                   keepScreenOn: $keepScreenOn,
+                  // 选词复制只有内置阅读器实现（本页 showOneHandMode=false，开关不显示），
+                  // 这里只为满足 `@Link` 的必填绑定给一个本地状态。
+                  selectMode: $selectMode,
                   showBookmarks: true,
                   showAloud: true,
                   ttsState: this.ttsState,

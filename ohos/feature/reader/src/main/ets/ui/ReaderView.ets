@@ -2,6 +2,7 @@ import { PathShape } from '@ohos.arkui.shape';
 import { batteryInfo } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
+  ReaderAnnotation,
   BookEngine,
   READER_FLIP_COVER,
   READER_FLIP_DEFAULT,
@@ -228,6 +229,7 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   flipMode: READER_FLIP_DEFAULT,
   keepScreenOn: false,
   oneHandMode: false,
+  selectMode: false,
   fontId: 'system',
 };
 const DEFAULT_OPTIONS: ReaderOpenOptions = {
@@ -238,6 +240,7 @@ const DEFAULT_OPTIONS: ReaderOpenOptions = {
   location: '',
   settings: DEFAULT_SETTINGS,
   fontOptions: [],
+  annotations: [],
 };
 
 interface ParsedLocation {
@@ -289,6 +292,7 @@ export struct ReaderView {
     onFontSelected: async (fontId: string): Promise<ReaderFontResolve> => {
       return { fontName: 'system', fontPath: '' };
     },
+    onAnnotationsChanged: (annotations: ReaderAnnotation[]): void => {},
   };
 
   @State private bookTitle: string = '';
@@ -317,6 +321,11 @@ export struct ReaderView {
   @State private keepScreenOn: boolean = DEFAULT_SETTINGS.keepScreenOn;
   /** 单手模式：点击左右两侧均为下一页，只有滑动才能回上一页。 */
   @State private oneHandMode: boolean = DEFAULT_SETTINGS.oneHandMode;
+  /**
+   * 选词复制：正文可长按选中/复制；开启期间滑动不翻页。
+   * 见 `READER_SELECT_MODE_PREF_KEY` 的说明——可选中正文与拖动翻页在当前 ArkUI 结构下无法共存。
+   */
+  @State @Watch('onSelectModeChanged') private selectMode: boolean = DEFAULT_SETTINGS.selectMode;
   /**
    * 特效降级：帧采样判定掉帧后置位。先去掉折痕的两条全屏渐变（省合成开销），
    * 仍掉帧则把仿真翻页降级成覆盖翻页，保证低端设备上「跟手」优先。
@@ -401,6 +410,10 @@ export struct ReaderView {
    * 分页结果缓存：同一章在相同排版参数下不重复测量。
    * 长章节（近 500 段、含跨页切分）测量要 1.5s 量级，来回翻章时缓存收益明显。
    */
+  /** 划线批注（阅读器只持有当前书的内存副本，落盘交给宿主）。 */
+  @State private annotations: ReaderAnnotation[] = [];
+  /** 划线数量上限：防止宿主那份偏好值无限增长（超出后丢弃最早的）。 */
+  private static readonly MAX_ANNOTATIONS: number = 500;
   private pageCache: Map<string, ReaderPage[]> = new Map<string, ReaderPage[]>();
 
   aboutToAppear(): void {
@@ -415,6 +428,8 @@ export struct ReaderView {
     this.flipMode = ReaderFlip.normalize(settings.flipMode);
     this.keepScreenOn = settings.keepScreenOn;
     this.oneHandMode = settings.oneHandMode === true;
+    this.selectMode = settings.selectMode === true;
+    this.annotations = this.options.annotations.length > 0 ? this.options.annotations.slice() : [];
     this.fontId = settings.fontId.length > 0 ? settings.fontId : DEFAULT_SETTINGS.fontId;
     // 打开时把已选字体注册进 ArkUI（宿主侧 ensureCached 命中缓存时立即返回）
     void this.applyFont(this.fontId, false);
@@ -501,6 +516,7 @@ export struct ReaderView {
           flipValue: $flipMode,
           keepScreenOn: $keepScreenOn,
           oneHandMode: this.oneHandMode,
+          selectMode: $selectMode,
           showOneHandMode: true,
           onOneHandModeChange: (enabled: boolean) => this.setOneHandMode(enabled),
           // 内置阅读器只有「界面」一个入口：把常亮也放进界面页
@@ -841,6 +857,11 @@ export struct ReaderView {
       batteryLevel: this.batteryLevel,
       batteryCharging: this.batteryCharging,
       fontFamily: this.fontFamily,
+      selectable: this.selectMode,
+      chapterIndex: this.chapterIndex,
+      annotations: this.annotations,
+      onMark: (paragraphIndex: number, text: string) => this.addAnnotation(paragraphIndex, text),
+      onUnmark: (paragraphIndex: number, text: string) => this.removeAnnotation(paragraphIndex, text),
     });
   }
 
@@ -1138,12 +1159,17 @@ export struct ReaderView {
     }
   }
 
-  /** 工具栏显示后自动隐藏，避免长时间占住正文（打开面板时不隐藏）。 */
+  /**
+   * 工具栏显示后自动隐藏，避免长时间占住正文（打开面板时不隐藏）。
+   *
+   * 选词模式下也不隐藏：那时正文会吃掉内容区的点按，「点中间唤出工具栏」失效，
+   * 工具栏是用户关掉选词模式的唯一入口，必须常驻（见 `onSelectModeChanged`）。
+   */
   private scheduleBarsAutoHide(): void {
     this.cancelBarsAutoHide();
     this.barTimer = setTimeout(() => {
       this.barTimer = -1;
-      if (this.showBars && !this.showPanel) {
+      if (this.showBars && !this.showPanel && !this.selectMode) {
         this.showBars = false;
       }
     }, BARS_AUTO_HIDE_MS);
@@ -1218,6 +1244,7 @@ export struct ReaderView {
       flipMode: this.flipMode,
       keepScreenOn: this.keepScreenOn,
       oneHandMode: this.oneHandMode,
+      selectMode: this.selectMode,
       fontId: this.fontId,
     };
     return settings;
@@ -1280,7 +1307,10 @@ export struct ReaderView {
       this.chapterBlocks = chapter.blocks;
       this.blockCount = chapter.blocks.length;
       this.blocks.update(chapter.blocks);
-      this.showBars = false;
+      // 选词模式下工具栏常驻（它是关掉选词模式的唯一入口），切章也不收起
+      if (!this.selectMode) {
+        this.showBars = false;
+      }
       this.cancelBarsAutoHide();
       this.restoreParagraph = paragraphIndex < 0 ? 0 : paragraphIndex;
       this.pendingLastPage = toLastPage;
@@ -1584,6 +1614,77 @@ export struct ReaderView {
   }
 
   // ---- 翻页交互 ----
+
+  /**
+   * 新增一条划线。
+   *
+   * 同章同段同原文不重复添加（同一句话划两次没有意义）；总数超上限时丢掉最早的一条。
+   */
+  private addAnnotation(paragraphIndex: number, text: string): void {
+    const selected: string = text.trim();
+    if (selected.length === 0) {
+      return;
+    }
+    for (let i = 0; i < this.annotations.length; i++) {
+      const item: ReaderAnnotation = this.annotations[i];
+      if (item.chapterIndex === this.chapterIndex && item.paragraphIndex === paragraphIndex &&
+        item.text === selected) {
+        return;
+      }
+    }
+    const next: ReaderAnnotation[] = this.annotations.slice();
+    next.push({
+      chapterIndex: this.chapterIndex,
+      paragraphIndex: paragraphIndex,
+      text: selected,
+      createdAt: Date.now(),
+    });
+    while (next.length > ReaderView.MAX_ANNOTATIONS) {
+      next.shift();
+    }
+    this.annotations = next;
+    this.callbacks.onAnnotationsChanged(next);
+    hilog.debug(0x0000, TAG, '划线：第 %{public}d 段「%{public}s」（共 %{public}d 条）',
+      paragraphIndex, selected, next.length);
+  }
+
+  /** 删除划线；`text` 为空表示删掉该段的全部划线（该段有多条时的兜底）。 */
+  private removeAnnotation(paragraphIndex: number, text: string): void {
+    const selected: string = text.trim();
+    const next: ReaderAnnotation[] = [];
+    let removed: number = 0;
+    for (let i = 0; i < this.annotations.length; i++) {
+      const item: ReaderAnnotation = this.annotations[i];
+      const sameBlock: boolean = item.chapterIndex === this.chapterIndex &&
+        item.paragraphIndex === paragraphIndex;
+      if (sameBlock && (selected.length === 0 || item.text === selected)) {
+        removed++;
+        continue;
+      }
+      next.push(item);
+    }
+    if (removed === 0) {
+      return;
+    }
+    this.annotations = next;
+    this.callbacks.onAnnotationsChanged(next);
+    hilog.debug(0x0000, TAG, '取消划线 %{public}d 条（剩 %{public}d 条）', removed, next.length);
+  }
+
+  /**
+   * 选词模式开关变化。
+   *
+   * 选词模式下正文会把内容区的点按吃掉（`copyOption` 的必然结果），「点中间唤出工具栏」这条路
+   * 就断了 —— 用户再没有入口进设置面板把它关掉。所以进入选词模式时直接展开工具栏并让它常驻。
+   */
+  private onSelectModeChanged(): void {
+    if (this.selectMode) {
+      this.showBars = true;
+      this.cancelBarsAutoHide();
+    } else {
+      this.scheduleBarsAutoHide();
+    }
+  }
 
   // 命名避开 CustomComponent 内置的 onDragStart/onDragEnd（拖拽事件回调）
   private beginPageDrag(event: GestureEvent): void {
