@@ -594,8 +594,21 @@ export struct ReaderView {
     // 实测那样一条单指拖动会被两条手势同时识别，回调交错、一次滑动翻两页。
     // 方向放开成 All 是为了拿到纵向位移给折痕定倾角，纵向为主的手势在 updatePageDrag 里被挡掉
     // （分页模式下纵向滑动本来就不做事）。
-    // 当前内置阅读器没有缩放/选词/批注手势，不存在与它们争手势的场景；将来若加入，
-    // 应把这条 PanGesture 与缩放/选择放进同一个 GestureGroup，并把缩放/选择设为高优先级。
+    //
+    // 关于「翻页手势与缩放/选词/批注手势共存」的实测结论（2026-09-17，模拟器 127.0.0.1:5555）：
+    // 正文 `Text` 一旦设为可选中（`.copyOption(CopyOptions.InApp)`），它会把点按与拖动全部收进
+    // 自己的内部识别，父组件这边实测：
+    //   - `.onClick` 收不到            ⇒ 点按翻页失效
+    //   - `.gesture(PanGesture)` 收不到 ⇒ 滑动翻页失效
+    //   - `parallelGesture(TapGesture)` 能收到 ⇒ 点按翻页可恢复
+    //   - 但 `parallelGesture(PanGesture)` 仍收不到；把 Pan 与 Tap 一起塞进
+    //     `parallelGesture(GestureGroup(GestureMode.Parallel, …))`、或连续写两次
+    //     `parallelGesture`，两条会一起失效（页面完全无响应）
+    // 即：**「可选中正文」与「父组件拖动翻页」在当前组件结构下无法同时生效**，
+    // 没有「放进同一个 GestureGroup 就万事大吉」这种写法。将来要加选词/批注，只能二选一：
+    //   ① 用模式开关切换：选词态把这条 PanGesture 让开、同时把正文设为可选中，退出即恢复；
+    //   ② 把翻页从 PanGesture 改成 `onTouch` 原始触摸事件驱动，不再依赖父组件的手势识别。
+    // 在此之前不要再往这里加手势：`fingers: 2` 的 Pan 会与这条互相抢识别（一次滑动翻两页）。
     .gesture(
       PanGesture({ direction: PanDirection.All, distance: 6 })
         .onActionStart((event: GestureEvent) => this.beginPageDrag(event))
