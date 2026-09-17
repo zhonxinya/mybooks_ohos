@@ -28,6 +28,7 @@ import { PageLayout, PageMetrics, PagePager, ReaderPage } from '../engine/PageLa
 import { LazyDataSource } from './LazyDataSource';
 import { ReaderBattery } from './ReaderBattery';
 import { ReaderChrome } from './ReaderChrome';
+import { ReaderClock } from './ReaderClock';
 import { ReaderControlPanel } from './ReaderControlPanel';
 import { ReaderOverlayBar } from './ReaderOverlayBar';
 import { PAGE_FOOTER_SPACE, PAGE_HEADER_SPACE, ReaderPageView } from './ReaderPageView';
@@ -424,18 +425,21 @@ export struct ReaderView {
   @Builder
   scrollContent() {
     Column() {
-      // 阅读区顶部：章节名（与分页模式一致）
-      if (this.chapterTitle.length > 0) {
+      // 阅读区顶部：章节名（与分页模式一致）+ 右上角时间（与章节名齐平）
+      Row({ space: 8 }) {
         Text(this.chapterTitle)
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
           .fontColor(ReaderPalette.hintColor(this.theme))
-          .width('100%')
+          .layoutWeight(1)
           .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .height(PAGE_HEADER_SPACE)
-          .padding({ left: CONTENT_HORIZONTAL_SPACE, right: CONTENT_HORIZONTAL_SPACE });
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+        ReaderClock({ theme: this.theme });
       }
+      .width('100%')
+      .height(PAGE_HEADER_SPACE)
+      .alignItems(VerticalAlign.Center)
+      .padding({ left: CONTENT_HORIZONTAL_SPACE, right: CONTENT_HORIZONTAL_SPACE });
       List({ scroller: this.listScroller, initialIndex: this.initialIndex, space: PARAGRAPH_SPACING }) {
         LazyForEach(this.blocks, (block: ReaderBlock, index: number) => {
           ListItem() {

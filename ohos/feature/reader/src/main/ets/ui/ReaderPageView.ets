@@ -4,6 +4,7 @@ import { ReaderPalette } from '../model/ReaderPalette';
 import { PageLayout, PageMetrics, ReaderPage } from '../engine/PageLayout';
 import { LazyDataSource } from './LazyDataSource';
 import { ReaderBattery } from './ReaderBattery';
+import { ReaderClock } from './ReaderClock';
 
 const TAG: string = 'ReaderPageView';
 const PARAGRAPH_SPACING: number = 12;
@@ -52,17 +53,20 @@ export struct ReaderPageView {
 
   build() {
     Column() {
-      // 阅读区顶部：章节名（比页脚字号稍大）
-      if (this.chapterTitle.length > 0) {
+      // 阅读区顶部：章节名（比页脚字号稍大）+ 右上角时间（与章节名齐平）
+      Row({ space: 8 }) {
         Text(this.chapterTitle)
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
           .fontColor(ReaderPalette.hintColor(this.theme))
-          .width('100%')
+          .layoutWeight(1)
           .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .height(PAGE_HEADER_SPACE);
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+        ReaderClock({ theme: this.theme });
       }
+      .width('100%')
+      .height(PAGE_HEADER_SPACE)
+      .alignItems(VerticalAlign.Center);
 
       Column({ space: PARAGRAPH_SPACING }) {
         ForEach(this.pageBlocks(), (block: ReaderBlock, index: number) => {
