@@ -160,8 +160,12 @@ export interface ReaderBlock {
 export interface ReaderChapter {
   index: number;
   title: string;
-  /** 仅文本段落（滚动模式的百分比、进度统计仍用它）。 */
-  paragraphs: string[];
+  /**
+   * 文本段落数量（滚动模式的百分比、进度统计用它）。
+   * 早先这里存的是整章段落文本数组，与 `blocks` 里的字符串重复持有（同一批 string 再存一个数组），
+   * 对一本几千段的书是纯冗余，改为只留计数。
+   */
+  paragraphCount: number;
   /** 文本 + 图片的有序块，渲染与分页以此为唯一来源。 */
   blocks: ReaderBlock[];
 }

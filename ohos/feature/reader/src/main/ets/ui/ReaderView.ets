@@ -177,7 +177,7 @@ function simGlintColor(theme: ReaderTheme): string {
 /** 测量入参单位自校准用的探针宽度（vp）。 */
 const PROBE_WIDTH_VP: number = 80;
 /** 分页结果最多缓存几章。 */
-const MAX_PAGE_CACHE: number = 4;
+const MAX_PAGE_CACHE: number = 2;
 /** 分片分页：首屏同步推进的步数、以及每帧推进的步数（步 ≈ 一个块/一次切分，含 1–4 次测量）。 */
 const INITIAL_PAGINATION_STEPS: number = 24;
 const PAGINATION_STEPS_PER_FRAME: number = 24;
@@ -342,6 +342,8 @@ export struct ReaderView {
   private measureArgScale: number = 0;
   /** 工具栏自动隐藏定时器。 */
   private barTimer: number = -1;
+  /** 折痕裁剪路径的可复用实例（每帧只改 commands，不新建对象）。 */
+  private foldShape: PathShape = new PathShape({ commands: '' });
   /** 翻页帧耗时采样（按设备性能自动降级特效）。 */
   private frameWatch: ReaderFrameWatch = new ReaderFrameWatch();
   /** 页脚电量（-1 表示读取失败，不显示）。 */
@@ -530,7 +532,9 @@ export struct ReaderView {
       if (this.flipMode === READER_FLIP_SIM) {
         this.simLayers();
       } else {
-        if (this.pageIndex > 0 || this.dragDir === -1) {
+        // 相邻页只在真的处于翻页过程中才渲染：静止时少一整页正文的组件与排版对象
+        // （翻页第一帧才建下一页，跟手延迟实测仍在 20ms 内）。
+        if (this.dragDir === -1) {
           this.pageLayer({
             index: this.pageIndex - 1,
             offset: -1,
@@ -538,7 +542,7 @@ export struct ReaderView {
             opacity: layerOpacity(this.flipMode, this.contentWidthVp, -1, this.dragDir, this.dragOffset),
           });
         }
-        if (this.pageIndex < this.pageCount - 1 || this.dragDir === 1) {
+        if (this.dragDir === 1) {
           this.pageLayer({
             index: this.pageIndex + 1,
             offset: 1,
@@ -587,7 +591,9 @@ export struct ReaderView {
   /** 仿真翻页的下层：翻页后要显示的那一页（未拖动时铺下一页，方向确定后按方向切）。 */
   @Builder
   simTargetLayer() {
-    if (this.dragDir === -1 ? (this.pageIndex > 0) : (this.pageIndex + 1 < this.pageCount)) {
+    // 静止时不铺目标页：省一整页正文的组件/排版对象，拖动第一帧才建
+    if (this.dragDir !== 0 &&
+      (this.dragDir === -1 ? (this.pageIndex > 0) : (this.pageIndex + 1 < this.pageCount))) {
       Stack() {
         this.pageView({
           index: this.dragDir === -1 ? this.pageIndex - 1 : this.pageIndex + 1,
@@ -609,31 +615,38 @@ export struct ReaderView {
   @Builder
   simFrontLayer() {
     if (this.pageIndex >= 0 && this.pageIndex < this.pageCount) {
-      Stack() {
-        this.pageView({ index: this.pageIndex, offset: 0, opacity: 1 });
+      // 只有折痕真的存在时才做裁剪：`clipShape` 会给这一层加一个裁剪图层
+      // （离屏缓冲）。静止时每翻一页都建一次裁剪层，实测把进程内存顶到 1GB 并被系统杀掉；
+      // 不裁剪时静止态就是一整页普通正文，翻页内存曲线与「覆盖翻页」一致。
+      if (Math.abs(this.dragOffset) > 0 && !this.reduceEffects) {
+        Stack() {
+          this.pageView({ index: this.pageIndex, offset: 0, opacity: 1 });
+        }
+        .width('100%')
+        .height('100%')
+        .clipShape(this.foldClipShape(foldFrontPath(this.contentWidthVp, this.contentHeightVp,
+          this.touchX, this.touchY, this.dragOffset, this.dragOffsetY)))
+        .zIndex(3);
+      } else {
+        Stack() {
+          this.pageView({ index: this.pageIndex, offset: 0, opacity: 1 });
+        }
+        .width('100%')
+        .height('100%')
+        .zIndex(3);
       }
-      .width('100%')
-      .height('100%')
-      .clipShape(new PathShape({
-        // 曲线折痕：边界不是直线，而是朝当前页一侧鼓出的二次贝塞尔
-        commands: foldFrontPath(this.contentWidthVp, this.contentHeightVp,
-          this.touchX, this.touchY, this.dragOffset, this.dragOffsetY),
-      }))
-      .zIndex(3);
     }
   }
 
   /**
-   * 纸背：把当前页副本裁到「被卷起的一侧」，再整层绕折痕旋转 180°。
-   * 旋转轴取折痕方向、旋转中心取折痕上的点，180° 不带透视 ⇒ 正好是关于折痕的镜像，
-   * 于是这段纸翻过来盖在未卷走的一侧上，露出镜像的纸背（纸张卷曲的关键一笔）。
-   * 裁剪作用在组件自身坐标系、旋转变换作用在裁剪之后，所以裁的是「源区域」。
+   * 复用同一个 `PathShape` 实例、只改它的 commands：拖动时这条路径每帧都要变，
+   * 每帧 `new PathShape(...)` 会不断产生新的原生图形对象（内存曲线对不上）。
    */
-  /**
-   * 折痕处的三段渐变：落在新页上的投影、当前页一侧的卷边柱面、柱面高光细线。
-   * 三条带子都沿折痕摆放并按折痕角度旋转，所以斜折痕时阴影与卷边同样贴合。
-   * 自动降级后只保留裁切（省掉全屏合成），折痕依然跟手。
-   */
+  private foldClipShape(commands: string): PathShape {
+    this.foldShape.commands(commands);
+    return this.foldShape;
+  }
+
   /**
    * 折痕阴影：沿折痕曲线铺「投影 + 卷边柱面 + 柱面高光」三段带。
    *
@@ -672,24 +685,20 @@ export struct ReaderView {
     if (reduce || Math.abs(drag) <= 0 || width <= 0 || height <= 0) {
       return out;
     }
-    const segments: number = 10;
+    // 段数只影响曲线带的平滑度：5 段在这条 18vp 量级的弧上已经看不出折角，
+    // 组件数却从 30 降到 10（每段都是带渐变的图层，越多越吃渲染内存）。
+    const segments: number = 4;
     // 投影（新页上）
     const shadow = foldBandSegments(width, height, touchX, touchY, drag, dragY,
       SIM_FOLD_SHADOW_VP, true, SIM_FOLD_SHADOW_VP / 2, 0, segments);
     for (let i = 0; i < shadow.length; i++) {
       out.push(shadow[i]);
     }
-    // 卷边柱面（当前页上）
+    // 卷边柱面（当前页上）：高光已经做在柱面渐变里，不再单独画高光细线
     const roll = foldBandSegments(width, height, touchX, touchY, drag, dragY,
       SIM_ROLL_VP, false, SIM_ROLL_VP / 2, 1, segments);
     for (let i = 0; i < roll.length; i++) {
       out.push(roll[i]);
-    }
-    // 柱面高光细线
-    const glint = foldBandSegments(width, height, touchX, touchY, drag, dragY,
-      SIM_ROLL_GLINT_VP, false, SIM_ROLL_VP * SIM_ROLL_CREST_RATIO, 2, segments);
-    for (let i = 0; i < glint.length; i++) {
-      out.push(glint[i]);
     }
     return out;
   }
@@ -705,8 +714,7 @@ export struct ReaderView {
       const edge: string = dark ? '#66000000' : '#38000000';
       return [[edge, 0], [light, 0.45], ['#00000000', 1]];
     }
-    const glint: string = dark ? '#33FFFFFF' : '#59FFFFFF';
-    return [[glint, 0], [glint, 1]];
+    return [[dark ? '#26FFFFFF' : '#40FFFFFF', 0], ['#00000000', 1]];
   }
 
   /**
@@ -1191,7 +1199,7 @@ export struct ReaderView {
       }
       this.chapterIndex = chapter.index;
       this.chapterTitle = chapter.title;
-      this.paragraphCount = chapter.paragraphs.length;
+      this.paragraphCount = chapter.paragraphCount;
       this.chapterBlocks = chapter.blocks;
       this.blockCount = chapter.blocks.length;
       this.blocks.update(chapter.blocks);

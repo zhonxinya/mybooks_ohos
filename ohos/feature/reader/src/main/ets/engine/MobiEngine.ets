@@ -12,7 +12,7 @@ import { loadMobiChapterTask, loadMobiDocTask } from './ReaderTasks';
 
 const TAG: string = 'MobiEngine';
 /** 章节正文缓存上限（MOBI 单章可能含大段 HTML，不能无限留）。 */
-const MAX_CACHED_CHAPTERS: number = 4;
+const MAX_CACHED_CHAPTERS: number = 3;
 
 /**
  * MOBI（KF7）引擎：**解析全在子线程**。
@@ -89,16 +89,16 @@ export class MobiEngine implements BookEngine {
       hilog.error(0x0000, TAG, 'chapter %{public}d failed: %{public}s', safeIndex, (error as Error).message);
       blocks = [MobiEngine.textBlock('（本章内容读取失败）')];
     }
-    const paragraphs: string[] = [];
+    let paragraphCount: number = 0;
     for (let i = 0; i < blocks.length; i++) {
       if (blocks[i].kind === ReaderBlockKind.TEXT) {
-        paragraphs.push(blocks[i].text);
+        paragraphCount++;
       }
     }
     const chapter: ReaderChapter = {
       index: safeIndex,
       title: section.title,
-      paragraphs: paragraphs,
+      paragraphCount: paragraphCount,
       blocks: blocks,
     };
     if (this.cache.size >= MAX_CACHED_CHAPTERS) {
