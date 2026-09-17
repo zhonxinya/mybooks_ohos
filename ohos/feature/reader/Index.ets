@@ -2,6 +2,8 @@
 export { ReaderView } from './src/main/ets/ui/ReaderView';
 export { ReaderControlPanel } from './src/main/ets/ui/ReaderControlPanel';
 export { ReaderChrome } from './src/main/ets/ui/ReaderChrome';
+export { ReaderClock } from './src/main/ets/ui/ReaderClock';
+export { ReaderBattery } from './src/main/ets/ui/ReaderBattery';
 export { ReaderIconButton } from './src/main/ets/ui/ReaderIconButton';
 export { ReaderOverlayBar } from './src/main/ets/ui/ReaderOverlayBar';
 export {

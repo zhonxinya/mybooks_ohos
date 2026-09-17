@@ -6,6 +6,7 @@ import {
   READER_FLIP_DEFAULT,
   READER_FLIP_NONE,
   READER_FLIP_OPTIONS,
+  READER_FLIP_SIM,
   READER_PANEL_APPEARANCE,
   READER_PANEL_SETTINGS,
   READER_PANEL_TOC,
@@ -51,6 +52,63 @@ const PAGE_TURN_RATIO: number = 0.25;
 const TAP_ZONE_RATIO: number = 0.33;
 /** 甩动翻页的速度阈值（vp/s）：拖动距离不够但甩得快也翻页，不必拖满 1/4 屏。 */
 const FLING_VELOCITY_VP: number = 400;
+/** 仿真翻页：折痕落在下层新页上的投影宽度（vp）与当前页卷边的压暗宽度（vp）。 */
+const SIM_FOLD_SHADOW_VP: number = 26;
+const SIM_FOLD_EDGE_VP: number = 12;
+
+/**
+ * 仿真翻页的折痕横坐标（vp）：向右翻（dir = 1）时折痕随手指左移，向左回（dir = -1）时右移。
+ *
+ * 这些几何关系写成模块级纯函数（而不是组件方法）是刻意的：`@Builder` 只登记
+ * 「构建函数体里直接出现过的状态变量」，一旦把 dragOffset/dragDir 的读取藏进方法，
+ * 视图层就不会随拖拽刷新。
+ */
+function simFoldX(width: number, offset: number, dir: number): number {
+  const distance = Math.min(width, Math.max(0, Math.abs(offset)));
+  return dir === -1 ? distance : width - distance;
+}
+
+/** 折痕露出的下层新页宽度（vp）。 */
+function simRevealedWidth(width: number, offset: number, dir: number): number {
+  const foldX = simFoldX(width, offset, dir);
+  return dir === -1 ? foldX : Math.max(0, width - foldX);
+}
+
+/** 投影宽度：贴住折痕、不超过被露出的新页宽度。 */
+function simShadowWidth(width: number, offset: number, dir: number): number {
+  return Math.min(SIM_FOLD_SHADOW_VP, simRevealedWidth(width, offset, dir));
+}
+
+/** 投影起始横坐标：投影永远落在折痕靠新页的一侧。 */
+function simShadowX(width: number, offset: number, dir: number): number {
+  const foldX = simFoldX(width, offset, dir);
+  return dir === -1 ? Math.max(0, foldX - simShadowWidth(width, offset, dir)) : foldX;
+}
+
+/** 卷边暗部宽度：贴住折痕、不超过当前页还没卷走的宽度。 */
+function simEdgeWidth(width: number, offset: number, dir: number): number {
+  return Math.min(SIM_FOLD_EDGE_VP, width - simRevealedWidth(width, offset, dir));
+}
+
+/** 卷边暗部起始横坐标：永远落在当前页一侧。 */
+function simEdgeX(width: number, offset: number, dir: number): number {
+  const foldX = simFoldX(width, offset, dir);
+  return dir === -1 ? foldX : Math.max(0, foldX - simEdgeWidth(width, offset, dir));
+}
+
+/** 折痕投影的渐变：深色主题下纸面本身很暗，投影要加重才看得出来。 */
+function simShadowColors(theme: ReaderTheme, dir: number): Array<[ResourceColor, number]> {
+  const strong: string = theme === ReaderTheme.DARK ? '#80000000' : '#48000000';
+  const clear: string = '#00000000';
+  return dir === -1 ? [[clear, 0], [strong, 1]] : [[strong, 0], [clear, 1]];
+}
+
+/** 卷边暗部：只压一点点，避免折痕看起来像一条黑线。 */
+function simEdgeColors(theme: ReaderTheme, dir: number): Array<[ResourceColor, number]> {
+  const edge: string = theme === ReaderTheme.DARK ? '#3D000000' : '#1F000000';
+  const clear: string = '#00000000';
+  return dir === -1 ? [[edge, 0], [clear, 1]] : [[clear, 0], [edge, 1]];
+}
 /** 测量入参单位自校准用的探针宽度（vp）。 */
 const PROBE_WIDTH_VP: number = 80;
 /** 分页结果最多缓存几章。 */
@@ -97,6 +155,17 @@ interface ParsedLocation {
 interface ReaderLayerSpec {
   index: number;
   offset: number;
+}
+
+/**
+ * 仿真翻页的页面层参数（同 `ReaderLayerSpec`，必须按单一对象传参才会随拖拽刷新）：
+ * `clipX/clipW` 是这一层在内容区里的可见区域（vp），页面本体始终按整页宽度渲染，不重排。
+ */
+interface SimLayerSpec {
+  index: number;
+  clipX: number;
+  clipW: number;
+  order: number;
 }
 
 /**
@@ -368,13 +437,17 @@ export struct ReaderView {
   @Builder
   pagedContent() {
     Stack() {
-      if (this.pageIndex > 0 || this.dragDir === -1) {
-        this.pageLayer({ index: this.pageIndex - 1, offset: -1 });
+      if (this.flipMode === READER_FLIP_SIM) {
+        this.simLayers();
+      } else {
+        if (this.pageIndex > 0 || this.dragDir === -1) {
+          this.pageLayer({ index: this.pageIndex - 1, offset: -1 });
+        }
+        if (this.pageIndex < this.pageCount - 1 || this.dragDir === 1) {
+          this.pageLayer({ index: this.pageIndex + 1, offset: 1 });
+        }
+        this.pageLayer({ index: this.pageIndex, offset: 0 });
       }
-      if (this.pageIndex < this.pageCount - 1 || this.dragDir === 1) {
-        this.pageLayer({ index: this.pageIndex + 1, offset: 1 });
-      }
-      this.pageLayer({ index: this.pageIndex, offset: 0 });
     }
     .width('100%')
     .height('100%')
@@ -386,6 +459,100 @@ export struct ReaderView {
         .onActionCancel(() => this.cancelPageDrag()),
     )
     .onClick((event: ClickEvent) => this.onPagerClick(event));
+  }
+
+  // ---- 仿真翻页 ----
+  //
+  // 自绘近似仿真：把当前页按「折痕」裁掉已经卷走的一段，下层铺翻页后要显示的那一页，
+  // 折痕处用两段渐变分别画「落在新页上的投影」与「当前页卷边的暗部」。
+  // 拖动距离 d ⇒ 折痕位置 = 内容区宽度 - d（向右翻）/ d（向左回），抬手后的动画把 d 补满一整屏，
+  // 折痕随之扫到另一端，视觉上就是整页翻过去。
+
+  @Builder
+  simLayers() {
+    // 几何都在这里现算：@Builder 只登记「方法体里直接出现过的状态变量」，
+    // 把 pageIndex/dragOffset/dragDir 藏进 helper 方法会让这一层第一次渲染后再不更新
+    // （表现为页码在变、页面内容停在旧页）。
+    // 下层：翻页后要显示的那一页（未拖动时先铺下一页，方向确定后按方向切）
+    this.simLayer({
+      index: this.dragDir === -1 ? this.pageIndex - 1 : this.pageIndex + 1,
+      clipX: 0,
+      clipW: this.contentWidthVp,
+      order: 1,
+    });
+    this.simFoldShading();
+    // 上层：当前页按折痕裁切（保留未卷走的一段）
+    this.simLayer({
+      index: this.pageIndex,
+      clipX: this.dragDir === -1 ? simFoldX(this.contentWidthVp, this.dragOffset, this.dragDir) : 0,
+      clipW: this.dragDir === -1
+        ? Math.max(0, this.contentWidthVp - simFoldX(this.contentWidthVp, this.dragOffset, this.dragDir))
+        : Math.max(0, simFoldX(this.contentWidthVp, this.dragOffset, this.dragDir)),
+      order: 3,
+    });
+  }
+
+  /**
+   * 仿真翻页的单层：外层只留 `clipW` 宽并 `clip(true)`，内层固定整页宽度，
+   * 这样被裁掉的部分不会让正文按窄宽度重新换行（每页的排版仍按内容区宽度算）。
+   */
+  @Builder
+  simLayer(spec: SimLayerSpec) {
+    if (spec.index >= 0 && spec.index < this.pageCount && spec.clipW > 0) {
+      Stack() {
+        Stack() {
+          ReaderPageView({
+            pages: this.pageSource,
+            pageIndex: spec.index,
+            pageCount: this.pageCount,
+            pageToken: this.paginationToken,
+            offsetX: 0,
+            layerOrder: 0,
+            fontSize: this.fontSize,
+            lineHeight: this.lineHeight,
+            theme: this.theme,
+            horizontalSpace: CONTENT_HORIZONTAL_SPACE,
+            topSpace: CONTENT_TOP_SPACE,
+            bottomSpace: CONTENT_BOTTOM_SPACE,
+            pageWidthVp: this.textWidthVp(),
+            pageHeightVp: this.textHeightVp(),
+            chapterTitle: this.chapterTitle,
+            bookTitle: this.bookTitle,
+            batteryLevel: this.batteryLevel,
+            batteryCharging: this.batteryCharging,
+            fontFamily: this.fontFamily,
+          });
+        }
+        .width(this.contentWidthVp)
+        .height('100%')
+        .alignContent(Alignment.TopStart);
+      }
+      .width(spec.clipW)
+      .height('100%')
+      .clip(true)
+      .alignContent(Alignment.TopStart)
+      .position({ x: spec.clipX, y: 0 })
+      .zIndex(spec.order);
+    }
+  }
+
+  /** 折痕处的两条渐变：落在新页上的投影 + 当前页卷边的暗部。 */
+  @Builder
+  simFoldShading() {
+    if (Math.abs(this.dragOffset) > 0) {
+      Column()
+        .width(simShadowWidth(this.contentWidthVp, this.dragOffset, this.dragDir))
+        .height('100%')
+        .linearGradient({ angle: 90, colors: simShadowColors(this.theme, this.dragDir) })
+        .position({ x: simShadowX(this.contentWidthVp, this.dragOffset, this.dragDir), y: 0 })
+        .zIndex(2);
+      Column()
+        .width(simEdgeWidth(this.contentWidthVp, this.dragOffset, this.dragDir))
+        .height('100%')
+        .linearGradient({ angle: 90, colors: simEdgeColors(this.theme, this.dragDir) })
+        .position({ x: simEdgeX(this.contentWidthVp, this.dragOffset, this.dragDir), y: 0 })
+        .zIndex(4);
+    }
   }
 
   /**
