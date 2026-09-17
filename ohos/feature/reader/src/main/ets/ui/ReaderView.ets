@@ -294,6 +294,11 @@ export struct ReaderView {
   @State private dragDir: number = 0;
   /** 拖拽的原始位移（vp）：无动画模式不做位移动画，但离阈值判定仍需真实拖距。 */
   private dragRaw: number = 0;
+  /**
+   * 翻页动画进行中：多指手势会并行触发两条 PanGesture（同一套回调），
+   * 用这个标记保证一次手势只结算一次，避免两指拖动被算成翻两页。
+   */
+  private turning: boolean = false;
 
   private engine: BookEngine | null = null;
   private blocks: LazyDataSource<ReaderBlock> = new LazyDataSource<ReaderBlock>();
@@ -527,17 +532,24 @@ export struct ReaderView {
     }
     .width('100%')
     .height('100%')
-    // 手势优先级：翻页只认横向拖动，且允许从正文任意位置起手（不限定边缘）。
-    // ArkUI 的 `fingers` 是「最少手指数」，默认 1 指 ⇒ 两指拖动同样触发这条 PanGesture，
-    // 单指/多指共用同一条代码路径，不会出现两条手势同时改 dragOffset 而翻两页的问题。
+    // 手势：横向拖动翻页，单指与双指各注册一条（并行组），起手位置不限（不必贴边）。
+    // 两条手势共用同一套回调，且 updatePageDrag 写的是「绝对位移」而不是增量，
+    // 因此并行触发不会叠加翻页；抬手结算另有 `turning` 标记兜底（见 endPageDrag）。
     // 当前内置阅读器没有缩放/选词/批注手势，不存在与它们争手势的场景；将来若加入，
-    // 应把这条 PanGesture 收进 GestureGroup(Parallel) 并把缩放/选择设为高优先级。
+    // 应把这两条 PanGesture 与缩放/选择放进同一个 GestureGroup，并把缩放/选择设为高优先级。
     .gesture(
-      PanGesture({ direction: PanDirection.Horizontal, distance: 6 })
-        .onActionStart(() => this.beginPageDrag())
-        .onActionUpdate((event: GestureEvent) => this.updatePageDrag(event.offsetX))
-        .onActionEnd((event: GestureEvent) => this.endPageDrag(event.velocityX))
-        .onActionCancel(() => this.cancelPageDrag()),
+      GestureGroup(GestureMode.Parallel,
+        PanGesture({ direction: PanDirection.Horizontal, distance: 6 })
+          .onActionStart(() => this.beginPageDrag())
+          .onActionUpdate((event: GestureEvent) => this.updatePageDrag(event.offsetX))
+          .onActionEnd((event: GestureEvent) => this.endPageDrag(event.velocityX))
+          .onActionCancel(() => this.cancelPageDrag()),
+        PanGesture({ direction: PanDirection.Horizontal, distance: 6, fingers: 2 })
+          .onActionStart(() => this.beginPageDrag())
+          .onActionUpdate((event: GestureEvent) => this.updatePageDrag(event.offsetX))
+          .onActionEnd((event: GestureEvent) => this.endPageDrag(event.velocityX))
+          .onActionCancel(() => this.cancelPageDrag()),
+      ),
     )
     .onClick((event: ClickEvent) => this.onPagerClick(event));
   }
@@ -1487,6 +1499,10 @@ export struct ReaderView {
       this.dragOffset = 0;
       return;
     }
+    // 多指并行触发时可能收到第二次结算：动画还在跑就忽略，避免翻两页
+    if (this.turning) {
+      return;
+    }
     const threshold = this.contentWidthVp * PAGE_TURN_RATIO;
     const fling = Math.abs(velocity) >= FLING_VELOCITY_VP && velocity * dir < 0;
     if (!fling && dir * this.dragRaw > -threshold) {
@@ -1524,12 +1540,14 @@ export struct ReaderView {
   private animateTurn(delta: number): void {
     const width = this.contentWidthVp;
     const target = delta > 0 ? -width : width;
+    this.turning = true;
     this.getUIContext().animateTo({
       duration: PAGE_ANIM_MS,
       curve: Curve.Friction,
       onFinish: () => {
         this.dragOffset = 0;
         this.dragDir = 0;
+        this.turning = false;
         this.frameWatch.stop();
         this.turnPage(delta);
       },
@@ -1544,12 +1562,14 @@ export struct ReaderView {
    * 手感更像纸页被松开（阻尼取 30 略低于临界阻尼 ≈31，过冲幅度极小，不会翻错方向）。
    */
   private animateBack(): void {
+    this.turning = true;
     this.getUIContext().animateTo({
       duration: PAGE_ANIM_MS,
       curve: curves.springCurve(0, 1, 240, 30),
       onFinish: () => {
         this.dragDir = 0;
         this.dragOffset = 0;
+        this.turning = false;
         this.frameWatch.stop();
       },
     }, () => {
@@ -1612,6 +1632,9 @@ export struct ReaderView {
    * 否则交给 `turnPage`（章首章末切章、分页还没补完）。
    */
   private turnPageAnimated(delta: number): void {
+    if (this.turning) {
+      return;
+    }
     if (this.flipMode === READER_FLIP_NONE || this.chapterLoading || this.blockCount === 0) {
       this.turnPage(delta);
       return;
