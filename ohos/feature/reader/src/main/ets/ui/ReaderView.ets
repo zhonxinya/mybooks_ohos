@@ -1,3 +1,4 @@
+import { curves } from '@kit.ArkUI';
 import { batteryInfo } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
@@ -54,9 +55,15 @@ const PAGE_TURN_RATIO: number = 0.25;
 const TAP_ZONE_RATIO: number = 0.33;
 /** 甩动翻页的速度阈值（vp/s）：拖动距离不够但甩得快也翻页，不必拖满 1/4 屏。 */
 const FLING_VELOCITY_VP: number = 400;
-/** 仿真翻页：折痕落在下层新页上的投影宽度（vp）与当前页卷边（纸卷高光带）宽度（vp）。 */
-const SIM_FOLD_SHADOW_VP: number = 26;
-const SIM_FOLD_EDGE_VP: number = 14;
+/**
+ * 仿真翻页的三段视觉元素宽度（vp）：
+ * 折痕落在下层新页上的投影、当前页一侧的卷边柱面（纸卷本体）、柱面上的高光细线。
+ */
+const SIM_FOLD_SHADOW_VP: number = 30;
+const SIM_ROLL_VP: number = 20;
+const SIM_ROLL_GLINT_VP: number = 1.5;
+/** 柱面高光（crest）在卷边带内的相对位置：0 = 靠当前页一侧，1 = 折痕处。 */
+const SIM_ROLL_CREST_RATIO: number = 0.45;
 
 /**
  * 仿真翻页的折痕横坐标（vp）：向右翻（dir = 1）时折痕随手指左移，向左回（dir = -1）时右移。
@@ -87,15 +94,30 @@ function simShadowX(width: number, offset: number, dir: number): number {
   return dir === -1 ? Math.max(0, foldX - simShadowWidth(width, offset, dir)) : foldX;
 }
 
-/** 卷边（纸卷）宽度：贴住折痕、不超过当前页还没卷走的宽度。 */
-function simEdgeWidth(width: number, offset: number, dir: number): number {
-  return Math.min(SIM_FOLD_EDGE_VP, width - simRevealedWidth(width, offset, dir));
+/** 卷边柱面宽度：贴住折痕、不超过当前页还没卷走的宽度。 */
+function simRollWidth(width: number, offset: number, dir: number): number {
+  return Math.min(SIM_ROLL_VP, width - simRevealedWidth(width, offset, dir));
 }
 
-/** 卷边起始横坐标：永远落在当前页一侧。 */
-function simEdgeX(width: number, offset: number, dir: number): number {
+/** 卷边柱面起始横坐标：永远落在当前页一侧。 */
+function simRollX(width: number, offset: number, dir: number): number {
   const foldX = simFoldX(width, offset, dir);
-  return dir === -1 ? foldX : Math.max(0, foldX - simEdgeWidth(width, offset, dir));
+  return dir === -1 ? foldX : Math.max(0, foldX - simRollWidth(width, offset, dir));
+}
+
+/** 柱面高光细线宽度：卷边带太窄时按比例缩，避免高光超出纸卷。 */
+function simGlintWidth(width: number, offset: number, dir: number): number {
+  return Math.min(SIM_ROLL_GLINT_VP, simRollWidth(width, offset, dir));
+}
+
+/** 柱面高光细线横坐标：位于卷边带内靠折痕一侧的受光面（crest）上。 */
+function simGlintX(width: number, offset: number, dir: number): number {
+  const rollX = simRollX(width, offset, dir);
+  const rollW = simRollWidth(width, offset, dir);
+  const crest = dir === -1
+    ? rollX + rollW * (1 - SIM_ROLL_CREST_RATIO) - simGlintWidth(width, offset, dir)
+    : rollX + rollW * SIM_ROLL_CREST_RATIO;
+  return Math.max(rollX, Math.min(rollX + rollW, crest));
 }
 
 /**
@@ -124,16 +146,25 @@ function simShadowColors(theme: ReaderTheme, dir: number): Array<[ResourceColor,
 }
 
 /**
- * 卷边渐变：暗 → 亮 → 暗，中间那道高光就是卷起纸卷的受光面。
- * 只有两端的暗部而没有高光时，折痕会看起来像一条贴在纸上的黑边。
+ * 卷边柱面渐变（圆筒质感）：贴合处压暗（接触阴影）→ 渐亮 → 受光高光 → 转暗 → 折痕处再压暗。
+ * 五段比「暗-亮-暗」三段更像卷起来的纸筒：两头暗得自然、中间那道是柱面的高光面。
  */
 function simRollColors(theme: ReaderTheme, dir: number): Array<[ResourceColor, number]> {
-  const dark: string = theme === ReaderTheme.DARK ? '#4D000000' : '#29000000';
-  const light: string = theme === ReaderTheme.DARK ? '#1FFFFFFF' : '#2EFFFFFF';
+  const dark: string = theme === ReaderTheme.DARK ? '#66000000' : '#38000000';
+  const mid: string = theme === ReaderTheme.DARK ? '#33000000' : '#1A000000';
+  const light: string = theme === ReaderTheme.DARK ? '#26FFFFFF' : '#40FFFFFF';
   const clear: string = '#00000000';
-  return dir === -1
-    ? [[dark, 0], [light, 0.45], [clear, 1]]
-    : [[clear, 0], [light, 0.55], [dark, 1]];
+  if (dir === -1) {
+    // 从折痕（左）到当前页（右）：先压暗，再亮起，最后融进纸面
+    return [[dark, 0], [light, 0.35], [mid, 0.65], [clear, 1]];
+  }
+  // 从当前页（左）到折痕（右）：从纸面渐出、高光、再收进折痕的暗边
+  return [[clear, 0], [mid, 0.3], [light, 0.6], [dark, 1]];
+}
+
+/** 柱面高光细线：柱面最亮的那一条，缺了它就只剩一块渐变色块。 */
+function simGlintColor(theme: ReaderTheme): string {
+  return theme === ReaderTheme.DARK ? '#33FFFFFF' : '#59FFFFFF';
 }
 /** 测量入参单位自校准用的探针宽度（vp）。 */
 const PROBE_WIDTH_VP: number = 80;
@@ -600,11 +631,17 @@ export struct ReaderView {
         .position({ x: simShadowX(this.contentWidthVp, this.dragOffset, this.dragDir), y: 0 })
         .zIndex(2);
       Column()
-        .width(simEdgeWidth(this.contentWidthVp, this.dragOffset, this.dragDir))
+        .width(simRollWidth(this.contentWidthVp, this.dragOffset, this.dragDir))
         .height('100%')
         .linearGradient({ angle: 90, colors: simRollColors(this.theme, this.dragDir) })
-        .position({ x: simEdgeX(this.contentWidthVp, this.dragOffset, this.dragDir), y: 0 })
+        .position({ x: simRollX(this.contentWidthVp, this.dragOffset, this.dragDir), y: 0 })
         .zIndex(4);
+      Column()
+        .width(simGlintWidth(this.contentWidthVp, this.dragOffset, this.dragDir))
+        .height('100%')
+        .backgroundColor(simGlintColor(this.theme))
+        .position({ x: simGlintX(this.contentWidthVp, this.dragOffset, this.dragDir), y: 0 })
+        .zIndex(5);
     }
   }
 
@@ -1501,12 +1538,18 @@ export struct ReaderView {
     });
   }
 
+  /**
+   * 回弹：距离不够时弹回原位。
+   * 用轻微欠阻尼的弹簧曲线而不是 Friction —— 收尾时会有一点点过冲再落回，
+   * 手感更像纸页被松开（阻尼取 30 略低于临界阻尼 ≈31，过冲幅度极小，不会翻错方向）。
+   */
   private animateBack(): void {
     this.getUIContext().animateTo({
       duration: PAGE_ANIM_MS,
-      curve: Curve.Friction,
+      curve: curves.springCurve(0, 1, 240, 30),
       onFinish: () => {
         this.dragDir = 0;
+        this.dragOffset = 0;
         this.frameWatch.stop();
       },
     }, () => {
