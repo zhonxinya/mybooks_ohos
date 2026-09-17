@@ -12,6 +12,8 @@ const SLOW_FRAME_LIMIT: number = 9;
  * 累计这么多帧后也强制停下，避免帧回调一直挂着耗电。
  */
 const MAX_FRAMES: number = SAMPLE_FRAMES * 3;
+/** 跟手延迟日志的最小间隔（ms）：拖动时不必每帧都打。 */
+const LATENCY_LOG_INTERVAL_MS: number = 1000;
 
 /**
  * 翻页交互期的帧耗时采样。
@@ -29,6 +31,9 @@ export class ReaderFrameWatch extends FrameCallback {
   private frames: number = 0;
   private slow: number = 0;
   private total: number = 0;
+  /** 跟手延迟探针：手势事件时刻（ms，Date.now 口径），等下一帧回调时结算。 */
+  private probeAt: number = 0;
+  private lastLatencyLogAt: number = 0;
 
   /** 开始采样（可重复调用；已经在采样时只置运行标记）。 */
   start(uiContext: UIContext, onJank: () => void): void {
@@ -49,10 +54,32 @@ export class ReaderFrameWatch extends FrameCallback {
     this.running = false;
   }
 
+  /**
+   * 打一次「跟手延迟」探针：记录手势事件时刻，等下一帧渲染回调时算出
+   * 「事件 → 该状态被渲染」的耗时（ms）。同一时刻只保留一个探针，不会排队。
+   */
+  probe(): void {
+    // 没在采样（帧回调链已停）时不记探针：否则它会跨过 stop/start 等到下一轮，
+    // 算出来的「延迟」会是几秒级的假数据。
+    if (!this.running || this.probeAt !== 0) {
+      return;
+    }
+    this.probeAt = Date.now();
+  }
+
   onFrame(frameTimeInNano: number): void {
     if (!this.running) {
       this.posted = false;
       return;
+    }
+    if (this.probeAt > 0) {
+      const latency: number = Date.now() - this.probeAt;
+      this.probeAt = 0;
+      const now: number = Date.now();
+      if (now - this.lastLatencyLogAt >= LATENCY_LOG_INTERVAL_MS) {
+        this.lastLatencyLogAt = now;
+        hilog.debug(0x0000, TAG, '跟手延迟 %{public}d ms（手势事件→渲染帧）', latency);
+      }
     }
     if (this.lastNano > 0) {
       const deltaMs = (frameTimeInNano - this.lastNano) / 1000000;
