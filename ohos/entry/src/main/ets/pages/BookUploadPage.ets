@@ -30,9 +30,17 @@ const CHUNK_THRESHOLD = 8 * 1024 * 1024;
 const CHUNK_SIZE = 4 * 1024 * 1024;
 const TAG: string = 'BookUpload';
 /**
- * 本次运行内批量通道已被判定不可用的标记（AppStorage）。
- * 批量通道依赖服务端 scan_upload_path 暂存文件，实测有部署会在这步失败；一旦失败就不再重试，
- * 避免每次上传都白传一遍整批文件再弹一次错误。
+ * 是否默认走批量通道（POST /api/book/upload/batch）。
+ *
+ * 默认关闭：批量通道要服务端先把文件暂存进 scan_upload_path 再交给扫描导入，实测在部分部署上
+ * 这一步必然失败（返回 internal「保存上传文件失败…」或 400），客户端只能回退逐个上传 —— 等于
+ * 白传一整批文件；而单文件接口（POST /api/book/upload）一次一个、直接返回 book_id，结果即时
+ * 可见。因此默认逐个上传，批量通道保留在开关之后，服务端修好且确实需要时可改回 true。
+ */
+const USE_BATCH_UPLOAD = false;
+/**
+ * 本次运行内批量通道已被判定不可用的标记（AppStorage）。仅在 USE_BATCH_UPLOAD 打开时使用：
+ * 一旦失败就不再重试，避免每次上传都白传一遍整批文件再弹一次错误。
  */
 const BATCH_UNAVAILABLE_KEY = 'talebookUploadBatchUnavailable';
 
@@ -545,7 +553,7 @@ struct BookUploadPage {
     const queue = this.items.filter((item: UploadItem) => item.status === ITEM_PENDING ||
       item.status === ITEM_FAILED);
 
-    // 大文件（>8MB）走分块；小文件走批量通道或单文件接口
+    // 大文件（>8MB）走分块；小文件逐个上传（默认），只有显式开启批量通道时才整批提交
     const chunkQueue: UploadItem[] = [];
     const smallQueue: UploadItem[] = [];
     for (const item of queue) {
@@ -558,9 +566,10 @@ struct BookUploadPage {
     this.batchHint = `正在上传 ${queue.length} 个文件…`;
 
     if (smallQueue.length > 0) {
-      // 单个小文件直接走单文件接口：一次请求就能拿到 book_id，不必借道批量通道再轮询。
-      // 多文件才尝试批量通道（那里会判断服务端是否支持、以及本次运行内是否已经失败过）。
-      if (smallQueue.length === 1 || !(await this.tryBatchUpload(smallQueue))) {
+      // 默认逐个上传：一次请求一个文件、直接拿到 book_id，失败也只影响那一个文件。
+      // USE_BATCH_UPLOAD 打开时多文件才先试批量通道（失败仍会回退到这里）。
+      const useBatch = USE_BATCH_UPLOAD && smallQueue.length > 1;
+      if (!useBatch || !(await this.tryBatchUpload(smallQueue))) {
         await this.uploadIndividually(smallQueue);
       }
     }
@@ -596,8 +605,9 @@ struct BookUploadPage {
 
   /**
    * 批量通道（POST /api/book/upload/batch，仅 MyBooks 提供）：服务端把文件暂存到扫描导入目录后
-   * 异步扫描入库。该通道依赖服务端 scan_upload_path 可写，实测存在暂存就失败的部署（返回 internal
-   * 「保存上传文件失败…」）；这类失败不作为错误提示，由调用方回退逐个上传。
+   * 异步扫描入库。仅在 USE_BATCH_UPLOAD 打开时被调用（默认关闭）；该通道依赖服务端
+   * scan_upload_path 可写，实测存在暂存就失败的部署（返回 internal「保存上传文件失败…」或 400），
+   * 这类失败不作为错误提示，由调用方回退逐个上传。
    *
    * @returns true 表示批量通道已受理（含轮询到结束）；false 表示需要回退逐个上传。
    */
