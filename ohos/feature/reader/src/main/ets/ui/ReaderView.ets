@@ -34,7 +34,8 @@ import { ReaderBattery } from './ReaderBattery';
 import { ReaderChrome } from './ReaderChrome';
 import { ReaderClock } from './ReaderClock';
 import { ReaderFrameWatch } from './ReaderFrameWatch';
-import { BandPlacement, CurlFold, curlFoldGeometry, bandPlacement } from './SimCurl';
+import { CurlFold, FoldBandSegment, curlFoldGeometry, foldBandSegments, foldCurveGeometry,
+  foldFrontPath } from './SimCurl';
 import { ReaderControlPanel } from './ReaderControlPanel';
 import { ReaderOverlayBar } from './ReaderOverlayBar';
 import { PAGE_FOOTER_SPACE, PAGE_HEADER_SPACE, ReaderPageView } from './ReaderPageView';
@@ -614,8 +615,9 @@ export struct ReaderView {
       .width('100%')
       .height('100%')
       .clipShape(new PathShape({
-        commands: curlFoldGeometry(this.contentWidthVp, this.contentHeightVp,
-          this.touchX, this.touchY, this.dragOffset, this.dragOffsetY).frontPath,
+        // 曲线折痕：边界不是直线，而是朝当前页一侧鼓出的二次贝塞尔
+        commands: foldFrontPath(this.contentWidthVp, this.contentHeightVp,
+          this.touchX, this.touchY, this.dragOffset, this.dragOffsetY),
       }))
       .zIndex(3);
     }
@@ -632,64 +634,79 @@ export struct ReaderView {
    * 三条带子都沿折痕摆放并按折痕角度旋转，所以斜折痕时阴影与卷边同样贴合。
    * 自动降级后只保留裁切（省掉全屏合成），折痕依然跟手。
    */
+  /**
+   * 折痕阴影：沿折痕曲线铺「投影 + 卷边柱面 + 柱面高光」三段带。
+   *
+   * 折痕是曲线（纸张卷曲），直条渐变对不上，所以把每条带拆成若干短直段拼出来
+   * （`foldBandSegments`）；每段只有一小块，比原来横跨整页的直条更省。
+   */
   @Builder
   simFoldShading() {
-    if (Math.abs(this.dragOffset) > 0 && !this.reduceEffects) {
-      // 三条带子的摆放都由 SimCurl 现算（属性表达式里直接调用：@Builder 内不能写局部变量，
-      // 而状态变量必须在构建函数体里直读，所以几何输入都从这里传进去）
-      Column()
-        .width(SIM_FOLD_SHADOW_VP)
-        .height(bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
-          this.dragOffset, this.dragOffsetY, SIM_FOLD_SHADOW_VP, true, SIM_FOLD_SHADOW_VP / 2).length)
-        .linearGradient({ angle: 90, colors: simShadowColors(this.theme, this.dragDir) })
-        .position({
-          x: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
-            this.dragOffset, this.dragOffsetY, SIM_FOLD_SHADOW_VP, true, SIM_FOLD_SHADOW_VP / 2).x,
-          y: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
-            this.dragOffset, this.dragOffsetY, SIM_FOLD_SHADOW_VP, true, SIM_FOLD_SHADOW_VP / 2).y,
-        })
-        .rotate({
-          angle: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
-            this.dragOffset, this.dragOffsetY, SIM_FOLD_SHADOW_VP, true, SIM_FOLD_SHADOW_VP / 2).rotationDeg,
-        })
-        .zIndex(2);
-      Column()
-        .width(SIM_ROLL_VP)
-        .height(bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
-          this.dragOffset, this.dragOffsetY, SIM_ROLL_VP, false, SIM_ROLL_VP / 2).length)
-        .linearGradient({ angle: 90, colors: simRollColors(this.theme, this.dragDir) })
-        .position({
-          x: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
-            this.dragOffset, this.dragOffsetY, SIM_ROLL_VP, false, SIM_ROLL_VP / 2).x,
-          y: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
-            this.dragOffset, this.dragOffsetY, SIM_ROLL_VP, false, SIM_ROLL_VP / 2).y,
-        })
-        .rotate({
-          angle: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
-            this.dragOffset, this.dragOffsetY, SIM_ROLL_VP, false, SIM_ROLL_VP / 2).rotationDeg,
-        })
-        .zIndex(5);
-      Column()
-        .width(SIM_ROLL_GLINT_VP)
-        .height(bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
-          this.dragOffset, this.dragOffsetY, SIM_ROLL_GLINT_VP, false,
-          SIM_ROLL_VP * SIM_ROLL_CREST_RATIO).length)
-        .backgroundColor(simGlintColor(this.theme))
-        .position({
-          x: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
-            this.dragOffset, this.dragOffsetY, SIM_ROLL_GLINT_VP, false,
-            SIM_ROLL_VP * SIM_ROLL_CREST_RATIO).x,
-          y: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
-            this.dragOffset, this.dragOffsetY, SIM_ROLL_GLINT_VP, false,
-            SIM_ROLL_VP * SIM_ROLL_CREST_RATIO).y,
-        })
-        .rotate({
-          angle: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
-            this.dragOffset, this.dragOffsetY, SIM_ROLL_GLINT_VP, false,
-            SIM_ROLL_VP * SIM_ROLL_CREST_RATIO).rotationDeg,
-        })
-        .zIndex(6);
+    ForEach(this.foldBands(this.dragOffset, this.dragOffsetY, this.touchX, this.touchY,
+      this.contentWidthVp, this.contentHeightVp, this.theme, this.reduceEffects),
+      (seg: FoldBandSegment) => {
+        Column()
+          .width(seg.width)
+          .height(seg.length)
+          .linearGradient({ angle: 90, colors: this.foldBandColors(seg.kind) })
+          .position({ x: seg.x, y: seg.y })
+          .rotate({ angle: seg.rotationDeg })
+          .zIndex(6);
+        // key 用「kind + 段序号」这种稳定值：若把坐标写进 key，拖拽时每帧都会
+        // 销毁重建 30 个组件（实测会把这个模拟器拖到内存吃紧），稳定 key 只更新属性
+      }, (seg: FoldBandSegment, index: number) => `${seg.kind}_${index}`);
+  }
+
+  /** 供构建函数体直接调用：状态变量都在参数里读出来，@Builder 才会登记依赖。 */
+  private foldBands(
+    drag: number,
+    dragY: number,
+    touchX: number,
+    touchY: number,
+    width: number,
+    height: number,
+    theme: ReaderTheme,
+    reduce: boolean,
+  ): FoldBandSegment[] {
+    const out: FoldBandSegment[] = [];
+    if (reduce || Math.abs(drag) <= 0 || width <= 0 || height <= 0) {
+      return out;
     }
+    const segments: number = 10;
+    // 投影（新页上）
+    const shadow = foldBandSegments(width, height, touchX, touchY, drag, dragY,
+      SIM_FOLD_SHADOW_VP, true, SIM_FOLD_SHADOW_VP / 2, 0, segments);
+    for (let i = 0; i < shadow.length; i++) {
+      out.push(shadow[i]);
+    }
+    // 卷边柱面（当前页上）
+    const roll = foldBandSegments(width, height, touchX, touchY, drag, dragY,
+      SIM_ROLL_VP, false, SIM_ROLL_VP / 2, 1, segments);
+    for (let i = 0; i < roll.length; i++) {
+      out.push(roll[i]);
+    }
+    // 柱面高光细线
+    const glint = foldBandSegments(width, height, touchX, touchY, drag, dragY,
+      SIM_ROLL_GLINT_VP, false, SIM_ROLL_VP * SIM_ROLL_CREST_RATIO, 2, segments);
+    for (let i = 0; i < glint.length; i++) {
+      out.push(glint[i]);
+    }
+    return out;
+  }
+
+  /** 折痕带的配色（0 投影 / 1 卷边柱面 / 2 高光）。 */
+  private foldBandColors(kind: number): Array<[ResourceColor, number]> {
+    const dark: boolean = this.theme === ReaderTheme.DARK;
+    if (kind === 0) {
+      return dark ? [['#80000000', 0], ['#00000000', 1]] : [['#48000000', 0], ['#00000000', 1]];
+    }
+    if (kind === 1) {
+      const light: string = dark ? '#26FFFFFF' : '#40FFFFFF';
+      const edge: string = dark ? '#66000000' : '#38000000';
+      return [[edge, 0], [light, 0.45], ['#00000000', 1]];
+    }
+    const glint: string = dark ? '#33FFFFFF' : '#59FFFFFF';
+    return [[glint, 0], [glint, 1]];
   }
 
   /**
@@ -1550,8 +1567,14 @@ export struct ReaderView {
       this.foldLogged = true;
       const fold: CurlFold = curlFoldGeometry(this.contentWidthVp, this.contentHeightVp,
         this.touchX, this.touchY, this.dragOffset, this.dragOffsetY);
-      hilog.debug(0x0000, TAG, '折痕几何：倾角 %{public}s°，跨度 %{public}s，抓取侧 %{public}d',
-        fold.rotationDeg.toFixed(1), fold.span.toFixed(0), fold.peelSign);
+      const path: string = foldFrontPath(this.contentWidthVp, this.contentHeightVp,
+        this.touchX, this.touchY, this.dragOffset, this.dragOffsetY);
+      const curve = foldCurveGeometry(this.contentWidthVp, this.contentHeightVp,
+        this.touchX, this.touchY, this.dragOffset, this.dragOffsetY);
+      hilog.debug(0x0000, TAG,
+        '折痕几何：倾角 %{public}s°，跨度 %{public}s，抓取侧 %{public}d，弯曲 %{public}s vp，裁剪路径含曲线 %{public}s',
+        fold.rotationDeg.toFixed(1), fold.span.toFixed(0), fold.peelSign,
+        curve.bulge.toFixed(1), path.indexOf('Q') > 0 ? '是' : '否');
     }
   }
 

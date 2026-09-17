@@ -15,6 +15,13 @@
 const MAX_TILT_TAN: number = 0.7;
 /** 拖动距离小于该值（vp）时视为还没真正起手：退回竖直折痕，避免抖动放大成斜折。 */
 const MIN_DRAG_FOR_TILT: number = 6;
+/**
+ * 折痕弯曲幅度上限（vp）：真实纸被拉起时折痕不是直线，中间会朝「还没卷走的一侧」鼓出来。
+ * 幅度按拖动进度 0 → 上限 渐变，起手时仍是近似直线。
+ */
+const FOLD_BULGE_VP: number = 18;
+/** 弯曲幅度达到上限所需的拖动进度（占内容区宽度的比例）。 */
+const BULGE_FULL_PROGRESS: number = 0.35;
 
 interface FoldCore {
   dirX: number;
@@ -301,3 +308,193 @@ export function bandPlacement(
 
 
 
+
+/** 折痕曲线：直线弦的两个端点 + 凸向「当前页一侧」的二次贝塞尔控制点。 */
+export interface FoldCurve {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  /** 二次贝塞尔控制点：曲线中点位于弦的哪一侧由它决定。 */
+  cx: number;
+  cy: number;
+  /** 弯曲幅度（vp）：弦中点到曲线中点的距离，0 表示直线折痕。 */
+  bulge: number;
+  /** 单位法线（指向 peel 侧）：偏移带子用。 */
+  nx: number;
+  ny: number;
+  peelSign: number;
+}
+
+/**
+ * 计算折痕曲线。
+ *
+ * 弦 = 折痕直线与页面矩形的交线段（用 foldCore 的跨度参数求出端点）；
+ * 控制点取弦中点沿法线偏移 2*bulge、方向指向「当前页一侧」——二次贝塞尔的中点
+ * 正好在控制点的一半处，所以曲线中点离弦的距离就是 bulge。
+ */
+export function foldCurveGeometry(
+  width: number,
+  height: number,
+  touchX: number,
+  touchY: number,
+  dx: number,
+  dy: number,
+): FoldCurve {
+  const core: FoldCore = foldCore(width, height, touchX, touchY, dx, dy);
+  const span: number[] = foldSpanParams(width, height, core.midX, core.midY, core.dirX, core.dirY);
+  const x0: number = core.midX + core.dirX * span[0];
+  const y0: number = core.midY + core.dirY * span[0];
+  const x1: number = core.midX + core.dirX * span[1];
+  const y1: number = core.midY + core.dirY * span[1];
+  // 法线：cross(dir, n) = +1 ⇒ +n 是 peelSign 为正的一侧
+  const nx: number = -core.dirY * core.peelSign;
+  const ny: number = core.dirX * core.peelSign;
+  const progress: number = Math.min(1, Math.abs(dx) / Math.max(1, width * BULGE_FULL_PROGRESS));
+  const bulge: number = FOLD_BULGE_VP * progress;
+  // 控制点沿 -n（当前页一侧）偏移：曲线中点凸向未卷走的一侧
+  const mx: number = (x0 + x1) / 2;
+  const my: number = (y0 + y1) / 2;
+  const curve: FoldCurve = {
+    x0: x0,
+    y0: y0,
+    x1: x1,
+    y1: y1,
+    cx: mx - nx * bulge * 2,
+    cy: my - ny * bulge * 2,
+    bulge: bulge,
+    nx: nx,
+    ny: ny,
+    peelSign: core.peelSign,
+  };
+  return curve;
+}
+
+/**
+ * 当前页可见区域的裁剪路径：先按弦裁半平面，再把落在弦上的那条直边换成二次贝塞尔。
+ * 这样正文的裁切边界就是一条弯的折痕（纸张卷曲的关键），而不是直线。
+ */
+export function foldFrontPath(
+  width: number,
+  height: number,
+  touchX: number,
+  touchY: number,
+  dx: number,
+  dy: number,
+): string {
+  const core: FoldCore = foldCore(width, height, touchX, touchY, dx, dy);
+  const curve: FoldCurve = foldCurveGeometry(width, height, touchX, touchY, dx, dy);
+  const poly: number[] = rectHalfPlane(width, height, core.midX, core.midY, core.dirX, core.dirY, -core.peelSign);
+  // 找出多边形里落在弦上的两个点（sideOf ≈ 0），它们之间的直边要换成贝塞尔
+  let firstOnLine: number = -1;
+  let secondOnLine: number = -1;
+  const count: number = poly.length / 2;
+  for (let i = 0; i < count; i++) {
+    const px: number = poly[i * 2];
+    const py: number = poly[i * 2 + 1];
+    if (Math.abs(sideOf(px, py, core.midX, core.midY, core.dirX, core.dirY)) < 0.5) {
+      if (firstOnLine < 0) {
+        firstOnLine = i;
+      } else {
+        secondOnLine = i;
+      }
+    }
+  }
+  if (firstOnLine < 0 || secondOnLine < 0 || curve.bulge <= 0.2) {
+    return polygonPath(poly);
+  }
+  // 沿多边形顺序输出，把「弦上两点之间的那段直边」替换成 Q 曲线
+  const fmt = (v: number): string => `${Math.round(v * 10) / 10}`;
+  let path: string = '';
+  let started: boolean = false;
+  for (let step = 0; step <= count; step++) {
+    const i: number = step % count;
+    const px: number = poly[i * 2];
+    const py: number = poly[i * 2 + 1];
+    if (!started) {
+      path += `M${fmt(px)} ${fmt(py)} `;
+      started = true;
+    } else {
+      path += `L${fmt(px)} ${fmt(py)} `;
+    }
+    if (i === firstOnLine) {
+      // 从弦上第一点起，用贝塞尔画到弦上第二点
+      path += `Q${fmt(curve.cx)} ${fmt(curve.cy)} ${fmt(poly[secondOnLine * 2])} ${fmt(poly[secondOnLine * 2 + 1])} `;
+      // 跳过中间被替代的顶点
+      step = secondOnLine - 1;
+      if (step < i) {
+        break;
+      }
+    }
+  }
+  return `${path}Z`;
+}
+
+/** 折痕渐变带的一小段（用短直带拼出曲线带，避免依赖 Canvas 绘制）。 */
+export interface FoldBandSegment {
+  /** 段的左上角（vp）。 */
+  x: number;
+  y: number;
+  width: number;
+  length: number;
+  /** 该段的倾角（度）。 */
+  rotationDeg: number;
+  /** 配色标记：0 = 投影（peel 侧），1 = 卷边柱面（当前页侧），2 = 柱面高光。 */
+  kind: number;
+}
+
+/**
+ * 把「沿折痕曲线、贴在一侧的渐变带」拆成若干短直段。
+ *
+ * 曲线用二次贝塞尔采样：第 i 段取相邻两个采样点，段心偏离折痕 `distanceVp`（沿法线、指向
+ * `onPeelSide` 决定的一侧），段长按两点距离，段倾角按两点连线方向 —— 这样曲线带由短直段拼出，
+ * 不需要 Canvas，也不会因为曲线而让阴影/卷边与折痕错位。
+ */
+export function foldBandSegments(
+  width: number,
+  height: number,
+  touchX: number,
+  touchY: number,
+  dx: number,
+  dy: number,
+  bandWidth: number,
+  onPeelSide: boolean,
+  distanceVp: number,
+  kind: number,
+  segments: number,
+): FoldBandSegment[] {
+  const curve: FoldCurve = foldCurveGeometry(width, height, touchX, touchY, dx, dy);
+  const side: number = onPeelSide ? curve.peelSign : -curve.peelSign;
+  const nx: number = curve.nx * side;
+  const ny: number = curve.ny * side;
+  const out: FoldBandSegment[] = [];
+  const step: number = 1 / Math.max(1, segments);
+  for (let i = 0; i < segments; i++) {
+    const t0: number = i * step;
+    const t1: number = (i + 1) * step;
+    const x0: number = bezierAt(curve.x0, curve.cx, curve.x1, t0);
+    const y0: number = bezierAt(curve.y0, curve.cy, curve.y1, t0);
+    const x1: number = bezierAt(curve.x0, curve.cx, curve.x1, t1);
+    const y1: number = bezierAt(curve.y0, curve.cy, curve.y1, t1);
+    const midX: number = (x0 + x1) / 2 + nx * distanceVp;
+    const midY: number = (y0 + y1) / 2 + ny * distanceVp;
+    const segLen: number = Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)) + 2;
+    // 段的方向：把竖直带（长轴沿 y）转到两点连线方向
+    const rotation: number = Math.atan2(-(x1 - x0), y1 - y0) * 180 / Math.PI;
+    out.push({
+      x: midX - bandWidth / 2,
+      y: midY - segLen / 2,
+      width: bandWidth,
+      length: segLen,
+      rotationDeg: rotation,
+      kind: kind,
+    });
+  }
+  return out;
+}
+
+/** 二次贝塞尔单点求值。 */
+function bezierAt(p0: number, c: number, p1: number, t: number): number {
+  const u: number = 1 - t;
+  return u * u * p0 + 2 * u * t * c + t * t * p1;
+}
