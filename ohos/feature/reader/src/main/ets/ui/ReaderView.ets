@@ -1,4 +1,5 @@
 import { curves } from '@kit.ArkUI';
+import { PathShape } from '@ohos.arkui.shape';
 import { batteryInfo } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
@@ -33,6 +34,7 @@ import { ReaderBattery } from './ReaderBattery';
 import { ReaderChrome } from './ReaderChrome';
 import { ReaderClock } from './ReaderClock';
 import { ReaderFrameWatch } from './ReaderFrameWatch';
+import { BandPlacement, CurlFold, curlFoldGeometry, bandPlacement } from './SimCurl';
 import { ReaderControlPanel } from './ReaderControlPanel';
 import { ReaderOverlayBar } from './ReaderOverlayBar';
 import { PAGE_FOOTER_SPACE, PAGE_HEADER_SPACE, ReaderPageView } from './ReaderPageView';
@@ -55,6 +57,11 @@ const PAGE_TURN_RATIO: number = 0.25;
 const TAP_ZONE_RATIO: number = 0.33;
 /** 甩动翻页的速度阈值（vp/s）：拖动距离不够但甩得快也翻页，不必拖满 1/4 屏。 */
 const FLING_VELOCITY_VP: number = 400;
+/**
+ * 刚拖动过这段时间（ms）内的点击事件忽略掉。
+ * ArkUI 的并行手势里点击与拖动可能同时送达，放任两者各翻一次就是「一次手势翻两页」。
+ */
+const CLICK_AFTER_PAN_MS: number = 400;
 /**
  * 仿真翻页的三段视觉元素宽度（vp）：
  * 折痕落在下层新页上的投影、当前页一侧的卷边柱面（纸卷本体）、柱面上的高光细线。
@@ -294,6 +301,16 @@ export struct ReaderView {
   @State private dragDir: number = 0;
   /** 拖拽的原始位移（vp）：无动画模式不做位移动画，但离阈值判定仍需真实拖距。 */
   private dragRaw: number = 0;
+  /** 仿真翻页用的手指按下点（vp，内容区坐标）与纵向位移：折痕要过手指并按拖动方向倾斜。 */
+  @State private touchX: number = 0;
+  @State private touchY: number = 0;
+  @State private dragOffsetY: number = 0;
+  /** 手势轴向锁：纵向为主的拖动不算翻页（分页模式下纵向滑动不做事），避免误卷。 */
+  private dragVertical: boolean = false;
+  /** 每次拖拽只在第一帧记一次折痕几何，便于现场核对倾角。 */
+  private foldLogged: boolean = false;
+  /** 最近一次拖拽时刻：拖动过的这一串事件不再当成点击（否则斜向拖动会翻两页）。 */
+  private lastPanAt: number = 0;
   /**
    * 翻页动画进行中：多指手势会并行触发两条 PanGesture（同一套回调），
    * 用这个标记保证一次手势只结算一次，避免两指拖动被算成翻两页。
@@ -532,127 +549,139 @@ export struct ReaderView {
     }
     .width('100%')
     .height('100%')
-    // 手势：横向拖动翻页，单指与双指各注册一条（并行组），起手位置不限（不必贴边）。
-    // 两条手势共用同一套回调，且 updatePageDrag 写的是「绝对位移」而不是增量，
-    // 因此并行触发不会叠加翻页；抬手结算另有 `turning` 标记兜底（见 endPageDrag）。
+    // 手势：一条 PanGesture 同时覆盖单指与多指（ArkUI 的 `fingers` 是「最少手指数」，
+    // 默认 1 指 ⇒ 两指拖动走的是同一条手势）。**不要**再额外注册一条 `fingers: 2` 的手势：
+    // 实测那样一条单指拖动会被两条手势同时识别，回调交错、一次滑动翻两页。
+    // 方向放开成 All 是为了拿到纵向位移给折痕定倾角，纵向为主的手势在 updatePageDrag 里被挡掉
+    // （分页模式下纵向滑动本来就不做事）。
     // 当前内置阅读器没有缩放/选词/批注手势，不存在与它们争手势的场景；将来若加入，
-    // 应把这两条 PanGesture 与缩放/选择放进同一个 GestureGroup，并把缩放/选择设为高优先级。
+    // 应把这条 PanGesture 与缩放/选择放进同一个 GestureGroup，并把缩放/选择设为高优先级。
     .gesture(
-      GestureGroup(GestureMode.Parallel,
-        PanGesture({ direction: PanDirection.Horizontal, distance: 6 })
-          .onActionStart(() => this.beginPageDrag())
-          .onActionUpdate((event: GestureEvent) => this.updatePageDrag(event.offsetX))
-          .onActionEnd((event: GestureEvent) => this.endPageDrag(event.velocityX))
-          .onActionCancel(() => this.cancelPageDrag()),
-        PanGesture({ direction: PanDirection.Horizontal, distance: 6, fingers: 2 })
-          .onActionStart(() => this.beginPageDrag())
-          .onActionUpdate((event: GestureEvent) => this.updatePageDrag(event.offsetX))
-          .onActionEnd((event: GestureEvent) => this.endPageDrag(event.velocityX))
-          .onActionCancel(() => this.cancelPageDrag()),
-      ),
+      PanGesture({ direction: PanDirection.All, distance: 6 })
+        .onActionStart((event: GestureEvent) => this.beginPageDrag(event))
+        .onActionUpdate((event: GestureEvent) => this.updatePageDrag(event.offsetX, event.offsetY))
+        .onActionEnd((event: GestureEvent) => this.endPageDrag(event.velocityX))
+        .onActionCancel(() => this.cancelPageDrag()),
     )
     .onClick((event: ClickEvent) => this.onPagerClick(event));
   }
 
   // ---- 仿真翻页 ----
   //
-  // 自绘近似仿真：把当前页按「折痕」裁掉已经卷走的一段，下层铺翻页后要显示的那一页，
-  // 折痕处用两段渐变分别画「落在新页上的投影」与「当前页卷边的暗部」。
-  // 拖动距离 d ⇒ 折痕位置 = 内容区宽度 - d（向右翻）/ d（向左回），抬手后的动画把 d 补满一整屏，
-  // 折痕随之扫到另一端，视觉上就是整页翻过去。
+  // 折痕几何见 `SimCurl.ets`：折痕**过当前手指位置**、方向**垂直于拖动方向**，手指按下点决定
+  // 哪一侧是被抓住、要卷起来的纸。水平拖动 ⇒ 竖直折痕（跟手 1:1）；斜向拖动 ⇒ 折痕倾斜，
+  // 于是「从不同区域、不同方向起手，卷页效果不一样」。
+  // 当前页按折痕做路径裁剪，折痕处叠三条渐变带（投影 / 卷边柱面 / 柱面高光），
+  // 抬手后的动画把折痕扫到页面另一端，视觉上就是整页翻过去。
 
   @Builder
   simLayers() {
-    // 几何都在这里现算：@Builder 只登记「方法体里直接出现过的状态变量」，
-    // 把 pageIndex/dragOffset/dragDir 藏进 helper 方法会让这一层第一次渲染后再不更新
-    // （表现为页码在变、页面内容停在旧页）。
-    // 下层：翻页后要显示的那一页（未拖动时先铺下一页，方向确定后按方向切）
-    this.simLayer({
-      index: this.dragDir === -1 ? this.pageIndex - 1 : this.pageIndex + 1,
-      clipX: 0,
-      clipW: this.contentWidthVp,
-      order: 1,
-    });
+    // 下层：翻页后要显示的那一页（整页铺满，未卷走的地方就从这里露出来）
+    this.simTargetLayer();
     this.simFoldShading();
-    // 上层：当前页按折痕裁切（保留未卷走的一段）
-    this.simLayer({
-      index: this.pageIndex,
-      clipX: this.dragDir === -1 ? simFoldX(this.contentWidthVp, this.dragOffset, this.dragDir) : 0,
-      clipW: this.dragDir === -1
-        ? Math.max(0, this.contentWidthVp - simFoldX(this.contentWidthVp, this.dragOffset, this.dragDir))
-        : Math.max(0, simFoldX(this.contentWidthVp, this.dragOffset, this.dragDir)),
-      order: 3,
-    });
+    // 上层：当前页按折痕裁切（折痕过手指、垂直于拖动方向）
+    this.simFrontLayer();
   }
 
-  /**
-   * 仿真翻页的单层：外层只留 `clipW` 宽并 `clip(true)`，内层固定整页宽度，
-   * 这样被裁掉的部分不会让正文按窄宽度重新换行（每页的排版仍按内容区宽度算）。
-   */
+  /** 仿真翻页的下层：翻页后要显示的那一页（未拖动时铺下一页，方向确定后按方向切）。 */
   @Builder
-  simLayer(spec: SimLayerSpec) {
-    if (spec.index >= 0 && spec.index < this.pageCount && spec.clipW > 0) {
+  simTargetLayer() {
+    if (this.dragDir === -1 ? (this.pageIndex > 0) : (this.pageIndex + 1 < this.pageCount)) {
       Stack() {
-        Stack() {
-          ReaderPageView({
-            pages: this.pageSource,
-            pageIndex: spec.index,
-            pageCount: this.pageCount,
-            pageToken: this.paginationToken,
-            offsetX: 0,
-            layerOrder: 0,
-            fontSize: this.fontSize,
-            lineHeight: this.lineHeight,
-            theme: this.theme,
-            horizontalSpace: CONTENT_HORIZONTAL_SPACE,
-            topSpace: CONTENT_TOP_SPACE,
-            bottomSpace: CONTENT_BOTTOM_SPACE,
-            pageWidthVp: this.textWidthVp(),
-            pageHeightVp: this.textHeightVp(),
-            chapterTitle: this.chapterTitle,
-            bookTitle: this.bookTitle,
-            batteryLevel: this.batteryLevel,
-            batteryCharging: this.batteryCharging,
-            fontFamily: this.fontFamily,
-          });
-        }
-        .width(this.contentWidthVp)
-        .height('100%')
-        .alignContent(Alignment.TopStart);
+        this.pageView({
+          index: this.dragDir === -1 ? this.pageIndex - 1 : this.pageIndex + 1,
+          offset: 0,
+          opacity: 1,
+        });
       }
-      .width(spec.clipW)
+      .width('100%')
       .height('100%')
-      .clip(true)
-      .alignContent(Alignment.TopStart)
-      .position({ x: spec.clipX, y: 0 })
-      .zIndex(spec.order);
+      .zIndex(1);
     }
   }
 
   /**
-   * 折痕处的两条渐变：落在新页上的投影 + 当前页的卷边（纸卷高光）。
-   * 自动降级后只保留裁切（省掉两条全屏渐变的全屏合成），折痕依然跟手。
+   * 仿真翻页的当前页层：整页渲染 + `clipShape` 按折痕裁掉被卷走的一侧。
+   * 用路径裁剪而不是「窄容器 + 固定宽内层」，折痕才能是任意角度的直线（斜向拖动时纸边也是斜的）。
+   * 几何在这里现算：`@Builder` 只登记构建函数体里直接出现过的状态变量，藏进方法就不跟手。
+   */
+  @Builder
+  simFrontLayer() {
+    if (this.pageIndex >= 0 && this.pageIndex < this.pageCount) {
+      Stack() {
+        this.pageView({ index: this.pageIndex, offset: 0, opacity: 1 });
+      }
+      .width('100%')
+      .height('100%')
+      .clipShape(new PathShape({
+        commands: curlFoldGeometry(this.contentWidthVp, this.contentHeightVp,
+          this.touchX, this.touchY, this.dragOffset, this.dragOffsetY).frontPath,
+      }))
+      .zIndex(3);
+    }
+  }
+
+  /**
+   * 折痕处的三段渐变：落在新页上的投影、当前页一侧的卷边柱面、柱面高光细线。
+   * 三条带子都沿折痕摆放并按折痕角度旋转，所以斜折痕时阴影与卷边同样贴合。
+   * 自动降级后只保留裁切（省掉全屏合成），折痕依然跟手。
    */
   @Builder
   simFoldShading() {
     if (Math.abs(this.dragOffset) > 0 && !this.reduceEffects) {
+      // 三条带子的摆放都由 SimCurl 现算（属性表达式里直接调用：@Builder 内不能写局部变量，
+      // 而状态变量必须在构建函数体里直读，所以几何输入都从这里传进去）
       Column()
-        .width(simShadowWidth(this.contentWidthVp, this.dragOffset, this.dragDir))
-        .height('100%')
+        .width(SIM_FOLD_SHADOW_VP)
+        .height(bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
+          this.dragOffset, this.dragOffsetY, SIM_FOLD_SHADOW_VP, true, SIM_FOLD_SHADOW_VP / 2).length)
         .linearGradient({ angle: 90, colors: simShadowColors(this.theme, this.dragDir) })
-        .position({ x: simShadowX(this.contentWidthVp, this.dragOffset, this.dragDir), y: 0 })
+        .position({
+          x: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
+            this.dragOffset, this.dragOffsetY, SIM_FOLD_SHADOW_VP, true, SIM_FOLD_SHADOW_VP / 2).x,
+          y: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
+            this.dragOffset, this.dragOffsetY, SIM_FOLD_SHADOW_VP, true, SIM_FOLD_SHADOW_VP / 2).y,
+        })
+        .rotate({
+          angle: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
+            this.dragOffset, this.dragOffsetY, SIM_FOLD_SHADOW_VP, true, SIM_FOLD_SHADOW_VP / 2).rotationDeg,
+        })
         .zIndex(2);
       Column()
-        .width(simRollWidth(this.contentWidthVp, this.dragOffset, this.dragDir))
-        .height('100%')
+        .width(SIM_ROLL_VP)
+        .height(bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
+          this.dragOffset, this.dragOffsetY, SIM_ROLL_VP, false, SIM_ROLL_VP / 2).length)
         .linearGradient({ angle: 90, colors: simRollColors(this.theme, this.dragDir) })
-        .position({ x: simRollX(this.contentWidthVp, this.dragOffset, this.dragDir), y: 0 })
+        .position({
+          x: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
+            this.dragOffset, this.dragOffsetY, SIM_ROLL_VP, false, SIM_ROLL_VP / 2).x,
+          y: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
+            this.dragOffset, this.dragOffsetY, SIM_ROLL_VP, false, SIM_ROLL_VP / 2).y,
+        })
+        .rotate({
+          angle: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
+            this.dragOffset, this.dragOffsetY, SIM_ROLL_VP, false, SIM_ROLL_VP / 2).rotationDeg,
+        })
         .zIndex(4);
       Column()
-        .width(simGlintWidth(this.contentWidthVp, this.dragOffset, this.dragDir))
-        .height('100%')
+        .width(SIM_ROLL_GLINT_VP)
+        .height(bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
+          this.dragOffset, this.dragOffsetY, SIM_ROLL_GLINT_VP, false,
+          SIM_ROLL_VP * SIM_ROLL_CREST_RATIO).length)
         .backgroundColor(simGlintColor(this.theme))
-        .position({ x: simGlintX(this.contentWidthVp, this.dragOffset, this.dragDir), y: 0 })
+        .position({
+          x: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
+            this.dragOffset, this.dragOffsetY, SIM_ROLL_GLINT_VP, false,
+            SIM_ROLL_VP * SIM_ROLL_CREST_RATIO).x,
+          y: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
+            this.dragOffset, this.dragOffsetY, SIM_ROLL_GLINT_VP, false,
+            SIM_ROLL_VP * SIM_ROLL_CREST_RATIO).y,
+        })
+        .rotate({
+          angle: bandPlacement(this.contentWidthVp, this.contentHeightVp, this.touchX, this.touchY,
+            this.dragOffset, this.dragOffsetY, SIM_ROLL_GLINT_VP, false,
+            SIM_ROLL_VP * SIM_ROLL_CREST_RATIO).rotationDeg,
+        })
         .zIndex(5);
     }
   }
@@ -1449,10 +1478,19 @@ export struct ReaderView {
   // ---- 翻页交互 ----
 
   // 命名避开 CustomComponent 内置的 onDragStart/onDragEnd（拖拽事件回调）
-  private beginPageDrag(): void {
+  private beginPageDrag(event: GestureEvent): void {
     this.dragDir = 0;
     this.dragOffset = 0;
+    this.dragOffsetY = 0;
     this.dragRaw = 0;
+    this.dragVertical = false;
+    this.foldLogged = false;
+    this.lastPanAt = Date.now();
+    const fingers: FingerInfo[] = event.fingerList;
+    if (fingers.length > 0) {
+      this.touchX = fingers[0].localX;
+      this.touchY = fingers[0].localY;
+    }
     this.frameWatch.start(this.getUIContext(), () => this.onMeasuredJank());
   }
 
@@ -1472,21 +1510,43 @@ export struct ReaderView {
     }
   }
 
-  /** 跟手位移：无动画模式不做位移，只在抬手时按方向瞬时翻页。 */
-  private updatePageDrag(dx: number): void {
+  /**
+   * 跟手位移：无动画模式不做位移，只在抬手时按方向瞬时翻页。
+   * `dy` 只用于仿真翻页的折痕倾斜（横向平移仍只看 `dx`）。
+   */
+  private updatePageDrag(dx: number, dy: number): void {
     const width = this.contentWidthVp;
     // 钳制在左右各一屏内：拖过头也不会把页面甩出可视区
     this.dragRaw = Math.min(width, Math.max(-width, dx));
     if (this.dragDir === 0) {
-      if (Math.abs(dx) < 2) {
+      if (Math.abs(dx) < 2 && Math.abs(dy) < 2) {
+        return;
+      }
+      // 轴向锁：纵向为主的手势不是翻页（分页模式下纵向滑动本来就不做事）
+      if (Math.abs(dy) > Math.abs(dx)) {
+        this.dragVertical = true;
         return;
       }
       this.dragDir = dx < 0 ? 1 : -1;
     }
+    if (this.dragVertical) {
+      return;
+    }
+    this.lastPanAt = Date.now();
+    this.dragOffsetY = dy;
     if (this.flipMode === READER_FLIP_NONE) {
       return;
     }
     this.dragOffset = this.dragRaw;
+    // 打一次跟手延迟探针：下一帧渲染回调时结算「手势事件 → 画面更新」的耗时
+    this.frameWatch.probe();
+    if (!this.foldLogged) {
+      this.foldLogged = true;
+      const fold: CurlFold = curlFoldGeometry(this.contentWidthVp, this.contentHeightVp,
+        this.touchX, this.touchY, this.dragOffset, this.dragOffsetY);
+      hilog.debug(0x0000, TAG, '折痕几何：倾角 %{public}s°，跨度 %{public}s，抓取侧 %{public}d',
+        fold.rotationDeg.toFixed(1), fold.span.toFixed(0), fold.peelSign);
+    }
   }
 
   /**
@@ -1505,6 +1565,8 @@ export struct ReaderView {
     }
     const threshold = this.contentWidthVp * PAGE_TURN_RATIO;
     const fling = Math.abs(velocity) >= FLING_VELOCITY_VP && velocity * dir < 0;
+    hilog.debug(0x0000, TAG, '抬手结算：dir=%{public}d 拖距 %{public}s vp 速度 %{public}s ⇒ %{public}s',
+      dir, this.dragRaw.toFixed(0), velocity.toFixed(0), (fling || dir * this.dragRaw <= -threshold) ? '翻页' : '回弹');
     if (!fling && dir * this.dragRaw > -threshold) {
       this.animateBack();
       return;
@@ -1655,6 +1717,10 @@ export struct ReaderView {
    * 单手模式下左右两侧都是「下一页」，后退只能靠向右滑动（拇指够不到左侧）。
    */
   private onPagerClick(event: ClickEvent): void {
+    // 刚拖动过（含被识别成拖动但最终回弹的情况）就不当点击
+    if (Date.now() - this.lastPanAt < CLICK_AFTER_PAN_MS) {
+      return;
+    }
     const width = this.contentWidthVp;
     if (width <= 0) {
       this.toggleBars();
@@ -1667,6 +1733,8 @@ export struct ReaderView {
       return;
     }
     const back = !this.oneHandMode && x <= width * TAP_ZONE_RATIO;
+    hilog.debug(0x0000, TAG, '点击翻页：x=%{public}s vp / 宽 %{public}s vp ⇒ %{public}s',
+      x.toFixed(0), width.toFixed(0), back ? '上一页' : '下一页');
     this.turnPageAnimated(back ? -1 : 1);
   }
 
