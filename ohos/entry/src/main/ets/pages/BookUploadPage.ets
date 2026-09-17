@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { PageScaffold, PrimaryButton, TextButton, SecondaryButton } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
@@ -27,6 +28,21 @@ const ITEM_FAILED = 'failed';
 /** 超过该大小走分块上传（与服务端分块导入逻辑对齐） */
 const CHUNK_THRESHOLD = 8 * 1024 * 1024;
 const CHUNK_SIZE = 4 * 1024 * 1024;
+const TAG: string = 'BookUpload';
+/**
+ * 是否默认走批量通道（POST /api/book/upload/batch）。
+ *
+ * 默认关闭：批量通道要服务端先把文件暂存进 scan_upload_path 再交给扫描导入，实测在部分部署上
+ * 这一步必然失败（返回 internal「保存上传文件失败…」或 400），客户端只能回退逐个上传 —— 等于
+ * 白传一整批文件；而单文件接口（POST /api/book/upload）一次一个、直接返回 book_id，结果即时
+ * 可见。因此默认逐个上传，批量通道保留在开关之后，服务端修好且确实需要时可改回 true。
+ */
+const USE_BATCH_UPLOAD = false;
+/**
+ * 本次运行内批量通道已被判定不可用的标记（AppStorage）。仅在 USE_BATCH_UPLOAD 打开时使用：
+ * 一旦失败就不再重试，避免每次上传都白传一遍整批文件再弹一次错误。
+ */
+const BATCH_UNAVAILABLE_KEY = 'talebookUploadBatchUnavailable';
 
 /** 把异常转成可读文本：优先取 message，避免界面上出现 "Error: xxx" 前缀。 */
 function errorText(e: Object): string {
@@ -228,13 +244,21 @@ struct BookUploadPage {
           // 临时分块用完即删：不留在缓存里，重传时才不会误判成「已上传」
           BookUploadService.removeStagedFile(chunkPath);
         }
-        if (rsp.err !== undefined && rsp.err !== 'ok') {
+        if (rsp.err !== undefined && rsp.err !== 'ok' && rsp.err !== 'samebook') {
           const msg = apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '分块上传失败';
           this.patchItem(item.id, ITEM_FAILED, msg, Number(rsp.book_id ?? 0), '');
           return false;
         }
+        if (rsp.err === 'samebook') {
+          // 同名同格式已在库里：服务端没有重新导入，但书确实在（与单文件接口一致按「已上传」算）。
+          // 旧实现把它当失败，于是回退整包上传又把同一个文件传了一遍。
+          this.patchItem(item.id, ITEM_SUCCESS, '已存在该格式', Number(rsp.book_id ?? 0), '');
+          BookUploadService.removeStagedFile(item.localPath);
+          BookUploadService.markLibraryDirty();
+          return true;
+        }
         if (Number(rsp.book_id ?? 0) > 0) {
-          // 最后一块：服务端已合并并导入（同名同格式已存在时也会带回 book_id，同样算已上传）
+          // 最后一块：服务端已合并并导入
           this.patchItem(item.id, ITEM_SUCCESS, '', Number(rsp.book_id ?? 0), '');
           BookUploadService.removeStagedFile(item.localPath);
           BookUploadService.markLibraryDirty();
@@ -511,23 +535,17 @@ struct BookUploadPage {
   }
 
   private async startUpload(): Promise<void> {
-    // 诊断：batchHint 在页面常驻渲染，用它可以精确定位流程停在哪一步
-    this.batchHint = '① 已触发上传';
     if (this.uploading) {
-      this.batchHint = '② 已在上传中，忽略本次点击';
       return;
     }
     if (this.pendingCount() === 0) {
-      this.batchHint = '② 没有待上传的文件';
       this.toast('没有待上传的文件');
       return;
     }
     if (!TalebookService.ensureTalebookConfigured()) {
-      this.batchHint = '② 服务器未配置';
       this.toast('请先配置 Talebook 服务器');
       return;
     }
-    this.batchHint = '③ 前置检查通过，正在上传…';
     this.uploading = true;
     // 不在此处 await 登录校验：ensureTalebookConfigured() 已把服务端地址同步给
     // native（内部调用 syncBaseUrl），请求直接携带凭据发出。这样 startUpload
@@ -535,66 +553,28 @@ struct BookUploadPage {
     const queue = this.items.filter((item: UploadItem) => item.status === ITEM_PENDING ||
       item.status === ITEM_FAILED);
 
-    // 大文件仍走分块；小文件优先批量接口（需 native 重建后 uploadBookBatch 才可用）
-    const largeQueue: UploadItem[] = [];
+    // 大文件（>8MB）走分块；小文件逐个上传（默认），只有显式开启批量通道时才整批提交
+    const chunkQueue: UploadItem[] = [];
     const smallQueue: UploadItem[] = [];
     for (const item of queue) {
-      // 当前服务端不支持批量上传时，全部改走分片上传通道
-      if (item.size > CHUNK_THRESHOLD || !ServerRegistry.supports(ServerFeature.BATCH_UPLOAD)) {
-        largeQueue.push(item);
+      if (item.size > CHUNK_THRESHOLD) {
+        chunkQueue.push(item);
       } else {
         smallQueue.push(item);
       }
     }
-    this.batchHint = `⑥ 通道就绪，小文件 ${smallQueue.length} 个、大文件 ${largeQueue.length} 个`;
+    this.batchHint = `正在上传 ${queue.length} 个文件…`;
 
     if (smallQueue.length > 0) {
-      for (const item of smallQueue) {
-        this.patchItem(item.id, ITEM_UPLOADING, '', 0, '批量上传中');
-      }
-      try {
-        const files: BatchUploadFile[] = smallQueue.map((item: UploadItem) => {
-          const f: BatchUploadFile = {
-            localPath: item.localPath,
-            name: item.name,
-            relativePath: item.name,
-          };
-          return f;
-        });
-        const startRsp: UploadBatchStartResponse = await TalebookApi.uploadBookBatch(files);
-        if (startRsp.err !== undefined && startRsp.err !== 'ok') {
-          // 服务端返回业务错误（如「保存上传文件失败」「服务器扫描导入目录未配置」）说明批量通道
-          // 整体不可用：透传 msg 原文，并回退逐个调用单文件接口，避免只报错不落书。
-          const msg = apiErrorMessage(startRsp).length > 0 ? apiErrorMessage(startRsp) : '批量上传失败';
-          this.batchHint = `批量上传失败，回退单文件上传：${msg}`;
-          this.toast(`批量上传失败，正在逐个重试：${msg}`);
-          await this.uploadIndividually(smallQueue);
-        } else {
-          const importId = Number(startRsp.import_id ?? 0);
-          if (importId > 0) {
-            this.batchImportId = importId;
-            this.batchHint = `已提交批量任务 ${importId}，共 ${Number(startRsp.file_count ?? smallQueue.length)} 个文件`;
-            // 轮询期间保持 uploading=true
-            await this.pollBatchStatus();
-          } else {
-            // 无 import_id：视为同步完成
-            for (const item of smallQueue) {
-              this.patchItem(item.id, ITEM_SUCCESS, '', 0, '');
-              BookUploadService.removeStagedFile(item.localPath);
-            }
-            BookUploadService.markLibraryDirty();
-          }
-        }
-      } catch (e) {
-        // 批量接口请求本身失败：透传原因，再回退逐个 uploadBookFile
-        const reason = errorText(e);
-        this.batchHint = `批量接口不可用，回退单文件上传：${reason}`;
-        this.toast(`批量上传失败，正在逐个重试：${reason}`);
+      // 默认逐个上传：一次请求一个文件、直接拿到 book_id，失败也只影响那一个文件。
+      // USE_BATCH_UPLOAD 打开时多文件才先试批量通道（失败仍会回退到这里）。
+      const useBatch = USE_BATCH_UPLOAD && smallQueue.length > 1;
+      if (!useBatch || !(await this.tryBatchUpload(smallQueue))) {
         await this.uploadIndividually(smallQueue);
       }
     }
 
-    for (const item of largeQueue) {
+    for (const item of chunkQueue) {
       this.patchItem(item.id, ITEM_UPLOADING, '', 0, '');
       try {
         const chunkedOk = await this.uploadChunked(item);
@@ -611,11 +591,101 @@ struct BookUploadPage {
     }
 
     this.uploading = false;
+    this.reportResult(queue);
   }
 
-  /** 逐个走单文件接口（POST /api/book/upload）上传，用于批量通道不可用时兜底。 */
-  private async uploadIndividually(queue: UploadItem[]): Promise<void> {
+  /** 批量通道不可用：只留一条中性提示（不弹错误、不显示服务端内部报错），并把失败原因写 hilog。
+   * 调用方随即回退逐个上传 —— 那才是真正的结果来源，所以这里不该报「失败」吓用户。
+   */
+  private disableBatchChannel(reason: string): void {
+    AppStorage.setOrCreate<boolean>(BATCH_UNAVAILABLE_KEY, true);
+    hilog.warn(0x0000, TAG, 'batch channel unavailable, fallback to single upload: %{public}s', reason);
+    this.batchHint = '服务端批量导入暂不可用，已自动改为逐个上传';
+  }
+
+  /**
+   * 批量通道（POST /api/book/upload/batch，仅 MyBooks 提供）：服务端把文件暂存到扫描导入目录后
+   * 异步扫描入库。仅在 USE_BATCH_UPLOAD 打开时被调用（默认关闭）；该通道依赖服务端
+   * scan_upload_path 可写，实测存在暂存就失败的部署（返回 internal「保存上传文件失败…」或 400），
+   * 这类失败不作为错误提示，由调用方回退逐个上传。
+   *
+   * @returns true 表示批量通道已受理（含轮询到结束）；false 表示需要回退逐个上传。
+   */
+  private async tryBatchUpload(queue: UploadItem[]): Promise<boolean> {
+    // 服务端不支持该端点、或本次运行内已经失败过：不再白跑一趟，直接走逐个上传
+    if (!ServerRegistry.supports(ServerFeature.BATCH_UPLOAD) ||
+      AppStorage.get<boolean>(BATCH_UNAVAILABLE_KEY) === true) {
+      return false;
+    }
     for (const item of queue) {
+      this.patchItem(item.id, ITEM_UPLOADING, '', 0, '批量上传中');
+    }
+    let startRsp: UploadBatchStartResponse;
+    try {
+      const files: BatchUploadFile[] = queue.map((item: UploadItem) => {
+        const f: BatchUploadFile = {
+          localPath: item.localPath,
+          name: item.name,
+          relativePath: item.name,
+        };
+        return f;
+      });
+      startRsp = await TalebookApi.uploadBookBatch(files);
+    } catch (e) {
+      this.disableBatchChannel(errorText(e));
+      return false;
+    }
+    if (startRsp.err !== undefined && startRsp.err !== 'ok') {
+      const msg = apiErrorMessage(startRsp);
+      this.disableBatchChannel(msg.length > 0 ? msg : `err=${startRsp.err}`);
+      return false;
+    }
+    const importId = Number(startRsp.import_id ?? 0);
+    if (importId > 0) {
+      this.batchImportId = importId;
+      this.batchHint = `已提交批量任务 ${importId}，共 ${Number(startRsp.file_count ?? queue.length)} 个文件`;
+      // 轮询期间保持 uploading=true
+      await this.pollBatchStatus();
+      return true;
+    }
+    // 无 import_id：服务端按同步完成处理
+    for (const item of queue) {
+      this.patchItem(item.id, ITEM_SUCCESS, '', 0, '');
+      BookUploadService.removeStagedFile(item.localPath);
+    }
+    BookUploadService.markLibraryDirty();
+    return true;
+  }
+
+  /** 上传收尾汇总：成功不弹 Toast（每次上传都弹很吵），只有失败才提示。 */
+  private reportResult(queue: UploadItem[]): void {
+    let ok = 0;
+    let failed = 0;
+    for (const item of queue) {
+      const cur = this.items.find((x: UploadItem) => x.id === item.id);
+      if (cur === undefined) {
+        continue;
+      }
+      if (cur.status === ITEM_SUCCESS) {
+        ok++;
+      } else if (cur.status === ITEM_FAILED) {
+        failed++;
+      }
+    }
+    if (failed > 0) {
+      this.batchHint = `上传结束：成功 ${ok} 个，失败 ${failed} 个`;
+      this.toast(`${failed} 个文件上传失败`);
+    } else if (ok > 0) {
+      this.batchHint = `上传完成：成功 ${ok} 个`;
+    } else {
+      this.batchHint = '';
+    }
+  }
+
+  /** 逐个走单文件接口（POST /api/book/upload）上传：批量通道不可用时的正常路径，也是最终结果来源。 */
+  private async uploadIndividually(queue: UploadItem[]): Promise<void> {
+    for (let i = 0; i < queue.length; i++) {
+      const item = queue[i];
       const cur = this.items.find((x: UploadItem) => x.id === item.id);
       if (cur === undefined) {
         continue;
@@ -624,7 +694,8 @@ struct BookUploadPage {
         cur.status !== ITEM_FAILED) {
         continue;
       }
-      this.patchItem(item.id, ITEM_UPLOADING, '', 0, '');
+      // 多个文件时显示队列位置（上传中… 2/5），让用户知道还剩几个
+      this.patchItem(item.id, ITEM_UPLOADING, '', 0, queue.length > 1 ? `${i + 1}/${queue.length}` : '');
       try {
         const rsp: UploadBookResponse = await TalebookApi.uploadBookFile(item.localPath, item.name);
         if (rsp.err === 'ok' || rsp.err === 'samebook') {
@@ -772,7 +843,7 @@ struct BookUploadPage {
       Text('支持 EPUB / MOBI / AZW3 / TXT / PDF / DOCX，可多选')
         .fontSize(12)
         .fontColor($r('app.color.text_secondary'));
-      Text('小文件走批量上传，超过 8MB 自动分块')
+      Text('超过 8MB 的文件自动分块上传')
         .fontSize(12)
         .fontColor($r('app.color.text_tertiary'));
 
