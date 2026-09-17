@@ -4,6 +4,7 @@ import {
   BookEngine,
   READER_FLIP_COVER,
   READER_FLIP_DEFAULT,
+  READER_FLIP_FADE,
   READER_FLIP_NONE,
   READER_FLIP_OPTIONS,
   READER_FLIP_SIM,
@@ -30,6 +31,7 @@ import { LazyDataSource } from './LazyDataSource';
 import { ReaderBattery } from './ReaderBattery';
 import { ReaderChrome } from './ReaderChrome';
 import { ReaderClock } from './ReaderClock';
+import { ReaderFrameWatch } from './ReaderFrameWatch';
 import { ReaderControlPanel } from './ReaderControlPanel';
 import { ReaderOverlayBar } from './ReaderOverlayBar';
 import { PAGE_FOOTER_SPACE, PAGE_HEADER_SPACE, ReaderPageView } from './ReaderPageView';
@@ -52,9 +54,9 @@ const PAGE_TURN_RATIO: number = 0.25;
 const TAP_ZONE_RATIO: number = 0.33;
 /** 甩动翻页的速度阈值（vp/s）：拖动距离不够但甩得快也翻页，不必拖满 1/4 屏。 */
 const FLING_VELOCITY_VP: number = 400;
-/** 仿真翻页：折痕落在下层新页上的投影宽度（vp）与当前页卷边的压暗宽度（vp）。 */
+/** 仿真翻页：折痕落在下层新页上的投影宽度（vp）与当前页卷边（纸卷高光带）宽度（vp）。 */
 const SIM_FOLD_SHADOW_VP: number = 26;
-const SIM_FOLD_EDGE_VP: number = 12;
+const SIM_FOLD_EDGE_VP: number = 14;
 
 /**
  * 仿真翻页的折痕横坐标（vp）：向右翻（dir = 1）时折痕随手指左移，向左回（dir = -1）时右移。
@@ -85,15 +87,33 @@ function simShadowX(width: number, offset: number, dir: number): number {
   return dir === -1 ? Math.max(0, foldX - simShadowWidth(width, offset, dir)) : foldX;
 }
 
-/** 卷边暗部宽度：贴住折痕、不超过当前页还没卷走的宽度。 */
+/** 卷边（纸卷）宽度：贴住折痕、不超过当前页还没卷走的宽度。 */
 function simEdgeWidth(width: number, offset: number, dir: number): number {
   return Math.min(SIM_FOLD_EDGE_VP, width - simRevealedWidth(width, offset, dir));
 }
 
-/** 卷边暗部起始横坐标：永远落在当前页一侧。 */
+/** 卷边起始横坐标：永远落在当前页一侧。 */
 function simEdgeX(width: number, offset: number, dir: number): number {
   const foldX = simFoldX(width, offset, dir);
   return dir === -1 ? foldX : Math.max(0, foldX - simEdgeWidth(width, offset, dir));
+}
+
+/**
+ * 页面层不透明度（只有淡入淡出模式会 < 1）。
+ *
+ * 与 `simFoldX` 同样是模块级纯函数：`dragOffset`/`dragDir`/`flipMode` 必须在构建函数体里
+ * 直接读出来，藏进组件方法时 ArkUI 不会把它们登记成这一块的依赖，拖动时整块不再重建
+ * ——表现就是「跟手失效」（页不跟手指走，只有抬手后的翻页动画生效）。
+ */
+function layerOpacity(mode: string, width: number, offset: number, dir: number, drag: number): number {
+  if (mode !== READER_FLIP_FADE || offset === 0) {
+    return 1;
+  }
+  const incoming = dir === 1 ? 1 : (dir === -1 ? -1 : 0);
+  if (incoming === 0 || offset !== incoming) {
+    return 0;
+  }
+  return width <= 0 ? 0 : Math.min(1, Math.abs(drag) / width);
 }
 
 /** 折痕投影的渐变：深色主题下纸面本身很暗，投影要加重才看得出来。 */
@@ -103,11 +123,17 @@ function simShadowColors(theme: ReaderTheme, dir: number): Array<[ResourceColor,
   return dir === -1 ? [[clear, 0], [strong, 1]] : [[strong, 0], [clear, 1]];
 }
 
-/** 卷边暗部：只压一点点，避免折痕看起来像一条黑线。 */
-function simEdgeColors(theme: ReaderTheme, dir: number): Array<[ResourceColor, number]> {
-  const edge: string = theme === ReaderTheme.DARK ? '#3D000000' : '#1F000000';
+/**
+ * 卷边渐变：暗 → 亮 → 暗，中间那道高光就是卷起纸卷的受光面。
+ * 只有两端的暗部而没有高光时，折痕会看起来像一条贴在纸上的黑边。
+ */
+function simRollColors(theme: ReaderTheme, dir: number): Array<[ResourceColor, number]> {
+  const dark: string = theme === ReaderTheme.DARK ? '#4D000000' : '#29000000';
+  const light: string = theme === ReaderTheme.DARK ? '#1FFFFFFF' : '#2EFFFFFF';
   const clear: string = '#00000000';
-  return dir === -1 ? [[edge, 0], [clear, 1]] : [[clear, 0], [edge, 1]];
+  return dir === -1
+    ? [[dark, 0], [light, 0.45], [clear, 1]]
+    : [[clear, 0], [light, 0.55], [dark, 1]];
 }
 /** 测量入参单位自校准用的探针宽度（vp）。 */
 const PROBE_WIDTH_VP: number = 80;
@@ -155,6 +181,8 @@ interface ParsedLocation {
 interface ReaderLayerSpec {
   index: number;
   offset: number;
+  /** 该层不透明度（仅淡入淡出模式 < 1；其余模式恒为 1）。 */
+  opacity: number;
 }
 
 /**
@@ -218,6 +246,11 @@ export struct ReaderView {
   @State private keepScreenOn: boolean = DEFAULT_SETTINGS.keepScreenOn;
   /** 单手模式：点击左右两侧均为下一页，只有滑动才能回上一页。 */
   @State private oneHandMode: boolean = DEFAULT_SETTINGS.oneHandMode;
+  /**
+   * 特效降级：帧采样判定掉帧后置位。先去掉折痕的两条全屏渐变（省合成开销），
+   * 仍掉帧则把仿真翻页降级成覆盖翻页，保证低端设备上「跟手」优先。
+   */
+  @State private reduceEffects: boolean = false;
   /** 控制面板朗读页的语速：本阅读器未启用朗读，仅满足面板的 @Link 绑定。 */
   @State private ttsSpeed: number = 1.0;
   /** 分页状态。 */
@@ -255,6 +288,8 @@ export struct ReaderView {
   private measureArgScale: number = 0;
   /** 工具栏自动隐藏定时器。 */
   private barTimer: number = -1;
+  /** 翻页帧耗时采样（按设备性能自动降级特效）。 */
+  private frameWatch: ReaderFrameWatch = new ReaderFrameWatch();
   /** 页脚电量（-1 表示读取失败，不显示）。 */
   @State private batteryLevel: number = -1;
   @State private batteryCharging: boolean = false;
@@ -302,6 +337,7 @@ export struct ReaderView {
   aboutToDisappear(): void {
     this.destroyed = true;
     this.pendingScrollIndex = -1;
+    this.frameWatch.stop();
     this.cancelBarsAutoHide();
     if (this.batteryTimer >= 0) {
       clearInterval(this.batteryTimer);
@@ -441,16 +477,30 @@ export struct ReaderView {
         this.simLayers();
       } else {
         if (this.pageIndex > 0 || this.dragDir === -1) {
-          this.pageLayer({ index: this.pageIndex - 1, offset: -1 });
+          this.pageLayer({
+            index: this.pageIndex - 1,
+            offset: -1,
+            // 参数里直接读 dragOffset/dragDir：这一块才会随拖拽逐帧重建（跟手）
+            opacity: layerOpacity(this.flipMode, this.contentWidthVp, -1, this.dragDir, this.dragOffset),
+          });
         }
         if (this.pageIndex < this.pageCount - 1 || this.dragDir === 1) {
-          this.pageLayer({ index: this.pageIndex + 1, offset: 1 });
+          this.pageLayer({
+            index: this.pageIndex + 1,
+            offset: 1,
+            opacity: layerOpacity(this.flipMode, this.contentWidthVp, 1, this.dragDir, this.dragOffset),
+          });
         }
-        this.pageLayer({ index: this.pageIndex, offset: 0 });
+        this.pageLayer({ index: this.pageIndex, offset: 0, opacity: 1 });
       }
     }
     .width('100%')
     .height('100%')
+    // 手势优先级：翻页只认横向拖动，且允许从正文任意位置起手（不限定边缘）。
+    // ArkUI 的 `fingers` 是「最少手指数」，默认 1 指 ⇒ 两指拖动同样触发这条 PanGesture，
+    // 单指/多指共用同一条代码路径，不会出现两条手势同时改 dragOffset 而翻两页的问题。
+    // 当前内置阅读器没有缩放/选词/批注手势，不存在与它们争手势的场景；将来若加入，
+    // 应把这条 PanGesture 收进 GestureGroup(Parallel) 并把缩放/选择设为高优先级。
     .gesture(
       PanGesture({ direction: PanDirection.Horizontal, distance: 6 })
         .onActionStart(() => this.beginPageDrag())
@@ -536,10 +586,13 @@ export struct ReaderView {
     }
   }
 
-  /** 折痕处的两条渐变：落在新页上的投影 + 当前页卷边的暗部。 */
+  /**
+   * 折痕处的两条渐变：落在新页上的投影 + 当前页的卷边（纸卷高光）。
+   * 自动降级后只保留裁切（省掉两条全屏渐变的全屏合成），折痕依然跟手。
+   */
   @Builder
   simFoldShading() {
-    if (Math.abs(this.dragOffset) > 0) {
+    if (Math.abs(this.dragOffset) > 0 && !this.reduceEffects) {
       Column()
         .width(simShadowWidth(this.contentWidthVp, this.dragOffset, this.dragDir))
         .height('100%')
@@ -549,7 +602,7 @@ export struct ReaderView {
       Column()
         .width(simEdgeWidth(this.contentWidthVp, this.dragOffset, this.dragDir))
         .height('100%')
-        .linearGradient({ angle: 90, colors: simEdgeColors(this.theme, this.dragDir) })
+        .linearGradient({ angle: 90, colors: simRollColors(this.theme, this.dragDir) })
         .position({ x: simEdgeX(this.contentWidthVp, this.dragOffset, this.dragDir), y: 0 })
         .zIndex(4);
     }
@@ -564,29 +617,45 @@ export struct ReaderView {
    */
   @Builder
   pageLayer(layer: ReaderLayerSpec) {
-    if (layer.index >= 0 && layer.index < this.pageCount) {
-      ReaderPageView({
-        pages: this.pageSource,
-        pageIndex: layer.index,
-        pageCount: this.pageCount,
-        pageToken: this.paginationToken,
-        offsetX: this.layerX(layer.offset),
-        layerOrder: this.layerZ(layer.offset),
-        fontSize: this.fontSize,
-        lineHeight: this.lineHeight,
-        theme: this.theme,
-        horizontalSpace: CONTENT_HORIZONTAL_SPACE,
-        topSpace: CONTENT_TOP_SPACE,
-        bottomSpace: CONTENT_BOTTOM_SPACE,
-        pageWidthVp: this.textWidthVp(),
-        pageHeightVp: this.textHeightVp(),
-        chapterTitle: this.chapterTitle,
-        bookTitle: this.bookTitle,
-        batteryLevel: this.batteryLevel,
-        batteryCharging: this.batteryCharging,
-        fontFamily: this.fontFamily,
-      });
+    // opacity 为 0 的层（淡入淡出里没轮到的相邻页）直接不建，省掉一次整页文本构建
+    if (layer.index >= 0 && layer.index < this.pageCount && layer.opacity > 0) {
+      if (layer.opacity < 1) {
+        Stack() {
+          this.pageView(layer);
+        }
+        .width('100%')
+        .height('100%')
+        .opacity(layer.opacity);
+      } else {
+        this.pageView(layer);
+      }
     }
+  }
+
+  /** 单页内容：所有翻页方式共用，参数仍是那个对象（刷新语义见 `pageLayer` 注释）。 */
+  @Builder
+  pageView(layer: ReaderLayerSpec) {
+    ReaderPageView({
+      pages: this.pageSource,
+      pageIndex: layer.index,
+      pageCount: this.pageCount,
+      pageToken: this.paginationToken,
+      offsetX: this.layerX(layer.offset),
+      layerOrder: this.layerZ(layer.offset),
+      fontSize: this.fontSize,
+      lineHeight: this.lineHeight,
+      theme: this.theme,
+      horizontalSpace: CONTENT_HORIZONTAL_SPACE,
+      topSpace: CONTENT_TOP_SPACE,
+      bottomSpace: CONTENT_BOTTOM_SPACE,
+      pageWidthVp: this.textWidthVp(),
+      pageHeightVp: this.textHeightVp(),
+      chapterTitle: this.chapterTitle,
+      bookTitle: this.bookTitle,
+      batteryLevel: this.batteryLevel,
+      batteryCharging: this.batteryCharging,
+      fontFamily: this.fontFamily,
+    });
   }
 
   @Builder
@@ -1335,6 +1404,23 @@ export struct ReaderView {
     this.dragDir = 0;
     this.dragOffset = 0;
     this.dragRaw = 0;
+    this.frameWatch.start(this.getUIContext(), () => this.onMeasuredJank());
+  }
+
+  /**
+   * 帧采样判定掉帧：第一级去掉折痕渐变（保留裁切，依然跟手），
+   * 第二级把仿真翻页降级成覆盖翻页。只影响本次会话，不改用户偏好。
+   */
+  private onMeasuredJank(): void {
+    if (!this.reduceEffects) {
+      this.reduceEffects = true;
+      hilog.info(0x0000, TAG, '翻页帧采样判定掉帧，先关闭折痕渐变特效');
+      return;
+    }
+    if (this.flipMode === READER_FLIP_SIM || this.flipMode === READER_FLIP_FADE) {
+      this.flipMode = READER_FLIP_COVER;
+      hilog.info(0x0000, TAG, '持续掉帧，本次会话把翻页方式降级为覆盖翻页');
+    }
   }
 
   /** 跟手位移：无动画模式不做位移，只在抬手时按方向瞬时翻页。 */
@@ -1375,6 +1461,7 @@ export struct ReaderView {
       // 无动画模式：不做位移动画，直接瞬切（含切章）
       this.dragDir = 0;
       this.dragOffset = 0;
+      this.frameWatch.stop();
       this.turnPage(dir);
       return;
     }
@@ -1390,6 +1477,7 @@ export struct ReaderView {
     if (this.flipMode === READER_FLIP_NONE || this.dragOffset === 0) {
       this.dragDir = 0;
       this.dragOffset = 0;
+      this.frameWatch.stop();
       return;
     }
     this.animateBack();
@@ -1405,6 +1493,7 @@ export struct ReaderView {
       onFinish: () => {
         this.dragOffset = 0;
         this.dragDir = 0;
+        this.frameWatch.stop();
         this.turnPage(delta);
       },
     }, () => {
@@ -1418,6 +1507,7 @@ export struct ReaderView {
       curve: Curve.Friction,
       onFinish: () => {
         this.dragDir = 0;
+        this.frameWatch.stop();
       },
     }, () => {
       this.dragOffset = 0;
@@ -1490,6 +1580,7 @@ export struct ReaderView {
     }
     this.pagerPositionApplied = true;
     this.dragDir = delta > 0 ? 1 : -1;
+    this.frameWatch.start(this.getUIContext(), () => this.onMeasuredJank());
     this.animateTurn(delta);
   }
 
@@ -1513,10 +1604,13 @@ export struct ReaderView {
     this.turnPageAnimated(back ? -1 : 1);
   }
 
-  /** 页面层横向位移：覆盖模式只动「上面那一页」，滑动模式两页同步平移。 */
+  /** 页面层横向位移：覆盖模式只动「上面那一页」，滑动模式两页同步平移；淡入淡出不位移。 */
   private layerX(offset: number): number {
     const width = this.contentWidthVp;
     const dx = this.dragOffset;
+    if (this.flipMode === READER_FLIP_FADE) {
+      return 0;
+    }
     if (this.flipMode === READER_FLIP_COVER) {
       if (offset === 0) {
         return this.dragDir === 1 ? dx : 0;
@@ -1532,8 +1626,11 @@ export struct ReaderView {
     return offset > 0 ? width + dx : -width + dx;
   }
 
-  /** 层序：覆盖模式向右拖时「上一页」要盖在当前页之上。 */
+  /** 层序：覆盖模式向右拖时「上一页」要盖在当前页之上；淡入淡出时目标页恒在当前页之上。 */
   private layerZ(offset: number): number {
+    if (this.flipMode === READER_FLIP_FADE) {
+      return offset === 0 ? 1 : 2;
+    }
     if (this.flipMode === READER_FLIP_COVER && this.dragDir === -1 && offset === -1) {
       return 3;
     }
