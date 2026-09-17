@@ -1,4 +1,3 @@
-import { curves } from '@kit.ArkUI';
 import { PathShape } from '@ohos.arkui.shape';
 import { batteryInfo } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -33,6 +32,7 @@ import { LazyDataSource } from './LazyDataSource';
 import { ReaderBattery } from './ReaderBattery';
 import { ReaderChrome } from './ReaderChrome';
 import { ReaderClock } from './ReaderClock';
+import { ReaderFlipAnimator } from './ReaderFlipAnimator';
 import { ReaderFrameWatch } from './ReaderFrameWatch';
 import { CurlFold, FoldBandSegment, curlFoldGeometry, foldBandSegments, foldCurveGeometry,
   foldFrontPath } from './SimCurl';
@@ -71,14 +71,39 @@ const FLING_VELOCITY_VP: number = 400;
  */
 const CLICK_AFTER_PAN_MS: number = 400;
 /**
- * 仿真翻页的三段视觉元素宽度（vp）：
- * 折痕落在下层新页上的投影、当前页一侧的卷边柱面（纸卷本体）、柱面上的高光细线。
+ * 仿真翻页的三段视觉元素宽度（vp），按「纸卷横截面」从当前页一侧排到新页一侧：
+ * 卷边柱面（当前页上）→ 折痕 → 纸背（新页上、纸卷绕过柱面后朝向读者的那一面）→ 折痕投影（新页上）。
  */
 const SIM_FOLD_SHADOW_VP: number = 30;
 const SIM_ROLL_VP: number = 20;
+/**
+ * 纸卷（圆柱）的投影半径（vp）：折痕到纸面离开柱面处的距离。
+ * 纸背带宽度取 `2 × 半径`——纸面绕过柱面后，朝读者的那一半在屏幕上正好铺开一个直径。
+ */
+const SIM_CYLINDER_R_VP: number = 14;
 const SIM_ROLL_GLINT_VP: number = 1.5;
 /** 柱面高光（crest）在卷边带内的相对位置：0 = 靠当前页一侧，1 = 折痕处。 */
 const SIM_ROLL_CREST_RATIO: number = 0.45;
+
+/**
+ * 折痕渐变带的 `ForEach` 键。
+ *
+ * **必须把位置量化后编进键里**：ArkUI 的 `ForEach` 对「键没变的项」不会更新组件属性，
+ * 键里只有 `kind` 和序号时，各条带子会在第一帧定住——折痕在扫、明暗带却停在原地
+ * （实测：动画期间几何逐帧重算了 40 次，画面上的带子一动不动）。
+ * 位置按 8vp 量化：带子挪过一格才重建组件，一次整页翻动只重建几十次，
+ * 不会退化成「每帧销毁重建 12 个渐变图层」。
+ */
+function bandKey(seg: FoldBandSegment, index: number): string {
+  const gx: number = Math.round(seg.x / 8);
+  const gy: number = Math.round(seg.y / 8);
+  return `${seg.kind}_${index}_${gx}_${gy}`;
+}
+
+/** 翻页动画期望的帧率范围：高刷屏（90/120Hz）按面板能力走，60Hz 设备由系统钳制。 */
+function pageTurnFrameRate(): ExpectedFrameRateRange {
+  return { min: PAGE_TURN_FPS_MIN, max: PAGE_TURN_FPS_MAX, expected: PAGE_TURN_FPS_EXPECTED };
+}
 
 /**
  * 仿真翻页的折痕横坐标（vp）：向右翻（dir = 1）时折痕随手指左移，向左回（dir = -1）时右移。
@@ -353,6 +378,8 @@ export struct ReaderView {
   private foldShape: PathShape = new PathShape({ commands: '' });
   /** 翻页帧耗时采样（按设备性能自动降级特效）。 */
   private frameWatch: ReaderFrameWatch = new ReaderFrameWatch();
+  /** 翻页/回弹动画：按帧推进折痕位移（`animateTo` 不会带动现算的几何）。 */
+  private flipAnim: ReaderFlipAnimator = new ReaderFlipAnimator();
   /** 页脚电量（-1 表示读取失败，不显示）。 */
   @State private batteryLevel: number = -1;
   @State private batteryCharging: boolean = false;
@@ -401,6 +428,7 @@ export struct ReaderView {
     this.destroyed = true;
     this.pendingScrollIndex = -1;
     this.frameWatch.stop();
+    this.flipAnim.cancel();
     this.cancelBarsAutoHide();
     if (this.batteryTimer >= 0) {
       clearInterval(this.batteryTimer);
@@ -655,7 +683,7 @@ export struct ReaderView {
   }
 
   /**
-   * 折痕阴影：沿折痕曲线铺「投影 + 卷边柱面 + 柱面高光」三段带。
+   * 折痕阴影：沿折痕曲线铺「卷边柱面 + 纸背 + 投影」三条带，按纸卷横截面从当前页排到新页。
    *
    * 折痕是曲线（纸张卷曲），直条渐变对不上，所以把每条带拆成若干短直段拼出来
    * （`foldBandSegments`）；每段只有一小块，比原来横跨整页的直条更省。
@@ -668,13 +696,12 @@ export struct ReaderView {
         Column()
           .width(seg.width)
           .height(seg.length)
-          .linearGradient({ angle: 90, colors: this.foldBandColors(seg.kind) })
+          .linearGradient({ angle: 90, colors: this.foldBandColors(seg.kind, seg.flip) })
           .position({ x: seg.x, y: seg.y })
           .rotate({ angle: seg.rotationDeg })
           .zIndex(6);
-        // key 用「kind + 段序号」这种稳定值：若把坐标写进 key，拖拽时每帧都会
-        // 销毁重建 30 个组件（实测会把这个模拟器拖到内存吃紧），稳定 key 只更新属性
-      }, (seg: FoldBandSegment, index: number) => `${seg.kind}_${index}`);
+        // 键必须带量化位置，理由见 `bandKey`
+      }, (seg: FoldBandSegment, index: number) => bandKey(seg, index));
   }
 
   /** 供构建函数体直接调用：状态变量都在参数里读出来，@Builder 才会登记依赖。 */
@@ -692,14 +719,21 @@ export struct ReaderView {
     if (reduce || Math.abs(drag) <= 0 || width <= 0 || height <= 0) {
       return out;
     }
-    // 段数只影响曲线带的平滑度：5 段在这条 18vp 量级的弧上已经看不出折角，
-    // 组件数却从 30 降到 10（每段都是带渐变的图层，越多越吃渲染内存）。
+    // 段数只影响曲线带的平滑度：4 段在这条 18vp 量级的弧上已经看不出折角，
+    // 组件数却只有 12 个（每段都是带渐变的图层，越多越吃渲染内存）。
     const segments: number = 4;
-    // 投影（新页上）
+    const backWidth: number = SIM_CYLINDER_R_VP * 2;
+    // 投影（新页上）：落在纸卷外缘之外，纸卷挡住的那一段不该有投影
     const shadow = foldBandSegments(width, height, touchX, touchY, drag, dragY,
-      SIM_FOLD_SHADOW_VP, true, SIM_FOLD_SHADOW_VP / 2, 0, segments);
+      SIM_FOLD_SHADOW_VP, true, backWidth + SIM_FOLD_SHADOW_VP / 2, 0, segments);
     for (let i = 0; i < shadow.length; i++) {
       out.push(shadow[i]);
+    }
+    // 纸背（新页上）：被卷起的纸绕过柱面后朝向读者的那一面，紧贴折痕铺一个直径宽
+    const back = foldBandSegments(width, height, touchX, touchY, drag, dragY,
+      backWidth, true, SIM_CYLINDER_R_VP, 2, segments);
+    for (let i = 0; i < back.length; i++) {
+      out.push(back[i]);
     }
     // 卷边柱面（当前页上）：高光已经做在柱面渐变里，不再单独画高光细线
     const roll = foldBandSegments(width, height, touchX, touchY, drag, dragY,
@@ -710,18 +744,41 @@ export struct ReaderView {
     return out;
   }
 
-  /** 折痕带的配色（0 投影 / 1 卷边柱面 / 2 高光）。 */
-  private foldBandColors(kind: number): Array<[ResourceColor, number]> {
+  /**
+   * 折痕带的配色（0 投影 / 1 卷边柱面 / 2 纸背）。
+   *
+   * 数组顺序是「折痕 → 带子外缘」；`flip`（来自 `FoldBandSegment`）表示渐变实际是从外缘流向折痕，
+   * 此时把数组反过来，两种拖动方向才会得到同一种明暗。
+   */
+  private foldBandColors(kind: number, flip: boolean): Array<[ResourceColor, number]> {
     const dark: boolean = this.theme === ReaderTheme.DARK;
-    if (kind === 0) {
-      return dark ? [['#80000000', 0], ['#00000000', 1]] : [['#48000000', 0], ['#00000000', 1]];
-    }
+    let colors: Array<[ResourceColor, number]>;
     if (kind === 1) {
-      const light: string = dark ? '#26FFFFFF' : '#40FFFFFF';
+      // 卷边柱面：折痕处压暗（接触阴影）→ 受光高光 → 融进纸面
       const edge: string = dark ? '#66000000' : '#38000000';
-      return [[edge, 0], [light, 0.45], ['#00000000', 1]];
+      const light: string = dark ? '#26FFFFFF' : '#40FFFFFF';
+      colors = [[edge, 0], [light, 0.45], ['#00000000', 1]];
+    } else if (kind === 2) {
+      // 纸背：必须是实色，否则下层新页的正文会透出来（纸背挡住了它）
+      const paper: string = ReaderPalette.pageBackground(this.theme);
+      if (dark) {
+        colors = [['#101020', 0], ['#2C2C48', 0.45], [paper, 1]];
+      } else if (this.theme === ReaderTheme.EYE) {
+        colors = [['#A6CCA9', 0], ['#DCF7E0', 0.45], [paper, 1]];
+      } else {
+        colors = [['#D5CCBB', 0], ['#FCF9F3', 0.45], [paper, 1]];
+      }
+    } else {
+      colors = dark ? [['#80000000', 0], ['#00000000', 1]] : [['#48000000', 0], ['#00000000', 1]];
     }
-    return [[dark ? '#26FFFFFF' : '#40FFFFFF', 0], ['#00000000', 1]];
+    if (!flip) {
+      return colors;
+    }
+    const reversed: Array<[ResourceColor, number]> = [];
+    for (let i = colors.length - 1; i >= 0; i--) {
+      reversed.push([colors[i][0], 1 - colors[i][1]]);
+    }
+    return reversed;
   }
 
   /**
@@ -1570,6 +1627,10 @@ export struct ReaderView {
     if (this.dragVertical) {
       return;
     }
+    // 位移不允许跨过起点：折痕的「抓取侧」由按下点与手指的相对位置决定，位移一旦跨过 0，
+    // 被卷起的一侧会整体翻到对面（画面突然换边，且露出的是同一张新页从另一头冒出来）。
+    // 钳在 0 上，往回拖就是沿原路把纸铺回去，抬起手按阈值回弹。
+    this.dragRaw = this.dragDir === 1 ? Math.min(0, this.dragRaw) : Math.max(0, this.dragRaw);
     this.lastPanAt = Date.now();
     this.dragOffsetY = dy;
     if (this.flipMode === READER_FLIP_NONE) {
@@ -1642,55 +1703,46 @@ export struct ReaderView {
     this.animateBack();
   }
 
-  /** 翻页动画结束后再切换页码，避免切换瞬间跳变。 */
+  /**
+   * 翻页动画：折痕从当前手指位置扫到页面另一端，扫完再切页码。
+   *
+   * 动画由 `ReaderFlipAnimator` 按帧推进（而不是 `animateTo`）——仿真翻页的画面每帧都由
+   * `dragOffset` 现算，`animateTo` 不会带着中间值重跑构建函数，卷曲就一动不动。
+   */
   private animateTurn(delta: number): void {
     const width = this.contentWidthVp;
     const target = delta > 0 ? -width : width;
     this.turning = true;
-    this.getUIContext().animateTo({
-      duration: PAGE_ANIM_MS,
-      curve: Curve.Friction,
-      expectedFrameRateRange: {
-        min: PAGE_TURN_FPS_MIN,
-        max: PAGE_TURN_FPS_MAX,
-        expected: PAGE_TURN_FPS_EXPECTED,
+    this.flipAnim.start(pageTurnFrameRate(), this.dragOffset, target, PAGE_ANIM_MS, false,
+      (value: number) => {
+        this.dragOffset = value;
       },
-      onFinish: () => {
+      () => {
         this.dragOffset = 0;
         this.dragDir = 0;
         this.turning = false;
         this.frameWatch.stop();
         this.turnPage(delta);
-      },
-    }, () => {
-      this.dragOffset = target;
-    });
+      });
   }
 
   /**
    * 回弹：距离不够时弹回原位。
-   * 用轻微欠阻尼的弹簧曲线而不是 Friction —— 收尾时会有一点点过冲再落回，
-   * 手感更像纸页被松开（阻尼取 30 略低于临界阻尼 ≈31，过冲幅度极小，不会翻错方向）。
+   * 用轻微过冲的弹簧曲线而不是单调减速 —— 收尾时会有一点点过冲再落回，
+   * 手感更像纸页被松开（过冲约 3.4%，幅度极小，不会翻错方向）。
    */
   private animateBack(): void {
     this.turning = true;
-    this.getUIContext().animateTo({
-      duration: PAGE_ANIM_MS,
-      curve: curves.springCurve(0, 1, 240, 30),
-      expectedFrameRateRange: {
-        min: PAGE_TURN_FPS_MIN,
-        max: PAGE_TURN_FPS_MAX,
-        expected: PAGE_TURN_FPS_EXPECTED,
+    this.flipAnim.start(pageTurnFrameRate(), this.dragOffset, 0, PAGE_ANIM_MS, true,
+      (value: number) => {
+        this.dragOffset = value;
       },
-      onFinish: () => {
+      () => {
         this.dragDir = 0;
         this.dragOffset = 0;
         this.turning = false;
         this.frameWatch.stop();
-      },
-    }, () => {
-      this.dragOffset = 0;
-    });
+      });
   }
 
   /** 翻页：越界时切到相邻章（下一章首页 / 上一章末页）。 */

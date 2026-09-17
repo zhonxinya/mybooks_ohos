@@ -431,8 +431,16 @@ export interface FoldBandSegment {
   length: number;
   /** 该段的倾角（度）。 */
   rotationDeg: number;
-  /** 配色标记：0 = 投影（peel 侧），1 = 卷边柱面（当前页侧），2 = 柱面高光。 */
+  /** 配色标记：0 = 投影（peel 侧），1 = 卷边柱面（当前页侧），2 = 纸背（peel 侧）。 */
   kind: number;
+  /**
+   * 该段的渐变是否需要反向。
+   *
+   * 段的局部 +x 轴在旋转后指向 `-peelSign * n`（`n` 是折痕法线里指向 peel 侧的方向），
+   * 而渐变 `angle: 90` 是沿着局部 +x 走的。于是「折痕 → 带子外缘」这一顺序在两种拖动方向下
+   * 正好相反：不反向时，同一条带子往左拖和往右拖会得到镜像的明暗，看起来像换了一边。
+   */
+  flip: boolean;
 }
 
 /**
@@ -441,6 +449,9 @@ export interface FoldBandSegment {
  * 曲线用二次贝塞尔采样：第 i 段取相邻两个采样点，段心偏离折痕 `distanceVp`（沿法线、指向
  * `onPeelSide` 决定的一侧），段长按两点距离，段倾角按两点连线方向 —— 这样曲线带由短直段拼出，
  * 不需要 Canvas，也不会因为曲线而让阴影/卷边与折痕错位。
+ *
+ * 注意 `side` 只能取 ±1：`curve.nx/ny` 里已经乘过 `peelSign`，本身就指向 peel 侧，
+ * 再乘一次 `peelSign` 会在往左拖（peelSign = -1）时把投影与卷边整条带到对面去。
  */
 export function foldBandSegments(
   width: number,
@@ -456,9 +467,12 @@ export function foldBandSegments(
   segments: number,
 ): FoldBandSegment[] {
   const curve: FoldCurve = foldCurveGeometry(width, height, touchX, touchY, dx, dy);
-  const side: number = onPeelSide ? curve.peelSign : -curve.peelSign;
+  const outwardSign: number = onPeelSide ? 1 : -1;
+  const side: number = outwardSign;
   const nx: number = curve.nx * side;
   const ny: number = curve.ny * side;
+  // 局部 +x 指向 -peelSign * n：与「由折痕指向带子外缘」同向时不需反向
+  const flip: boolean = curve.peelSign * outwardSign > 0;
   const out: FoldBandSegment[] = [];
   const step: number = 1 / Math.max(1, segments);
   for (let i = 0; i < segments; i++) {
@@ -480,6 +494,7 @@ export function foldBandSegments(
       length: segLen,
       rotationDeg: rotation,
       kind: kind,
+      flip: flip,
     });
   }
   return out;
