@@ -53,6 +53,13 @@ const PROGRESS_REPORT_STEP: number = 0.005;
 const SCROLL_AFTER_RELOAD_MS: number = 32;
 /** 翻页动画时长（ms）与翻页判定阈值（占内容区宽度的比例）。 */
 const PAGE_ANIM_MS: number = 220;
+/**
+ * 翻页动画期望帧率：高刷屏（90/120Hz）让折痕按面板能力走，60Hz 设备由系统钳制到 60。
+ * 只声明「翻页动画」这一段的期望，滚动/其他交互不受影响（省电）。
+ */
+const PAGE_TURN_FPS_MIN: number = 60;
+const PAGE_TURN_FPS_MAX: number = 120;
+const PAGE_TURN_FPS_EXPECTED: number = 120;
 const PAGE_TURN_RATIO: number = 0.25;
 /** 三区点击：左右各 1/3 翻页，中间切换工具栏。 */
 const TAP_ZONE_RATIO: number = 0.33;
@@ -1643,6 +1650,11 @@ export struct ReaderView {
     this.getUIContext().animateTo({
       duration: PAGE_ANIM_MS,
       curve: Curve.Friction,
+      expectedFrameRateRange: {
+        min: PAGE_TURN_FPS_MIN,
+        max: PAGE_TURN_FPS_MAX,
+        expected: PAGE_TURN_FPS_EXPECTED,
+      },
       onFinish: () => {
         this.dragOffset = 0;
         this.dragDir = 0;
@@ -1665,6 +1677,11 @@ export struct ReaderView {
     this.getUIContext().animateTo({
       duration: PAGE_ANIM_MS,
       curve: curves.springCurve(0, 1, 240, 30),
+      expectedFrameRateRange: {
+        min: PAGE_TURN_FPS_MIN,
+        max: PAGE_TURN_FPS_MAX,
+        expected: PAGE_TURN_FPS_EXPECTED,
+      },
       onFinish: () => {
         this.dragDir = 0;
         this.dragOffset = 0;
