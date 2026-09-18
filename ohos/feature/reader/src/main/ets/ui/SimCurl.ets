@@ -1,10 +1,10 @@
 /**
  * 仿真翻页的折痕几何（纯函数，便于单独推演、日志核对）。
  *
- * 模型：折痕**过当前手指位置 `F`**，方向**垂直于拖动方向**。
- * - 折痕落在手指上 ⇒ 拖多远折痕就走多远，跟手 1:1（与最初的实现手感一致）；
- * - 斜向拖动时折痕随之倾斜 ⇒ 从不同区域、不同方向起手，卷页效果不一样；
- * - 手指按下点 `T` 用来判定哪一侧是被抓住、要卷起来的纸：`T` 所在的一侧卷起露出新页，
+ * 模型：折痕**过「页边锚点 + 拖动位移」的位置 `F`**，方向**垂直于拖动方向**。
+ * - 折痕随拖动位移 1:1 移动（拖多远折痕就走多远），起手时停在页边；
+ * - 斜向拖动时折痕随之倾斜 ⇒ 不同起手高度/方向，卷页效果不一样；
+ * - 锚点 `A`（被翻那一面的页边中点）用来判定哪一侧是被抓住、要卷起来的纸：`A` 所在的一侧卷起露出新页，
  *   另一侧仍是平摊的当前页。
  *
  * 折痕倾斜角做了钳制（与竖直方向夹角 ≤ `MAX_TILT_TAN`），避免斜向拖拽时折痕被压成水平、
@@ -103,15 +103,23 @@ function rectHalfPlane(
   return out;
 }
 
-/** 多边形 → SVG path 命令（保留一位小数，够用且日志可读）。 */
-function polygonPath(points: number[]): string {
+/**
+ * 多边形 → SVG path 命令（保留一位小数，够用且日志可读）。
+ *
+ * 顶点不足 3 个（半平面与页面矩形没有交集：折痕已经扫到页边、这一侧什么都不剩）时，
+ * 返回一条**完全在组件外**的三角形，而不是空路径 `M0 0 Z`。
+ * 实测：ArkUI 把空路径当成「没有裁剪」，图层会整层显示出来——仿真翻页收尾时
+ * （折痕扫到页边那一帧）会闪出一整屏相邻页，短拖回弹时 6 次里能抓到 3 次。
+ * 语义上这里要的是「什么都别裁出来」，三角形落在组件外正好得到空裁剪区。
+ */
+function polygonPath(points: number[], scale: number = 1): string {
   if (points.length < 6) {
-    return 'M0 0 Z';
+    return 'M-8192 -8192 L-8192 -8191 L-8191 -8192 Z';
   }
   let path = '';
   for (let i = 0; i + 1 < points.length; i += 2) {
-    const x = Math.round(points[i] * 10) / 10;
-    const y = Math.round(points[i + 1] * 10) / 10;
+    const x = Math.round(points[i] * scale * 10) / 10;
+    const y = Math.round(points[i + 1] * scale * 10) / 10;
     path += `${i === 0 ? 'M' : 'L'}${x} ${y} `;
   }
   return `${path}Z`;
@@ -154,22 +162,28 @@ function foldSpanParams(
 /**
  * 计算当前拖拽状态下的折痕几何。
  *
+ * `anchorX/anchorY` 是**起手时抓住的那个点**（vp，内容区坐标系）——调用方传的是
+ * 「被翻的那一面的页边中点高度 + 页边横坐标」（下一页 ⇒ 右边缘，上一页 ⇒ 左边缘），
+ * 不是手指按下的横坐标：折痕从页边出发、随拖动位移 1:1 走，才是真实翻页的样子。
+ * 早期传手指按下点时，在屏幕中间起手会「一按下就把手指右边的整片纸变成下一页」
+ * （实测在 x=300px 起手拖动 200px 时，屏幕 80% 在第一帧就变成了下一页）。
+ *
  * @param width 内容区宽（vp）
  * @param height 内容区高（vp）
- * @param touchX/touchY 手指按下点（vp，内容区坐标系）
- * @param dx/dy 相对按下点的累计位移（vp）
+ * @param anchorX/anchorY 起手锚点（vp，内容区坐标系；见上）
+ * @param dx/dy 相对起手位置的累计位移（vp）
  */
 function foldCore(
   width: number,
   height: number,
-  touchX: number,
-  touchY: number,
+  anchorX: number,
+  anchorY: number,
   dx: number,
   dy: number,
 ): FoldCore {
-  const fingerX = touchX + dx;
-  const fingerY = touchY + dy;
-  // 折痕过手指：这样「拖多远、折痕走多远」，跟手是 1:1
+  const fingerX = anchorX + dx;
+  const fingerY = anchorY + dy;
+  // 折痕过锚点：这样「拖多远、折痕走多远」，跟手是 1:1
   const midX = fingerX;
   const midY = fingerY;
   // 折痕方向 = 拖动方向的法线
@@ -204,7 +218,7 @@ function foldCore(
   }
   const span = foldSpanParams(width, height, midX, midY, dirX, dirY);
   const centerT = (span[0] + span[1]) / 2;
-  const touchSide = sideOf(touchX, touchY, midX, midY, dirX, dirY);
+  const anchorSide = sideOf(anchorX, anchorY, midX, midY, dirX, dirY);
   const core: FoldCore = {
     dirX: dirX,
     dirY: dirY,
@@ -214,7 +228,7 @@ function foldCore(
     centerY: midY + dirY * centerT,
     span: span[1] - span[0],
     rotationDeg: Math.atan2(-dirX, dirY) * 180 / Math.PI,
-    peelSign: touchSide >= 0 ? 1 : -1,
+    peelSign: anchorSide >= 0 ? 1 : -1,
     tilted: tilted,
   };
   return core;
@@ -225,18 +239,18 @@ function foldCore(
  *
  * @param width 内容区宽（vp）
  * @param height 内容区高（vp）
- * @param touchX/touchY 手指按下点（vp，内容区坐标系）
+ * @param anchorX/anchorY 起手锚点（vp，内容区坐标系；见 `foldCore`）
  * @param dx/dy 相对按下点的累计位移（vp）
  */
 export function curlFoldGeometry(
   width: number,
   height: number,
-  touchX: number,
-  touchY: number,
+  anchorX: number,
+  anchorY: number,
   dx: number,
   dy: number,
 ): CurlFold {
-  const core: FoldCore = foldCore(width, height, touchX, touchY, dx, dy);
+  const core: FoldCore = foldCore(width, height, anchorX, anchorY, dx, dy);
   const front = rectHalfPlane(width, height, core.midX, core.midY, core.dirX, core.dirY, -core.peelSign);
   const peel = rectHalfPlane(width, height, core.midX, core.midY, core.dirX, core.dirY, core.peelSign);
   const fold: CurlFold = {
@@ -274,15 +288,15 @@ export interface BandPlacement {
 export function bandPlacement(
   width: number,
   height: number,
-  touchX: number,
-  touchY: number,
+  anchorX: number,
+  anchorY: number,
   dx: number,
   dy: number,
   bandWidth: number,
   onPeelSide: boolean,
   distanceVp: number,
 ): BandPlacement {
-  const core: FoldCore = foldCore(width, height, touchX, touchY, dx, dy);
+  const core: FoldCore = foldCore(width, height, anchorX, anchorY, dx, dy);
   // 折痕法线：cross(dir, n) = +1，所以 +n 是 peelSign 为正的那一侧
   const nx: number = -core.dirY;
   const ny: number = core.dirX;
@@ -336,12 +350,12 @@ export interface FoldCurve {
 export function foldCurveGeometry(
   width: number,
   height: number,
-  touchX: number,
-  touchY: number,
+  anchorX: number,
+  anchorY: number,
   dx: number,
   dy: number,
 ): FoldCurve {
-  const core: FoldCore = foldCore(width, height, touchX, touchY, dx, dy);
+  const core: FoldCore = foldCore(width, height, anchorX, anchorY, dx, dy);
   const span: number[] = foldSpanParams(width, height, core.midX, core.midY, core.dirX, core.dirY);
   const x0: number = core.midX + core.dirX * span[0];
   const y0: number = core.midY + core.dirY * span[0];
@@ -371,20 +385,31 @@ export function foldCurveGeometry(
 }
 
 /**
- * 当前页可见区域的裁剪路径：先按弦裁半平面，再把落在弦上的那条直边换成二次贝塞尔。
- * 这样正文的裁切边界就是一条弯的折痕（纸张卷曲的关键），而不是直线。
+ * 折痕一侧的裁剪路径：先按弦裁半平面，再把落在弦上的那条直边换成二次贝塞尔。
+ * 这样边界就是一条弯的折痕（纸张卷曲的关键），而不是直线。
+ *
+ * `peelSide` 选哪一侧：false = 还没被卷走的那一侧（当前页），true = 已经卷走、
+ * 露出相邻页的那一侧。
+ *
+ * `scale` 把几何用的 vp 换算成裁剪路径要求的单位：ArkUI 的 `clipShape(PathShape)`
+ * 按 **px** 解释 `commands`（实测：`M100 0 L600 0 …` 裁出的左边界正好落在屏幕 x=100px），
+ * 而这里的几何全是 vp。传 `vp2px(1)` 才能让裁切边界与折痕渐变带重合；
+ * 不换算时裁剪区只有实际的 1/3 大小（表现为「当前页只剩左上角一小块、整屏都是下一页」）。
  */
-export function foldFrontPath(
+export function foldSidePath(
   width: number,
   height: number,
-  touchX: number,
-  touchY: number,
+  anchorX: number,
+  anchorY: number,
   dx: number,
   dy: number,
+  peelSide: boolean,
+  scale: number = 1,
 ): string {
-  const core: FoldCore = foldCore(width, height, touchX, touchY, dx, dy);
-  const curve: FoldCurve = foldCurveGeometry(width, height, touchX, touchY, dx, dy);
-  const poly: number[] = rectHalfPlane(width, height, core.midX, core.midY, core.dirX, core.dirY, -core.peelSign);
+  const core: FoldCore = foldCore(width, height, anchorX, anchorY, dx, dy);
+  const curve: FoldCurve = foldCurveGeometry(width, height, anchorX, anchorY, dx, dy);
+  const poly: number[] = rectHalfPlane(width, height, core.midX, core.midY, core.dirX, core.dirY,
+    peelSide ? core.peelSign : -core.peelSign);
   // 找出多边形里落在弦上的两个点（sideOf ≈ 0），它们之间的直边要换成贝塞尔
   let firstOnLine: number = -1;
   let secondOnLine: number = -1;
@@ -401,7 +426,7 @@ export function foldFrontPath(
     }
   }
   if (firstOnLine < 0 || secondOnLine < 0) {
-    return polygonPath(poly);
+    return polygonPath(poly, scale);
   }
   // 旋转顶点顺序，让「折痕那条边」成为最后一条边（闭合边），再把闭合边换成二次贝塞尔。
   // 注意：折痕边可能是 first->second，也可能是 second->first（绕多边形一圈）。
@@ -412,12 +437,12 @@ export function foldFrontPath(
   let path: string = '';
   for (let k = 0; k < count; k++) {
     const idx: number = (startIndex + k) % count;
-    path += `${k === 0 ? 'M' : 'L'}${round1(poly[idx * 2])} ${round1(poly[idx * 2 + 1])} `;
+    path += `${k === 0 ? 'M' : 'L'}${round1(poly[idx * 2] * scale)} ${round1(poly[idx * 2 + 1] * scale)} `;
   }
   if (curve.bulge > 0.2) {
     // 闭合边就是折痕：用 Q 凸出去，终点回到路径起点
-    path += `Q${round1(curve.cx)} ${round1(curve.cy)} ` +
-      `${round1(poly[startIndex * 2])} ${round1(poly[startIndex * 2 + 1])} `;
+    path += `Q${round1(curve.cx * scale)} ${round1(curve.cy * scale)} ` +
+      `${round1(poly[startIndex * 2] * scale)} ${round1(poly[startIndex * 2 + 1] * scale)} `;
   }
   return `${path}Z`;
 }
@@ -456,8 +481,8 @@ export interface FoldBandSegment {
 export function foldBandSegments(
   width: number,
   height: number,
-  touchX: number,
-  touchY: number,
+  anchorX: number,
+  anchorY: number,
   dx: number,
   dy: number,
   bandWidth: number,
@@ -466,7 +491,7 @@ export function foldBandSegments(
   kind: number,
   segments: number,
 ): FoldBandSegment[] {
-  const curve: FoldCurve = foldCurveGeometry(width, height, touchX, touchY, dx, dy);
+  const curve: FoldCurve = foldCurveGeometry(width, height, anchorX, anchorY, dx, dy);
   const outwardSign: number = onPeelSide ? 1 : -1;
   const side: number = outwardSign;
   const nx: number = curve.nx * side;
