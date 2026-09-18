@@ -36,7 +36,7 @@ import { ReaderClock } from './ReaderClock';
 import { ReaderFlipAnimator } from './ReaderFlipAnimator';
 import { ReaderFrameWatch } from './ReaderFrameWatch';
 import { CurlFold, FoldBandSegment, curlFoldGeometry, foldBandSegments, foldCurveGeometry,
-  foldFrontPath } from './SimCurl';
+  foldSidePath } from './SimCurl';
 import { ReaderControlPanel } from './ReaderControlPanel';
 import { ReaderOverlayBar } from './ReaderOverlayBar';
 import { PAGE_FOOTER_SPACE, PAGE_HEADER_SPACE, ReaderPageView } from './ReaderPageView';
@@ -112,6 +112,15 @@ function curlProgress(drag: number): number {
   const t: number = Math.abs(drag) / SIM_CURL_FULL_VP;
   return Math.min(1, Math.max(SIM_CURL_MIN_RATIO, t));
 }
+
+/**
+ * 相邻页层至少要露出这么宽（vp）才建。
+ *
+ * 折痕刚扫到页边时，露出的那一侧只剩零点几 vp：裁剪区退化成亚像素的一条，
+ * 实测 ArkUI 对这种「几乎为零」的裁剪会当成没有裁剪，整层相邻页直接盖满屏幕
+ * （短拖回弹收尾时能抓到这样一帧）。取 2vp 当阈值，那一小条本来也看不出内容。
+ */
+const REVEAL_MIN_DRAG_VP: number = 2;
 
 /** 翻页动画期望的帧率范围：高刷屏（90/120Hz）按面板能力走，60Hz 设备由系统钳制。 */
 function pageTurnFrameRate(): ExpectedFrameRateRange {
@@ -654,29 +663,57 @@ export struct ReaderView {
   // 锚点所在的一侧是被抓住、要卷起来的纸。水平拖动 ⇒ 竖直折痕（跟手 1:1）；斜向拖动 ⇒
   // 折痕倾斜，于是「不同起手高度、不同方向，卷页效果不一样」。
   //
-  // 锚点取**被翻那一面的页边**（下一页 ⇒ 右边缘，上一页 ⇒ 左边缘），横坐标由 `foldAnchorX()`
-  // 给出、纵坐标取手指按下点的高度：这样「在屏幕任何位置起手，都是从页边开始把纸揭开」。
-  // 早期把锚点取成手指按下的横坐标，在中间起手会一按下就把右半屏变成下一页（不是翻页）。
-  // 当前页按折痕做路径裁剪，折痕处叠三条渐变带（投影 / 卷边柱面 / 纸背），
-  // 抬手后的动画把折痕从当前位置扫到另一条页边，视觉上就是整页翻过去。
+  // 锚点取**被翻那一面的页边**（下一页 ⇒ 右边缘，上一页 ⇒ 左边缘），横坐标由构建体里的
+  // `this.dragDir === 1 ? this.contentWidthVp : 0` 给出、纵坐标取手指按下点的高度：
+  // 这样「在屏幕任何位置起手，都是从页边开始把纸揭开」。早期把锚点取成手指按下的横坐标，
+  // 在中间起手会一按下就把右半屏变成下一页（不是翻页）。
+  //
+  // 层结构（三条，见 `simLayers`）：
+  //   1. 当前页：整页铺满，**永不裁剪、永不重建**——静止、拖动、抬手动画都是它；
+  //   2. 相邻页：裁到「已经卷走」的那一侧，盖在当前页之上 —— 只在这一侧真的有内容要露
+  //      （`dragDir != 0` 且 `|dragOffset| > 0`）时才建；
+  //   3. 折痕渐变带：折痕处三条带（投影 / 卷边柱面 / 纸背）。
+  // 裁剪放在「相邻页」而不是「当前页」上是有实测原因的：裁当前页时，一次翻页结束要把它
+  // 从「按折痕裁剪」切回「不裁剪」（两条 if 分支互相替换）、同时还要撤掉相邻页层，
+  // 重建那一帧偶发少画一次当前页，露出的正好是下面那张相邻页——短拖回弹时 6 次里 3 次
+  // 抓到「整屏都是相邻页」的一帧。把当前页固定成不裁剪的底图后，最坏情况也只是相邻页层
+  // 晚一帧消失（它只覆盖已经露出来的那一侧），不会再闪出别的页。
   //
   // 锚点必须在构建函数体里直接算出来（不能藏进方法）：`@Builder` 只登记构建函数体里
   // 直接出现过的状态变量，藏起来就不会随拖动刷新。
 
   @Builder
   simLayers() {
-    // 下层：翻页后要显示的那一页（整页铺满，未卷走的地方就从这里露出来）
-    this.simTargetLayer();
+    // 底图：当前页（整页，不裁剪）
+    this.simCurrentLayer();
+    // 被卷走的那一侧露出的相邻页（按折痕裁切）
+    this.simRevealLayer();
     this.simFoldShading();
-    // 上层：当前页按折痕裁切（折痕过页边锚点、垂直于拖动方向）
-    this.simFrontLayer();
   }
 
-  /** 仿真翻页的下层：翻页后要显示的那一页（未拖动时铺下一页，方向确定后按方向切）。 */
+  /** 仿真翻页的底图：当前页整页铺满（不裁剪，避免翻页收尾时重建这一层）。 */
   @Builder
-  simTargetLayer() {
-    // 静止时不铺目标页：省一整页正文的组件/排版对象，拖动第一帧才建
-    if (this.dragDir !== 0 &&
+  simCurrentLayer() {
+    if (this.pageIndex >= 0 && this.pageIndex < this.pageCount) {
+      Stack() {
+        this.pageView({ index: this.pageIndex, offset: 0, opacity: 1 });
+      }
+      .width('100%')
+      .height('100%')
+      .zIndex(1);
+    }
+  }
+
+  /**
+   * 仿真翻页的相邻页层：翻页后要显示的那一页，只保留「已经卷走」的一侧。
+   *
+   * 静止时不铺：省一整页正文的组件/排版对象，拖动第一帧才建；`|dragOffset| == 0` 时
+   * 那一侧本来就没有内容要露，一并省掉。
+   * 几何在这里现算：`@Builder` 只登记构建函数体里直接出现过的状态变量，藏进方法就不跟手。
+   */
+  @Builder
+  simRevealLayer() {
+    if (this.dragDir !== 0 && Math.abs(this.dragOffset) > REVEAL_MIN_DRAG_VP &&
       (this.dragDir === -1 ? (this.pageIndex > 0) : (this.pageIndex + 1 < this.pageCount))) {
       Stack() {
         this.pageView({
@@ -687,43 +724,10 @@ export struct ReaderView {
       }
       .width('100%')
       .height('100%')
-      .zIndex(1);
-    }
-  }
-
-  /**
-   * 仿真翻页的当前页层：整页渲染 + `clipShape` 按折痕裁掉被卷走的一侧。
-   * 用路径裁剪而不是「窄容器 + 固定宽内层」，折痕才能是任意角度的直线（斜向拖动时纸边也是斜的）。
-   * 几何在这里现算：`@Builder` 只登记构建函数体里直接出现过的状态变量，藏进方法就不跟手。
-   */
-  @Builder
-  simFrontLayer() {
-    if (this.pageIndex >= 0 && this.pageIndex < this.pageCount) {
-      // 只有折痕真的存在时才做裁剪：`clipShape` 会给这一层加一个裁剪图层
-      // （离屏缓冲）。静止时每翻一页都建一次裁剪层，实测把进程内存顶到 1GB 并被系统杀掉；
-      // 不裁剪时静止态就是一整页普通正文，翻页内存曲线与「覆盖翻页」一致。
-      //
-      // 掉帧降级（`reduceEffects`）时**仍然照裁**：那一级只是去掉折痕渐变带（见 `foldBands`
-      // 的 reduce 参数），裁切是「当前页被揭开」这件事本身——不裁就整屏都是当前页，
-      // 拖动期间画面完全不动，看起来像翻页失灵（与 `onMeasuredJank` 注释里写的降级语义一致）。
-      if (Math.abs(this.dragOffset) > 0) {
-        Stack() {
-          this.pageView({ index: this.pageIndex, offset: 0, opacity: 1 });
-        }
-        .width('100%')
-        .height('100%')
-        .clipShape(this.foldClipShape(foldFrontPath(this.contentWidthVp, this.contentHeightVp,
-          this.dragDir === 1 ? this.contentWidthVp : 0, this.touchY,
-          this.dragOffset, this.dragOffsetY, this.vpToPx(1))))
-        .zIndex(3);
-      } else {
-        Stack() {
-          this.pageView({ index: this.pageIndex, offset: 0, opacity: 1 });
-        }
-        .width('100%')
-        .height('100%')
-        .zIndex(3);
-      }
+      .clipShape(this.foldClipShape(foldSidePath(this.contentWidthVp, this.contentHeightVp,
+        this.dragDir === 1 ? this.contentWidthVp : 0, this.touchY,
+        this.dragOffset, this.dragOffsetY, true, this.vpToPx(1))))
+      .zIndex(3);
     }
   }
 
@@ -1794,8 +1798,8 @@ export struct ReaderView {
       const anchorX: number = this.dragDir === 1 ? this.contentWidthVp : 0;
       const fold: CurlFold = curlFoldGeometry(this.contentWidthVp, this.contentHeightVp,
         anchorX, this.touchY, this.dragOffset, this.dragOffsetY);
-      const path: string = foldFrontPath(this.contentWidthVp, this.contentHeightVp,
-        anchorX, this.touchY, this.dragOffset, this.dragOffsetY);
+      const path: string = foldSidePath(this.contentWidthVp, this.contentHeightVp,
+        anchorX, this.touchY, this.dragOffset, this.dragOffsetY, false);
       const curve = foldCurveGeometry(this.contentWidthVp, this.contentHeightVp,
         anchorX, this.touchY, this.dragOffset, this.dragOffsetY);
       hilog.debug(0x0000, TAG,

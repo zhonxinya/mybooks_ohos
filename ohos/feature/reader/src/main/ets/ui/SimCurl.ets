@@ -103,10 +103,18 @@ function rectHalfPlane(
   return out;
 }
 
-/** 多边形 → SVG path 命令（保留一位小数，够用且日志可读）。 */
+/**
+ * 多边形 → SVG path 命令（保留一位小数，够用且日志可读）。
+ *
+ * 顶点不足 3 个（半平面与页面矩形没有交集：折痕已经扫到页边、这一侧什么都不剩）时，
+ * 返回一条**完全在组件外**的三角形，而不是空路径 `M0 0 Z`。
+ * 实测：ArkUI 把空路径当成「没有裁剪」，图层会整层显示出来——仿真翻页收尾时
+ * （折痕扫到页边那一帧）会闪出一整屏相邻页，短拖回弹时 6 次里能抓到 3 次。
+ * 语义上这里要的是「什么都别裁出来」，三角形落在组件外正好得到空裁剪区。
+ */
 function polygonPath(points: number[], scale: number = 1): string {
   if (points.length < 6) {
-    return 'M0 0 Z';
+    return 'M-8192 -8192 L-8192 -8191 L-8191 -8192 Z';
   }
   let path = '';
   for (let i = 0; i + 1 < points.length; i += 2) {
@@ -377,26 +385,31 @@ export function foldCurveGeometry(
 }
 
 /**
- * 当前页可见区域的裁剪路径：先按弦裁半平面，再把落在弦上的那条直边换成二次贝塞尔。
- * 这样正文的裁切边界就是一条弯的折痕（纸张卷曲的关键），而不是直线。
+ * 折痕一侧的裁剪路径：先按弦裁半平面，再把落在弦上的那条直边换成二次贝塞尔。
+ * 这样边界就是一条弯的折痕（纸张卷曲的关键），而不是直线。
+ *
+ * `peelSide` 选哪一侧：false = 还没被卷走的那一侧（当前页），true = 已经卷走、
+ * 露出相邻页的那一侧。
  *
  * `scale` 把几何用的 vp 换算成裁剪路径要求的单位：ArkUI 的 `clipShape(PathShape)`
  * 按 **px** 解释 `commands`（实测：`M100 0 L600 0 …` 裁出的左边界正好落在屏幕 x=100px），
  * 而这里的几何全是 vp。传 `vp2px(1)` 才能让裁切边界与折痕渐变带重合；
  * 不换算时裁剪区只有实际的 1/3 大小（表现为「当前页只剩左上角一小块、整屏都是下一页」）。
  */
-export function foldFrontPath(
+export function foldSidePath(
   width: number,
   height: number,
   anchorX: number,
   anchorY: number,
   dx: number,
   dy: number,
+  peelSide: boolean,
   scale: number = 1,
 ): string {
   const core: FoldCore = foldCore(width, height, anchorX, anchorY, dx, dy);
   const curve: FoldCurve = foldCurveGeometry(width, height, anchorX, anchorY, dx, dy);
-  const poly: number[] = rectHalfPlane(width, height, core.midX, core.midY, core.dirX, core.dirY, -core.peelSign);
+  const poly: number[] = rectHalfPlane(width, height, core.midX, core.midY, core.dirX, core.dirY,
+    peelSide ? core.peelSign : -core.peelSign);
   // 找出多边形里落在弦上的两个点（sideOf ≈ 0），它们之间的直边要换成贝塞尔
   let firstOnLine: number = -1;
   let secondOnLine: number = -1;
