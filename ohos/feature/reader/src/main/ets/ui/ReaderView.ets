@@ -82,6 +82,9 @@ const SIM_ROLL_VP: number = 20;
  * 纸背带宽度取 `2 × 半径`——纸面绕过柱面后，朝读者的那一半在屏幕上正好铺开一个直径。
  */
 const SIM_CYLINDER_R_VP: number = 14;
+/** 拖动到这个距离（vp）时纸卷长到满尺寸；更近的距离按比例缩小（取 `SIM_CURL_MIN_RATIO` 保底）。 */
+const SIM_CURL_FULL_VP: number = 50;
+const SIM_CURL_MIN_RATIO: number = 0.35;
 const SIM_ROLL_GLINT_VP: number = 1.5;
 /** 柱面高光（crest）在卷边带内的相对位置：0 = 靠当前页一侧，1 = 折痕处。 */
 const SIM_ROLL_CREST_RATIO: number = 0.45;
@@ -99,6 +102,15 @@ function bandKey(seg: FoldBandSegment, index: number): string {
   const gx: number = Math.round(seg.x / 8);
   const gy: number = Math.round(seg.y / 8);
   return `${seg.kind}_${index}_${gx}_${gy}`;
+}
+
+/**
+ * 纸卷的展开程度 0.35~1：按拖动距离线性长起来，`SIM_CURL_FULL_VP` 处封顶。
+ * 见 `foldBands` 里对横截面三个宽度的缩放。
+ */
+function curlProgress(drag: number): number {
+  const t: number = Math.abs(drag) / SIM_CURL_FULL_VP;
+  return Math.min(1, Math.max(SIM_CURL_MIN_RATIO, t));
 }
 
 /** 翻页动画期望的帧率范围：高刷屏（90/120Hz）按面板能力走，60Hz 设备由系统钳制。 */
@@ -751,22 +763,29 @@ export struct ReaderView {
     // 段数只影响曲线带的平滑度：4 段在这条 18vp 量级的弧上已经看不出折角，
     // 组件数却只有 12 个（每段都是带渐变的图层，越多越吃渲染内存）。
     const segments: number = 4;
-    const backWidth: number = SIM_CYLINDER_R_VP * 2;
+    // 纸卷随拖动长起来：一按下（识别距离 6vp）就摆出整条卷边会很假——真实纸页是
+    // 先被掀起一个小角、卷曲半径随掀起的长度增大。这里按拖动距离把横截面的
+    // 三个宽度等比缩放（保底 0.35，避免折痕变成一条没有厚度的硬缝）。
+    const curl: number = curlProgress(drag);
+    const radius: number = SIM_CYLINDER_R_VP * curl;
+    const backWidth: number = radius * 2;
+    const shadowWidth: number = SIM_FOLD_SHADOW_VP * curl;
+    const rollWidth: number = SIM_ROLL_VP * curl;
     // 投影（新页上）：落在纸卷外缘之外，纸卷挡住的那一段不该有投影
     const shadow = foldBandSegments(width, height, touchX, touchY, drag, dragY,
-      SIM_FOLD_SHADOW_VP, true, backWidth + SIM_FOLD_SHADOW_VP / 2, 0, segments);
+      shadowWidth, true, backWidth + shadowWidth / 2, 0, segments);
     for (let i = 0; i < shadow.length; i++) {
       out.push(shadow[i]);
     }
     // 纸背（新页上）：被卷起的纸绕过柱面后朝向读者的那一面，紧贴折痕铺一个直径宽
     const back = foldBandSegments(width, height, touchX, touchY, drag, dragY,
-      backWidth, true, SIM_CYLINDER_R_VP, 2, segments);
+      backWidth, true, radius, 2, segments);
     for (let i = 0; i < back.length; i++) {
       out.push(back[i]);
     }
     // 卷边柱面（当前页上）：高光已经做在柱面渐变里，不再单独画高光细线
     const roll = foldBandSegments(width, height, touchX, touchY, drag, dragY,
-      SIM_ROLL_VP, false, SIM_ROLL_VP / 2, 1, segments);
+      rollWidth, false, rollWidth / 2, 1, segments);
     for (let i = 0; i < roll.length; i++) {
       out.push(roll[i]);
     }
