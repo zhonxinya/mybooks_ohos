@@ -1,5 +1,5 @@
 import {
-  PageScaffold, PrimaryButton, SecondaryButton, SettingCell, LoadingState
+  PageScaffold, PrimaryButton, SecondaryButton, SettingCell, LoadingState, BookIdPicker
 } from '../components';
 import {
   TalebookApi, ApiMessageResult, apiErrorMessage, ToolboxTaskProgressResponse
@@ -203,13 +203,7 @@ struct ChineseConverterToolPage {
           }
 
           Column({ space: 10 }) {
-            TextInput({ placeholder: '书籍 ID', text: this.bookIdText })
-              .height(40)
-              .borderRadius(8)
-              .backgroundColor($r('app.color.page_background'))
-              .onChange((v: string) => {
-                this.bookIdText = v;
-              });
+            BookIdPicker({ bookIdText: $bookIdText });
             Text('方向：t2s/tw2s/tw2sp/s2t/s2tw/s2twp/t2tw/tw2t')
               .fontSize(11)
               .fontColor($r('app.color.text_tertiary'))

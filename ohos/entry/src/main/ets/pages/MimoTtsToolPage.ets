@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import {
   PageScaffold, PrimaryButton, SecondaryButton, DangerButton,
-  LoadingState, EmptyState, FilterChips, FilterChipItem, TextButton
+  LoadingState, EmptyState, FilterChips, FilterChipItem, TextButton, BookIdPicker
 } from '../components';
 import {
   TalebookApi, ApiMessageResult, apiErrorMessage,
@@ -560,13 +560,7 @@ struct MimoTtsToolPage {
         }
 
         Column({ space: 10 }) {
-        TextInput({ placeholder: '书籍 ID', text: this.bookIdText })
-      .height(40)
-      .borderRadius(8)
-      .backgroundColor($r('app.color.page_background'))
-      .onChange((v: string) => {
-        this.bookIdText = v;
-      });
+          BookIdPicker({ bookIdText: $bookIdText });
         TextInput({ placeholder: 'API Key', text: this.apiKey })
       .type(InputType.Password)
       .height(40)
