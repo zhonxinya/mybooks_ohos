@@ -70,6 +70,8 @@ struct BookDetailPage {
   @State isbn: string = '';
   @State extLink: string = '';
   @State reviewStars: number = 0;
+  /** 首次展示由 aboutToAppear 触发加载；之后再显示本页（如从引用信息/编辑页返回）才静默重取 */
+  private detailShownOnce: boolean = false;
   @State reviewComment: string = '';
   @State ownReview: BookReviewItem | null = null;
   @State submittingReview: boolean = false;
@@ -121,14 +123,31 @@ struct BookDetailPage {
     this.syncLocalFileFromDownloads();
     this.refreshReadEnabled();
     this.syncDownloadState();
+    // 「引用信息」「编辑元数据」都会改服务端元数据；返回本页时静默重取一次，否则标题、标签、
+    // 封面等仍是旧值（首次展示由 aboutToAppear 负责，不重复请求）
+    if (!this.detailShownOnce) {
+      this.detailShownOnce = true;
+      return;
+    }
+    void this.loadDetail(true);
   }
 
-  private async loadDetail(): Promise<void> {
-    this.loading = true;
-    this.errorMessage = '';
+  /**
+   * 加载详情。
+   *
+   * @param silent 静默重取：不切换 loading（避免从别的页面返回时整页闪一次骨架屏），
+   *               失败也不顶掉页面上已有的内容。
+   */
+  private async loadDetail(silent: boolean = false): Promise<void> {
+    if (!silent) {
+      this.loading = true;
+      this.errorMessage = '';
+    }
     try {
       if (!TalebookService.ensureTalebookConfigured()) {
-        this.errorMessage = '请先配置 Talebook 服务器';
+        if (!silent) {
+          this.errorMessage = '请先配置 Talebook 服务器';
+        }
         return;
       }
       if (TalebookService.hasAuthCredentials()) {
@@ -136,7 +155,10 @@ struct BookDetailPage {
       }
       const envelope = await TalebookService.getBookDetailAsync(this.bookId);
       if (!TalebookService.isApiSuccess(envelope)) {
-        this.errorMessage = envelope.error.length > 0 ? envelope.error : '加载失败';
+        // 静默重取失败就保留页面上已有的内容，不要用错误页把好数据顶掉
+        if (!silent) {
+          this.errorMessage = envelope.error.length > 0 ? envelope.error : '加载失败';
+        }
         return;
       }
       const body = envelope.body ?? {};
@@ -201,11 +223,18 @@ struct BookDetailPage {
         this.localFormat = local.format ?? this.selectedFormat;
       }
       this.refreshReadEnabled();
-      this.loadSocialData();
+      if (!silent) {
+        // 书评/社交统计不受「应用引用信息、编辑元数据」影响，静默重取时不必再拉一遍
+        this.loadSocialData();
+      }
     } catch (error) {
-      this.errorMessage = `${error}`;
+      if (!silent) {
+        this.errorMessage = `${error}`;
+      }
     } finally {
-      this.loading = false;
+      if (!silent) {
+        this.loading = false;
+      }
     }
   }
 
@@ -722,6 +751,7 @@ struct BookDetailPage {
       if (this.localOnly) {
         TalebookService.removeDownloadRecord(this.localBookId);
         this.toast('已删除');
+        this.notifyLibraryChanged();
         this.getUIContext().getRouter().back();
         return;
       }
@@ -732,13 +762,22 @@ struct BookDetailPage {
         return;
       }
       this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '已删除');
-      BookshelfRefresh.notify();
+      this.notifyLibraryChanged();
       this.getUIContext().getRouter().back();
     } catch (error) {
       this.toast(`删除失败：${error}`);
     } finally {
       this.deleteBusy = false;
     }
+  }
+
+  /**
+   * 图书被删除后：书架与小说导航页都要重取，否则已删的书会继续留在列表里
+   * （小说页签在 Tabs 里常驻，不主动通知就永远停在旧数据上）。
+   */
+  private notifyLibraryChanged(): void {
+    BookshelfRefresh.notify();
+    BookshelfRefresh.notifyBooksTab();
   }
 
   private async pickAndUploadCover(): Promise<void> {

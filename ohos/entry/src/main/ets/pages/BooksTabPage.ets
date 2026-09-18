@@ -55,6 +55,8 @@ export struct BooksTabPage {
   /** 首页书单推荐（/api/booklists/homepage，服务端挑置顶 > 我点赞的 > 其余公开，最多 2 个）。 */
   @State homeBooklists: BookListSummary[] = [];
   @State isRefreshing: boolean = false;
+  /** 书库内容变更广播（删除/上传/元数据修改）：本页签常驻 Tabs，必须主动重取才不会停在旧数据上。 */
+  @StorageProp('booksTabRefreshTick') @Watch('onLibraryChanged') libraryTick: number = 0;
   /** 下拉刷新的重入保护：isRefreshing 由 Refresh 组件先置 true，不能拿它判断重入。 */
   private refreshInFlight: boolean = false;
   private lastLoadTime: number = 0;
@@ -62,6 +64,24 @@ export struct BooksTabPage {
   aboutToAppear(): void {
     this.isListMode = BookViewMode.isListMode();
     void this.loadBooks(true);
+  }
+
+  /**
+   * 书库内容变更后重取（删除图书、上传入库、应用引用信息等）。
+   *
+   * 与下拉刷新同样**不清空**现有列表：本页签是首页式页面，清空会整页闪一次骨架屏；
+   * 首屏还没加载完时直接跳过，交给正在进行的加载。
+   */
+  private onLibraryChanged(): void {
+    if (this.loading || this.refreshInFlight) {
+      return;
+    }
+    this.currentPage = 1;
+    this.hasMore = true;
+    this.errorMessage = '';
+    this.emptyActionLabel = '';
+    TalebookService.invalidateNavCache();
+    void this.fetchBooksAsync(true, this.currentPage);
   }
 
   private collectFormatText(item: Record<string, Object>): string {
