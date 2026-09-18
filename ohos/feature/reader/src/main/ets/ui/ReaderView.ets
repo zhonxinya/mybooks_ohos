@@ -1986,8 +1986,8 @@ export struct ReaderView {
   }
 
   /**
-   * 点击翻页：目标页已存在时走左右滑动动效，
-   * 否则交给 `turnPage`（章首章末切章、分页还没补完）。
+   * 点击翻页：目标页已存在时走卷页动效；**章首/章末也走同一套动效**
+   * （那一侧露的是空白纸，见 `simRevealLayer`），只有分页还没补完时才交给 `turnPage` 先不动。
    */
   private turnPageAnimated(delta: number): void {
     if (this.turning) {
@@ -1998,9 +1998,18 @@ export struct ReaderView {
       return;
     }
     const target = this.pageIndex + delta;
-    if (target < 0 || !this.ensurePagesFor(target)) {
-      this.turnPage(delta);
-      return;
+    const inChapter: boolean = target >= 0 && target < this.pageCount;
+    if (inChapter) {
+      if (!this.ensurePagesFor(target)) {
+        this.turnPage(delta);
+        return;
+      }
+    } else {
+      // 越出本章：分页还没补完时先别放动画（免得把「还没分好」当成「到章末」）
+      if (this.pageCount === 0 || this.activePager !== null) {
+        this.turnPage(delta);
+        return;
+      }
     }
     this.pagerPositionApplied = true;
     this.dragDir = delta > 0 ? 1 : -1;
