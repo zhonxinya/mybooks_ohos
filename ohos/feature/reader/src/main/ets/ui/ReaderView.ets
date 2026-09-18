@@ -702,7 +702,11 @@ export struct ReaderView {
       // 只有折痕真的存在时才做裁剪：`clipShape` 会给这一层加一个裁剪图层
       // （离屏缓冲）。静止时每翻一页都建一次裁剪层，实测把进程内存顶到 1GB 并被系统杀掉；
       // 不裁剪时静止态就是一整页普通正文，翻页内存曲线与「覆盖翻页」一致。
-      if (Math.abs(this.dragOffset) > 0 && !this.reduceEffects) {
+      //
+      // 掉帧降级（`reduceEffects`）时**仍然照裁**：那一级只是去掉折痕渐变带（见 `foldBands`
+      // 的 reduce 参数），裁切是「当前页被揭开」这件事本身——不裁就整屏都是当前页，
+      // 拖动期间画面完全不动，看起来像翻页失灵（与 `onMeasuredJank` 注释里写的降级语义一致）。
+      if (Math.abs(this.dragOffset) > 0) {
         Stack() {
           this.pageView({ index: this.pageIndex, offset: 0, opacity: 1 });
         }
