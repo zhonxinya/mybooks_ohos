@@ -52,8 +52,18 @@ const PARAGRAPH_SPACING: number = 12;
 const PROGRESS_REPORT_STEP: number = 0.005;
 /** 切章/恢复位置后等待一帧（≈1 帧 16ms）再滚动，确保 LazyForEach 已应用重载。 */
 const SCROLL_AFTER_RELOAD_MS: number = 32;
-/** 翻页动画时长（ms）与翻页判定阈值（占内容区宽度的比例）。 */
-const PAGE_ANIM_MS: number = 220;
+/**
+ * 翻页动画的名义速度（vp/ms）：时长按「折痕还要走多远」折算，而不是固定时长。
+ *
+ * 固定 220ms 时折痕的观感速度差得很远：点按翻页要扫过整页（373vp ⇒ 1.7vp/ms），
+ * 而从右边拖到快到底再抬手只剩几十 vp，同样是 220ms ⇒ 0.3vp/ms 甚至更慢，
+ * 看着像收尾拖泥带水。这里统一成同一个速度，再夹在上下限里：
+ * 整页 373vp ⇒ 219ms（与原来一致）、剩 150vp ⇒ 120ms（下限）、剩 40vp ⇒ 120ms。
+ */
+const PAGE_ANIM_SPEED_VP_MS: number = 1.7;
+/** 动画时长的上下限（ms）：太短看不出卷动，太长会显得黏。 */
+const PAGE_ANIM_MIN_MS: number = 120;
+const PAGE_ANIM_MAX_MS: number = 320;
 /**
  * 翻页动画期望帧率：高刷屏（90/120Hz）让折痕按面板能力走，60Hz 设备由系统钳制到 60。
  * 只声明「翻页动画」这一段的期望，滚动/其他交互不受影响（省电）。
@@ -121,6 +131,15 @@ function curlProgress(drag: number): number {
  * （短拖回弹收尾时能抓到这样一帧）。取 2vp 当阈值，那一小条本来也看不出内容。
  */
 const REVEAL_MIN_DRAG_VP: number = 2;
+
+/**
+ * 按折痕还要走的距离（vp）折算动画时长：名义速度恒定，再夹在上下限内。
+ * 见 `PAGE_ANIM_SPEED_VP_MS` 的说明。
+ */
+function pageAnimMs(travelVp: number): number {
+  const ms: number = travelVp / PAGE_ANIM_SPEED_VP_MS;
+  return Math.min(PAGE_ANIM_MAX_MS, Math.max(PAGE_ANIM_MIN_MS, ms));
+}
 
 /** 翻页动画期望的帧率范围：高刷屏（90/120Hz）按面板能力走，60Hz 设备由系统钳制。 */
 function pageTurnFrameRate(): ExpectedFrameRateRange {
@@ -1825,8 +1844,12 @@ export struct ReaderView {
     }
     const threshold = this.contentWidthVp * PAGE_TURN_RATIO;
     const fling = Math.abs(velocity) >= FLING_VELOCITY_VP && velocity * dir < 0;
-    hilog.debug(0x0000, TAG, '抬手结算：dir=%{public}d 拖距 %{public}s vp 速度 %{public}s ⇒ %{public}s',
-      dir, this.dragRaw.toFixed(0), velocity.toFixed(0), (fling || dir * this.dragRaw <= -threshold) ? '翻页' : '回弹');
+    const turningNow: boolean = fling || dir * this.dragRaw <= -threshold;
+    const travel: number = turningNow ? Math.abs(this.contentWidthVp + this.dragOffset) : Math.abs(this.dragOffset);
+    hilog.debug(0x0000, TAG,
+      '抬手结算：dir=%{public}d 拖距 %{public}s vp 速度 %{public}s ⇒ %{public}s（还剩 %{public}s vp，动画 %{public}s ms）',
+      dir, this.dragRaw.toFixed(0), velocity.toFixed(0), turningNow ? '翻页' : '回弹',
+      travel.toFixed(0), pageAnimMs(travel).toFixed(0));
     if (!fling && dir * this.dragRaw > -threshold) {
       this.animateBack();
       return;
@@ -1868,7 +1891,8 @@ export struct ReaderView {
     const width = this.contentWidthVp;
     const target = delta > 0 ? -width : width;
     this.turning = true;
-    this.flipAnim.start(pageTurnFrameRate(), this.dragOffset, target, PAGE_ANIM_MS, false,
+    this.flipAnim.start(pageTurnFrameRate(), this.dragOffset, target,
+      pageAnimMs(Math.abs(target - this.dragOffset)), false,
       (value: number) => {
         this.dragOffset = value;
       },
@@ -1888,7 +1912,8 @@ export struct ReaderView {
    */
   private animateBack(): void {
     this.turning = true;
-    this.flipAnim.start(pageTurnFrameRate(), this.dragOffset, 0, PAGE_ANIM_MS, true,
+    this.flipAnim.start(pageTurnFrameRate(), this.dragOffset, 0,
+      pageAnimMs(Math.abs(this.dragOffset)), true,
       (value: number) => {
         this.dragOffset = value;
       },
