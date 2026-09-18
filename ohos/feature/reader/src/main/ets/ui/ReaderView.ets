@@ -1859,6 +1859,22 @@ export struct ReaderView {
   }
 
   /**
+   * 这一侧还有可翻的页吗：本章内还有相邻页，或者还能切到相邻章。
+   * 分页还没补完（`pageCount == 0` 或 `activePager != null`）时按「可能有」处理，交给 `turnPage` 判定。
+   */
+  private canTurnPage(delta: number): boolean {
+    const target = this.pageIndex + delta;
+    if (target >= 0 && target < this.pageCount) {
+      return true;
+    }
+    if (this.pageCount === 0 || this.activePager !== null) {
+      return true;
+    }
+    const neighbour = this.chapterIndex + delta;
+    return neighbour >= 0 && neighbour < this.catalogSize;
+  }
+
+  /**
    * 抬手结算：拖动距离超过 `PAGE_TURN_RATIO` 或甩动速度超过阈值都翻页，否则回弹。
    * `velocity` 为手势速度（vp/s，正 = 向右），方向与拖动方向一致时才算甩页。
    */
@@ -1875,12 +1891,22 @@ export struct ReaderView {
     const threshold = this.contentWidthVp * PAGE_TURN_RATIO;
     const fling = Math.abs(velocity) >= FLING_VELOCITY_VP && velocity * dir < 0;
     const turningNow: boolean = fling || dir * this.dragRaw <= -threshold;
-    const travel: number = turningNow ? Math.abs(this.contentWidthVp + this.dragOffset) : Math.abs(this.dragOffset);
+    // 与 animateTurn 的终点一致：下一页 ⇒ -width，上一页 ⇒ +width
+    const endOffset: number = dir > 0 ? -this.contentWidthVp : this.contentWidthVp;
+    const travel: number = turningNow ? Math.abs(endOffset - this.dragOffset) : Math.abs(this.dragOffset);
     hilog.debug(0x0000, TAG,
       '抬手结算：dir=%{public}d 拖距 %{public}s vp 速度 %{public}s ⇒ %{public}s（还剩 %{public}s vp，动画 %{public}s ms）',
       dir, this.dragRaw.toFixed(0), velocity.toFixed(0), turningNow ? '翻页' : '回弹',
       travel.toFixed(0), pageAnimMs(travel).toFixed(0));
     if (!fling && dir * this.dragRaw > -threshold) {
+      this.animateBack();
+      return;
+    }
+    // 这一侧根本没有下一页/章（书的首末页）：别放「翻过去」的动画——动画会把纸整页卷走、
+    // 露出空白纸，结束后 turnPage 又什么都不做，画面弹回原来那页，看着像翻了个空。
+    // 与「拖得不够」同样处理：回弹。
+    if (!this.canTurnPage(dir)) {
+      hilog.debug(0x0000, TAG, '抬手结算：dir=%{public}d 这一侧没有可翻的页/章，改为回弹', dir);
       this.animateBack();
       return;
     }
@@ -2028,6 +2054,10 @@ export struct ReaderView {
       // 越出本章：分页还没补完时先别放动画（免得把「还没分好」当成「到章末」）
       if (this.pageCount === 0 || this.activePager !== null) {
         this.turnPage(delta);
+        return;
+      }
+      // 书的首末页：这一侧没有下一页/章，直接忽略这次点按（放动画会「翻了个空」）
+      if (!this.canTurnPage(delta)) {
         return;
       }
     }
