@@ -355,8 +355,11 @@ export struct ReaderView {
   @State private dragDir: number = 0;
   /** 拖拽的原始位移（vp）：无动画模式不做位移动画，但离阈值判定仍需真实拖距。 */
   private dragRaw: number = 0;
-  /** 仿真翻页用的手指按下点（vp，内容区坐标）与纵向位移：折痕要过手指并按拖动方向倾斜。 */
-  @State private touchX: number = 0;
+  /**
+   * 仿真翻页的起手高度（vp，内容区坐标）与纵向位移：折痕的纵向位置跟着起手高度走、
+   * 方向按拖动方向倾斜。折痕的横坐标不在这里——它由「页边锚点 + 拖动位移」决定，
+   * 见 `simFrontLayer`/`foldBands` 里的 `this.dragDir === 1 ? this.contentWidthVp : 0`。
+   */
   @State private touchY: number = 0;
   @State private dragOffsetY: number = 0;
   /** 手势轴向锁：纵向为主的拖动不算翻页（分页模式下纵向滑动不做事），避免误卷。 */
@@ -647,18 +650,25 @@ export struct ReaderView {
 
   // ---- 仿真翻页 ----
   //
-  // 折痕几何见 `SimCurl.ets`：折痕**过当前手指位置**、方向**垂直于拖动方向**，手指按下点决定
-  // 哪一侧是被抓住、要卷起来的纸。水平拖动 ⇒ 竖直折痕（跟手 1:1）；斜向拖动 ⇒ 折痕倾斜，
-  // 于是「从不同区域、不同方向起手，卷页效果不一样」。
-  // 当前页按折痕做路径裁剪，折痕处叠三条渐变带（投影 / 卷边柱面 / 柱面高光），
-  // 抬手后的动画把折痕扫到页面另一端，视觉上就是整页翻过去。
+  // 折痕几何见 `SimCurl.ets`：折痕**过「页边锚点 + 拖动位移」**、方向**垂直于拖动方向**，
+  // 锚点所在的一侧是被抓住、要卷起来的纸。水平拖动 ⇒ 竖直折痕（跟手 1:1）；斜向拖动 ⇒
+  // 折痕倾斜，于是「不同起手高度、不同方向，卷页效果不一样」。
+  //
+  // 锚点取**被翻那一面的页边**（下一页 ⇒ 右边缘，上一页 ⇒ 左边缘），横坐标由 `foldAnchorX()`
+  // 给出、纵坐标取手指按下点的高度：这样「在屏幕任何位置起手，都是从页边开始把纸揭开」。
+  // 早期把锚点取成手指按下的横坐标，在中间起手会一按下就把右半屏变成下一页（不是翻页）。
+  // 当前页按折痕做路径裁剪，折痕处叠三条渐变带（投影 / 卷边柱面 / 纸背），
+  // 抬手后的动画把折痕从当前位置扫到另一条页边，视觉上就是整页翻过去。
+  //
+  // 锚点必须在构建函数体里直接算出来（不能藏进方法）：`@Builder` 只登记构建函数体里
+  // 直接出现过的状态变量，藏起来就不会随拖动刷新。
 
   @Builder
   simLayers() {
     // 下层：翻页后要显示的那一页（整页铺满，未卷走的地方就从这里露出来）
     this.simTargetLayer();
     this.simFoldShading();
-    // 上层：当前页按折痕裁切（折痕过手指、垂直于拖动方向）
+    // 上层：当前页按折痕裁切（折痕过页边锚点、垂直于拖动方向）
     this.simFrontLayer();
   }
 
@@ -699,7 +709,8 @@ export struct ReaderView {
         .width('100%')
         .height('100%')
         .clipShape(this.foldClipShape(foldFrontPath(this.contentWidthVp, this.contentHeightVp,
-          this.touchX, this.touchY, this.dragOffset, this.dragOffsetY, this.vpToPx(1))))
+          this.dragDir === 1 ? this.contentWidthVp : 0, this.touchY,
+          this.dragOffset, this.dragOffsetY, this.vpToPx(1))))
         .zIndex(3);
       } else {
         Stack() {
@@ -731,7 +742,8 @@ export struct ReaderView {
    */
   @Builder
   simFoldShading() {
-    ForEach(this.foldBands(this.dragOffset, this.dragOffsetY, this.touchX, this.touchY,
+    ForEach(this.foldBands(this.dragOffset, this.dragOffsetY,
+      this.dragDir === 1 ? this.contentWidthVp : 0, this.touchY,
       this.contentWidthVp, this.contentHeightVp, this.theme, this.reduceEffects),
       (seg: FoldBandSegment) => {
         Column()
@@ -749,8 +761,8 @@ export struct ReaderView {
   private foldBands(
     drag: number,
     dragY: number,
-    touchX: number,
-    touchY: number,
+    anchorX: number,
+    anchorY: number,
     width: number,
     height: number,
     theme: ReaderTheme,
@@ -772,19 +784,19 @@ export struct ReaderView {
     const shadowWidth: number = SIM_FOLD_SHADOW_VP * curl;
     const rollWidth: number = SIM_ROLL_VP * curl;
     // 投影（新页上）：落在纸卷外缘之外，纸卷挡住的那一段不该有投影
-    const shadow = foldBandSegments(width, height, touchX, touchY, drag, dragY,
+    const shadow = foldBandSegments(width, height, anchorX, anchorY, drag, dragY,
       shadowWidth, true, backWidth + shadowWidth / 2, 0, segments);
     for (let i = 0; i < shadow.length; i++) {
       out.push(shadow[i]);
     }
     // 纸背（新页上）：被卷起的纸绕过柱面后朝向读者的那一面，紧贴折痕铺一个直径宽
-    const back = foldBandSegments(width, height, touchX, touchY, drag, dragY,
+    const back = foldBandSegments(width, height, anchorX, anchorY, drag, dragY,
       backWidth, true, radius, 2, segments);
     for (let i = 0; i < back.length; i++) {
       out.push(back[i]);
     }
     // 卷边柱面（当前页上）：高光已经做在柱面渐变里，不再单独画高光细线
-    const roll = foldBandSegments(width, height, touchX, touchY, drag, dragY,
+    const roll = foldBandSegments(width, height, anchorX, anchorY, drag, dragY,
       rollWidth, false, rollWidth / 2, 1, segments);
     for (let i = 0; i < roll.length; i++) {
       out.push(roll[i]);
@@ -1716,7 +1728,7 @@ export struct ReaderView {
     this.lastPanAt = Date.now();
     const fingers: FingerInfo[] = event.fingerList;
     if (fingers.length > 0) {
-      this.touchX = fingers[0].localX;
+      // 只取按下点的高度：折痕的纵向位置跟着起手高度走，横坐标由页边锚点决定
       this.touchY = fingers[0].localY;
     }
     this.frameWatch.start(this.getUIContext(), () => this.onMeasuredJank());
@@ -1774,12 +1786,14 @@ export struct ReaderView {
     this.frameWatch.probe();
     if (!this.foldLogged) {
       this.foldLogged = true;
+      // 与渲染同一套锚点，日志才和画面对得上
+      const anchorX: number = this.dragDir === 1 ? this.contentWidthVp : 0;
       const fold: CurlFold = curlFoldGeometry(this.contentWidthVp, this.contentHeightVp,
-        this.touchX, this.touchY, this.dragOffset, this.dragOffsetY);
+        anchorX, this.touchY, this.dragOffset, this.dragOffsetY);
       const path: string = foldFrontPath(this.contentWidthVp, this.contentHeightVp,
-        this.touchX, this.touchY, this.dragOffset, this.dragOffsetY);
+        anchorX, this.touchY, this.dragOffset, this.dragOffsetY);
       const curve = foldCurveGeometry(this.contentWidthVp, this.contentHeightVp,
-        this.touchX, this.touchY, this.dragOffset, this.dragOffsetY);
+        anchorX, this.touchY, this.dragOffset, this.dragOffsetY);
       hilog.debug(0x0000, TAG,
         '折痕几何：倾角 %{public}s°，跨度 %{public}s，抓取侧 %{public}d，弯曲 %{public}s vp，裁剪路径含曲线 %{public}s',
         fold.rotationDeg.toFixed(1), fold.span.toFixed(0), fold.peelSign,
@@ -1947,10 +1961,7 @@ export struct ReaderView {
     }
     this.pagerPositionApplied = true;
     this.dragDir = delta > 0 ? 1 : -1;
-    // 点按翻页没有按下点：折痕几何是按「按下点 + 位移」算的，这里补一个等效按下点
-    // ——抓住要翻的那一边的页边中点（下一页 ⇒ 右边缘中点，上一页 ⇒ 左边缘中点），
-    // 折痕才会从该边扫到另一边；不补的话按下点是 (0,0)，折痕算到屏幕外，动画期间看不到卷页。
-    this.touchX = delta > 0 ? this.contentWidthVp : 0;
+    // 点按翻页没有按下点：折痕的纵向位置取内容区中点，横坐标由页边锚点决定（下一页 ⇒ 右边缘）
     this.touchY = this.contentHeightVp / 2;
     this.dragOffsetY = 0;
     this.frameWatch.start(this.getUIContext(), () => this.onMeasuredJank());

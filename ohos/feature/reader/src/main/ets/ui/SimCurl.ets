@@ -1,10 +1,10 @@
 /**
  * 仿真翻页的折痕几何（纯函数，便于单独推演、日志核对）。
  *
- * 模型：折痕**过当前手指位置 `F`**，方向**垂直于拖动方向**。
- * - 折痕落在手指上 ⇒ 拖多远折痕就走多远，跟手 1:1（与最初的实现手感一致）；
- * - 斜向拖动时折痕随之倾斜 ⇒ 从不同区域、不同方向起手，卷页效果不一样；
- * - 手指按下点 `T` 用来判定哪一侧是被抓住、要卷起来的纸：`T` 所在的一侧卷起露出新页，
+ * 模型：折痕**过「页边锚点 + 拖动位移」的位置 `F`**，方向**垂直于拖动方向**。
+ * - 折痕随拖动位移 1:1 移动（拖多远折痕就走多远），起手时停在页边；
+ * - 斜向拖动时折痕随之倾斜 ⇒ 不同起手高度/方向，卷页效果不一样；
+ * - 锚点 `A`（被翻那一面的页边中点）用来判定哪一侧是被抓住、要卷起来的纸：`A` 所在的一侧卷起露出新页，
  *   另一侧仍是平摊的当前页。
  *
  * 折痕倾斜角做了钳制（与竖直方向夹角 ≤ `MAX_TILT_TAN`），避免斜向拖拽时折痕被压成水平、
@@ -154,22 +154,28 @@ function foldSpanParams(
 /**
  * 计算当前拖拽状态下的折痕几何。
  *
+ * `anchorX/anchorY` 是**起手时抓住的那个点**（vp，内容区坐标系）——调用方传的是
+ * 「被翻的那一面的页边中点高度 + 页边横坐标」（下一页 ⇒ 右边缘，上一页 ⇒ 左边缘），
+ * 不是手指按下的横坐标：折痕从页边出发、随拖动位移 1:1 走，才是真实翻页的样子。
+ * 早期传手指按下点时，在屏幕中间起手会「一按下就把手指右边的整片纸变成下一页」
+ * （实测在 x=300px 起手拖动 200px 时，屏幕 80% 在第一帧就变成了下一页）。
+ *
  * @param width 内容区宽（vp）
  * @param height 内容区高（vp）
- * @param touchX/touchY 手指按下点（vp，内容区坐标系）
- * @param dx/dy 相对按下点的累计位移（vp）
+ * @param anchorX/anchorY 起手锚点（vp，内容区坐标系；见上）
+ * @param dx/dy 相对起手位置的累计位移（vp）
  */
 function foldCore(
   width: number,
   height: number,
-  touchX: number,
-  touchY: number,
+  anchorX: number,
+  anchorY: number,
   dx: number,
   dy: number,
 ): FoldCore {
-  const fingerX = touchX + dx;
-  const fingerY = touchY + dy;
-  // 折痕过手指：这样「拖多远、折痕走多远」，跟手是 1:1
+  const fingerX = anchorX + dx;
+  const fingerY = anchorY + dy;
+  // 折痕过锚点：这样「拖多远、折痕走多远」，跟手是 1:1
   const midX = fingerX;
   const midY = fingerY;
   // 折痕方向 = 拖动方向的法线
@@ -204,7 +210,7 @@ function foldCore(
   }
   const span = foldSpanParams(width, height, midX, midY, dirX, dirY);
   const centerT = (span[0] + span[1]) / 2;
-  const touchSide = sideOf(touchX, touchY, midX, midY, dirX, dirY);
+  const anchorSide = sideOf(anchorX, anchorY, midX, midY, dirX, dirY);
   const core: FoldCore = {
     dirX: dirX,
     dirY: dirY,
@@ -214,7 +220,7 @@ function foldCore(
     centerY: midY + dirY * centerT,
     span: span[1] - span[0],
     rotationDeg: Math.atan2(-dirX, dirY) * 180 / Math.PI,
-    peelSign: touchSide >= 0 ? 1 : -1,
+    peelSign: anchorSide >= 0 ? 1 : -1,
     tilted: tilted,
   };
   return core;
@@ -225,18 +231,18 @@ function foldCore(
  *
  * @param width 内容区宽（vp）
  * @param height 内容区高（vp）
- * @param touchX/touchY 手指按下点（vp，内容区坐标系）
+ * @param anchorX/anchorY 起手锚点（vp，内容区坐标系；见 `foldCore`）
  * @param dx/dy 相对按下点的累计位移（vp）
  */
 export function curlFoldGeometry(
   width: number,
   height: number,
-  touchX: number,
-  touchY: number,
+  anchorX: number,
+  anchorY: number,
   dx: number,
   dy: number,
 ): CurlFold {
-  const core: FoldCore = foldCore(width, height, touchX, touchY, dx, dy);
+  const core: FoldCore = foldCore(width, height, anchorX, anchorY, dx, dy);
   const front = rectHalfPlane(width, height, core.midX, core.midY, core.dirX, core.dirY, -core.peelSign);
   const peel = rectHalfPlane(width, height, core.midX, core.midY, core.dirX, core.dirY, core.peelSign);
   const fold: CurlFold = {
@@ -274,15 +280,15 @@ export interface BandPlacement {
 export function bandPlacement(
   width: number,
   height: number,
-  touchX: number,
-  touchY: number,
+  anchorX: number,
+  anchorY: number,
   dx: number,
   dy: number,
   bandWidth: number,
   onPeelSide: boolean,
   distanceVp: number,
 ): BandPlacement {
-  const core: FoldCore = foldCore(width, height, touchX, touchY, dx, dy);
+  const core: FoldCore = foldCore(width, height, anchorX, anchorY, dx, dy);
   // 折痕法线：cross(dir, n) = +1，所以 +n 是 peelSign 为正的那一侧
   const nx: number = -core.dirY;
   const ny: number = core.dirX;
@@ -336,12 +342,12 @@ export interface FoldCurve {
 export function foldCurveGeometry(
   width: number,
   height: number,
-  touchX: number,
-  touchY: number,
+  anchorX: number,
+  anchorY: number,
   dx: number,
   dy: number,
 ): FoldCurve {
-  const core: FoldCore = foldCore(width, height, touchX, touchY, dx, dy);
+  const core: FoldCore = foldCore(width, height, anchorX, anchorY, dx, dy);
   const span: number[] = foldSpanParams(width, height, core.midX, core.midY, core.dirX, core.dirY);
   const x0: number = core.midX + core.dirX * span[0];
   const y0: number = core.midY + core.dirY * span[0];
@@ -382,14 +388,14 @@ export function foldCurveGeometry(
 export function foldFrontPath(
   width: number,
   height: number,
-  touchX: number,
-  touchY: number,
+  anchorX: number,
+  anchorY: number,
   dx: number,
   dy: number,
   scale: number = 1,
 ): string {
-  const core: FoldCore = foldCore(width, height, touchX, touchY, dx, dy);
-  const curve: FoldCurve = foldCurveGeometry(width, height, touchX, touchY, dx, dy);
+  const core: FoldCore = foldCore(width, height, anchorX, anchorY, dx, dy);
+  const curve: FoldCurve = foldCurveGeometry(width, height, anchorX, anchorY, dx, dy);
   const poly: number[] = rectHalfPlane(width, height, core.midX, core.midY, core.dirX, core.dirY, -core.peelSign);
   // 找出多边形里落在弦上的两个点（sideOf ≈ 0），它们之间的直边要换成贝塞尔
   let firstOnLine: number = -1;
@@ -462,8 +468,8 @@ export interface FoldBandSegment {
 export function foldBandSegments(
   width: number,
   height: number,
-  touchX: number,
-  touchY: number,
+  anchorX: number,
+  anchorY: number,
   dx: number,
   dy: number,
   bandWidth: number,
@@ -472,7 +478,7 @@ export function foldBandSegments(
   kind: number,
   segments: number,
 ): FoldBandSegment[] {
-  const curve: FoldCurve = foldCurveGeometry(width, height, touchX, touchY, dx, dy);
+  const curve: FoldCurve = foldCurveGeometry(width, height, anchorX, anchorY, dx, dy);
   const outwardSign: number = onPeelSide ? 1 : -1;
   const side: number = outwardSign;
   const nx: number = curve.nx * side;
