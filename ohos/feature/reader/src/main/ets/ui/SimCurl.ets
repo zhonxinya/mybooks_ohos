@@ -104,14 +104,14 @@ function rectHalfPlane(
 }
 
 /** 多边形 → SVG path 命令（保留一位小数，够用且日志可读）。 */
-function polygonPath(points: number[]): string {
+function polygonPath(points: number[], scale: number = 1): string {
   if (points.length < 6) {
     return 'M0 0 Z';
   }
   let path = '';
   for (let i = 0; i + 1 < points.length; i += 2) {
-    const x = Math.round(points[i] * 10) / 10;
-    const y = Math.round(points[i + 1] * 10) / 10;
+    const x = Math.round(points[i] * scale * 10) / 10;
+    const y = Math.round(points[i + 1] * scale * 10) / 10;
     path += `${i === 0 ? 'M' : 'L'}${x} ${y} `;
   }
   return `${path}Z`;
@@ -373,6 +373,11 @@ export function foldCurveGeometry(
 /**
  * 当前页可见区域的裁剪路径：先按弦裁半平面，再把落在弦上的那条直边换成二次贝塞尔。
  * 这样正文的裁切边界就是一条弯的折痕（纸张卷曲的关键），而不是直线。
+ *
+ * `scale` 把几何用的 vp 换算成裁剪路径要求的单位：ArkUI 的 `clipShape(PathShape)`
+ * 按 **px** 解释 `commands`（实测：`M100 0 L600 0 …` 裁出的左边界正好落在屏幕 x=100px），
+ * 而这里的几何全是 vp。传 `vp2px(1)` 才能让裁切边界与折痕渐变带重合；
+ * 不换算时裁剪区只有实际的 1/3 大小（表现为「当前页只剩左上角一小块、整屏都是下一页」）。
  */
 export function foldFrontPath(
   width: number,
@@ -381,6 +386,7 @@ export function foldFrontPath(
   touchY: number,
   dx: number,
   dy: number,
+  scale: number = 1,
 ): string {
   const core: FoldCore = foldCore(width, height, touchX, touchY, dx, dy);
   const curve: FoldCurve = foldCurveGeometry(width, height, touchX, touchY, dx, dy);
@@ -401,7 +407,7 @@ export function foldFrontPath(
     }
   }
   if (firstOnLine < 0 || secondOnLine < 0) {
-    return polygonPath(poly);
+    return polygonPath(poly, scale);
   }
   // 旋转顶点顺序，让「折痕那条边」成为最后一条边（闭合边），再把闭合边换成二次贝塞尔。
   // 注意：折痕边可能是 first->second，也可能是 second->first（绕多边形一圈）。
@@ -412,12 +418,12 @@ export function foldFrontPath(
   let path: string = '';
   for (let k = 0; k < count; k++) {
     const idx: number = (startIndex + k) % count;
-    path += `${k === 0 ? 'M' : 'L'}${round1(poly[idx * 2])} ${round1(poly[idx * 2 + 1])} `;
+    path += `${k === 0 ? 'M' : 'L'}${round1(poly[idx * 2] * scale)} ${round1(poly[idx * 2 + 1] * scale)} `;
   }
   if (curve.bulge > 0.2) {
     // 闭合边就是折痕：用 Q 凸出去，终点回到路径起点
-    path += `Q${round1(curve.cx)} ${round1(curve.cy)} ` +
-      `${round1(poly[startIndex * 2])} ${round1(poly[startIndex * 2 + 1])} `;
+    path += `Q${round1(curve.cx * scale)} ${round1(curve.cy * scale)} ` +
+      `${round1(poly[startIndex * 2] * scale)} ${round1(poly[startIndex * 2 + 1] * scale)} `;
   }
   return `${path}Z`;
 }

@@ -383,8 +383,6 @@ export struct ReaderView {
   private measureArgScale: number = 0;
   /** 工具栏自动隐藏定时器。 */
   private barTimer: number = -1;
-  /** 折痕裁剪路径的可复用实例（每帧只改 commands，不新建对象）。 */
-  private foldShape: PathShape = new PathShape({ commands: '' });
   /** 翻页帧耗时采样（按设备性能自动降级特效）。 */
   private frameWatch: ReaderFrameWatch = new ReaderFrameWatch();
   /** 翻页/回弹动画：按帧推进折痕位移（`animateTo` 不会带动现算的几何）。 */
@@ -689,7 +687,7 @@ export struct ReaderView {
         .width('100%')
         .height('100%')
         .clipShape(this.foldClipShape(foldFrontPath(this.contentWidthVp, this.contentHeightVp,
-          this.touchX, this.touchY, this.dragOffset, this.dragOffsetY)))
+          this.touchX, this.touchY, this.dragOffset, this.dragOffsetY, this.vpToPx(1))))
         .zIndex(3);
       } else {
         Stack() {
@@ -703,12 +701,14 @@ export struct ReaderView {
   }
 
   /**
-   * 复用同一个 `PathShape` 实例、只改它的 commands：拖动时这条路径每帧都要变，
-   * 每帧 `new PathShape(...)` 会不断产生新的原生图形对象（内存曲线对不上）。
+   * 折痕裁剪路径的形状对象。
+   *
+   * 每次都新建：`PathShape` 不是可观察对象，改动同一个实例的 `commands` 不会让 ArkUI
+   * 重新应用裁剪（同一引用会被当成「没变化」而跳过），裁剪会停在第一次那条路径上。
+   * 路径字符串每帧都不同，新建的开销远小于「裁剪不更新」这件事本身。
    */
   private foldClipShape(commands: string): PathShape {
-    this.foldShape.commands(commands);
-    return this.foldShape;
+    return new PathShape({ commands: commands });
   }
 
   /**
