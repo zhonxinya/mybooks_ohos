@@ -728,18 +728,28 @@ export struct ReaderView {
    *
    * 静止时不铺：省一整页正文的组件/排版对象，拖动第一帧才建；`|dragOffset| == 0` 时
    * 那一侧本来就没有内容要露，一并省掉。
+   *
+   * 本章没有相邻页可露时（章首往回翻 / 章末往下翻）改铺**一张空白纸**：早期这里整层不建，
+   * 于是拖动期间只有折痕带在扫、正文一动不动，看起来像「卷了个寂寞」；覆盖翻页在同一位置
+   * 露出的也是页面底色（相邻页层不渲染时露的就是它），这里与它保持一致。
    * 几何在这里现算：`@Builder` 只登记构建函数体里直接出现过的状态变量，藏进方法就不跟手。
    */
   @Builder
   simRevealLayer() {
-    if (this.dragDir !== 0 && Math.abs(this.dragOffset) > REVEAL_MIN_DRAG_VP &&
-      (this.dragDir === -1 ? (this.pageIndex > 0) : (this.pageIndex + 1 < this.pageCount))) {
+    if (this.dragDir !== 0 && Math.abs(this.dragOffset) > REVEAL_MIN_DRAG_VP) {
       Stack() {
-        this.pageView({
-          index: this.dragDir === -1 ? this.pageIndex - 1 : this.pageIndex + 1,
-          offset: 0,
-          opacity: 1,
-        });
+        if (this.dragDir === -1 ? (this.pageIndex > 0) : (this.pageIndex + 1 < this.pageCount)) {
+          this.pageView({
+            index: this.dragDir === -1 ? this.pageIndex - 1 : this.pageIndex + 1,
+            offset: 0,
+            opacity: 1,
+          });
+        } else {
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor(ReaderPalette.pageBackground(this.theme));
+        }
       }
       .width('100%')
       .height('100%')
