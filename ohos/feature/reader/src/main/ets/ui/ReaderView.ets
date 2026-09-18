@@ -428,6 +428,11 @@ export struct ReaderView {
   private barTimer: number = -1;
   /** 翻页帧耗时采样（按设备性能自动降级特效）。 */
   private frameWatch: ReaderFrameWatch = new ReaderFrameWatch();
+  /**
+   * 本次拖动的位移基准（vp）：正常起手为 0；抬手动画还没跑完时按下则为「接手的当前位置」，
+   * 见 `beginPageDrag`。几何与阈值判定都用 `dragBase + 手指位移` 这个总量。
+   */
+  private dragBase: number = 0;
   /** 翻页/回弹动画：按帧推进折痕位移（`animateTo` 不会带动现算的几何）。 */
   private flipAnim: ReaderFlipAnimator = new ReaderFlipAnimator();
   /** 页脚电量（-1 表示读取失败，不显示）。 */
@@ -1756,11 +1761,25 @@ export struct ReaderView {
 
   // 命名避开 CustomComponent 内置的 onDragStart/onDragEnd（拖拽事件回调）
   private beginPageDrag(event: GestureEvent): void {
-    this.dragDir = 0;
-    this.dragOffset = 0;
-    this.dragOffsetY = 0;
-    this.dragRaw = 0;
-    this.dragVertical = false;
+    if (this.turning) {
+      // 抬手动画还没跑完就又按下：这是「按住正在翻的那半张纸」。收掉动画、以当前位移为基准
+      // 接手，方向沿用动画的方向（不去清零 dragOffset —— 清零会闪一帧「折痕跳回页边」，
+      // 而那一帧整屏都是当前页，看着就是一次跳帧）。
+      this.flipAnim.cancel();
+      this.turning = false;
+      this.frameWatch.stop();
+      this.dragBase = this.dragOffset;
+      this.dragRaw = this.dragBase;
+      hilog.debug(0x0000, TAG, '抬手动画中再次按下：以位移 %{public}s vp 为基准接手',
+        this.dragBase.toFixed(0));
+    } else {
+      this.dragBase = 0;
+      this.dragDir = 0;
+      this.dragOffset = 0;
+      this.dragOffsetY = 0;
+      this.dragRaw = 0;
+      this.dragVertical = false;
+    }
     this.foldLogged = false;
     this.lastPanAt = Date.now();
     const fingers: FingerInfo[] = event.fingerList;
@@ -1793,8 +1812,9 @@ export struct ReaderView {
    */
   private updatePageDrag(dx: number, dy: number): void {
     const width = this.contentWidthVp;
-    // 钳制在左右各一屏内：拖过头也不会把页面甩出可视区
-    this.dragRaw = Math.min(width, Math.max(-width, dx));
+    // 钳制在左右各一屏内：拖过头也不会把页面甩出可视区。
+    // 位移以 `dragBase` 为基准叠加：正常起手时它是 0，接手半翻的纸时它是接手位置。
+    this.dragRaw = Math.min(width, Math.max(-width, this.dragBase + dx));
     if (this.dragDir === 0) {
       if (Math.abs(dx) < 2 && Math.abs(dy) < 2) {
         return;
