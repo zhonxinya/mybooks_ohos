@@ -3,10 +3,29 @@ import {
   LoadingState, EmptyState, IconCircleButton,
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
+import { TalebookApi } from '../services/TalebookApi';
 import { SoNovelService } from '../services/SoNovelService';
 import { BookViewMode } from '../utils/BookViewMode';
 import { DownloadTaskService } from '../services/DownloadTaskService';
 import { MergedSoNovelResult, SoNovelMerge, SoNovelSearchItem } from '../utils/SoNovelMerge';
+import { hasSameBook, normalizeName } from '../utils/LibraryMatch';
+
+/** 核对书库的在途请求上限：结果可能有几十本，逐个串行太慢，放开太多又会压垮书库。 */
+const LIBRARY_CHECK_CONCURRENCY: number = 3;
+/**
+ * 单次搜索最多核对多少本。
+ * 宽泛关键词（如单字）可能返回上百本，逐本查书库会打满请求；超出的部分不标角标，
+ * 统计文案会注明「已核对前 N 本」，不假装全都核对过。
+ */
+const LIBRARY_CHECK_MAX: number = 60;
+/**
+ * 每次书库候选查询取多少条。
+ * 用模糊检索（`name=`）而不是服务端的同名精确查询（`title=`）：书库里的书名常与书源不一致
+ * （如书库存的是「《金枝》」、书源给的是「金枝」），精确查询会直接查不到，
+ * 客户端连归一化比对的机会都没有。取一条较宽的候选窗口，再在客户端按归一化后的书名 + 作者严格比对。
+ */
+const LIBRARY_CANDIDATE_LIMIT: number = 50;
+const BADGE_IN_LIBRARY: string = '已入库';
 
 @Entry
 @Component
@@ -21,7 +40,14 @@ struct SoNovelSearchPage {
   @State activeTaskCount: number = 0;
   @State showSourceSheet: boolean = false;
   @State sheetMergedIndex: number = -1;
+  /** 与 mergedResults 同序：该书是否已在书库。 */
+  @State inLibrary: boolean[] = [];
+  @State checkingLibrary: boolean = false;
+  /** 本次已核对的结果条数（受 LIBRARY_CHECK_MAX 限制，可能少于结果总数）。 */
+  @State libraryCheckedCount: number = 0;
   private searchToken: number = 0;
+  /** 书名+作者 → 是否在书库（页面级会话缓存，换关键词重搜时不必重复查询）。 */
+  private libraryCache: Map<string, boolean> = new Map<string, boolean>();
 
   aboutToAppear(): void {
     this.isListMode = BookViewMode.isListMode();
@@ -55,6 +81,9 @@ struct SoNovelSearchPage {
     this.errorMessage = '';
     this.mergedResults = [];
     this.catalogItems = [];
+    this.inLibrary = [];
+    this.checkingLibrary = false;
+    this.libraryCheckedCount = 0;
     try {
       const url = TalebookService.secureGet('sonovel_url');
       if (url.length > 0) {
@@ -78,6 +107,8 @@ struct SoNovelSearchPage {
       }
       this.mergedResults = SoNovelMerge.merge(items);
       this.syncCatalogItems();
+      // 不 await：先出结果，入库角标随后补齐，避免书库查询拖慢搜索
+      void this.checkLibraryMembership(token);
     } catch (error) {
       if (token !== this.searchToken) {
         return;
@@ -101,8 +132,100 @@ struct SoNovelSearchPage {
         author: merged.author,
         subtitle: SoNovelMerge.subtitle(merged),
         format: sourceCount > 1 ? `${sourceCount}源` : 'EPUB',
+        badge: this.isInLibrary(index) ? BADGE_IN_LIBRARY : '',
       };
     });
+  }
+
+  private isInLibrary(index: number): boolean {
+    return index < this.inLibrary.length && this.inLibrary[index];
+  }
+
+  private libraryMatchCount(): number {
+    let count = 0;
+    for (let i = 0; i < this.inLibrary.length; i++) {
+      if (this.inLibrary[i]) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  private resultSummary(): string {
+    const total = `共 ${this.mergedResults.length} 本`;
+    if (this.checkingLibrary) {
+      return `${total} · 正在核对书库…`;
+    }
+    const matched = this.libraryMatchCount();
+    const checked = this.libraryCheckedCount;
+    if (checked > 0 && checked < this.mergedResults.length) {
+      return `${total} · 已核对前 ${checked} 本，${matched} 本已入库`;
+    }
+    return matched > 0 ? `${total} · ${matched} 本已入库` : total;
+  }
+
+  /**
+   * 核对每本搜索结果是否已在书库（书名 + 作者都相同）。
+   *
+   * 书库候选走 `GET /api/search?name=`（模糊检索），严格的同名 + 同作者判定在客户端做，
+   * 见 `LibraryMatch`；并发受 `LIBRARY_CHECK_CONCURRENCY` 限制、总量受 `LIBRARY_CHECK_MAX` 限制；
+   * 查询失败按「未入库」处理，不影响搜索结果本身。
+   *
+   * @throws 内部调用可能抛出异常，由调用方处理
+   */
+  private async checkLibraryMembership(token: number): Promise<void> {
+    const results = this.mergedResults;
+    if (results.length === 0) {
+      return;
+    }
+    const total = Math.min(results.length, LIBRARY_CHECK_MAX);
+    this.checkingLibrary = true;
+    this.libraryCheckedCount = 0;
+    const flags: boolean[] = [];
+    for (let i = 0; i < results.length; i++) {
+      flags.push(false);
+    }
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < total) {
+        const index = next;
+        next++;
+        const item = results[index];
+        flags[index] = await this.isBookInLibrary(item.bookName, item.author);
+      }
+    };
+    const workers: Promise<void>[] = [];
+    const workerCount = Math.min(LIBRARY_CHECK_CONCURRENCY, total);
+    for (let i = 0; i < workerCount; i++) {
+      workers.push(worker());
+    }
+    await Promise.all(workers);
+    if (token !== this.searchToken) {
+      return;
+    }
+    this.inLibrary = flags;
+    this.libraryCheckedCount = total;
+    this.checkingLibrary = false;
+    this.syncCatalogItems();
+  }
+
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
+  private async isBookInLibrary(title: string, author: string): Promise<boolean> {
+    const key = `${normalizeName(title)}|${normalizeName(author)}`;
+    const cached = this.libraryCache.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+    let hit = false;
+    try {
+      const candidates = await TalebookApi.search(title, 1, LIBRARY_CANDIDATE_LIMIT);
+      hit = hasSameBook(candidates, title, author);
+    } catch (_error) {
+      // 书库查询失败（未配置书库/网络异常）时按未入库处理，不打断搜索结果展示
+      hit = false;
+    }
+    this.libraryCache.set(key, hit);
+    return hit;
   }
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
@@ -206,6 +329,12 @@ struct SoNovelSearchPage {
         .fontSize(12)
         .fontColor($r('app.color.text_tertiary'))
         .width('100%');
+      if (this.isInLibrary(this.sheetMergedIndex)) {
+        Text('这本书已在书库中，无需重复下载')
+          .fontSize(12)
+          .fontColor($r('app.color.success'))
+          .width('100%');
+      }
       List({ space: 8 }) {
         ForEach(this.sheetMerged()?.sources ?? [], (source: SoNovelSearchItem) => {
           ListItem() {
@@ -314,7 +443,7 @@ struct SoNovelSearchPage {
         EmptyState({ message: '未找到相关书籍' });
       } else {
         Row() {
-          Text(`共 ${this.mergedResults.length} 本`)
+          Text(this.resultSummary())
             .fontSize(13)
             .fontColor($r('app.color.text_secondary'));
           Blank().layoutWeight(1);

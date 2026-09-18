@@ -68,7 +68,9 @@ export struct BookCatalogView {
           }
           .height($r('app.float.list_item_height'))
           .padding({ left: 16, right: 16 })
-        }, (item: BookListItemData) => `list-${item.id}`);
+          // key 必须包含行内会变化的字段：角标（如「已入库」）是异步补齐的，
+          // 只按下标做 key 时 onDataReloaded 会复用旧组件，行内容不刷新
+        }, (item: BookListItemData) => `list-${item.id}-${item.badge ?? ''}`);
         if (this.loadingMore) {
           ListItem() {
             LoadingState({ hint: '加载更多...' });
@@ -100,11 +102,12 @@ export struct BookCatalogView {
               cover: item.cover ?? '',
               format: item.format ?? '',
               subtitle: item.subtitle ?? '',
+              badge: item.badge ?? '',
               onTap: () => this.onItemTap(item),
               onLongPress: () => this.onItemLongPress(item),
             });
           }
-        }, (item: BookListItemData) => `grid-${item.id}`);
+        }, (item: BookListItemData) => `grid-${item.id}-${item.badge ?? ''}`);
 
         if (this.loadingMore) {
           GridItem() {

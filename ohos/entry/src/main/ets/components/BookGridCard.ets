@@ -29,6 +29,8 @@ export struct BookGridCard {
   cover: string = '';
   format: string = '';
   subtitle: string = '';
+  /** 状态角标（如「已入库」）；空串不显示。 */
+  badge: string = '';
   onTap?: () => void;
   onLongPress?: () => void;
 
@@ -60,6 +62,21 @@ export struct BookGridCard {
     Column({ space: COVER_TEXT_GAP }) {
       Stack({ alignContent: Alignment.TopEnd }) {
         this.coverArea();
+        if (this.badge.length > 0) {
+          // Stack 统一按 TopEnd 对齐，角标要落左上角，所以外面套一层撑满宽度的 Row 把它推到左边
+          Row() {
+            Text(this.badge)
+              .fontSize(9)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.success'))
+              .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+              .margin({ top: 5, left: 5 })
+              .borderRadius(5)
+              .backgroundColor($r('app.color.success_light'));
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.Start);
+        }
         if (this.format.length > 0) {
           // 角标底色是半透明黑，文字固定白色：`on_brand` 在深色主题下是深色，压在黑底上读不出来
           Text(this.format.toUpperCase())
