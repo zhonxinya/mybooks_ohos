@@ -80,8 +80,24 @@ struct MetaBookListPage {
     this.itemsSource.update(this.items);
   }
 
+  /** 首次展示由 aboutToAppear 加载；之后再显示本页（从书详情返回）才静默重取 */
+  private metaShownOnce: boolean = false;
+
   aboutToAppear(): void {
     void this.loadMeta();
+  }
+
+  /**
+   * 从「全部标签／全部作者／丛书…」点进书 → 编辑元数据或应用引用信息 → 返回本页时元数据可能已变
+   * （新增标签、作者/出版社改名等），静默重取一次，避免列表停在旧标签与旧计数上。
+   * 首次展示由 aboutToAppear 负责，不重复请求。
+   */
+  onPageShow(): void {
+    if (!this.metaShownOnce) {
+      this.metaShownOnce = true;
+      return;
+    }
+    void this.loadMeta(true);
   }
 
   /** 作者/标签支持置顶（item_type 0=作者 1=标签）。 */
@@ -169,17 +185,29 @@ struct MetaBookListPage {
     return `已显示 ${shown} / ${this.total} 项 · 服务端按书籍数量截断`;
   }
 
-  private async loadMeta(): Promise<void> {
-    this.loading = true;
-    this.errorMessage = '';
+  /**
+   * 加载元数据列表。
+   *
+   * @param silent 静默重取：不切换 loading（避免从书详情/书单返回时整页闪一次骨架屏），
+   *               失败也保留页面上已有的列表。
+   */
+  private async loadMeta(silent: boolean = false): Promise<void> {
+    if (!silent) {
+      this.loading = true;
+      this.errorMessage = '';
+    }
     try {
       if (!TalebookService.ensureTalebookConfigured()) {
-        this.errorMessage = '请先配置 Talebook 服务器';
+        if (!silent) {
+          this.errorMessage = '请先配置 Talebook 服务器';
+        }
         return;
       }
       if (this.metaType === 'category') {
         if (!ServerRegistry.supports(ServerFeature.CATEGORIES)) {
-          this.errorMessage = `${ServerRegistry.profile().displayName} 服务端不支持书籍分类`;
+          if (!silent) {
+            this.errorMessage = `${ServerRegistry.profile().displayName} 服务端不支持书籍分类`;
+          }
           return;
         }
         const categories: MetaItem[] = await TalebookApi.getCategories();
@@ -196,7 +224,9 @@ struct MetaBookListPage {
       const envelope = await TalebookService.getMetaListAsync(this.metaType, 1,
         PaginationConstants.PAGE_SIZE, this.showAll ? 'show=all' : '');
       if (!TalebookService.isApiSuccess(envelope)) {
-        this.errorMessage = envelope.error.length > 0 ? envelope.error : '加载元数据失败';
+        if (!silent) {
+          this.errorMessage = envelope.error.length > 0 ? envelope.error : '加载元数据失败';
+        }
         return;
       }
       const body = envelope.body ?? {};
@@ -207,9 +237,13 @@ struct MetaBookListPage {
       this.pins = this.parseMetaItems(body['pins'] as Record<string, Object>[] | undefined);
       this.total = Number(body['total'] ?? fetched.length);
     } catch (error) {
-      this.errorMessage = error instanceof Error ? error.message : `${error}`;
+      if (!silent) {
+        this.errorMessage = error instanceof Error ? error.message : `${error}`;
+      }
     } finally {
-      this.loading = false;
+      if (!silent) {
+        this.loading = false;
+      }
     }
   }
 

@@ -10,6 +10,7 @@ import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { BookUploadService } from '../services/BookUploadService';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
+import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { mapTalebookBook } from '../utils/BookMapper';
 
 @Entry
@@ -141,6 +142,9 @@ struct AdminBookListPage {
             this.books = this.books.filter((item) => Number(item['id'] ?? 0) !== bookId);
             this.catalogItems = this.catalogItems.filter((item: BookListItemData) => item.id !== String(bookId));
             this.toast('已删除');
+            // 书架与小说导航页在别的页签上常驻，这里不通知就会继续显示刚删掉的书
+            BookshelfRefresh.notify();
+            BookshelfRefresh.notifyBooksTab();
           } else {
             this.toast(envelope.error.length > 0 ? envelope.error : '删除失败');
           }
