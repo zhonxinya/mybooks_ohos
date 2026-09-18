@@ -28,3 +28,4 @@ export { TagNavSection, TagNavItem } from './TagNavRow';
 export { FriendsLinksRow, FriendLink } from './FriendsLinksRow';
 export { LazyDataSource } from './LazyDataSource';
 export { AccountPicker } from './AccountPicker';
+export { BookIdPicker } from './BookIdPicker';

@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import {
   PageScaffold, PrimaryButton, SecondaryButton, DangerButton,
-  LoadingState, EmptyState, SettingCell, FilterChips, FilterChipItem
+  LoadingState, EmptyState, SettingCell, FilterChips, FilterChipItem, BookIdPicker
 } from '../components';
 import {
   TalebookApi, ApiMessageResult, apiErrorMessage,
@@ -434,13 +434,7 @@ struct EpubBeautifyToolPage {
         }
 
         Column({ space: 10 }) {
-          TextInput({ placeholder: '书籍 ID（多个用逗号分隔）', text: this.bookIdsText })
-            .height(40)
-            .borderRadius(8)
-            .backgroundColor($r('app.color.page_background'))
-            .onChange((v: string) => {
-              this.bookIdsText = v;
-            });
+          BookIdPicker({ bookIdText: $bookIdsText, multi: true });
           Text(`预设：${this.presetHints}`)
             .fontSize(11)
             .fontColor($r('app.color.text_tertiary'))

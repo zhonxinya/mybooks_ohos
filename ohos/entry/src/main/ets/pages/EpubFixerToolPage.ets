@@ -1,5 +1,5 @@
 import {
-  PageScaffold, PrimaryButton, SecondaryButton, SettingCell, LoadingState
+  PageScaffold, PrimaryButton, SecondaryButton, SettingCell, LoadingState, BookIdPicker
 } from '../components';
 import {
   TalebookApi, ApiMessageResult, apiErrorMessage
@@ -114,13 +114,7 @@ struct EpubFixerToolPage {
           }
 
           Column({ space: 10 }) {
-            TextInput({ placeholder: '书籍 ID', text: this.bookIdText })
-              .height(40)
-              .borderRadius(8)
-              .backgroundColor($r('app.color.page_background'))
-              .onChange((v: string) => {
-                this.bookIdText = v;
-              });
+            BookIdPicker({ bookIdText: $bookIdText });
           }
           .width('100%')
           .padding(12)

@@ -1,6 +1,6 @@
 import {
   PageScaffold, LoadingState, EmptyState, SectionTitle, FilterChips, FilterChipItem,
-  PrimaryButton, SecondaryButton
+  PrimaryButton, SecondaryButton, BookIdPicker
 } from '../components';
 import {
   AdminImportApi, AdminApiResult, BookFilePathResponse, TxtParserResponse,
@@ -293,14 +293,7 @@ struct TxtBookPage {
           }
 
           Column({ space: 10 }) {
-            TextInput({ placeholder: '书籍 ID', text: this.bookIdText })
-              .type(InputType.Number)
-              .height(40)
-              .borderRadius(8)
-              .backgroundColor($r('app.color.page_background'))
-              .onChange((value: string) => {
-                this.bookIdText = value;
-              });
+            BookIdPicker({ bookIdText: $bookIdText });
           }
           .width('100%')
           .padding($r('app.float.card_padding'))

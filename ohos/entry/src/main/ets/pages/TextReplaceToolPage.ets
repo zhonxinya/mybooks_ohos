@@ -1,5 +1,5 @@
 import {
-  PageScaffold, PrimaryButton, SecondaryButton, SettingCell, LoadingState
+  PageScaffold, PrimaryButton, SecondaryButton, SettingCell, LoadingState, BookIdPicker
 } from '../components';
 import {
   TalebookApi, ApiMessageResult, apiErrorMessage,
@@ -249,13 +249,7 @@ struct TextReplaceToolPage {
           }
 
           Column({ space: 10 }) {
-            TextInput({ placeholder: '书籍 ID', text: this.bookIdText })
-              .height(40)
-              .borderRadius(8)
-              .backgroundColor($r('app.color.page_background'))
-              .onChange((v: string) => {
-                this.bookIdText = v;
-              });
+            BookIdPicker({ bookIdText: $bookIdText });
             TextInput({ placeholder: '查找内容 / 正则 pattern', text: this.pattern })
               .height(40)
               .borderRadius(8)

@@ -1,6 +1,6 @@
 import {
   PageScaffold, PrimaryButton, SecondaryButton, SettingCell,
-  LoadingState, EmptyState, TextButton
+  LoadingState, EmptyState, TextButton, BookIdPicker
 } from '../components';
 import {
   TalebookApi, apiErrorMessage, ToolboxDataResponse
@@ -218,13 +218,7 @@ struct EpubSplitToolPage {
         }
 
         Column({ space: 10 }) {
-          TextInput({ placeholder: '书籍 ID', text: this.bookIdText })
-            .height(40)
-            .borderRadius(8)
-            .backgroundColor($r('app.color.page_background'))
-            .onChange((v: string) => {
-              this.bookIdText = v;
-            });
+          BookIdPicker({ bookIdText: $bookIdText });
           SecondaryButton({
             label: this.busy ? '加载中…' : '加载章节',
             buttonEnabled: !this.busy,
