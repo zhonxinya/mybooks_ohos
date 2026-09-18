@@ -7,6 +7,8 @@ export interface BookListItemData {
   cover?: string;
   subtitle?: string;
   format?: string;
+  /** 状态角标（如「已入库」）；空串不显示。 */
+  badge?: string;
 }
 
 @Component
@@ -44,6 +46,14 @@ export struct BookListItem {
             .maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1);
+          if (this.item.badge !== undefined && this.item.badge.length > 0) {
+            Text(this.item.badge)
+              .fontSize(10)
+              .fontColor($r('app.color.success'))
+              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+              .borderRadius(4)
+              .backgroundColor($r('app.color.success_light'));
+          }
           if (this.item.format !== undefined && this.item.format.length > 0) {
             Text(this.item.format.toUpperCase())
               .fontSize(10)
