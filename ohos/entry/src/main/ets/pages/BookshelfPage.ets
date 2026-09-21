@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { SymbolGlyphModifier } from '@kit.ArkUI';
 import {
   HarmonyTopBar, BookListItemData, FilterChips, FilterChipItem,
   EmptyState, LoadingState, IconCircleButton, BookCatalogView, AuthImage, AccountPicker,
@@ -11,6 +12,9 @@ import { LocalBookService } from '../services/LocalBookService';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { DateFormat } from '../utils/DateFormat';
 import { BookViewMode } from '../utils/BookViewMode';
+import {
+  BookSortMode, SHELF_SORT_OPTIONS, SHELF_SORT_RECENT_ADDED,
+} from '../utils/BookSortMode';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { mapTalebookBook } from '../utils/BookMapper';
 
@@ -27,6 +31,8 @@ export struct BookshelfPage {
   @State loading: boolean = true;
   @State importing: boolean = false;
   @State isListMode: boolean = false;
+  /** 本地书籍排序方式，默认「最近加入」＝下载记录原有顺序。 */
+  @State sortMode: number = SHELF_SORT_RECENT_ADDED;
   @State @Watch('onSelectedTabChanged') selectedTab: number = 0;
   /**
    * 底部面板开关（同一节点只能挂一个 bindSheet，链式挂多个时只有第一个生效）。
@@ -59,6 +65,7 @@ export struct BookshelfPage {
 
   aboutToAppear(): void {
     this.isListMode = BookViewMode.isListMode();
+    this.sortMode = BookSortMode.load();
     this.loadData(false);
   }
   private onRefreshTick(): void {
@@ -135,17 +142,30 @@ export struct BookshelfPage {
 
   private updateDisplayRecords(): void {
     if (this.selectedTab === 0) {
-      this.displayRecords = this.records;
+      this.displayRecords = BookSortMode.sort(this.records, this.sortMode);
     } else if (this.selectedTab === 2) {
       return;
     } else {
-      this.displayRecords = this.records.filter((item) => {
+      const books = this.records.filter((item) => {
         const format = (item.format ?? '').toLowerCase();
         return format.includes('epub') || format.includes('txt') || format.includes('mobi') ||
           format.includes('azw');
       });
+      this.displayRecords = BookSortMode.sort(books, this.sortMode);
     }
     this.catalogItems = this.displayRecords.map((record: DownloadRecord) => this.toListItem(record));
+  }
+
+  /** 切换排序方式并落盘；有声书页签的数据来自服务端分页，不参与本地排序。 */
+  private applySortMode(mode: number): void {
+    if (this.sortMode === mode) {
+      return;
+    }
+    this.sortMode = mode;
+    BookSortMode.save(mode);
+    if (this.selectedTab !== 2) {
+      this.updateDisplayRecords();
+    }
   }
 
   private async loadAudiobooks(reset: boolean): Promise<void> {
@@ -487,6 +507,74 @@ export struct BookshelfPage {
     return name.length > 0 ? name : '未配置账号';
   }
 
+  /** 排序已偏离默认（最近加入）时高亮，让用户知道列表为什么不是原顺序。 */
+  private sortIsDefault(): boolean {
+    return this.sortMode === SHELF_SORT_RECENT_ADDED;
+  }
+
+  /**
+   * 排序下拉：挂在顶部胶囊卡片右侧。
+   *
+   * 用 `@LocalBuilder` 而非 `@Builder`：本方法会作为 `@BuilderParam` 传给 FilterChips，
+   * 普通 `@Builder` 传下去时 ArkUI 会把 `this` 重绑到接收方，`this.sortMode` 会取不到
+   * （同 PageScaffold 的 actionWrapper 注释）。
+   */
+  @LocalBuilder
+  sortTrailing() {
+    // 有声书是服务端分页数据，不参与本地排序（Builder 里不能提前 return，只能靠条件包住）
+    if (this.selectedTab !== 2) {
+      Row({ space: 2 }) {
+        Text(BookSortMode.label(this.sortMode))
+          .fontSize(13)
+          .fontColor(this.sortIsDefault() ? $r('app.color.text_secondary') : $r('app.color.brand_primary'))
+          .maxLines(1);
+        SymbolGlyph($r('sys.symbol.chevron_down'))
+          .fontSize(12)
+          .fontColor([this.sortIsDefault() ? $r('app.color.text_tertiary') : $r('app.color.brand_primary')]);
+      }
+      .height(34)
+      .padding({ left: 10, right: 8 })
+      // 圆角必须写进 border：先 borderRadius 再 border 会把圆角重置（同 ChipButton）
+      .border({
+        width: 1,
+        color: this.sortIsDefault() ? $r('app.color.divider') : $r('app.color.brand_primary'),
+        radius: $r('app.float.chip_radius'),
+      })
+      .backgroundColor($r('app.color.card_background'))
+      .alignItems(VerticalAlign.Center)
+      .stateStyles({
+        pressed: {
+          .backgroundColor($r('app.color.chip_background_pressed'))
+        },
+      })
+      .bindMenu(this.sortMenuItems());
+    }
+  }
+
+  /**
+   * 排序菜单项：当前项带勾。
+   *
+   * 用 `MenuElement[]` 而非 `Menu()` + `MenuItem` 的自定义 builder：后者作为
+   * `bindMenu` 的 CustomBuilder 传入时不弹出（实测点击无任何反应），数组形式正常。
+   * 数组在调用时求值，也不受 BuilderParam 传递时 `this` 重绑的影响。
+   */
+  private sortMenuItems(): MenuElement[] {
+    const items: MenuElement[] = [];
+    for (const option of SHELF_SORT_OPTIONS) {
+      const item: MenuElement = {
+        value: option.label,
+        action: () => this.applySortMode(option.value),
+      };
+      // 只给当前项加勾。必须用 symbolIcon：`icon` 只认图片资源，传 sys.symbol.* 不渲染
+      if (option.value === this.sortMode) {
+        item.symbolIcon = new SymbolGlyphModifier($r('sys.symbol.checkmark'))
+          .fontColor([$r('app.color.brand_primary')]);
+      }
+      items.push(item);
+    }
+    return items;
+  }
+
   private openAccountSwitcher(): void {
     if (AccountManager.switchableAccounts().length <= 1) {
       this.getUIContext().getPromptAction().showToast({
@@ -501,8 +589,7 @@ export struct BookshelfPage {
   @Builder
   toolbarRow() {
     Row({ space: 8 }) {
-      Blank().layoutWeight(1);
-      this.iconToolButton($r('sys.symbol.magnifyingglass'), () => {
+      Blank().layoutWeight(1);      this.iconToolButton($r('sys.symbol.magnifyingglass'), () => {
         this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookBookSearchPage' });
       });
       this.iconToolButton($r('sys.symbol.book'), () => {
@@ -697,7 +784,11 @@ export struct BookshelfPage {
         },
       });
       Column() {
-        FilterChips({ items: this.filterItems, selected: $selectedTab });
+        FilterChips({
+          items: this.filterItems,
+          selected: $selectedTab,
+          trailing: this.sortTrailing,
+        });
       }
       .width('100%')
       .margin({ left: 16, right: 16, bottom: 4 })
