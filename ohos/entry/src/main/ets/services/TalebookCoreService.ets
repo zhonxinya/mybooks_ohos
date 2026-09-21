@@ -175,6 +175,17 @@ export class TalebookCoreService {
     NativeCore.setSslVerify(!allowInsecure);
   }
 
+  /**
+   * 连接层性能日志开关（pref `http_perf_log`）。
+   * 默认关闭；排查网络问题时打开后可在 hilog 看到 newconn/dns/conn/tls/ttfb/total。
+   */
+  static setHttpMetrics(enabled: boolean): void {
+    if (!NativeCore.isInitialized()) {
+      return;
+    }
+    NativeCore.setHttpMetrics(enabled);
+  }
+
   static getDownloadRecords(): Promise<Array<Record<string, Object>>> {
     return TalebookCoreService.getInstance().getDownloadRecords();
   }

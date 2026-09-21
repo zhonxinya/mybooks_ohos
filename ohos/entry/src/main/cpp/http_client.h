@@ -19,6 +19,8 @@ public:
     std::string getBaseUrl(const std::string &service) const;
     void setCookieDir(const std::string &dir);
     void setSslVerify(bool verify);
+    /** 连接层性能日志开关（默认关；pref `http_perf_log=true` 时开启）。 */
+    void setMetricsEnabled(bool enabled);
     bool sslVerify() const { return sslVerify_; }
     void loadCookies();
     void saveCookies();
@@ -34,7 +36,7 @@ public:
     HttpResponse downloadToFile(const std::string &service, const std::string &path,
                                 const std::string &destPath, const std::string &query = "");
     HttpResponse downloadUrlToFile(const std::string &url, const std::string &destPath);
-    /** 预热 DNS / TLS session（服务器禁用连接复用时仍有用） */
+    /** 预热 DNS / TLS session；连接已被本线程 handle 复用，预热即可让首个用户请求直接复用这条连接 */
     HttpResponse warmConnection(const std::string &service);
 
 private:

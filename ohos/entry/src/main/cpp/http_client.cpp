@@ -5,6 +5,8 @@
 
 #include <hilog/log.h>
 
+#include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <fstream>
@@ -20,8 +22,29 @@ std::once_flag gCurlInitFlag;
 std::mutex gShareMutex;
 CURLSH *gCurlShare = nullptr;
 
-// 每个 worker 线程复用 easy handle，保留本线程 DNS / TLS session 缓存（服务器禁用连接复用）。
+// 每个 worker 线程一个长期存活的 easy handle：curl_easy_reset 只清选项，会保留
+// live connections / DNS 缓存 / TLS session / cookies，因此同线程的后续请求可以直接
+// 复用已建立的 TCP+TLS 连接（HTTP keep-alive），不必每次请求重新握手。
 thread_local CURL *gTlsEasy = nullptr;
+
+// Cookie 落盘串行化：只在内容变化时写，且写临时文件后 rename 原子替换。
+std::mutex gCookieMutex;
+std::string gPersistedCookieLines;
+
+// 连接层性能日志开关：默认关（避免每请求一行日志），由 pref `http_perf_log` 打开。
+std::atomic<bool> gMetricsEnabled{false};
+
+/** 线程退出时释放本线程 handle，避免 fd 泄漏（worker 线程长期存活，正常不会触发）。 */
+struct EasyHandleGuard {
+    ~EasyHandleGuard()
+    {
+        if (gTlsEasy != nullptr) {
+            curl_easy_cleanup(gTlsEasy);
+            gTlsEasy = nullptr;
+        }
+    }
+};
+thread_local EasyHandleGuard gEasyHandleGuard;
 
 void ensureCurlInit()
 {
@@ -36,7 +59,9 @@ void ensureCurlInit()
                               +[](CURL * /*handle*/, curl_lock_data /*data*/, void * /*userptr*/) {
                                   gShareMutex.unlock();
                               });
-            // 服务器禁用 Keep-Alive：不共享 CONNECT；跨线程共享 DNS + TLS session 缩短每次新连接握手。
+            // 跨线程共享 DNS 与 TLS session 缓存。连接（CURL_LOCK_DATA_CONNECT）不共享：
+            // curl 官方明确「不支持在多个并发线程之间共享连接」，改为每线程各自持有连接
+            // （见 acquireEasyHandle），这才是多线程下可安全 keep-alive 的方式。
             curl_share_setopt(gCurlShare, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
             curl_share_setopt(gCurlShare, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION);
         }
@@ -49,6 +74,8 @@ CURL *acquireEasyHandle()
     if (gTlsEasy == nullptr) {
         gTlsEasy = curl_easy_init();
     } else {
+        // 只重置选项：live connections / DNS 缓存 / TLS session / cookies 都保留，
+        // 于是同线程的下一请求会复用上一条已建立的连接。
         curl_easy_reset(gTlsEasy);
     }
     return gTlsEasy;
@@ -65,15 +92,25 @@ void applySharedCurlOptions(CURL *curl)
     curl_easy_setopt(curl, CURLOPT_DNS_CACHE_TIMEOUT, 600L);
     curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1L);
     curl_easy_setopt(curl, CURLOPT_TCP_FASTOPEN, 1L);
-    // 服务器禁用连接复用：每次请求后关闭，避免误复用已关闭连接导致卡住。
-    curl_easy_setopt(curl, CURLOPT_FORBID_REUSE, 1L);
+    // 允许复用本线程已建立的连接：客户端↔nginx 这一跳本身是 keep-alive。
+    // 服务端 nginx 只对「nginx→tornado」上游跳发 Connection: close
+    // （conf/nginx 中 map $http_upgrade $connection_upgrade + proxy_set_header），
+    // 不影响客户端这一侧；因此客户端可以且应当复用连接。
+    curl_easy_setopt(curl, CURLOPT_FORBID_REUSE, 0L);
     curl_easy_setopt(curl, CURLOPT_FRESH_CONNECT, 0L);
-    // TLS session ticket/ID 仍可跨「新 TCP 连接」复用，显著缩短握手。
+    // 连接缓存上限：每个 worker 线程最多留几条连接，避免批量封面时堆连接。
+    curl_easy_setopt(curl, CURLOPT_MAXCONNECTS, 4L);
+    // TCP 层保活：让内核探测空闲连接，尽早发现被网络中断的半开连接。
+    curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+    curl_easy_setopt(curl, CURLOPT_TCP_KEEPIDLE, 30L);
+    curl_easy_setopt(curl, CURLOPT_TCP_KEEPINTVL, 15L);
+    // TLS session ticket/ID 可跨「新 TCP 连接」复用，显著缩短握手。
     curl_easy_setopt(curl, CURLOPT_SSL_SESSIONID_CACHE, 1L);
     // 关闭 Expect: 100-continue，避免经反向代理的 POST 多等一轮 RTT。
     curl_easy_setopt(curl, CURLOPT_EXPECT_100_TIMEOUT_MS, 0L);
-    // 无 Keep-Alive 时 HTTP/1.1 比每次新建 HTTP/2 更轻。
+    // 当前 libcurl 构建无 nghttp2，HTTP/1.1 是唯一可用版本；显式指定避免协商。
     curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+    // 本构建未编译 zlib/brotli，此行当前为空操作；保留以便将来换带压缩的 libcurl 后自动生效。
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "TalebookReader/1.0 (HarmonyOS)");
 }
@@ -131,6 +168,88 @@ std::string formatCurlError(CURLcode code, const char *message)
         return "无法验证 SSL 证书，请使用受信任证书；仅自签名/局域网环境可开启「跳过 SSL 验证」";
     }
     return message != nullptr ? std::string(message) : "网络请求失败";
+}
+
+/** 取 libcurl 的某段时间统计（秒 → 毫秒），取不到返回 -1。 */
+long curlTimeMs(CURL *curl, CURLINFO info)
+{
+    double seconds = 0;
+    if (curl_easy_getinfo(curl, info, &seconds) != CURLE_OK) {
+        return -1;
+    }
+    return static_cast<long>(seconds * 1000.0);
+}
+
+/**
+ * 连接层性能日志（hilog -T MyBooksHttp 可看）：
+ * newconn 是本次请求新建的 TCP 连接数，0 表示复用了已有连接（keep-alive 生效），
+ * dnsMs/connMs/tlsMs/ttfbMs 分别对应 DNS、TCP、TLS 握手、首字节耗时。
+ */
+void logRequestMetrics(const char *kind, const char *method, const std::string &url, CURL *curl,
+                       CURLcode code, long statusCode)
+{
+    if (!gMetricsEnabled.load()) {
+        return;
+    }
+    long connects = 0;
+    curl_easy_getinfo(curl, CURLINFO_NUM_CONNECTS, &connects);
+    OH_LOG_Print(LOG_APP, LOG_INFO, 0xD002, "MyBooksHttp",
+                 "perf kind=%{public}s method=%{public}s http=%{public}ld curl=%{public}d "
+                 "newconn=%{public}ld dnsMs=%{public}ld connMs=%{public}ld tlsMs=%{public}ld "
+                 "ttfbMs=%{public}ld totalMs=%{public}ld url=%{public}s",
+                 kind, method, statusCode, static_cast<int>(code), connects,
+                 curlTimeMs(curl, CURLINFO_NAMELOOKUP_TIME), curlTimeMs(curl, CURLINFO_CONNECT_TIME),
+                 curlTimeMs(curl, CURLINFO_APPCONNECT_TIME),
+                 curlTimeMs(curl, CURLINFO_STARTTRANSFER_TIME), curlTimeMs(curl, CURLINFO_TOTAL_TIME),
+                 url.c_str());
+}
+
+/**
+ * Cookie 落盘：只在内容真正变化时写，且先写临时文件再 rename 原子替换。
+ *
+ * 原实现靠「curl_easy_cleanup 时由 COOKIEJAR 落盘」；现在 handle 长期存活于线程内，
+ * cleanup 不再发生，而每请求无条件重写 cookies.txt 既有写放大，又可能让别的线程在
+ * COOKIEFILE 读取时看到半截文件（表现为登录态莫名丢失）。
+ */
+void persistCookiesIfChanged(CURL *curl, const std::string &cookieDir)
+{
+    if (cookieDir.empty()) {
+        return;
+    }
+    struct curl_slist *cookies = nullptr;
+    if (curl_easy_getinfo(curl, CURLINFO_COOKIELIST, &cookies) != CURLE_OK) {
+        return;
+    }
+    std::string lines;
+    for (struct curl_slist *node = cookies; node != nullptr; node = node->next) {
+        if (node->data != nullptr) {
+            lines += node->data;
+            lines += '\n';
+        }
+    }
+    curl_slist_free_all(cookies);
+
+    std::lock_guard<std::mutex> lock(gCookieMutex);
+    if (lines == gPersistedCookieLines) {
+        return;
+    }
+    const std::string path = cookieDir + "/cookies.txt";
+    const std::string tmpPath = path + ".tmp";
+    // 交给 libcurl 按标准 Netscape 格式写临时文件（FLUSH 写到 COOKIEJAR 指定的文件）
+    curl_easy_setopt(curl, CURLOPT_COOKIEJAR, tmpPath.c_str());
+    const CURLcode flushCode = curl_easy_setopt(curl, CURLOPT_COOKIELIST, "FLUSH");
+    curl_easy_setopt(curl, CURLOPT_COOKIEJAR, static_cast<const char *>(nullptr));
+    if (flushCode != CURLE_OK) {
+        return;
+    }
+    if (rename(tmpPath.c_str(), path.c_str()) == 0) {
+        gPersistedCookieLines = lines;
+        // 只记条数，不记 cookie 内容（会话凭据不外泄）
+        OH_LOG_Print(LOG_APP, LOG_INFO, 0xD002, "MyBooksHttp",
+                     "cookie persist lines=%{public}zu", std::count(lines.begin(), lines.end(), '\n'));
+    } else {
+        remove(tmpPath.c_str());
+    }
 }
 
 HttpResponse performCurlRequest(const std::string &url, const std::string &method,
@@ -193,21 +312,20 @@ HttpResponse performCurlRequest(const std::string &url, const std::string &metho
     }
 
     const CURLcode code = curl_easy_perform(curl);
+    long status = 0;
     if (code != CURLE_OK) {
         result.error = formatCurlError(code, curl_easy_strerror(code));
     } else {
-        long status = 0;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
         result.statusCode = static_cast<int>(status);
         result.body = std::move(responseBody);
     }
 
+    logRequestMetrics("api", method.c_str(), url, curl, code, status);
+    // handle 留在本线程复用连接，cookie 改为「有变化才原子落盘」，
+    // 跨线程 / 跨模块（mybooks_core）请求依旧能读到最新会话。
+    persistCookiesIfChanged(curl, cookieDir);
     curl_slist_free_all(headers);
-    // 必须 cleanup：COOKIEJAR 仅在 cleanup 时落盘到 cookies.txt，
-    // 否则登录 cookie 只留在本线程 handle 内存，跨线程/跨模块（mybooks_core）请求拿不到会话。
-    // DNS/TLS 缓存已通过 curl_share 共享，且已 FORBID_REUSE，cleanup 无性能损失。
-    curl_easy_cleanup(curl);
-    gTlsEasy = nullptr;
     return result;
 }
 
@@ -293,10 +411,10 @@ HttpResponse performCurlDownload(const std::string &url, const std::string &dest
         }
     }
 
+    logRequestMetrics("download", "GET", url, curl, code, result.statusCode);
+    persistCookiesIfChanged(curl, cookieDir);
     curl_slist_free_all(headers);
-    // 同 performCurlRequest：cleanup 触发 COOKIEJAR 落盘，保证登录态跨请求可用
-    curl_easy_cleanup(curl);
-    gTlsEasy = nullptr;
+    // handle 留在本线程复用（连接 keep-alive），cookie 已按变化原子落盘。
     return result;
 }
 
@@ -343,6 +461,11 @@ void HttpClient::setCookieDir(const std::string &dir)
 void HttpClient::setSslVerify(bool verify)
 {
     sslVerify_ = verify;
+}
+
+void HttpClient::setMetricsEnabled(bool enabled)
+{
+    gMetricsEnabled.store(enabled);
 }
 
 void HttpClient::loadCookies()

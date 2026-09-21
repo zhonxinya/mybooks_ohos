@@ -52,6 +52,11 @@ export class NativeCore {
     mybooksCore.setSslVerify(verify);
   }
 
+  /** 连接层性能日志开关（默认关，排查网络问题时打开） */
+  static setHttpMetrics(enabled: boolean): void {
+    mybooksCore.setHttpMetrics(enabled);
+  }
+
   static async talebookGet(path: string): Promise<string> {
     const raw = await mybooksCore.talebookGet(path) as string;
     const resp = parseCoreResponse(raw);

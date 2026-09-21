@@ -402,6 +402,20 @@ static napi_value SetSslVerify(napi_env env, napi_callback_info info) {
     return undefined;
 }
 
+static napi_value SetHttpMetrics(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    bool enabled = false;
+    if (argc >= 1) {
+        napi_get_value_bool(env, args[0], &enabled);
+    }
+    mybooks::HttpClient::instance().setMetricsEnabled(enabled);
+    napi_value undefined = nullptr;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
 static napi_value RegisterCallback(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -492,6 +506,7 @@ static napi_value Init(napi_env env, napi_value exports) {
          nullptr},
         {"setBaseUrl", nullptr, SetBaseUrl, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setSslVerify", nullptr, SetSslVerify, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setHttpMetrics", nullptr, SetHttpMetrics, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"registerProgressCallback", nullptr, RegisterCallback, nullptr, nullptr, nullptr,
          napi_default, nullptr},
     };

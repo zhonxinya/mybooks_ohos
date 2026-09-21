@@ -385,6 +385,9 @@ export class TalebookService {
     if (key === 'allow_insecure_ssl') {
       TalebookCoreService.setSslVerify(value === 'true');
     }
+    if (key === 'http_perf_log') {
+      TalebookCoreService.setHttpMetrics(value === 'true');
+    }
   }
 
   static prefSetBatch(values: Record<string, string>): void {
@@ -392,6 +395,10 @@ export class TalebookService {
     const allowInsecure = values['allow_insecure_ssl'];
     if (allowInsecure !== undefined) {
       TalebookCoreService.setSslVerify(allowInsecure === 'true');
+    }
+    const perfLog = values['http_perf_log'];
+    if (perfLog !== undefined) {
+      TalebookCoreService.setHttpMetrics(perfLog === 'true');
     }
   }
 
