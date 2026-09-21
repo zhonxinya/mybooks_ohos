@@ -95,6 +95,8 @@ struct BuiltInReaderPage {
   private bookTitle: string = '';
   private bookFormat: string = '';
   private keepScreenOn: boolean = false;
+  /** 已按「先恢复系统栏再返回」退出过：`aboutToDisappear` 不必再恢复一次。 */
+  private systemBarsRestored: boolean = false;
   private options: ReaderOpenOptions = DEFAULT_OPTIONS;
   private callbacks: ReaderCallbacks = DEFAULT_CALLBACKS;
 
@@ -152,8 +154,22 @@ struct BuiltInReaderPage {
 
   aboutToDisappear(): void {
     ReadKitSession.flushProgress();
-    this.restoreSystemBars();
+    // 兜底：正常退出已由 onBackPress 恢复并等待，这里只覆盖进程被回收等异常路径
+    if (!this.systemBarsRestored) {
+      this.restoreSystemBars();
+    }
     this.applyKeepScreenOn(false);
+  }
+
+  /**
+   * 拦截系统返回键/返回手势，走与点返回按钮相同的「先恢复系统栏再返回」路径。
+   *
+   * 不拦的话系统直接 pop 页面：书架页会在窗口仍全屏时先布局一次，等系统栏回来后整页下移
+   * 一个状态栏高度（实测 132px / 44vp），表现为退出阅读器时页面猛跳一下。
+   */
+  onBackPress(): boolean {
+    this.exitReader();
+    return true;
   }
 
   build() {
@@ -177,7 +193,23 @@ struct BuiltInReaderPage {
 
   /** 退出阅读器：恢复系统栏后返回（恢复动作放这里，保证点返回与手势返回都覆盖）。 */
   private exitReader(): void {
-    this.restoreSystemBars();
+    void this.restoreSystemBarsThenBack();
+  }
+
+  /**
+   * 先恢复系统栏与窗口布局、**等生效后再**返回。
+   *
+   * 顺序不能颠倒：先 `router.back()` 的话，书架页会在「系统栏未恢复 + 窗口仍全屏」时先布局一次，
+   * 等系统栏回来后整页再下移一个状态栏高度（实测 132px / 44vp），看起来就是退出时页面猛跳。
+   */
+  private async restoreSystemBarsThenBack(): Promise<void> {
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      await WindowAbility.getInstance().exitImmersiveMode(context);
+      this.systemBarsRestored = true;
+    } catch (error) {
+      hilog.warn(0x0000, TAG, 'restoreSystemBars failed: %{public}s', (error as Error).message);
+    }
     this.getUIContext().getRouter().back();
   }
 

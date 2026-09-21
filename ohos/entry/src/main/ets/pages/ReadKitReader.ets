@@ -129,6 +129,8 @@ struct ReadKitReader {
   private restoreResourceIndex: number = 0;
   private restoreDomPos: string = '';
   private destroyed: boolean = false;
+  /** 已按「先恢复系统栏再返回」退出过：`aboutToDisappear` 不必再恢复一次。 */
+  private immersiveExited: boolean = false;
   private retryPending: boolean = false;
   private chapterPageTotals: Map<number, number> = new Map();
   private componentWidthVp: number = 0;
@@ -282,6 +284,27 @@ struct ReadKitReader {
   private exitImmersiveMode(context: common.UIAbilityContext): void {
     WindowAbility.getInstance().toggleWindowSystemBar(['status', 'navigation'], context);
     void WindowAbility.getInstance().setWindowLayoutFullScreen(false);
+  }
+
+  /**
+   * 退出阅读器：先恢复系统栏/窗口并**等生效后再**返回。
+   *
+   * 顺序不能颠倒：先 `router.back()` 的话，书架页会在「系统栏未恢复 + 窗口仍全屏」时先布局一次，
+   * 等系统栏回来后整页再下移一个状态栏高度（实测 132px / 44vp），看起来就是退出时页面猛跳。
+   *
+   * @throws 内部调用可能抛出异常，由调用方处理
+   */
+  private async exitReaderThenBack(context: common.UIAbilityContext): Promise<void> {
+    if (this.immersiveExited) {
+      return;
+    }
+    this.immersiveExited = true;
+    try {
+      await WindowAbility.getInstance().exitImmersiveMode(context);
+    } catch (error) {
+      hilog.warn(0x0000, TAG, 'exitImmersiveMode failed: %{public}s', error.message);
+    }
+    this.getUIContext().getRouter().back();
   }
 
   private onReadyChanged(): void {
@@ -1336,7 +1359,10 @@ struct ReadKitReader {
       this.batteryTimer = -1;
     }
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    this.exitImmersiveMode(context);
+    // 兜底：正常退出已由 onBackPress 恢复并等待，这里只覆盖进程被回收等异常路径
+    if (!this.immersiveExited) {
+      this.exitImmersiveMode(context);
+    }
     if (this.lastResourceIndex >= 0) {
       const location = JSON.stringify({
         resourceIndex: this.lastResourceIndex,
@@ -1470,6 +1496,20 @@ struct ReadKitReader {
     }
   }
 
+  /**
+   * 拦截系统返回键/返回手势：走与返回按钮相同的「先恢复系统栏再返回」路径。
+   *
+   * 面板打开时先关面板（保持原有交互），否则交给 `exitReaderThenBack` 恢复窗口后返回。
+   */
+  onBackPress(): boolean {
+    if (this.showControlPanel) {
+      this.closeControlPanel();
+      return true;
+    }
+    void this.exitReaderThenBack(this.getUIContext().getHostContext() as common.UIAbilityContext);
+    return true;
+  }
+
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   build() {
     Stack() {
@@ -1550,7 +1590,7 @@ struct ReadKitReader {
             expanded: true,
             onBack: () => {
               this.closeControlPanel();
-              this.getUIContext().getRouter().back();
+              void this.exitReaderThenBack(this.getUIContext().getHostContext() as common.UIAbilityContext);
             },
             onBookmark: () => {
               this.addBookmark();
