@@ -150,10 +150,8 @@ std::string TalebookApi::signIn(const std::string &username, const std::string &
                               escapeJsonString(password) + "\"}");
     }
     applyApiBusinessError(resp);
-    if (resp.error.empty() && resp.statusCode >= 200 && resp.statusCode < 300) {
-        store_.writeSecure("talebook_username", username);
-        store_.writeSecure("talebook_password", password);
-    }
+    // 凭据由 ArkTS 层写入系统关键资产存储（Asset Store），native 不再落地明文：
+    // 这里曾把用户名/密码写进 secure/storage.json，属明文保存，已移除。
     return wrapResponse(resp);
 }
 
@@ -165,7 +163,6 @@ std::string TalebookApi::signOut() const
         resp = http_.post("talebook", "/api/user/signout", "");
     }
     const_cast<HttpClient &>(http_).clearCookies();
-    store_.writeSecure("talebook_user_profile", "");
     return wrapResponse(resp);
 }
 

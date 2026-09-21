@@ -31,6 +31,8 @@ export default class EntryAbility extends UIAbility {
     AccountManager.ensureMigrated();
     // 按当前账号记录重新下发身份：自愈历史上未能落盘的账号配置，避免重启后请求打到空地址
     AccountManager.ensureActiveIdentity();
+    // 凭据明文清理：把历史版本明文保存的密码/用户名/资料迁入 Asset Store 后从明文通道删除
+    TalebookService.migratePlaintextSecrets();
     NotificationService.init();
     DownloadTaskService.notifyChanged();
     void TalebookService.warmLocalCaches();
