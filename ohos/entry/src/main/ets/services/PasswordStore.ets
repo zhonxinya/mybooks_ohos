@@ -74,4 +74,17 @@ export class PasswordStore {
       }
     }
   }
+
+  /**
+   * 确保别名在 Asset Store 中存在（用于把历史上明文保存的凭据迁移过来）。
+   * 已存在时不覆盖：Asset Store 中的值更可信，避免明文旧值倒灌。
+   * 返回是否已就绪（含此前已存在的情况）。
+   */
+  static ensure(alias: string, secret: string): boolean {
+    if (secret.length === 0 || PasswordStore.get(alias).length > 0) {
+      return true;
+    }
+    PasswordStore.set(alias, secret);
+    return PasswordStore.get(alias).length > 0;
+  }
 }

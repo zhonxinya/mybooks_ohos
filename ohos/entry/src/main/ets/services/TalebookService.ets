@@ -5,9 +5,12 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { parseApiEnvelopeTask, parseJsonArrayTask } from './TalebookJsonParser';
 import { TalebookCoreService } from './TalebookCoreService';
+import { AccountStore } from './AccountStore';
 import { PasswordStore } from './PasswordStore';
 import { ServerRegistry, ServerKind } from './ServerProfile';
-import { ACTIVE_ACCOUNT_KEY, identityDirFor, LEGACY_PASSWORD_ALIAS, passwordAliasFor } from '../models/AccountModels';
+import { ACTIVE_ACCOUNT_KEY, AccountRecord, DISCARDED_PLAINTEXT_KEYS, identityDirFor,
+  LEGACY_PASSWORD_ALIAS, LEGACY_PROFILE_ALIAS, LEGACY_USERNAME_ALIAS, passwordAliasFor,
+  profileAliasFor, usernameAliasFor } from '../models/AccountModels';
 
 export interface ApiEnvelope {
   status: number;
@@ -127,7 +130,6 @@ export class TalebookService {
   private static readonly LARGE_JSON_THRESHOLD: number = 32768;
   /** 由 Asset Store Kit 加密保存的密码类键，不再写入明文 JSON。 */
   private static readonly PASSWORD_KEYS: string[] = ['talebook_password'];
-  private static passwordMigrated: boolean = false;
   /** 应用数据根目录（全局根）；账号身份根在该目录下的 accounts/<id>。 */
   private static dataDir_: string = '';
   /** 最近一次自动登录失败原因（空串 = 无失败）；登录页已移除，该值仅用于提示。 */
@@ -318,8 +320,8 @@ export class TalebookService {
   }
 
   static secureGet(key: string): string {
-    if (TalebookService.PASSWORD_KEYS.indexOf(key) >= 0) {
-      return TalebookService.readPassword();
+    if (TalebookService.isAssetKey(key)) {
+      return PasswordStore.get(TalebookService.activeAliasFor(key));
     }
     if (TalebookService.isGlobalSecureKey(key)) {
       return entry.secureGetGlobal(key);
@@ -328,8 +330,12 @@ export class TalebookService {
   }
 
   static secureSet(key: string, value: string): void {
-    if (TalebookService.PASSWORD_KEYS.indexOf(key) >= 0) {
-      PasswordStore.set(TalebookService.activePasswordAlias(), value);
+    if (TalebookService.isAssetKey(key)) {
+      PasswordStore.set(TalebookService.activeAliasFor(key), value);
+      // 明文通道里可能还留着同一个键（升级前写入的），一并擦除，避免旧值继续可读
+      if (key !== 'talebook_password') {
+        entry.secureSet(key, '');
+      }
       return;
     }
     if (TalebookService.isGlobalSecureKey(key)) {
@@ -337,6 +343,30 @@ export class TalebookService {
       return;
     }
     entry.secureSet(key, value);
+  }
+
+  /**
+   * 必须进系统关键资产存储（Asset Store）的键：密码、用户名、用户资料。
+   *
+   * 用户资料里含 `podcast_token`（播客订阅凭据），用户名属账号身份信息，
+   * 三者都不允许明文落盘，因此统一走 Asset Store，只有连接受限的服务端地址等
+   * 非敏感配置才留在 native 的明文 JSON 里。
+   */
+  private static isAssetKey(key: string): boolean {
+    return TalebookService.PASSWORD_KEYS.indexOf(key) >= 0
+      || key === 'talebook_username' || key === 'talebook_user_profile';
+  }
+
+  /** 把对外的键名映射为「当前账号」在 Asset Store 中的别名。 */
+  private static activeAliasFor(key: string): string {
+    const id: string = entry.prefGet(ACTIVE_ACCOUNT_KEY);
+    if (key === 'talebook_password') {
+      return passwordAliasFor(id);
+    }
+    if (key === 'talebook_username') {
+      return usernameAliasFor(id);
+    }
+    return profileAliasFor(id);
   }
 
   /**
@@ -353,26 +383,67 @@ export class TalebookService {
   }
 
   /**
-   * 读取当前账号的密码（始终来自 Asset Store）。
-   * 旧版把密码明文存在 secure JSON 中，且键名与默认账号别名相同，故仅对默认账号做一次迁移。
-   * 新账号可能有不同的密码，不能回退到默认账号的明文，否则会串账号。
+   * 凭据明文存储迁移：把历史版本写在 native 明文 JSON 里的密码/用户名/用户资料
+   * 搬进 Asset Store，并立刻从明文通道删除。
+   *
+   * 旧版只是「读到密码时才迁移」，若用户升级后一直能自动登录（读到的是 Asset Store 里的值），
+   * 明文副本就会长期留在 secure 目录里。这里在启动时无条件清一次。
+   *
+   * 明文里还残留密码时，说明 Asset Store 里多半没有值，需要先搬再删，避免登录失败。
    */
-  private static readPassword(): string {
+  static migratePlaintextSecrets(): void {
     const alias: string = TalebookService.activePasswordAlias();
-    const secret: string = PasswordStore.get(alias);
-    if (secret.length > 0) {
-      return secret;
+    const plaintextPassword: string = entry.secureGet(LEGACY_PASSWORD_ALIAS);
+    const plaintextUsername: string = entry.secureGet(LEGACY_USERNAME_ALIAS);
+    const plaintextProfile: string = entry.secureGet(LEGACY_PROFILE_ALIAS);
+    if (plaintextPassword.length > 0) {
+      PasswordStore.ensure(alias, plaintextPassword);
     }
-    if (alias !== LEGACY_PASSWORD_ALIAS || TalebookService.passwordMigrated) {
-      return '';
+    if (plaintextUsername.length > 0) {
+      PasswordStore.ensure(TalebookService.activeAliasFor('talebook_username'), plaintextUsername);
     }
-    TalebookService.passwordMigrated = true;
-    const legacy: string = entry.secureGet(LEGACY_PASSWORD_ALIAS);
-    if (legacy.length > 0) {
-      PasswordStore.set(alias, legacy);
-      entry.secureSet(LEGACY_PASSWORD_ALIAS, '');
+    if (plaintextProfile.length > 0) {
+      PasswordStore.ensure(TalebookService.activeAliasFor('talebook_user_profile'), plaintextProfile);
     }
-    return legacy;
+    // 现有账号各自的旧别名（多账号升级路径）
+    const records: AccountRecord[] = AccountStore.list();
+    for (let i = 0; i < records.length; i++) {
+      const id: string = records[i].id;
+      const legacyUser: string = entry.secureGet(`account_${id}_username`);
+      if (legacyUser.length > 0) {
+        PasswordStore.ensure(usernameAliasFor(id), legacyUser);
+      }
+      const legacyProfile: string = entry.secureGet(`account_${id}_profile`);
+      if (legacyProfile.length > 0) {
+        PasswordStore.ensure(profileAliasFor(id), legacyProfile);
+      }
+      const recordUser: string = records[i].username;
+      if (recordUser.length > 0) {
+        PasswordStore.ensure(usernameAliasFor(id), recordUser);
+      }
+    }
+    for (let i = 0; i < DISCARDED_PLAINTEXT_KEYS.length; i++) {
+      entry.secureSet(DISCARDED_PLAINTEXT_KEYS[i], '');
+    }
+    // 仅记录「是否还存在明文」与键数量，绝不输出任何凭据内容
+    let remaining: number = 0;
+    for (let i = 0; i < DISCARDED_PLAINTEXT_KEYS.length; i++) {
+      if (entry.secureGet(DISCARDED_PLAINTEXT_KEYS[i]).length > 0) {
+        remaining++;
+      }
+    }
+    // 明文清空后，自动登录仍要能从 Asset Store 取到密码/用户名（只记存在与否）
+    const pwdInStore: number = PasswordStore.get(alias).length > 0 ? 1 : 0;
+    const userInStore: number =
+      PasswordStore.get(TalebookService.activeAliasFor('talebook_username')).length > 0 ? 1 : 0;
+    const profileInStore: number =
+      PasswordStore.get(TalebookService.activeAliasFor('talebook_user_profile')).length > 0 ? 1 : 0;
+    hilog.info(0x0000, TAG,
+      'plaintext secret migration done: had=%{public}d/%{public}d/%{public}d residual=%{public}d '
+        + 'assetStore=%{public}d/%{public}d/%{public}d accounts=%{public}d',
+      plaintextPassword.length > 0 ? 1 : 0, plaintextUsername.length > 0 ? 1 : 0,
+      plaintextProfile.length > 0 ? 1 : 0, remaining, pwdInStore, userInStore, profileInStore,
+      records.length);
   }
 
   static prefGet(key: string, defaultValue: string = ''): string {

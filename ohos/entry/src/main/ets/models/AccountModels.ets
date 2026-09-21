@@ -18,6 +18,10 @@ export const ACTIVE_ACCOUNT_KEY: string = 'active_account_id';
 export const ACCOUNT_LEGACY_ID: string = 'default';
 /** 历史密码在 Asset Store 中的别名；默认账号沿用该别名以复用已保存的密码。 */
 export const LEGACY_PASSWORD_ALIAS: string = 'talebook_password';
+/** 历史用户名在 Asset Store 中的别名（旧版曾明文存于 secure JSON）。 */
+export const LEGACY_USERNAME_ALIAS: string = 'talebook_username';
+/** 历史用户资料在 Asset Store 中的别名（旧版曾明文存于 secure JSON，含 podcast_token）。 */
+export const LEGACY_PROFILE_ALIAS: string = 'talebook_user_profile';
 
 /** 一个已保存的账号。密码不在此结构中，单独存于 Asset Store。 */
 export interface AccountRecord {
@@ -82,6 +86,22 @@ export function identityDirFor(filesDir: string, id: string): string {
 export function passwordAliasFor(id: string): string {
   return isLegacyAccount(id) ? LEGACY_PASSWORD_ALIAS : `account_${id}_password`;
 }
+
+/** 账号用户名在 Asset Store 中的别名。 */
+export function usernameAliasFor(id: string): string {
+  return isLegacyAccount(id) ? LEGACY_USERNAME_ALIAS : `account_${id}_username`;
+}
+
+/** 账号用户资料（含 podcast_token 等凭据）在 Asset Store 中的别名。 */
+export function profileAliasFor(id: string): string {
+  return isLegacyAccount(id) ? LEGACY_PROFILE_ALIAS : `account_${id}_profile`;
+}
+
+/** 已迁出明文存储的旧键：迁移到 Asset Store 后须从明文 JSON 中删除。 */
+export const DISCARDED_PLAINTEXT_KEYS: string[] = [
+  LEGACY_PASSWORD_ALIAS, LEGACY_USERNAME_ALIAS, LEGACY_PROFILE_ALIAS,
+  'talebook_username', 'talebook_password', 'talebook_user_profile',
+];
 
 /** 从 URL 中取出主机（含端口），用于生成展示名。 */
 export function accountHost(url: string): string {
