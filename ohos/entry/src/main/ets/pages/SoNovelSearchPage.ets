@@ -1,13 +1,15 @@
 import {
   PageScaffold, SearchBar, BookCatalogView, BookViewToggleButton, BookListItemData,
-  LoadingState, EmptyState, IconCircleButton,
+  LoadingState, EmptyState, IconCircleButton, ChipButton, FilterChipItem,
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi } from '../services/TalebookApi';
 import { SoNovelService } from '../services/SoNovelService';
 import { BookViewMode } from '../utils/BookViewMode';
 import { DownloadTaskService } from '../services/DownloadTaskService';
-import { MergedSoNovelResult, SoNovelMerge, SoNovelSearchItem } from '../utils/SoNovelMerge';
+import {
+  MergedSoNovelResult, SoNovelMerge, SoNovelSearchItem, SoNovelSourceOption,
+} from '../utils/SoNovelMerge';
 import { hasSameBook, normalizeName } from '../utils/LibraryMatch';
 
 /** 核对书库的在途请求上限：结果可能有几十本，逐个串行太慢，放开太多又会压垮书库。 */
@@ -26,12 +28,21 @@ const LIBRARY_CHECK_MAX: number = 60;
  */
 const LIBRARY_CANDIDATE_LIMIT: number = 50;
 const BADGE_IN_LIBRARY: string = '已入库';
+/** 筛选芯片里「全部」的取值；书源 sourceId 为服务端给定的正整数，不会冲突。 */
+const SOURCE_FILTER_ALL: number = 0;
 
 @Entry
 @Component
 struct SoNovelSearchPage {
   @State keyword: string = '';
+  /** 本次搜索的合并结果（未筛选）。 */
   @State mergedResults: MergedSoNovelResult[] = [];
+  /** 当前展示的结果（已按 selectedSourceId 筛选）；列表与计数都基于它。 */
+  @State visibleResults: MergedSoNovelResult[] = [];
+  /** 当前选中的书源；0 = 全部。 */
+  @State selectedSourceId: number = SOURCE_FILTER_ALL;
+  /** 本次结果里出现过的书源（含「全部」芯片）。 */
+  @State sourceOptions: SoNovelSourceOption[] = [];
   @State loading: boolean = false;
   @State searched: boolean = false;
   @State isListMode: boolean = false;
@@ -40,8 +51,13 @@ struct SoNovelSearchPage {
   @State activeTaskCount: number = 0;
   @State showSourceSheet: boolean = false;
   @State sheetMergedIndex: number = -1;
-  /** 与 mergedResults 同序：该书是否已在书库。 */
-  @State inLibrary: boolean[] = [];
+  /**
+   * 已核对入库的条目：合并键（书名+作者）→ 是否在书库。
+   *
+   * 按合并键而非下标存：按书源筛选会改变展示集的下标，用下标会在切换书源后把
+   * 入库角标错位到别的书上。
+   */
+  @State inLibraryByKey: Map<string, boolean> = new Map<string, boolean>();
   @State checkingLibrary: boolean = false;
   /** 本次已核对的结果条数（受 LIBRARY_CHECK_MAX 限制，可能少于结果总数）。 */
   @State libraryCheckedCount: number = 0;
@@ -80,8 +96,11 @@ struct SoNovelSearchPage {
     this.searched = true;
     this.errorMessage = '';
     this.mergedResults = [];
+    this.visibleResults = [];
+    this.sourceOptions = [];
+    this.selectedSourceId = SOURCE_FILTER_ALL;
     this.catalogItems = [];
-    this.inLibrary = [];
+    this.inLibraryByKey = new Map<string, boolean>();
     this.checkingLibrary = false;
     this.libraryCheckedCount = 0;
     try {
@@ -96,6 +115,7 @@ struct SoNovelSearchPage {
       if (envelope.error.length > 0) {
         this.errorMessage = envelope.error;
         this.mergedResults = [];
+        this.visibleResults = [];
         this.catalogItems = [];
         return;
       }
@@ -105,8 +125,11 @@ struct SoNovelSearchPage {
       for (let i = 0; i < raw.length; i++) {
         items.push(SoNovelMerge.fromRecord(raw[i]));
       }
+      // 书源清单必须在 merge 之后提取：芯片数字要与筛选结果条数一致，而合并会把同名同作者
+      // 的多条合成一条，用原始条数统计时「阅读库（21）」点进去只剩 19 本，看起来像丢了结果。
       this.mergedResults = SoNovelMerge.merge(items);
-      this.syncCatalogItems();
+      this.sourceOptions = SoNovelMerge.sourceOptions(this.mergedResults);
+      this.applySourceFilter();
       // 不 await：先出结果，入库角标随后补齐，避免书库查询拖慢搜索
       void this.checkLibraryMembership(token);
     } catch (error) {
@@ -115,6 +138,7 @@ struct SoNovelSearchPage {
       }
       this.errorMessage = error instanceof Error ? error.message : `${error}`;
       this.mergedResults = [];
+      this.visibleResults = [];
       this.catalogItems = [];
     } finally {
       if (token === this.searchToken) {
@@ -123,36 +147,83 @@ struct SoNovelSearchPage {
     }
   }
 
+  /** 重新按 `selectedSourceId` 计算展示集（切换芯片、搜索完成时调用）。 */
+  private applySourceFilter(): void {
+    this.visibleResults = SoNovelMerge.filterBySource(this.mergedResults, this.selectedSourceId);
+    this.syncCatalogItems();
+  }
+
+  /**
+   * 筛选芯片项：首位固定「全部（N）」，其余为本次命中的书源（按能看到的书数降序）。
+   *
+   * 芯片文案带条数：同时命中多个书源时，用户一眼能看出哪个源收录得多。
+   */
+  private sourceChipItems(): FilterChipItem[] {
+    const items: FilterChipItem[] = [
+      { label: `全部（${this.mergedResults.length}）`, value: SOURCE_FILTER_ALL },
+    ];
+    for (let i = 0; i < this.sourceOptions.length; i++) {
+      const option = this.sourceOptions[i];
+      items.push({
+        label: `${SoNovelMerge.sourceLabel(option.sourceId, option.sourceName)}（${option.count}）`,
+        value: option.sourceId,
+      });
+    }
+    return items;
+  }
+
+  private onSourceFilterChanged(value: number): void {
+    if (this.selectedSourceId === value) {
+      return;
+    }
+    this.selectedSourceId = value;
+    this.applySourceFilter();
+  }
+
   private syncCatalogItems(): void {
-    this.catalogItems = this.mergedResults.map((merged: MergedSoNovelResult, index: number): BookListItemData => {
-      const sourceCount = merged.sources.length;
+    const merged = this.visibleResults;
+    this.catalogItems = merged.map((item: MergedSoNovelResult): BookListItemData => {
+      const sourceCount = item.sources.length;
       return {
-        id: `${index}`,
-        title: merged.bookName.length > 0 ? merged.bookName : '未知',
-        author: merged.author,
-        subtitle: SoNovelMerge.subtitle(merged),
+        // id 用条目自身标识（书名+作者），**不能用展示下标**：
+        // `BookCatalogView` 的 LazyForEach key 是 `list-${id}-${badge}`，按下标做 id 时
+        // 筛选后新列表的 id 又从 0 开始，key 大面积重复 → 复用旧组件，列表看着没变。
+        id: SoNovelMerge.mergeKey(item.bookName, item.author),
+        title: item.bookName.length > 0 ? item.bookName : '未知',
+        author: item.author,
+        subtitle: SoNovelMerge.subtitle(item),
         format: sourceCount > 1 ? `${sourceCount}源` : 'EPUB',
-        badge: this.isInLibrary(index) ? BADGE_IN_LIBRARY : '',
+        badge: this.isInLibrary(item) ? BADGE_IN_LIBRARY : '',
       };
     });
   }
 
-  private isInLibrary(index: number): boolean {
-    return index < this.inLibrary.length && this.inLibrary[index];
+  /**
+   * 入库标记按**合并键**（书名+作者）查，不用下标。
+   *
+   * 筛选会改变展示集的下标，而入库标记是按未筛选的全集存的，
+   * 用下标查会在切换书源后把入库角标错位到别的书上。
+   */
+  private isInLibrary(item: MergedSoNovelResult): boolean {
+    const flag = this.inLibraryByKey.get(SoNovelMerge.mergeKey(item.bookName, item.author));
+    return flag !== undefined && flag;
   }
 
+  /** 入库数：从合并键映射里统计，与当前筛选无关（统计的是本次搜索整体）。 */
   private libraryMatchCount(): number {
     let count = 0;
-    for (let i = 0; i < this.inLibrary.length; i++) {
-      if (this.inLibrary[i]) {
+    this.inLibraryByKey.forEach((hit: boolean) => {
+      if (hit) {
         count++;
       }
-    }
+    });
     return count;
   }
 
   private resultSummary(): string {
-    const total = `共 ${this.mergedResults.length} 本`;
+    const total = this.selectedSourceId === SOURCE_FILTER_ALL
+      ? `共 ${this.mergedResults.length} 本`
+      : `筛选出 ${this.visibleResults.length} / ${this.mergedResults.length} 本`;
     if (this.checkingLibrary) {
       return `${total} · 正在核对书库…`;
     }
@@ -181,17 +252,15 @@ struct SoNovelSearchPage {
     const total = Math.min(results.length, LIBRARY_CHECK_MAX);
     this.checkingLibrary = true;
     this.libraryCheckedCount = 0;
-    const flags: boolean[] = [];
-    for (let i = 0; i < results.length; i++) {
-      flags.push(false);
-    }
+    const flags = new Map<string, boolean>();
     let next = 0;
     const worker = async (): Promise<void> => {
       while (next < total) {
         const index = next;
         next++;
         const item = results[index];
-        flags[index] = await this.isBookInLibrary(item.bookName, item.author);
+        flags.set(SoNovelMerge.mergeKey(item.bookName, item.author),
+          await this.isBookInLibrary(item.bookName, item.author));
       }
     };
     const workers: Promise<void>[] = [];
@@ -203,7 +272,7 @@ struct SoNovelSearchPage {
     if (token !== this.searchToken) {
       return;
     }
-    this.inLibrary = flags;
+    this.inLibraryByKey = flags;
     this.libraryCheckedCount = total;
     this.checkingLibrary = false;
     this.syncCatalogItems();
@@ -247,12 +316,24 @@ struct SoNovelSearchPage {
     });
   }
 
+  /** 按条目 id（书名+作者）在当前展示集里定位；找不到返回 -1。 */
+  private visibleIndexOf(id: string): number {
+    for (let i = 0; i < this.visibleResults.length; i++) {
+      const item = this.visibleResults[i];
+      if (SoNovelMerge.mergeKey(item.bookName, item.author) === id) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
   /** @throws 内部调用可能抛出异常，由调用方处理 */
-  private openMerged(index: number): void {
-    if (index < 0 || index >= this.mergedResults.length) {
+  private openMerged(id: string): void {
+    const index = this.visibleIndexOf(id);
+    if (index < 0) {
       return;
     }
-    const merged = this.mergedResults[index];
+    const merged = this.visibleResults[index];
     if (merged.sources.length === 0) {
       return;
     }
@@ -288,11 +369,12 @@ struct SoNovelSearchPage {
   }
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
-  private downloadMerged(index: number): void {
-    if (index < 0 || index >= this.mergedResults.length) {
+  private downloadMerged(id: string): void {
+    const index = this.visibleIndexOf(id);
+    if (index < 0) {
       return;
     }
-    const merged = this.mergedResults[index];
+    const merged = this.visibleResults[index];
     if (merged.sources.length === 0) {
       return;
     }
@@ -305,10 +387,16 @@ struct SoNovelSearchPage {
   }
 
   private sheetMerged(): MergedSoNovelResult | null {
-    if (this.sheetMergedIndex < 0 || this.sheetMergedIndex >= this.mergedResults.length) {
+    if (this.sheetMergedIndex < 0 || this.sheetMergedIndex >= this.visibleResults.length) {
       return null;
     }
-    return this.mergedResults[this.sheetMergedIndex];
+    return this.visibleResults[this.sheetMergedIndex];
+  }
+
+  /** 下载面板里的「已在书库」提示（下标是展示集下标，故需再取一次条目）。 */
+  private sheetMergedInLibrary(): boolean {
+    const merged = this.sheetMerged();
+    return merged !== null && this.isInLibrary(merged);
   }
 
   @Builder
@@ -329,7 +417,7 @@ struct SoNovelSearchPage {
         .fontSize(12)
         .fontColor($r('app.color.text_tertiary'))
         .width('100%');
-      if (this.isInLibrary(this.sheetMergedIndex)) {
+      if (this.sheetMergedInLibrary()) {
         Text('这本书已在书库中，无需重复下载')
           .fontSize(12)
           .fontColor($r('app.color.success'))
@@ -442,6 +530,9 @@ struct SoNovelSearchPage {
       } else if (this.mergedResults.length === 0) {
         EmptyState({ message: '未找到相关书籍' });
       } else {
+        if (this.sourceOptions.length > 1) {
+          this.sourceFilterRow();
+        }
         Row() {
           Text(this.resultSummary())
             .fontSize(13)
@@ -454,17 +545,48 @@ struct SoNovelSearchPage {
         .width('100%')
         .padding({ left: 16, right: 16, top: 4, bottom: 4 });
 
-        BookCatalogView({
-          items: this.catalogItems,
-          isListMode: this.isListMode,
-          loadingMore: false,
-          onItemTap: (item: BookListItemData) => this.openMerged(Number(item.id)),
-          onItemLongPress: (item: BookListItemData) => this.downloadMerged(Number(item.id)),
-          onLoadMore: () => {},
-        });
+        if (this.visibleResults.length === 0) {
+          EmptyState({ message: '该来源没有相关书籍', detail: '点其它书源芯片或选「全部」查看所有结果' });
+        } else {
+          BookCatalogView({
+            items: this.catalogItems,
+            isListMode: this.isListMode,
+            loadingMore: false,
+            onItemTap: (item: BookListItemData) => this.openMerged(item.id),
+            onItemLongPress: (item: BookListItemData) => this.downloadMerged(item.id),
+            onLoadMore: () => {},
+          });
+        }
       }
     }
     .width('100%')
     .height('100%');
+  }
+
+  /**
+   * 书源筛选芯片行。
+   *
+   * 手写而非复用 `FilterChips`：芯片数量与文案都随搜索结果变化，而 `FilterChips` 的
+   * `items` 是普通成员（非 `@Prop`），父级状态更新不会刷新它；书源名又长（如
+   * 「全本小说网(quanben.io)」），必须横向滚动，而这些能力只本页需要，不值得改动
+   * 被多处复用的公共组件。
+   */
+  @Builder
+  sourceFilterRow() {
+    Scroll() {
+      Row({ space: 8 }) {
+        ForEach(this.sourceChipItems(), (chip: FilterChipItem) => {
+          ChipButton({
+            label: chip.label,
+            selected: this.selectedSourceId === chip.value,
+            onTap: () => this.onSourceFilterChanged(chip.value),
+          });
+        }, (chip: FilterChipItem) => `source-${chip.value}-${chip.label}`);
+      }
+      .padding({ left: 16, right: 16, top: 4, bottom: 8 });
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .width('100%');
   }
 }
