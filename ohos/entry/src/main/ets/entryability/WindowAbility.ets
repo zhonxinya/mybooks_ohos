@@ -110,4 +110,21 @@ export class WindowAbility {
       });
     });
   }
+
+  /**
+   * 退出沉浸式阅读：恢复系统栏 + 取消全屏布局，**并等待两者生效后才 resolve**。
+   *
+   * 为什么必须可等待：待返回的页面（书架/漫画入口）在窗口仍全屏时就会先布局一次，等系统栏
+   * 恢复后整页再下移一个状态栏高度。若在恢复完成前就 `router.back()`，视觉上就是「退出阅读器
+   * 时页面猛跳一下」（实测跳 132px / 44vp，正是状态栏+导航栏避让区的高度）。
+   *
+   * 因此调用方必须 `await` 本方法**再**路由返回；否则跳变照旧。
+   *
+   * @throws 内部调用可能抛出异常，由调用方处理
+   */
+  async exitImmersiveMode(context: common.UIAbilityContext): Promise<void> {
+    await this.setWindowLayoutFullScreen(false);
+    const wnd = await window.getLastWindow(context);
+    await wnd.setWindowSystemBarEnable(['status', 'navigation']);
+  }
 }

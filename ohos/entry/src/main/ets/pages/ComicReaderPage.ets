@@ -69,6 +69,8 @@ struct ComicReaderPage {
   private pendingReportIndex: number = -1;
   private reportTimer: number = -1;
   private progressHintShown: boolean = false;
+  /** 已按「先恢复系统栏再返回」退出过，避免重复恢复。 */
+  private immersiveExited: boolean = false;
 
   aboutToAppear(): void {
     const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
@@ -81,7 +83,21 @@ struct ComicReaderPage {
   aboutToDisappear(): void {
     this.clearReportTimer();
     void this.flushProgress();
-    this.exitImmersiveMode();
+    // 兜底：正常退出已由 onBackPress 恢复并等待，这里只覆盖进程被回收等异常路径
+    if (!this.immersiveExited) {
+      this.exitImmersiveMode();
+    }
+  }
+
+  /**
+   * 拦截系统返回键/返回手势：走与返回按钮相同的「先恢复系统栏再返回」路径。
+   *
+   * 不拦的话系统直接 pop 页面：返回的页面会在窗口仍全屏时先布局一次，等系统栏回来后整页下移
+   * 一个状态栏高度，表现为退出时页面猛跳一下。
+   */
+  onBackPress(): boolean {
+    void this.exitImmersiveModeThenBack();
+    return true;
   }
 
   private toast(message: string): void {
@@ -292,9 +308,28 @@ struct ComicReaderPage {
     }
   }
 
-  private close(): void {
-    this.exitImmersiveMode();
+  /**
+   * 退出阅读器：先恢复系统栏/窗口并**等生效后再**返回。
+   *
+   * 顺序不能颠倒：先 `router.back()` 的话，返回的页面会在「系统栏未恢复 + 窗口仍全屏」时先布局
+   * 一次，等系统栏回来后整页再下移一个状态栏高度，看起来就是退出时页面猛跳。
+   */
+  private async exitImmersiveModeThenBack(): Promise<void> {
+    if (this.immersiveExited) {
+      return;
+    }
+    this.immersiveExited = true;
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      await WindowAbility.getInstance().exitImmersiveMode(context);
+    } catch (error) {
+      hilog.warn(0x0000, TAG, 'exitImmersiveMode failed: %{public}s', `${error}`);
+    }
     this.getUIContext().getRouter().back();
+  }
+
+  private close(): void {
+    void this.exitImmersiveModeThenBack();
   }
 
   /** 重新取图：变更 LazyForEach 键强制重建页面项，失败的页会重新走一次图片通道。 */
