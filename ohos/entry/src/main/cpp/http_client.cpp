@@ -6,6 +6,7 @@
 #include <hilog/log.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <fstream>
@@ -29,6 +30,9 @@ thread_local CURL *gTlsEasy = nullptr;
 // Cookie 落盘串行化：只在内容变化时写，且写临时文件后 rename 原子替换。
 std::mutex gCookieMutex;
 std::string gPersistedCookieLines;
+
+// 连接层性能日志开关：默认关（避免每请求一行日志），由 pref `http_perf_log` 打开。
+std::atomic<bool> gMetricsEnabled{false};
 
 /** 线程退出时释放本线程 handle，避免 fd 泄漏（worker 线程长期存活，正常不会触发）。 */
 struct EasyHandleGuard {
@@ -184,6 +188,9 @@ long curlTimeMs(CURL *curl, CURLINFO info)
 void logRequestMetrics(const char *kind, const char *method, const std::string &url, CURL *curl,
                        CURLcode code, long statusCode)
 {
+    if (!gMetricsEnabled.load()) {
+        return;
+    }
     long connects = 0;
     curl_easy_getinfo(curl, CURLINFO_NUM_CONNECTS, &connects);
     OH_LOG_Print(LOG_APP, LOG_INFO, 0xD002, "MyBooksHttp",
@@ -454,6 +461,11 @@ void HttpClient::setCookieDir(const std::string &dir)
 void HttpClient::setSslVerify(bool verify)
 {
     sslVerify_ = verify;
+}
+
+void HttpClient::setMetricsEnabled(bool enabled)
+{
+    gMetricsEnabled.store(enabled);
 }
 
 void HttpClient::loadCookies()

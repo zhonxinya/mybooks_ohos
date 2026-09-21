@@ -47,6 +47,8 @@ public:
     /** 是否校验 HTTPS 服务器证书：默认开启；仅当用户在设置中显式允许时才关闭。 */
     void setSslVerify(bool verify);
     bool sslVerify() const { return sslVerify_; }
+    /** 连接层性能日志开关（默认关；pref `http_perf_log=true` 时开启）。 */
+    void setMetricsEnabled(bool enabled);
 
     HttpResponse request(const HttpRequestOptions &options);
     HttpResponse get(const std::string &pathOrUrl,

@@ -19,6 +19,8 @@ public:
     std::string getBaseUrl(const std::string &service) const;
     void setCookieDir(const std::string &dir);
     void setSslVerify(bool verify);
+    /** 连接层性能日志开关（默认关；pref `http_perf_log=true` 时开启）。 */
+    void setMetricsEnabled(bool enabled);
     bool sslVerify() const { return sslVerify_; }
     void loadCookies();
     void saveCookies();

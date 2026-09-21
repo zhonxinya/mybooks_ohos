@@ -191,6 +191,9 @@ napi_value PrefSet(napi_env env, napi_callback_info info)
     if (key == "allow_insecure_ssl") {
         core.http().setSslVerify(value != "true");
     }
+    if (key == "http_perf_log") {
+        core.http().setMetricsEnabled(value == "true");
+    }
     napi_value undefined = nullptr;
     napi_get_undefined(env, &undefined);
     return undefined;

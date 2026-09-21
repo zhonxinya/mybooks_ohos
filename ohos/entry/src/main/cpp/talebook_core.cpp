@@ -24,6 +24,8 @@ void TalebookCore::init(const std::string &dataDir)
     HttpClient::instance().setCookieDir(dataDir + "/.cookies");
     const std::string allowInsecure = store_->readPref("allow_insecure_ssl", "false");
     HttpClient::instance().setSslVerify(allowInsecure != "true");
+    // 连接层性能日志默认关闭，排查网络问题时置 pref http_perf_log=true 打开
+    HttpClient::instance().setMetricsEnabled(store_->readPref("http_perf_log", "false") == "true");
     initialized_ = true;
 }
 

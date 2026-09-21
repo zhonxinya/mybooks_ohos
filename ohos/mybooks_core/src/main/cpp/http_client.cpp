@@ -2,6 +2,7 @@
 #include <hilog/log.h>
 
 #include <curl/curl.h>
+#include <atomic>
 #include <cstdio>
 #include <fstream>
 #include <mutex>
@@ -25,6 +26,9 @@ static thread_local CURL *tEasy = nullptr;
 // Cookie 落盘串行化：只在内容变化时写，且写临时文件后 rename 原子替换。
 static std::mutex gCookieMutex;
 static std::string gPersistedCookieLines;
+
+// 连接层性能日志开关：默认关（避免每请求一行日志），由 pref `http_perf_log` 打开。
+static std::atomic<bool> gMetricsEnabled{false};
 
 static void ensureCurlInit() {
     std::call_once(gCurlInitFlag, []() {
@@ -159,6 +163,9 @@ static long curlTimeMs(CURL *curl, CURLINFO info) {
  */
 static void logRequestMetrics(const char *kind, const char *method, const std::string &url,
                               CURL *curl, CURLcode code, long statusCode) {
+    if (!gMetricsEnabled.load()) {
+        return;
+    }
     long connects = 0;
     curl_easy_getinfo(curl, CURLINFO_NUM_CONNECTS, &connects);
     OH_LOG_Print(LOG_APP, LOG_INFO, 0xD002, "MyBooksHttp",
@@ -238,6 +245,7 @@ void HttpClient::clearAuth() {
 }
 void HttpClient::setCookieDir(const std::string &dir) { cookieDir_ = dir; }
 void HttpClient::setSslVerify(bool verify) { sslVerify_ = verify; }
+void HttpClient::setMetricsEnabled(bool enabled) { gMetricsEnabled.store(enabled); }
 
 std::string HttpClient::resolveUrl(const std::string &pathOrUrl) const {
     if (pathOrUrl.rfind("http://", 0) == 0 || pathOrUrl.rfind("https://", 0) == 0) {
@@ -333,7 +341,7 @@ HttpResponse HttpClient::request(const HttpRequestOptions &options) {
         }
     }
 
-    logRequestMetrics("api", options.method.c_str(), url, curl, code, status);
+    logRequestMetrics("core-api", options.method.c_str(), url, curl, code, status);
     // handle 留在本线程复用连接，cookie 改为「有变化才原子落盘」
     persistCookiesIfChanged(curl, cookieDir_);
     curl_slist_free_all(headers);
@@ -479,7 +487,7 @@ HttpResponse HttpClient::uploadFiles(const std::string &pathOrUrl,
                  "upload resp curl=%{public}d http=%{public}d body=%{public}s",
                  static_cast<int>(code), response.statusCode, responseBody.substr(0, 800).c_str());
 
-    logRequestMetrics("upload", "POST", url, curl, code, response.statusCode);
+    logRequestMetrics("core-upload", "POST", url, curl, code, response.statusCode);
     persistCookiesIfChanged(curl, cookieDir_);
     curl_mime_free(mime);
     curl_slist_free_all(headers);
@@ -561,7 +569,7 @@ HttpResponse HttpClient::downloadToFile(const std::string &pathOrUrl, const std:
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
         response.statusCode = static_cast<int>(status);
     }
-    logRequestMetrics("download", "GET", url, curl, code, status);
+    logRequestMetrics("core-download", "GET", url, curl, code, status);
     persistCookiesIfChanged(curl, cookieDir_);
     curl_slist_free_all(headers);
     // handle 留在本线程复用连接
