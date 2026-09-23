@@ -12,6 +12,9 @@ const TITLE_FONT_SIZE: number = 13;
 const META_FONT_SIZE: number = 11;
 const LINE_GAP: number = 3;
 const COVER_TEXT_GAP: number = 6;
+/** 3 列网格封面约宽；用于 sourceSize，避免原图全分辨率解码。 */
+const COVER_DECODE_WIDTH_VP: number = 120;
+const COVER_DECODE_HEIGHT_VP: number = 171;
 
 /**
  * 网格卡片（3 列封面墙，微信读书那类轻量风格）。
@@ -22,17 +25,29 @@ const COVER_TEXT_GAP: number = 6;
  * 文字不预留空行（曾试过把标题固定占两行来让作者行对齐，但短书名时标题与作者之间会空出整行，
  * 看起来像漏了内容）；标题最多两行、按实际行数自然排布。
  */
+@Reusable
 @Component
 export struct BookGridCard {
-  title: string = '';
-  author: string = '';
-  cover: string = '';
-  format: string = '';
-  subtitle: string = '';
+  @State title: string = '';
+  @State author: string = '';
+  @State cover: string = '';
+  @State format: string = '';
+  @State subtitle: string = '';
   /** 状态角标（如「已入库」）；空串不显示。 */
-  badge: string = '';
-  onTap?: () => void;
-  onLongPress?: () => void;
+  @State badge: string = '';
+  onTap?: () => void = undefined;
+  onLongPress?: () => void = undefined;
+
+  aboutToReuse(params: Record<string, Object>): void {
+    this.title = params.title as string;
+    this.author = params.author as string;
+    this.cover = params.cover as string;
+    this.format = params.format as string;
+    this.subtitle = params.subtitle as string;
+    this.badge = params.badge as string;
+    this.onTap = params.onTap as (() => void) | undefined;
+    this.onLongPress = params.onLongPress as (() => void) | undefined;
+  }
 
   @Builder
   coverArea() {
@@ -41,6 +56,8 @@ export struct BookGridCard {
         url: this.cover,
         imageWidth: '100%',
         imageHeight: '100%',
+        decodeWidthVp: COVER_DECODE_WIDTH_VP,
+        decodeHeightVp: COVER_DECODE_HEIGHT_VP,
       })
         .width('100%')
         .aspectRatio(0.7);

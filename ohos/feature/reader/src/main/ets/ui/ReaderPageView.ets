@@ -59,9 +59,6 @@ export struct ReaderPageView {
   @Prop chapterTitle: string = '';
   /** 底部左侧书名。 */
   @Prop bookTitle: string = '';
-  /** 页脚电量（-1 表示未知，不渲染）。 */
-  @Prop batteryLevel: number = -1;
-  @Prop batteryCharging: boolean = false;
   /** 正文字体家族名（空 = 系统默认；由宿主解析并用 UIContext 注册后传入）。 */
   @Prop fontFamily: string = '';
   /**
@@ -124,8 +121,6 @@ export struct ReaderPageView {
           .textOverflow({ overflow: TextOverflow.Ellipsis });
         ReaderBattery({
           theme: this.theme,
-          level: this.batteryLevel,
-          charging: this.batteryCharging,
         });
         if (this.pageCount >= 1) {
           Text(`${this.pageIndex + 1} / ${this.pageCount}`)

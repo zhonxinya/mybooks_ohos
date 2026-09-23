@@ -1,6 +1,7 @@
 import {
   PageScaffold, LoadingState, EmptyState, SearchBar, FilterChips, FilterChipItem,
   BookCatalogView, BookListItem, BookListItemData, PrimaryButton, TextButton, ChipButton,
+  LazyDataSource,
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
@@ -11,6 +12,19 @@ import {
   NETWORK_SEARCH_MODE_CUSTOM,
   NETWORK_AVAILABILITY_NO_PLUGINS, NETWORK_AVAILABILITY_NO_SOURCES,
 } from '../services/NetworkLibraryApi';
+import { PaginationHelper } from '../utils/PaginationHelper';
+
+/** 分组列表扁平行：书源标题或书目，供 LazyForEach 按需创建。 */
+interface GroupedListEntry {
+  kind: string;
+  key: string;
+  sourceName: string;
+  count: number;
+  row: BookListItemData | null;
+}
+
+const GROUP_KIND_HEADER: string = 'header';
+const GROUP_KIND_BOOK: string = 'book';
 
 /** 搜索任务轮询间隔（上游为后台线程池任务，需轮询 status）。 */
 const SEARCH_POLL_INTERVAL_MS: number = 2000;
@@ -84,6 +98,9 @@ struct NetworkLibraryPage {
   @State categories: NetworkCategoryItem[] = [];
   @State loadingCategories: boolean = false;
   @State categoryError: string = '';
+  /** 搜索分组列表数据源（扁平化后的 header/book）。 */
+  private groupedSource: LazyDataSource<GroupedListEntry> = new LazyDataSource<GroupedListEntry>();
+  private lastLoadTime: number = 0;
   private featureSupported: boolean = ServerRegistry.supports(ServerFeature.NETWORK_LIBRARY);
   private modeItems: FilterChipItem[] = [
     { label: '常用书源', value: 0 },
@@ -245,6 +262,55 @@ struct NetworkLibraryPage {
     }
     this.rows = rows;
     this.index = index;
+    this.rebuildGroupedEntries(rows, index);
+  }
+
+  /** 把按书源分组的结果展平为 LazyForEach 行（标题 + 书目）。 */
+  private rebuildGroupedEntries(rows: BookListItemData[],
+    index: Map<string, NetworkBookItem>): void {
+    const entries: GroupedListEntry[] = [];
+    const names: string[] = [];
+    const counts: Map<string, number> = new Map();
+    for (const row of rows) {
+      const book = index.get(row.id);
+      if (book === undefined) {
+        continue;
+      }
+      const name = book.sourceName.length > 0 ? book.sourceName : book.sourceId;
+      if (names.indexOf(name) < 0) {
+        names.push(name);
+      }
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    for (const name of names) {
+      const header: GroupedListEntry = {
+        kind: GROUP_KIND_HEADER,
+        key: `h-${name}`,
+        sourceName: name,
+        count: counts.get(name) ?? 0,
+        row: null,
+      };
+      entries.push(header);
+      for (const row of rows) {
+        const book = index.get(row.id);
+        if (book === undefined) {
+          continue;
+        }
+        const bookName = book.sourceName.length > 0 ? book.sourceName : book.sourceId;
+        if (bookName !== name) {
+          continue;
+        }
+        const bookEntry: GroupedListEntry = {
+          kind: GROUP_KIND_BOOK,
+          key: `b-${name}-${row.id}`,
+          sourceName: name,
+          count: 0,
+          row: row,
+        };
+        entries.push(bookEntry);
+      }
+    }
+    this.groupedSource.update(entries);
   }
 
   /** 把新结果并入已收口集合（按 sourceId + bookUrl 去重）。 */
@@ -463,9 +529,11 @@ struct NetworkLibraryPage {
   }
 
   private loadMore(): void {
-    if (this.loadingMore || this.searching || !this.hasMore) {
+    if (!PaginationHelper.canLoadMore(this.lastLoadTime, this.loadingMore || this.searching,
+      this.hasMore)) {
       return;
     }
+    this.lastLoadTime = Date.now();
     if (this.mode === LIST_MODE_EXPLORE) {
       void this.explorePage(this.page + 1);
       return;
@@ -563,38 +631,6 @@ struct NetworkLibraryPage {
     }
     const more = this.failedSources.length > 3 ? ` 等 ${this.failedSources.length} 个` : '';
     return `${names.join('、')}${more}`;
-  }
-
-  /** 结果中出现过的书源名（按首次出现顺序）。 */
-  private sourceNames(): string[] {
-    const names: string[] = [];
-    for (const row of this.rows) {
-      const book = this.index.get(row.id);
-      if (book === undefined) {
-        continue;
-      }
-      const name = book.sourceName.length > 0 ? book.sourceName : book.sourceId;
-      if (names.indexOf(name) < 0) {
-        names.push(name);
-      }
-    }
-    return names;
-  }
-
-  /** 某个书源下的行。 */
-  private rowsOfSource(name: string): BookListItemData[] {
-    const result: BookListItemData[] = [];
-    for (const row of this.rows) {
-      const book = this.index.get(row.id);
-      if (book === undefined) {
-        continue;
-      }
-      const bookName = book.sourceName.length > 0 ? book.sourceName : book.sourceId;
-      if (bookName === name) {
-        result.push(row);
-      }
-    }
-    return result;
   }
 
   /** 翻页：搜索模式重发任务，发现模式重拉指定页。 */
@@ -802,44 +838,50 @@ struct NetworkLibraryPage {
 
   /**
    * 搜索结果按书源分组展示（对齐上游：每个书源一个标题 + 该源返回的书）。
-   * 分组标题用内联 Row 而非共享 SectionTitle（后者的参数是普通成员，不会随状态重绘）。
+   * 展平为 LazyForEach 行，避免多源长结果全量挂载。
    */
   @Builder
   groupedResults() {
     List({ space: 8 }) {
-      ForEach(this.sourceNames(), (name: string) => {
-        ListItem() {
-          Row({ space: 8 }) {
-            Column()
-              .width(4)
-              .height(16)
-              .borderRadius(2)
-              .backgroundColor($r('app.color.brand_primary'));
-            Text(name)
-              .fontSize(15)
-              .fontWeight(FontWeight.Medium)
-              .fontColor($r('app.color.text_primary'))
-              .layoutWeight(1)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis });
-            Text(`${this.rowsOfSource(name).length} 本`)
-              .fontSize(12)
-              .fontColor($r('app.color.text_tertiary'));
+      LazyForEach(this.groupedSource, (entry: GroupedListEntry) => {
+        if (entry.kind === GROUP_KIND_HEADER) {
+          ListItem() {
+            Row({ space: 8 }) {
+              Column()
+                .width(4)
+                .height(16)
+                .borderRadius(2)
+                .backgroundColor($r('app.color.brand_primary'));
+              Text(entry.sourceName)
+                .fontSize(15)
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('app.color.text_primary'))
+                .layoutWeight(1)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
+              Text(`${entry.count} 本`)
+                .fontSize(12)
+                .fontColor($r('app.color.text_tertiary'));
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16, top: 6, bottom: 2 });
           }
-          .width('100%')
-          .padding({ left: 16, right: 16, top: 6, bottom: 2 });
-        }
-        ForEach(this.rowsOfSource(name), (row: BookListItemData) => {
+        } else {
           ListItem() {
             BookListItem({
-              item: row,
-              onTap: () => this.openBook(row),
+              item: entry.row as BookListItemData,
+              onTap: () => {
+                const row = entry.row;
+                if (row !== null) {
+                  this.openBook(row);
+                }
+              },
             });
           }
           .height($r('app.float.list_item_height'))
           .padding({ left: 16, right: 16 });
-        }, (row: BookListItemData) => `grp-${name}-${row.id}`);
-      }, (name: string) => `grp-head-${name}`);
+        }
+      }, (entry: GroupedListEntry) => entry.key);
       if (this.loadingMore || this.searching) {
         ListItem() {
           LoadingState({ hint: this.searching ? '搜索中…' : '加载更多…' });

@@ -1,18 +1,47 @@
+import { batteryInfo } from '@kit.BasicServicesKit';
 import { ReaderTheme } from '../model/ReaderTypes';
 import { ReaderPalette } from '../model/ReaderPalette';
+
+/** 电量轮询间隔：系统无电量变化订阅，分钟级足够。 */
+const BATTERY_REFRESH_MS: number = 60000;
 
 /**
  * 页脚电量指示：小电池图形 + 百分比。
  *
+ * 自管轮询与 @State，避免父阅读器因电量刷新整树重建。
  * 只用模块内的调色板与 ArkUI 基础图形（不依赖系统 symbol，避免符号缺失时空白）；
- * 电量值由父组件读取 `batteryInfo.batterySOC` 后传入，`level < 0` 表示未知、整块不渲染。
+ * `level < 0` 表示未知、整块不渲染。
  */
 @Component
 export struct ReaderBattery {
   @Prop theme: ReaderTheme = ReaderTheme.LIGHT;
-  /** 电量百分比 0~100；负数表示未知 */
-  @Prop level: number = -1;
-  @Prop charging: boolean = false;
+  @State private level: number = -1;
+  @State private charging: boolean = false;
+  private timerId: number = -1;
+
+  aboutToAppear(): void {
+    this.refresh();
+    this.timerId = setInterval(() => {
+      this.refresh();
+    }, BATTERY_REFRESH_MS);
+  }
+
+  aboutToDisappear(): void {
+    if (this.timerId >= 0) {
+      clearInterval(this.timerId);
+      this.timerId = -1;
+    }
+  }
+
+  private refresh(): void {
+    try {
+      this.level = batteryInfo.batterySOC;
+      this.charging = batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.ENABLE ||
+        batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.FULL;
+    } catch (_error) {
+      this.level = -1;
+    }
+  }
 
   build() {
     if (this.level >= 0) {

@@ -1,4 +1,4 @@
-import { BusinessError, batteryInfo } from '@kit.BasicServicesKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { display, window } from '@kit.ArkUI';
 import { fileIo as fs } from '@kit.CoreFileKit';
@@ -61,8 +61,6 @@ const SCRIM_FADE_MS: number = 280;
 const HINT_FADE_MS: number = 200;
 const READER_OVERLAY_TOP_PADDING_VP: number = 48;
 const READER_OVERLAY_BOTTOM_PADDING_VP: number = 12;
-/** 页脚电量刷新间隔（ms）：与内置阅读器一致，一分钟一次足够。 */
-const BATTERY_REFRESH_MS: number = 60000;
 /** 阅读页顶部章节名 / 页脚的字号（与内置阅读器同一套：15 / 10）。 */
 const READER_HEADER_FONT_SIZE: number = 15;
 const READER_FOOTER_FONT_SIZE: number = 10;
@@ -94,9 +92,6 @@ struct ReadKitReader {
   @State private bookTitle: string = '';
   @State private chapterTitle: string = '';
   @State private pageIndicatorText: string = '';
-  /** 页脚电量（-1 表示读取失败，不显示）；与内置阅读器页脚一致。 */
-  @State private batteryLevel: number = -1;
-  @State private batteryCharging: boolean = false;
   @State @Watch('onReadyChanged') private ready: boolean = false;
   @State private fontSize: number = 18;
   @State private lineHeight: number = 1.6;
@@ -151,14 +146,9 @@ struct ReadKitReader {
   private ttsPageTurnTimer: number = -1;
   private ttsChapterStartTimer: number = -1;
   private pendingTtsChapterIndex: number = -1;
-  private batteryTimer: number = -1;
 
   aboutToAppear(): void {
     this.loadReaderPrefs();
-    this.refreshBattery();
-    this.batteryTimer = setInterval(() => {
-      this.refreshBattery();
-    }, BATTERY_REFRESH_MS);
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     ReaderFontService.init(context.filesDir);
     this.restoreResolvedFont();
@@ -1354,10 +1344,6 @@ struct ReadKitReader {
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   aboutToDisappear(): void {
     this.destroyed = true;
-    if (this.batteryTimer >= 0) {
-      clearInterval(this.batteryTimer);
-      this.batteryTimer = -1;
-    }
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     // 兜底：正常退出已由 onBackPress 恢复并等待，这里只覆盖进程被回收等异常路径
     if (!this.immersiveExited) {
@@ -1462,8 +1448,6 @@ struct ReadKitReader {
           .textOverflow({ overflow: TextOverflow.Ellipsis });
         ReaderBattery({
           theme: this.readerTheme,
-          level: this.batteryLevel,
-          charging: this.batteryCharging,
         });
         if (this.pageIndicatorText.length > 0) {
           Text(this.pageIndicatorText)
@@ -1483,17 +1467,6 @@ struct ReadKitReader {
       bottom: READER_OVERLAY_BOTTOM_PADDING_VP,
     })
     .hitTestBehavior(HitTestMode.None);
-  }
-
-  /** 页脚电量：读不到时置 -1，页脚不渲染电量块。 */
-  private refreshBattery(): void {
-    try {
-      this.batteryLevel = batteryInfo.batterySOC;
-      this.batteryCharging = batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.ENABLE ||
-        batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.FULL;
-    } catch (_error) {
-      this.batteryLevel = -1;
-    }
   }
 
   /**

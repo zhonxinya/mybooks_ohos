@@ -27,5 +27,6 @@ export { SiteStatsCard, SiteStatsData } from './SiteStatsCard';
 export { TagNavSection, TagNavItem } from './TagNavRow';
 export { FriendsLinksRow, FriendLink } from './FriendsLinksRow';
 export { LazyDataSource } from './LazyDataSource';
+export { BookDetailReviewSheet } from './BookDetailReviewSheet';
 export { AccountPicker } from './AccountPicker';
 export { BookIdPicker } from './BookIdPicker';

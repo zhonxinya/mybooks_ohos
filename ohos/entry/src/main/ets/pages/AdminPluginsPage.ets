@@ -119,8 +119,10 @@ struct AdminPluginsPage {
   // 内置插件自报状态（builtin_state 原样保留，供 OPDS 服务开关与"待配置"判定使用）
   @State private builtinState: Record<string, AdminPluginServiceState> = {};
   // 目录：搜索与状态筛选
-  @State private search: string = '';
-  @State private statusFilter: number = FILTER_ALL;
+  @State @Watch('onCatalogFilterChanged') private search: string = '';
+  @State @Watch('onCatalogFilterChanged') private statusFilter: number = FILTER_ALL;
+  /** 分组列表缓存：避免 build 内反复 filteredPlugins/groupedPlugins。 */
+  @State private pluginGroups: PluginGroup[] = [];
   // 插件详情
   @State private selectedKey: string = '';
   @State private sheetMode: string = '';
@@ -186,6 +188,7 @@ struct AdminPluginsPage {
       }
       this.definitions = rsp.definitions ?? [];
       this.installations = rsp.installations ?? [];
+      this.refreshPluginGroups();
       this.resolveOpdsToggle(rsp.builtin_state ?? {});
       await this.loadConnections();
       await this.loadRuns();
@@ -584,6 +587,15 @@ struct AdminPluginsPage {
       }
     }
     return groups;
+  }
+
+  /** 目录/安装态/筛选变更后刷新分组缓存。 */
+  private refreshPluginGroups(): void {
+    this.pluginGroups = this.groupedPlugins();
+  }
+
+  private onCatalogFilterChanged(): void {
+    this.refreshPluginGroups();
   }
 
   private buildGroup(type: string, plugins: AdminPluginDefinition[]): PluginGroup {
@@ -1923,7 +1935,7 @@ struct AdminPluginsPage {
       onChange: () => {},
     });
 
-    if (this.filteredPlugins().length === 0) {
+    if (this.pluginGroups.length === 0) {
       Text('没有符合条件的插件')
         .fontSize(14)
         .fontColor($r('app.color.text_secondary'))
@@ -1937,7 +1949,7 @@ struct AdminPluginsPage {
         },
       });
     } else {
-      ForEach(this.groupedPlugins(), (group: PluginGroup) => {
+      ForEach(this.pluginGroups, (group: PluginGroup) => {
         this.pluginGroupSection(group);
       }, (group: PluginGroup) => `group-${group.type}`);
     }

@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
-import { PageScaffold, PrimaryButton, SecondaryButton, LoadingState, SettingCell, AuthImage, ChipButton, StarRating, SectionTitle } from '../components';
+import { PageScaffold, PrimaryButton, SecondaryButton, LoadingState, SettingCell, AuthImage, ChipButton, StarRating, SectionTitle, BookDetailReviewSheet } from '../components';
 import { DownloadTask, TalebookService } from '../services/TalebookService';
 import { ReaderLauncher, ReaderOpenParams } from '../services/ReaderLauncher';
 import { TalebookApi, ApiMessageResult, apiErrorMessage } from '../services/TalebookApi';
@@ -1273,58 +1273,16 @@ struct BookDetailPage {
 
   @Builder
   reviewSheet() {
-    Column({ space: 12 }) {
-      Row({ space: 10 }) {
-        Text('评分')
-          .fontSize(14)
-          .fontColor($r('app.color.text_secondary'));
-        this.reviewStarsRow(this.reviewStars, 26);
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Center);
-      Row({ space: 6 }) {
-        ForEach([1, 2, 3, 4, 5], (index: number) => {
-          Column() {
-            SymbolGlyph(index <= this.reviewStars ? $r('sys.symbol.star_fill') : $r('sys.symbol.star'))
-              .fontSize(30)
-              .fontColor([index <= this.reviewStars ? $r('app.color.brand_primary') : $r('app.color.divider')]);
-          }
-          .onClick(() => {
-            this.reviewStars = index;
-          });
-        }, (index: number) => `pick-${index}-${this.reviewStars}`);
-      }
-      .width('100%')
-      .justifyContent(FlexAlign.Center);
-      TextArea({ text: this.reviewComment, placeholder: '写下你的评价（可选）' })
-        .width('100%')
-        .height(100)
-        .onChange((value: string) => {
-          this.reviewComment = value;
-        });
-      Row({ space: 12 }) {
-        if (this.ownReview !== null) {
-          SecondaryButton({
-            label: '删除我的评价',
-            fullWidth: false,
-            onTap: () => this.confirmDeleteReview(),
-          })
-            .layoutWeight(1);
-        }
-        PrimaryButton({
-          label: '提交评价',
-          fullWidth: false,
-          buttonEnabled: !this.submittingReview,
-          onTap: () => {
-            void this.submitReview();
-          },
-        })
-          .layoutWeight(1);
-      }
-      .width('100%');
-    }
-    .width('100%')
-    .padding($r('app.float.page_padding'));
+    BookDetailReviewSheet({
+      reviewStars: $reviewStars,
+      reviewComment: $reviewComment,
+      ownReview: this.ownReview,
+      submittingReview: this.submittingReview,
+      onSubmit: () => {
+        void this.submitReview();
+      },
+      onDelete: () => this.confirmDeleteReview(),
+    });
   }
 
   build() {
