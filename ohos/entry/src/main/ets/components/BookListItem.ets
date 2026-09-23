@@ -11,10 +11,16 @@ export interface BookListItemData {
   badge?: string;
 }
 
+@Reusable
 @Component
 export struct BookListItem {
-  @Prop item: BookListItemData;
-  onTap?: () => void;
+  @State item: BookListItemData = { id: '', title: '' };
+  onTap?: () => void = undefined;
+
+  aboutToReuse(params: Record<string, Object>): void {
+    this.item = params.item as BookListItemData;
+    this.onTap = params.onTap as (() => void) | undefined;
+  }
 
   build() {
     Row({ space: 12 }) {
@@ -23,6 +29,8 @@ export struct BookListItem {
           url: this.item.cover,
           imageWidth: 64,
           imageHeight: 92,
+          decodeWidthVp: 64,
+          decodeHeightVp: 92,
         });
       } else {
         Column() {

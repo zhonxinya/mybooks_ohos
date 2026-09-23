@@ -8,430 +8,151 @@ import { ExpectedItemModel, UserMemoItem, parseExpectedItems, parseUserMemos } f
 import { FormatReadingStat, ReadingDevice, parseFormatStats, parseReadingDevices } from '../models/DeviceModels';
 import { TalebookCoreService } from './TalebookCoreService';
 import { ServerEndpoint, ServerRegistry } from './ServerProfile';
+import {
+  AccessStatusResponse,
+  AdminBookListResponse,
+  AdminImportListResponse,
+  AdminMemoListResponse,
+  AdminResourcesResponse,
+  AdminReviewsResponse,
+  AdminRunningTasksResponse,
+  AdminSettingsResponse,
+  AdminSyslogResponse,
+  AdminTokenResponse,
+  AdminToolListResponse,
+  AdminUserPage,
+  AdminUsersResponse,
+  ApiMessageResult,
+  ApiResult,
+  AudioImportStatusResponse,
+  BarcodeResponse,
+  BatchAddRunResponse,
+  BatchAddStatusResponse,
+  BatchCategoryOpts,
+  BatchCategoryResponse,
+  BatchTagUpdateResponse,
+  BatchUploadFile,
+  BookBarnApplyTokenResponse,
+  BookDetailPayload,
+  BookFilePathResponse,
+  BookListPayload,
+  BookbarnAdminTokenResponse,
+  ClearRareTagsResponse,
+  EpubBeautifyRunOptions,
+  ImportStatusResponse,
+  IndexPayload,
+  InstallRequest,
+  InstallStatusResponse,
+  LibraryStatsData,
+  LibraryStatsResponse,
+  LimitQuery,
+  MetaQuery,
+  MimoTtsClonesResponse,
+  MimoTtsConfigResponse,
+  MimoTtsConvertRequest,
+  MimoTtsPromptsResponse,
+  MimoTtsTestRequest,
+  PageQuery,
+  ReferQuery,
+  SearchQuery,
+  StampStatusResponse,
+  SyncImportAnchor,
+  SyncImportClearResponse,
+  SyncImportRequest,
+  SyncImportResponse,
+  SyncPullResponse,
+  SyncPushPayload,
+  SysInfoResponse,
+  ThanksNotesResponse,
+  ToolboxDataResponse,
+  ToolboxStoreIndexResponse,
+  ToolboxTaskProgressResponse,
+  TrashBooksResponse,
+  TrashSizeResponse,
+  TxtParserResponse,
+  TxtReadResponse,
+  UploadBatchItem,
+  UploadBatchStartResponse,
+  UploadBatchStatusResponse,
+  UploadBookResponse,
+  VipInfoResponse,
+  WhoAmIResponse,
+  apiErrorMessage
+} from './TalebookApiTypes';
+export {
+  AccessStatusResponse,
+  AdminBookListResponse,
+  AdminImportListResponse,
+  AdminMemoListResponse,
+  AdminResourcesResponse,
+  AdminReviewsResponse,
+  AdminRunningTasksResponse,
+  AdminSettingsResponse,
+  AdminSyslogResponse,
+  AdminTokenResponse,
+  AdminToolListResponse,
+  AdminUserPage,
+  AdminUsersResponse,
+  ApiMessageResult,
+  ApiResult,
+  AudioImportStatusResponse,
+  BarcodeResponse,
+  BatchAddRunResponse,
+  BatchAddStatusResponse,
+  BatchCategoryOpts,
+  BatchCategoryResponse,
+  BatchTagUpdateResponse,
+  BatchUploadFile,
+  BookBarnApplyTokenResponse,
+  BookDetailPayload,
+  BookFilePathResponse,
+  BookListPayload,
+  BookbarnAdminTokenResponse,
+  ClearRareTagsResponse,
+  EpubBeautifyRunOptions,
+  ImportStatusResponse,
+  IndexPayload,
+  InstallRequest,
+  InstallStatusResponse,
+  LibraryStatsData,
+  LibraryStatsResponse,
+  LimitQuery,
+  MetaQuery,
+  MimoTtsClonesResponse,
+  MimoTtsConfigResponse,
+  MimoTtsConvertRequest,
+  MimoTtsPromptsResponse,
+  MimoTtsTestRequest,
+  PageQuery,
+  ReferQuery,
+  SearchQuery,
+  StampStatusResponse,
+  SyncImportAnchor,
+  SyncImportClearResponse,
+  SyncImportRequest,
+  SyncImportResponse,
+  SyncPullResponse,
+  SyncPushPayload,
+  SysInfoResponse,
+  ThanksNotesResponse,
+  ToolboxDataResponse,
+  ToolboxStoreIndexResponse,
+  ToolboxTaskProgressResponse,
+  TrashBooksResponse,
+  TrashSizeResponse,
+  TxtParserResponse,
+  TxtReadResponse,
+  UploadBatchItem,
+  UploadBatchStartResponse,
+  UploadBatchStatusResponse,
+  UploadBookResponse,
+  VipInfoResponse,
+  WhoAmIResponse,
+  apiErrorMessage
+} from './TalebookApiTypes';
 
 export { EditBookRequest, ReferBook, AudioFileInfo, AudioInfoResponse, AudioConversionResponse, AudioCollectionResponse, AudioPurchaseResponse };
-export { AdminBookListResponse, ApiMessageResult, AccessStatusResponse, WhoAmIResponse, UploadBookResponse, CropCoverResult, ToolboxDataResponse, ToolboxTaskProgressResponse, MimoTtsConvertRequest, MimoTtsTestRequest, MimoTtsConfigResponse, MimoTtsClonesResponse, MimoTtsPromptsResponse, EpubBeautifyRunOptions, BookBarnApplyTokenResponse, BookFilePathResponse, TxtReadResponse, TxtParserResponse, BatchTagUpdateResponse, BatchCategoryResponse, ClearRareTagsResponse, LibraryStatsResponse, LibraryStatsData, SysInfoResponse, AdminRunningTasksResponse, BatchAddRunResponse, BatchAddStatusResponse, ImportStatusResponse, AudioImportStatusResponse, ToolboxStoreIndexResponse, BarcodeResponse, InstallStatusResponse, InstallRequest, StampStatusResponse, ThanksNotesResponse, AdminTokenResponse, BookbarnAdminTokenResponse };
 
-interface BookListPayload {
-  books?: Array<Record<string, Object>>;
-  total?: number;
-}
-
-interface IndexPayload {
-  random?: Array<Record<string, Object>>;
-  recent?: Array<Record<string, Object>>;
-}
-
-interface BookDetailPayload {
-  err?: string;
-  book?: Record<string, Object>;
-}
-
-interface ApiResult {
-  err?: string;
-}
-
-interface ApiMessageResult extends ApiResult {
-  msg?: string;
-}
-interface AccessStatusResponse extends ApiMessageResult {
-  version?: string;
-  welcome?: string;
-}
-
-interface WhoAmIResponse extends ApiResult {
-  userId?: number;
-  username?: string;
-  canRead?: boolean;
-  isActive?: boolean;
-  is_guest?: boolean;
-  msg?: string;
-}
-
-/** 取服务端错误响应中人类可读的提示（优先 msg，回退 err 错误码）。 */
-export function apiErrorMessage(rsp: ApiResult): string {
-  const msg = (rsp as ApiMessageResult).msg;
-  if (msg !== undefined && msg.length > 0) {
-    return msg;
-  }
-  return rsp.err !== undefined && rsp.err !== 'ok' ? rsp.err : '';
-}
-
-interface AdminSettingsResponse extends ApiMessageResult {
-  settings?: Record<string, Object>;
-  sns?: Array<Record<string, Object>>;
-  site_url?: string;
-}
-
-interface AdminBookListResponse extends ApiMessageResult {
-  items?: Array<Record<string, Object>>;
-  total?: number;
-}
-
-interface AdminUserPage {
-  items?: Array<Record<string, Object>>;
-  total?: number;
-}
-
-interface AdminUsersResponse extends ApiMessageResult {
-  users?: AdminUserPage;
-  settings?: Record<string, Object>;
-}
-
-interface TrashBooksResponse extends ApiMessageResult {
-  books?: Array<Record<string, Object>>;
-}
-
-interface TrashSizeResponse extends ApiMessageResult {
-  sizes?: Record<string, Object>;
-}
-
-interface AdminReviewsResponse extends ApiMessageResult {
-  total?: number;
-  page?: number;
-  page_size?: number;
-  reviews?: Array<Record<string, Object>>;
-}
-
-interface AdminImportListResponse extends ApiMessageResult {
-  items?: Array<Record<string, Object>>;
-  total?: number;
-  scanning?: boolean;
-  importing?: boolean;
-  summary?: Record<string, Object>;
-  scan_dir?: string;
-}
-
-interface AdminSyslogResponse extends ApiMessageResult {
-  lines?: Array<string>;
-  href?: string;
-}
-
-interface AdminResourcesResponse extends ApiMessageResult {
-  resources?: Array<Record<string, Object>>;
-}
-
-/** 书库统计数据 */
-interface LibraryStatsData {
-  total_books?: number;
-  ebook_count?: number;
-  physical_count?: number;
-  month_ebook_count?: number;
-  month_physical_count?: number;
-  current_year?: number;
-  current_month?: number;
-}
-
-/** GET /api/library/stats */
-interface LibraryStatsResponse extends ApiMessageResult {
-  stats?: LibraryStatsData;
-}
-
-/** GET /api/sysinfo */
-interface SysInfoResponse extends ApiMessageResult {
-  data?: Record<string, Object>;
-}
-
-/** GET /api/admin/tasks/running */
-interface AdminRunningTasksResponse extends ApiMessageResult {
-  tasks?: Array<Record<string, Object>>;
-  messages?: Array<Record<string, Object>>;
-}
-
-/** POST /api/admin/batch_add/run */
-interface BatchAddRunResponse extends ApiMessageResult {
-  total?: number;
-}
-
-/** GET /api/admin/batch_add/status */
-interface BatchAddStatusResponse extends ApiMessageResult {
-  status?: Record<string, Object>;
-  summary?: Record<string, Object>;
-  batch_adding?: boolean;
-}
-
-/** GET /api/admin/import/status */
-interface ImportStatusResponse extends ApiMessageResult {
-  task?: Record<string, Object>;
-  status?: Record<string, Object>;
-  summary?: Record<string, Object>;
-  scanning?: boolean;
-  ignored_errors?: Object;
-  importing?: boolean;
-}
-
-/** GET /api/admin/audio_import/status */
-interface AudioImportStatusResponse extends ApiMessageResult {
-  status?: Record<string, Object>;
-  summary?: Record<string, Object>;
-  audio_importing?: boolean;
-}
-
-/** POST /api/admin/barcode */
-interface BarcodeResponse extends ApiMessageResult {
-  isbn?: string;
-}
-
-/** GET /api/admin/install */
-interface InstallStatusResponse extends ApiMessageResult {
-  installed?: boolean;
-}
-
-/** POST /api/admin/install 表单/查询参数 */
-interface InstallRequest {
-  username: string;
-  password: string;
-  email: string;
-  title: string;
-  language?: string;
-  invite?: string;
-  code?: string;
-}
-
-/** GET /api/admin/stamp */
-interface StampStatusResponse extends ApiMessageResult {
-  exists?: boolean;
-}
-
-/** GET /api/admin/thanks/notes */
-interface ThanksNotesResponse extends ApiMessageResult {
-  names?: string[];
-}
-
-/** GET /api/admin/token */
-interface AdminTokenResponse extends ApiMessageResult {
-  token?: string;
-}
-
-/** POST /api/admin/bookbarn/token/apply */
-interface BookbarnAdminTokenResponse extends ApiMessageResult {
-  token?: string;
-}
-
-
-interface UploadBookResponse extends ApiMessageResult {
-  book_id?: number;
-}
-export interface UploadBatchItem {
-  id?: number;
-  path?: string;
-  name?: string;
-  title?: string;
-  author?: string;
-  status?: string;
-  book_id?: number;
-}
-
-export interface UploadBatchStatusResponse extends ApiMessageResult {
-  items?: UploadBatchItem[];
-  importing?: boolean;
-}
-
-export interface UploadBatchStartResponse extends ApiMessageResult {
-  import_id?: number;
-  file_count?: number;
-}
-export interface BatchUploadFile {
-  localPath: string;
-  name: string;
-  relativePath?: string;
-}
-/** GET /api/sync 拉取结果；各 kind 为变更记录数组，未请求的 kind 可能为 null。 */
-export interface SyncPullResponse {
-  err?: string;
-  msg?: string;
-  books?: Array<Record<string, Object>> | null;
-  notes?: Array<Record<string, Object>> | null;
-  configs?: Array<Record<string, Object>> | null;
-}
-
-/** POST /api/sync 推送体：按 kind 分组的记录列表。 */
-export interface SyncPushPayload {
-  books?: Array<Record<string, Object>>;
-  notes?: Array<Record<string, Object>>;
-  configs?: Array<Record<string, Object>>;
-}
-
-export interface SyncImportAnchor {
-  id: string;
-  text?: string;
-  chapterHint?: string;
-  note?: string;
-}
-
-export interface SyncImportRequest {
-  bookId: number;
-  anchors: SyncImportAnchor[];
-  onAmbiguous?: string;
-  dryRun?: boolean;
-  force?: boolean;
-}
-
-export interface SyncImportResponse extends ApiMessageResult {
-  book_id?: number;
-  book_hash?: string;
-  dry_run?: boolean;
-  results?: Array<Record<string, Object>>;
-  pushed?: Record<string, Object>;
-}
-
-export interface SyncImportClearResponse extends ApiMessageResult {
-  book_id?: number;
-  book_hash?: string;
-  cleared?: number;
-}
-
-interface AdminToolListResponse extends ApiMessageResult {
-  tools?: Array<Record<string, Object>>;
-}
-interface ToolboxStoreIndexResponse extends ApiMessageResult {
-  enabled?: boolean;
-  tools?: Array<Record<string, Object>>;
-}
-
-interface ToolboxDataResponse extends ApiMessageResult {
-  data?: Record<string, Object>;
-}
-
-/** VIP 配额与到期（GET /api/user/vip）。 */
-export interface VipInfoResponse extends ApiResult {
-  vipquota?: number;
-  vip_expire?: string;
-}
-
-/** 书籍文件路径（GET /api/book/:id/filepath?format=）。 */
-interface BookFilePathResponse extends ApiMessageResult {
-  data?: Record<string, Object>;
-}
-
-/** TXT 在线阅读内容（GET /api/read/txt/:id）。 */
-interface TxtReadResponse extends ApiMessageResult {
-  content?: string;
-}
-
-/** TXT 解析结果（GET /api/book/txt/parser）。 */
-interface TxtParserResponse extends ApiMessageResult {
-  data?: Record<string, Object>;
-}
-
-/** 按标签批量更新书籍标签（POST /api/book/update_tags?tag=）。 */
-interface BatchTagUpdateResponse extends ApiMessageResult {
-  count?: number;
-  total?: number;
-}
-
-/** 批量设置分类（POST /api/book/category）。 */
-interface BatchCategoryResponse extends ApiMessageResult {
-  count?: number;
-}
-
-interface BatchCategoryOpts {
-  author?: string;
-  tag?: string;
-  series?: string;
-}
-
-/** 清理稀有标签（POST /api/clear_rare_tags）。 */
-interface ClearRareTagsResponse extends ApiMessageResult {
-  book_count?: number;
-  tag_count?: number;
-}
-
-interface ToolboxTaskProgressResponse extends ApiMessageResult {
-  data?: Record<string, Object>;
-}
-
-/** MiMo TTS 转换请求（POST /api/toolbox/mimo_tts/convert）。 */
-interface MimoTtsConvertRequest {
-  bookId: number;
-  apiKey: string;
-  voiceDesc?: string;
-  apiUrl?: string;
-  modelName?: string;
-  apiType?: string;
-  voiceName?: string;
-  authType?: string;
-  cloneVoice?: string;
-}
-
-/** MiMo TTS 连接测试请求（POST /api/toolbox/mimo_tts/test，无 book_id）。 */
-interface MimoTtsTestRequest {
-  apiKey: string;
-  voiceDesc?: string;
-  apiUrl?: string;
-  modelName?: string;
-  apiType?: string;
-  voiceName?: string;
-  authType?: string;
-  cloneVoice?: string;
-}
-
-interface MimoTtsConfigResponse extends ApiMessageResult {
-  config?: Record<string, Object> | null;
-}
-
-interface MimoTtsClonesResponse extends ApiMessageResult {
-  clones?: Array<Record<string, Object>>;
-}
-
-interface MimoTtsPromptsResponse extends ApiMessageResult {
-  prompts?: Array<Record<string, Object>>;
-}
-
-/** EPUB 美化运行可选参数（POST /api/toolbox/epub_beautify/run）。 */
-interface EpubBeautifyRunOptions {
-  preset?: string;
-  tocStyle?: string;
-  useSystemFonts?: boolean;
-  suffix?: string;
-  fontOverrides?: Record<string, Object>;
-  tocDepth?: number;
-  cleanup?: Record<string, Object>;
-  paletteOverrides?: Record<string, Object>;
-  pageTint?: boolean | string;
-  dialogue?: boolean;
-  titleSplit?: boolean;
-  paraMode?: string;
-  paraIndent?: boolean;
-  paraGap?: number;
-  tocColumns?: boolean;
-  notes?: boolean;
-  noteMark?: string;
-  bgImage?: boolean;
-}
-
-interface BookBarnApplyTokenResponse extends ApiMessageResult {
-  token?: string;
-}
-
-
-interface AdminMemoListResponse extends ApiMessageResult {
-  data?: Record<string, Object>;
-}
-
-interface PageQuery {
-  page: number;
-  limit: number;
-}
-
-interface SearchQuery {
-  name: string;
-  page: number;
-  limit: number;
-}
-
-interface LimitQuery {
-  limit: number;
-}
-
-interface MetaQuery {
-  page: number;
-  limit: number;
-}
-
-interface ReferQuery {
-  title: string;
-}
 
 /** 解析 JSON；若响应体为 HTML/重定向等非 JSON，返回 { err: 'ok' } 避免崩溃。 */
 function parseJsonOrOk(raw: string): ApiMessageResult {
@@ -2606,7 +2327,7 @@ interface CropCoverIdsPayload {
   ids: number[];
 }
 
-interface CropCoverResult extends ApiMessageResult {
+export interface CropCoverResult extends ApiMessageResult {
   data?: Record<string, Object>;
 }
 

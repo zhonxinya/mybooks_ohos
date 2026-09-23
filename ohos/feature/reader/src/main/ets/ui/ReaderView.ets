@@ -1,5 +1,4 @@
 import { PathShape } from '@ohos.arkui.shape';
-import { batteryInfo } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
   ReaderAnnotation,
@@ -31,14 +30,13 @@ import { BookEngineFactory } from '../engine/BookEngineFactory';
 import { PageLayout, PageMetrics, PagePager, ReaderPage } from '../engine/PageLayout';
 import { LazyDataSource } from './LazyDataSource';
 import { ReaderBattery } from './ReaderBattery';
-import { ReaderChrome } from './ReaderChrome';
+import { ReaderBarsOverlay } from './ReaderBarsOverlay';
 import { ReaderClock } from './ReaderClock';
 import { ReaderFlipAnimator } from './ReaderFlipAnimator';
 import { ReaderFrameWatch } from './ReaderFrameWatch';
 import { CurlFold, FoldBandSegment, curlFoldGeometry, foldBandSegments, foldCurveGeometry,
   foldSidePath } from './SimCurl';
 import { ReaderControlPanel } from './ReaderControlPanel';
-import { ReaderOverlayBar } from './ReaderOverlayBar';
 import { PAGE_FOOTER_SPACE, PAGE_HEADER_SPACE, ReaderPageView } from './ReaderPageView';
 
 
@@ -260,8 +258,6 @@ const PAGINATION_SLICE_MS: number = 8;
 const PAGE_TURN_PAGINATION_MS: number = 8;
 /** 工具栏显示后自动隐藏的延时（ms）。 */
 const BARS_AUTO_HIDE_MS: number = 4000;
-/** 页脚电量的刷新间隔（ms）：系统不提供电量变化订阅，这里按分钟级轮询。 */
-const BATTERY_REFRESH_MS: number = 60000;
 const DEFAULT_SETTINGS: ReaderSettings = {
   fontSize: 18,
   lineHeight: 1.6,
@@ -435,10 +431,6 @@ export struct ReaderView {
   private dragBase: number = 0;
   /** 翻页/回弹动画：按帧推进折痕位移（`animateTo` 不会带动现算的几何）。 */
   private flipAnim: ReaderFlipAnimator = new ReaderFlipAnimator();
-  /** 页脚电量（-1 表示读取失败，不显示）。 */
-  @State private batteryLevel: number = -1;
-  @State private batteryCharging: boolean = false;
-  private batteryTimer: number = -1;
   /** 已注册进 ArkUI 的字体家族名，避免重复注册。 */
   private registeredFonts: Set<string> = new Set<string>();
   /** 分片分页：进行中的分页器与调度状态。 */
@@ -463,10 +455,6 @@ export struct ReaderView {
   private pageCache: Map<string, ReaderPage[]> = new Map<string, ReaderPage[]>();
 
   aboutToAppear(): void {
-    this.refreshBattery();
-    this.batteryTimer = setInterval(() => {
-      this.refreshBattery();
-    }, BATTERY_REFRESH_MS);
     const settings = this.options.settings;
     this.fontSize = settings.fontSize;
     this.lineHeight = settings.lineHeight;
@@ -491,10 +479,6 @@ export struct ReaderView {
     this.frameWatch.stop();
     this.flipAnim.cancel();
     this.cancelBarsAutoHide();
-    if (this.batteryTimer >= 0) {
-      clearInterval(this.batteryTimer);
-      this.batteryTimer = -1;
-    }
     if (this.engine !== null) {
       this.engine.close();
       this.engine = null;
@@ -927,8 +911,6 @@ export struct ReaderView {
       pageHeightVp: this.textHeightVp(),
       chapterTitle: this.chapterTitle,
       bookTitle: this.bookTitle,
-      batteryLevel: this.batteryLevel,
-      batteryCharging: this.batteryCharging,
       fontFamily: this.fontFamily,
       selectable: this.selectMode,
       chapterIndex: this.chapterIndex,
@@ -1004,8 +986,6 @@ export struct ReaderView {
             .textOverflow({ overflow: TextOverflow.Ellipsis });
           ReaderBattery({
             theme: this.theme,
-            level: this.batteryLevel,
-            charging: this.batteryCharging,
           });
           Text(`${Math.round(this.lastReportedPercent * 100)}%`)
             .fontSize(10)
@@ -1120,46 +1100,26 @@ export struct ReaderView {
 
   @Builder
   overlayBars() {
-    Column() {
-      ReaderChrome({
-        bookTitle: this.bookTitle,
-        chapterTitle: this.chapterTitle,
-        chapterProgressText: this.progressText(),
-        theme: this.theme,
-        expanded: this.showBars,
-        // 内置阅读器暂无书签能力：隐藏两个书签入口，避免点了没反应
-        showBookmarkActions: false,
-        onBack: () => this.callbacks.onClose(),
-        onRefresh: () => this.reloadChapter(),
-      });
-      // Blank 也必须放行：它是子节点，默认会吃掉中间区域的点击/滑动
-      Blank()
-        .hitTestBehavior(HitTestMode.None);
-      ReaderOverlayBar({
-        theme: this.theme,
-        chapterProgress: this.chapterProgressValue(),
-        canGoPrevChapter: this.chapterIndex > 0,
-        canGoNextChapter: this.chapterIndex + 1 < this.catalogSize,
-        activeNav: this.showPanel ? this.panelTab : '',
-        // 搜索/朗读未实现，先隐藏
-        showSearch: false,
-        showAloud: false,
-        showRefresh: true,
-        showNight: true,
-        onRefresh: () => this.reloadChapter(),
-        onToggleNight: () => this.toggleNightTheme(),
-        onPrevChapter: () => this.goToChapter(this.chapterIndex - 1),
-        onNextChapter: () => this.goToChapter(this.chapterIndex + 1),
-        onChapterProgressChange: (value: number) => this.jumpToChapterProgress(value),
-        onOpenToc: () => this.openPanel(READER_PANEL_TOC),
-        onOpenAppearance: () => this.openPanel(READER_PANEL_APPEARANCE),
-        onOpenSettings: () => this.openPanel(READER_PANEL_SETTINGS),
-      });
-    }
-    .width('100%')
-    .height('100%')
-    // 工具栏之间的空白必须让点击穿透到正文：否则工具栏显示时中间点击/左右翻页都失效
-    .hitTestBehavior(HitTestMode.None);
+    ReaderBarsOverlay({
+      bookTitle: this.bookTitle,
+      chapterTitle: this.chapterTitle,
+      chapterProgressText: this.progressText(),
+      theme: this.theme,
+      chapterProgress: this.chapterProgressValue(),
+      canGoPrevChapter: this.chapterIndex > 0,
+      canGoNextChapter: this.chapterIndex + 1 < this.catalogSize,
+      activeNav: this.showPanel ? this.panelTab : '',
+      showBookmarkActions: false,
+      onBack: () => this.callbacks.onClose(),
+      onRefresh: () => this.reloadChapter(),
+      onToggleNight: () => this.toggleNightTheme(),
+      onPrevChapter: () => this.goToChapter(this.chapterIndex - 1),
+      onNextChapter: () => this.goToChapter(this.chapterIndex + 1),
+      onChapterProgressChange: (value: number) => this.jumpToChapterProgress(value),
+      onOpenToc: () => this.openPanel(READER_PANEL_TOC),
+      onOpenAppearance: () => this.openPanel(READER_PANEL_APPEARANCE),
+      onOpenSettings: () => this.openPanel(READER_PANEL_SETTINGS),
+    });
   }
 
   /** 本章进度 0~1（分页按页数，滚动按段落数）。 */
@@ -1323,19 +1283,6 @@ export struct ReaderView {
     return settings;
   }
 
-  /**
-   * 读取设备电量供页脚显示（系统 API，开销极小）。
-   * 系统未向普通应用开放电量变化订阅，这里在打开时读一次并按分钟级轮询刷新。
-   */
-  private refreshBattery(): void {
-    try {
-      this.batteryLevel = batteryInfo.batterySOC;
-      this.batteryCharging = batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.ENABLE ||
-        batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.FULL;
-    } catch (_error) {
-      this.batteryLevel = -1;
-    }
-  }
   // ---- 打开 / 切章 ----
 
   private async openBook(start: ParsedLocation): Promise<void> {
