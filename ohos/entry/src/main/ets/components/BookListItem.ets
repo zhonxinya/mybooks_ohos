@@ -84,7 +84,7 @@ export struct BookListItem {
           Text(this.item.subtitle)
             .fontSize(12)
             .fontColor($r('app.color.text_tertiary'))
-            .maxLines(1)
+            .maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis });
         }
       }

@@ -115,11 +115,36 @@ export struct BookshelfPage {
   }
 
   private mergeRecordProgress(record: DownloadRecord, historyMap: Map<string, ReadingHistoryItem>): DownloadRecord {
-    if (record.progress?.location !== undefined && record.progress.location.length > 0) {
-      return record;
-    }
     const item = historyMap.get(record.bookId);
     if (item === undefined) {
+      return record;
+    }
+    const progress = record.progress;
+    if (progress === undefined) {
+      return {
+        bookId: record.bookId,
+        title: record.title,
+        author: record.author,
+        coverUrl: record.coverUrl,
+        filePath: record.filePath,
+        format: record.format,
+        downloadTime: record.downloadTime,
+        progress: {
+          lastReadTime: item.lastReadTime,
+          chapterName: item.chapterName,
+          currentPage: item.currentPage,
+          progressPercent: item.progressPercent,
+          location: item.location,
+        },
+      };
+    }
+    const recordTime = progress.lastReadTime ?? 0;
+    const mergedTime = Math.max(recordTime, item.lastReadTime);
+    const chapterName = (progress.chapterName !== undefined && progress.chapterName.length > 0)
+      ? progress.chapterName : item.chapterName;
+    const location = (progress.location !== undefined && progress.location.length > 0)
+      ? progress.location : item.location;
+    if (mergedTime === recordTime && chapterName === progress.chapterName && location === progress.location) {
       return record;
     }
     return {
@@ -131,11 +156,11 @@ export struct BookshelfPage {
       format: record.format,
       downloadTime: record.downloadTime,
       progress: {
-        lastReadTime: item.lastReadTime,
-        chapterName: item.chapterName,
-        currentPage: item.currentPage,
-        progressPercent: item.progressPercent,
-        location: item.location,
+        lastReadTime: mergedTime,
+        chapterName: chapterName,
+        currentPage: progress.currentPage ?? item.currentPage,
+        progressPercent: progress.progressPercent ?? item.progressPercent,
+        location: location,
       },
     };
   }
