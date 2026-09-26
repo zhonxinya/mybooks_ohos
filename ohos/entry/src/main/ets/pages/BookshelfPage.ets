@@ -62,6 +62,8 @@ export struct BookshelfPage {
   private audioPage: number = 1;
   private lastAudioLoadTime: number = 0;
   private audioBooksRaw: Record<string, Object>[] = [];
+  /** 上次已上屏的下载+进度指纹。Tab 切回来数据没变时不再重建列表。 */
+  private shelfStamp: string = '';
 
   aboutToAppear(): void {
     this.isListMode = BookViewMode.isListMode();
@@ -98,7 +100,13 @@ export struct BookshelfPage {
       if (url.length > 0) {
         TalebookService.setBaseUrl('talebook', url);
       }
-      this.records = this.mergeReadingProgress(TalebookService.getDownloads());
+      const merged: DownloadRecord[] = this.mergeReadingProgress(TalebookService.getDownloads());
+      const stamp: string = this.shelfStampOf(merged);
+      if (stamp === this.shelfStamp) {
+        return;
+      }
+      this.shelfStamp = stamp;
+      this.records = merged;
       this.updateDisplayRecords();
     } finally {
       this.loading = false;
@@ -163,6 +171,19 @@ export struct BookshelfPage {
         location: location,
       },
     };
+  }
+
+  /** 顺序、书名、文件和阅读进度任一变化都会改变指纹。 */
+  private shelfStampOf(records: DownloadRecord[]): string {
+    const parts: string[] = [];
+    for (let i = 0; i < records.length; i++) {
+      const record: DownloadRecord = records[i];
+      const progress = record.progress;
+      parts.push(`${record.bookId}\t${record.title}\t${record.filePath ?? ''}\t${record.downloadTime ?? 0}\t` +
+        `${progress?.lastReadTime ?? 0}\t${progress?.chapterName ?? ''}\t${progress?.progressPercent ?? -1}\t` +
+        `${progress?.location ?? ''}`);
+    }
+    return parts.join('\n');
   }
 
   private updateDisplayRecords(): void {

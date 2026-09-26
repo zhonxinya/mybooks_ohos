@@ -27,6 +27,7 @@ import {
 } from '../model/ReaderTypes';
 import { ReaderPalette } from '../model/ReaderPalette';
 import { BookEngineFactory } from '../engine/BookEngineFactory';
+import { LruCache } from '../engine/LruCache';
 import { PageLayout, PageMetrics, PagePager, ReaderPage } from '../engine/PageLayout';
 import { LazyDataSource } from './LazyDataSource';
 import { ReaderBattery } from './ReaderBattery';
@@ -34,7 +35,7 @@ import { ReaderBarsOverlay } from './ReaderBarsOverlay';
 import { ReaderClock } from './ReaderClock';
 import { ReaderFlipAnimator } from './ReaderFlipAnimator';
 import { ReaderFrameWatch } from './ReaderFrameWatch';
-import { CurlFold, FoldBandSegment, curlFoldGeometry, foldBandSegments, foldCurveGeometry,
+import { CurlFold, FoldBandSegment, FoldCurve, curlFoldGeometry, foldBandSegmentsOnCurve, foldCurveGeometry,
   foldSidePath } from './SimCurl';
 import { ReaderControlPanel } from './ReaderControlPanel';
 import { PAGE_FOOTER_SPACE, PAGE_HEADER_SPACE, ReaderPageView } from './ReaderPageView';
@@ -248,7 +249,7 @@ function simGlintColor(theme: ReaderTheme): string {
 /** 测量入参单位自校准用的探针宽度（vp）。 */
 const PROBE_WIDTH_VP: number = 80;
 /** 分页结果最多缓存几章。 */
-const MAX_PAGE_CACHE: number = 2;
+const MAX_PAGE_CACHE: number = 4;
 /** 分片分页：首屏同步推进的步数、以及每帧推进的步数（步 ≈ 一个块/一次切分，含 1–4 次测量）。 */
 const INITIAL_PAGINATION_STEPS: number = 24;
 const PAGINATION_STEPS_PER_FRAME: number = 24;
@@ -452,7 +453,7 @@ export struct ReaderView {
   @State private annotations: ReaderAnnotation[] = [];
   /** 划线数量上限：防止宿主那份偏好值无限增长（超出后丢弃最早的）。 */
   private static readonly MAX_ANNOTATIONS: number = 500;
-  private pageCache: Map<string, ReaderPage[]> = new Map<string, ReaderPage[]>();
+  private pageCache: LruCache<string, ReaderPage[]> = new LruCache<string, ReaderPage[]>(MAX_PAGE_CACHE);
 
   aboutToAppear(): void {
     const settings = this.options.settings;
@@ -809,21 +810,20 @@ export struct ReaderView {
     const backWidth: number = radius * 2;
     const shadowWidth: number = SIM_FOLD_SHADOW_VP * curl;
     const rollWidth: number = SIM_ROLL_VP * curl;
+    // 三条带子共用同一条折痕曲线，避免每帧把贝塞尔重算三遍。
+    const curve: FoldCurve = foldCurveGeometry(width, height, anchorX, anchorY, drag, dragY);
     // 投影（新页上）：落在纸卷外缘之外，纸卷挡住的那一段不该有投影
-    const shadow = foldBandSegments(width, height, anchorX, anchorY, drag, dragY,
-      shadowWidth, true, backWidth + shadowWidth / 2, 0, segments);
+    const shadow = foldBandSegmentsOnCurve(curve, shadowWidth, true, backWidth + shadowWidth / 2, 0, segments);
     for (let i = 0; i < shadow.length; i++) {
       out.push(shadow[i]);
     }
     // 纸背（新页上）：被卷起的纸绕过柱面后朝向读者的那一面，紧贴折痕铺一个直径宽
-    const back = foldBandSegments(width, height, anchorX, anchorY, drag, dragY,
-      backWidth, true, radius, 2, segments);
+    const back = foldBandSegmentsOnCurve(curve, backWidth, true, radius, 2, segments);
     for (let i = 0; i < back.length; i++) {
       out.push(back[i]);
     }
     // 卷边柱面（当前页上）：高光已经做在柱面渐变里，不再单独画高光细线
-    const roll = foldBandSegments(width, height, anchorX, anchorY, drag, dragY,
-      rollWidth, false, rollWidth / 2, 1, segments);
+    const roll = foldBandSegmentsOnCurve(curve, rollWidth, false, rollWidth / 2, 1, segments);
     for (let i = 0; i < roll.length; i++) {
       out.push(roll[i]);
     }
@@ -1392,6 +1392,10 @@ export struct ReaderView {
     this.calibrateMeasureUnit();
     const started = Date.now();
     this.paginationStartedAt = started;
+    // 重排（改字号/行距）时旧页还在数据源里。静默清空，第一次发布再整表替换，
+    // 之后的分片只追加，不会接到上一轮分页结果后面。
+    this.pages = [];
+    this.pageSource.resetQuiet();
     const cacheKey = this.paginationCacheKey();
     const cached = this.pageCache.get(cacheKey);
     if (cached !== undefined) {
@@ -1431,9 +1435,7 @@ export struct ReaderView {
       return;
     }
     const pages = pager.getPages().slice();
-    this.pages = pages;
-    this.pageSource.update(pages);
-    this.pageCount = pages.length;
+    this.publishKnownPages(pages);
     if (!this.pagerPositionApplied && pager.getNextBlockIndex() > this.pagerTargetBlock && pages.length > 0) {
       this.pagerPositionApplied = true;
       this.pageIndex = PageLayout.pageForParagraph(pages, this.pagerRestore);
@@ -1471,11 +1473,24 @@ export struct ReaderView {
       this.chapterIndex, pages.length, Date.now() - this.paginationStartedAt);
   }
 
+  /**
+   * 发布已分出的页。比上次多出来的页只追加，避免分片期间整表 onDataReloaded。
+   * 页数变少（切章后重新分页）才整表替换。
+   */
+  private publishKnownPages(pages: ReaderPage[]): void {
+    const known: number = this.pageSource.totalCount();
+    this.pages = pages;
+    if (known === 0 || pages.length < known) {
+      this.pageSource.update(pages);
+    } else if (pages.length > known) {
+      this.pageSource.append(pages.slice(known));
+    }
+    this.pageCount = pages.length;
+  }
+
   /** 把完整页表应用到界面（缓存命中 / 同步分页路径）。 */
   private applyPages(pages: ReaderPage[], restoreParagraph: number, toLastPage: boolean): void {
-    this.pages = pages;
-    this.pageSource.update(pages);
-    this.pageCount = pages.length;
+    this.publishKnownPages(pages);
     this.pageIndex = toLastPage ? Math.max(0, pages.length - 1) :
       PageLayout.pageForParagraph(pages, restoreParagraph);
     this.paginationToken++;
@@ -1484,9 +1499,6 @@ export struct ReaderView {
   }
 
   private cachePages(cacheKey: string, pages: ReaderPage[]): void {
-    if (this.pageCache.size >= MAX_PAGE_CACHE) {
-      this.pageCache.clear();
-    }
     this.pageCache.set(cacheKey, pages.slice());
   }
 
@@ -1512,9 +1524,7 @@ export struct ReaderView {
       pager.advance(PAGINATION_STEPS_PER_FRAME, PAGINATION_SLICE_MS);
     }
     const pages = pager.getPages().slice();
-    this.pages = pages;
-    this.pageSource.update(pages);
-    this.pageCount = pages.length;
+    this.publishKnownPages(pages);
     if (pager.isFinished()) {
       this.finishPagination(this.paginationCacheKey(), pages);
     }

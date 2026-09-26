@@ -492,6 +492,21 @@ export function foldBandSegments(
   segments: number,
 ): FoldBandSegment[] {
   const curve: FoldCurve = foldCurveGeometry(width, height, anchorX, anchorY, dx, dy);
+  return foldBandSegmentsOnCurve(curve, bandWidth, onPeelSide, distanceVp, kind, segments);
+}
+
+/**
+ * 在已经算好的折痕曲线上拆渐变带。
+ * 同一帧的投影 / 纸背 / 卷边共用一条曲线，避免把贝塞尔重算三遍。
+ */
+export function foldBandSegmentsOnCurve(
+  curve: FoldCurve,
+  bandWidth: number,
+  onPeelSide: boolean,
+  distanceVp: number,
+  kind: number,
+  segments: number,
+): FoldBandSegment[] {
   const outwardSign: number = onPeelSide ? 1 : -1;
   const side: number = outwardSign;
   const nx: number = curve.nx * side;

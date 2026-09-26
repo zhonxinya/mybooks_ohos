@@ -8,7 +8,7 @@ import { MobiDoc, MobiDocData, MobiInfo, MobiSection } from './MobiDoc';
 import { MobiIndexData } from './MobiIndex';
 import { MobiKf8, MobiKf8Parts, MobiKf8TocItem } from './MobiKf8';
 import { MobiRecords } from './MobiRecords';
-import { TxtParser, TxtSectionData } from './TxtParser';
+import { TxtBookIndex, TxtParser } from './TxtParser';
 import { ReaderBlock, ReaderBlockKind } from '../model/ReaderTypes';
 
 /**
@@ -79,10 +79,16 @@ export function loadEpubChapterTask(chapterPath: string, chapterDir: string): Re
   return blocks;
 }
 
-/** 读取整本 TXT 并切章（编码探测 + 章节正则都在子线程）。 */
+/** 读取整本 TXT、切章，并把各章正文写入 UTF-8 缓存（编码探测 + 章节正则都在子线程）。 */
 @Concurrent
-export function loadTxtBookTask(filePath: string): TxtSectionData[] {
-  return TxtParser.load(filePath);
+export function loadTxtBookTask(filePath: string, cachePath: string): TxtBookIndex {
+  return TxtParser.index(filePath, cachePath);
+}
+
+/** 按字节区间读回一章的段落。 */
+@Concurrent
+export function loadTxtChapterTask(cachePath: string, byteStart: number, byteEnd: number): string[] {
+  return TxtParser.readChapter(cachePath, byteStart, byteEnd);
 }
 
 /**
