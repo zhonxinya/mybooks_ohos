@@ -2,8 +2,7 @@
  * 我的书架（Talebook `/api/shelf`）。
  *
  * 上游 `BookShelf.get` 一次性返回全部在架书籍且不支持 `start`/`size`，
- * 因此分页在本地完成：每次「加载更多」先重新拉取一次书架（保证其它端加入/移出的书籍可见），
- * 再按 `PaginationConstants.PAGE_SIZE` 展开展示。
+ * 因此分页在本地完成：首屏和下拉刷新拉整架，之后「加载更多」只展开已在内存里的下一页。
  */
 import {
   PageScaffold, BookCatalogView, BookViewToggleButton, BookListItemData,
@@ -54,7 +53,7 @@ struct ShelfPage {
     }
   }
 
-  /** 首屏/下拉刷新传 reset=true；加载更多传 false（页码已自增）。 */
+  /** 首屏和下拉刷新。加载更多只在本地展开，不重新请求。 */
   private async loadShelf(reset: boolean): Promise<void> {
     if (reset) {
       // 下拉刷新时保留现有列表，避免闪白（Refresh 自带进度指示）
@@ -117,7 +116,8 @@ struct ShelfPage {
       return;
     }
     this.currentPage += 1;
-    void this.loadShelf(false);
+    this.applyPage();
+    this.lastLoadTime = Date.now();
   }
 
   /**

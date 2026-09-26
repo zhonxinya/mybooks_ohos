@@ -1,12 +1,16 @@
 #pragma once
 
+#include <mutex>
 #include <string>
+
+struct cJSON;
 
 namespace talebook {
 
 class JsonStore {
 public:
     explicit JsonStore(std::string rootDir);
+    ~JsonStore();
 
     /**
      * 账号身份根目录：secure 凭据与各 JSON blob（下载记录/阅读历史/书签）的落盘位置；
@@ -39,6 +43,14 @@ private:
     std::string prefPath() const;
     std::string securePath() const;
     std::string globalSecurePath() const;
+    /** 把 preferences.json 载入内存；之后的读写都走这份缓存。调用方须已持有 prefMutex_。 */
+    void ensurePrefLocked() const;
+    /** 用 updated 替换缓存并落盘。失败时不改缓存，并释放 updated。调用方须已持有 prefMutex_。 */
+    bool commitPrefLocked(struct cJSON *updated) const;
+
+    mutable std::mutex prefMutex_;
+    mutable struct cJSON *prefObject_ = nullptr;
+    mutable bool prefLoaded_ = false;
 };
 
 } // namespace talebook

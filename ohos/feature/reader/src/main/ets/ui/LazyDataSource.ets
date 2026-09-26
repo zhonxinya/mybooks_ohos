@@ -33,4 +33,23 @@ export class LazyDataSource<T> implements IDataSource {
     this.items = items;
     this.listeners.forEach((listener: DataChangeListener) => listener.onDataReloaded());
   }
+
+  /** 清空但不通知。紧接着的 update/append 会负责通知，避免中间闪一帧空列表。 */
+  resetQuiet(): void {
+    this.items = [];
+  }
+
+  /** 只追加新页，已在屏上的页不重建。 */
+  append(items: T[]): void {
+    if (items.length === 0) {
+      return;
+    }
+    const start: number = this.items.length;
+    this.items = this.items.concat(items);
+    this.listeners.forEach((listener: DataChangeListener) => {
+      for (let i = 0; i < items.length; i++) {
+        listener.onDataAdd(start + i);
+      }
+    });
+  }
 }

@@ -97,6 +97,15 @@ JsonStore::JsonStore(std::string rootDir) : rootDir_(std::move(rootDir)), identi
     makeDirs(rootDir_ + "/secure", 0700);
 }
 
+JsonStore::~JsonStore()
+{
+    std::lock_guard<std::mutex> lock(prefMutex_);
+    if (prefObject_ != nullptr) {
+        cJSON_Delete(prefObject_);
+        prefObject_ = nullptr;
+    }
+}
+
 void JsonStore::setIdentityDir(const std::string &dir)
 {
     // 空目录回退全局根，保证单账号场景行为不变
@@ -145,21 +154,57 @@ bool JsonStore::write(const std::string &name, const std::string &json) const
     return writeFileAtomic(pathFor(name), json);
 }
 
+void JsonStore::ensurePrefLocked() const
+{
+    if (prefLoaded_ && prefObject_ != nullptr) {
+        return;
+    }
+    if (prefObject_ != nullptr) {
+        cJSON_Delete(prefObject_);
+    }
+    prefObject_ = loadObjectFromFile(prefPath());
+    prefLoaded_ = true;
+}
+
+bool JsonStore::commitPrefLocked(cJSON *updated) const
+{
+    if (updated == nullptr) {
+        return false;
+    }
+    if (!saveObjectToFile(prefPath(), updated)) {
+        cJSON_Delete(updated);
+        return false;
+    }
+    if (prefObject_ != nullptr) {
+        cJSON_Delete(prefObject_);
+    }
+    prefObject_ = updated;
+    prefLoaded_ = true;
+    return true;
+}
+
 std::string JsonStore::readPref(const std::string &key, const std::string &defaultValue) const
 {
-    cJSON *object = loadObjectFromFile(prefPath());
-    const std::string value = readStringField(object, key, defaultValue);
-    cJSON_Delete(object);
-    return value;
+    std::lock_guard<std::mutex> lock(prefMutex_);
+    ensurePrefLocked();
+    return readStringField(prefObject_, key, defaultValue);
 }
 
 bool JsonStore::writePref(const std::string &key, const std::string &value) const
 {
-    cJSON *object = loadObjectFromFile(prefPath());
-    const bool ok = writeStringField(object, key, value);
-    const bool saved = ok && saveObjectToFile(prefPath(), object);
-    cJSON_Delete(object);
-    return saved;
+    std::lock_guard<std::mutex> lock(prefMutex_);
+    ensurePrefLocked();
+    const cJSON *existing = cJSON_GetObjectItemCaseSensitive(prefObject_, key.c_str());
+    if (existing != nullptr && cJSON_IsString(existing) && existing->valuestring != nullptr &&
+        value == existing->valuestring) {
+        return true;
+    }
+    cJSON *updated = cJSON_Duplicate(prefObject_, true);
+    if (updated == nullptr || !writeStringField(updated, key, value)) {
+        cJSON_Delete(updated);
+        return false;
+    }
+    return commitPrefLocked(updated);
 }
 
 bool JsonStore::writePrefsBatch(const std::string &jsonObject) const
@@ -171,19 +216,38 @@ bool JsonStore::writePrefsBatch(const std::string &jsonObject) const
         }
         return false;
     }
-    cJSON *object = loadObjectFromFile(prefPath());
+    std::lock_guard<std::mutex> lock(prefMutex_);
+    ensurePrefLocked();
+    cJSON *updated = cJSON_Duplicate(prefObject_, true);
+    if (updated == nullptr) {
+        cJSON_Delete(incoming);
+        return false;
+    }
+    bool changed = false;
     const cJSON *child = nullptr;
     cJSON_ArrayForEach(child, incoming)
     {
         if (child->string == nullptr || !cJSON_IsString(child) || child->valuestring == nullptr) {
             continue;
         }
-        writeStringField(object, child->string, child->valuestring);
+        const cJSON *existing = cJSON_GetObjectItemCaseSensitive(prefObject_, child->string);
+        if (existing != nullptr && cJSON_IsString(existing) && existing->valuestring != nullptr &&
+            std::string(existing->valuestring) == child->valuestring) {
+            continue;
+        }
+        if (!writeStringField(updated, child->string, child->valuestring)) {
+            cJSON_Delete(updated);
+            cJSON_Delete(incoming);
+            return false;
+        }
+        changed = true;
     }
-    const bool saved = saveObjectToFile(prefPath(), object);
-    cJSON_Delete(object);
     cJSON_Delete(incoming);
-    return saved;
+    if (!changed) {
+        cJSON_Delete(updated);
+        return true;
+    }
+    return commitPrefLocked(updated);
 }
 
 std::string JsonStore::readSecure(const std::string &key, const std::string &defaultValue) const
