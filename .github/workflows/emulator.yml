@@ -1,0 +1,102 @@
+name: HarmonyOS Emulator
+
+# 编译校验在 HarmonyOS App Build 里，每次 push / PR 都会跑。
+# 模拟器不能跑在 GitHub 托管 runner 上：没有 /dev/kvm，hdc 的端口转发也会被拦。
+# 本工作流只在手动触发时跑，默认要求标签为 harmony-emulator 的自托管 runner。
+on:
+  workflow_dispatch:
+    inputs:
+      use_github_hosted:
+        description: 改在 GitHub 托管 runner 上试跑（没有 KVM，会立刻失败，用来确认限制）
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  emulator:
+    name: 模拟器安装并启动
+    timeout-minutes: 90
+    runs-on: ${{ inputs.use_github_hosted && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "harmony-emulator"]') }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build HAP
+        id: build
+        uses: ./.github/actions/build-hap
+        with:
+          build-mode: debug
+
+      - name: Materialize Harmony signing secrets
+        env:
+          STORE_B64: ${{ secrets.HARMONY_STORE_BASE64 }}
+          CERT_B64: ${{ secrets.HARMONY_CERT_BASE64 }}
+          PROFILE_B64: ${{ secrets.HARMONY_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/harmony-sign"
+          if [[ -n "$STORE_B64" && -n "$CERT_B64" && -n "$PROFILE_B64" ]]; then
+            printf '%s' "$STORE_B64" | base64 -d > "$RUNNER_TEMP/harmony-sign/store.p12"
+            printf '%s' "$CERT_B64" | base64 -d > "$RUNNER_TEMP/harmony-sign/cert.cer"
+            printf '%s' "$PROFILE_B64" | base64 -d > "$RUNNER_TEMP/harmony-sign/profile.p7b"
+            echo "HARMONY_STORE_FILE=$RUNNER_TEMP/harmony-sign/store.p12" >> "$GITHUB_ENV"
+            echo "HARMONY_CERT_FILE=$RUNNER_TEMP/harmony-sign/cert.cer" >> "$GITHUB_ENV"
+            echo "HARMONY_PROFILE_FILE=$RUNNER_TEMP/harmony-sign/profile.p7b" >> "$GITHUB_ENV"
+            echo "已载入 HarmonyOS 签名材料"
+          else
+            echo "未配置 HarmonyOS 签名密钥，改用 OpenHarmony 调试签名（供 ohos-qemu）"
+          fi
+
+      - name: Install emulator host packages
+        run: |
+          set -euo pipefail
+          if ! command -v qemu-system-x86_64 >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends qemu-system-x86 libatomic1 openjdk-17-jre-headless
+          fi
+          if [[ -e /dev/kvm && ! -w /dev/kvm ]]; then
+            sudo chmod 666 /dev/kvm || true
+          fi
+
+      - name: Sign HAP
+        env:
+          HARMONY_KEY_ALIAS: ${{ secrets.HARMONY_KEY_ALIAS }}
+          HARMONY_KEY_PASSWORD: ${{ secrets.HARMONY_KEY_PASSWORD }}
+          HARMONY_STORE_PASSWORD: ${{ secrets.HARMONY_STORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ci/sign-hap.sh
+          scripts/ci/sign-hap.sh \
+            "${{ steps.build.outputs.hap-path }}" \
+            "$RUNNER_TEMP/entry-signed.hap" \
+            com.zhonxinya.talebook
+
+      - name: Cache emulator image
+        uses: actions/cache@v4
+        with:
+          path: ~/.ohos-qemu
+          key: ohos-qemu-phone-${{ runner.os }}-v20260809
+
+      - name: Boot emulator, install, and launch
+        env:
+          HAP: ${{ runner.temp }}/entry-signed.hap
+          ARTIFACT_DIR: emulator-artifacts
+        run: |
+          set -euo pipefail
+          chmod +x scripts/ci/run-emulator-verify.sh
+          scripts/ci/run-emulator-verify.sh
+
+      - name: Upload emulator artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-verify
+          path: emulator-artifacts/**
+          if-no-files-found: ignore

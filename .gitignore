@@ -63,6 +63,9 @@ tmp_*
 # DevEco 本地签名材料目录（.cer / .p7b / .p12）
 .ohos/
 
+# 模拟器验证的截图和 hdc 日志
+emulator-artifacts/
+
 # 本地 Agent / 工具配置，不随仓库发布
 .reasonix/
 reasonix.toml
