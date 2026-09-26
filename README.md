@@ -111,6 +111,34 @@ volumes:
 签名材料由 DevEco 写入 `ohos/build-profile.json5`（该文件已被 `.gitignore` 排除，不会误提交）。
 模板见根目录 `build-profile.json5.template` 与 `local.properties.template`。
 
+## 持续集成
+
+| 工作流 | 跑在哪 | 做什么 |
+|---|---|---|
+| [HarmonyOS App Build](.github/workflows/build.yml) | GitHub 托管 `ubuntu-latest` | 每次 push / PR 做无签名 debug 编译，产物是未签名 HAP |
+| [HarmonyOS Emulator](.github/workflows/emulator.yml) | 自托管 runner，标签 `harmony-emulator` | 手动触发：签名、启动模拟器、安装并拉起应用，上传截图和 hdc 日志 |
+
+官方 DevEco 模拟器没有 Linux 版，GitHub 托管 runner 也没有 `/dev/kvm`，所以模拟器验证不能和编译放在同一台托管机上。模拟器镜像用社区维护的 [ohos-qemu](https://github.com/harmony-contrib/ohos-qemu)（OpenHarmony）。没配置下面的签名密钥时，流水线用 OpenHarmony 公开调试证书给 HAP 签名，才能装进这台模拟器。
+
+在一台打开了虚拟化的 Linux x86_64 上：
+
+```bash
+bash scripts/ci/setup-emulator-host.sh
+```
+
+然后按脚本末尾的说明，把这台机器注册成 Actions runner，标签带上 `harmony-emulator`。Runner 服务要和安装镜像的是同一个用户，才能用到 `~/.ohos-qemu`。注册好之后，到 Actions 里手动运行 **HarmonyOS Emulator**。
+
+若要装进官方 HarmonyOS 模拟器或真机，把 DevEco 自动签名产生的材料做成仓库密钥（Actions secrets），流水线会优先用它们，不再用 OpenHarmony 调试证书：
+
+| Secret | 内容 |
+|---|---|
+| `HARMONY_STORE_BASE64` | `.p12` 的 base64 |
+| `HARMONY_CERT_BASE64` | `.cer` 的 base64 |
+| `HARMONY_PROFILE_BASE64` | `.p7b` 的 base64 |
+| `HARMONY_KEY_ALIAS` | 密钥别名 |
+| `HARMONY_STORE_PASSWORD` | keystore 密码 |
+| `HARMONY_KEY_PASSWORD` | 密钥密码 |
+
 ## 配置
 
 1. 设置 → 账号与服务器：**新增账号**（选择服务端类型 MyBooks / Talebook，填写书库地址与用户名密码）。
