@@ -40,15 +40,14 @@ export interface PageMetrics {
 /** 测量一段文本在给定约束下占用的高度（px）。 */
 export type MeasureTextHeight = (text: string, fontSize: number, widthVp: number, lineHeight: number) => number;
 
-/** 取「能放进 availablePx 的最大前缀」；返回空串表示可用高度不足一行。 */
+/**
+ * 取「能放进 availablePx 的最大前缀」；返回空串表示可用高度不足一行。
+ * `fullHeight` 由调用方已经测过，这里不再对整段重复测量。
+ */
 function headThatFits(text: string, availablePx: number, metrics: PageMetrics,
-  measure: MeasureTextHeight): string {
-  if (availablePx <= 0 || text.length === 0) {
+  measure: MeasureTextHeight, fullHeight: number): string {
+  if (availablePx <= 0 || text.length === 0 || fullHeight <= 0) {
     return '';
-  }
-  const fullHeight: number = measure(text, metrics.fontSize, metrics.widthVp, metrics.lineHeight);
-  if (fullHeight <= availablePx) {
-    return text;
   }
   let count: number = Math.floor(text.length * availablePx / fullHeight);
   if (count < 1) {
@@ -202,7 +201,7 @@ export class PagePager {
       this.rest = '';
       return;
     }
-    const head: string = headThatFits(text, available, this.metrics, this.measure);
+    const head: string = headThatFits(text, available, this.metrics, this.measure, fullHeight);
     if (head.length === 0) {
       // 空页也放不下一行：强制切 1 字保证前进；非空页则收页后重试
       if (this.pageBlocks.length === 0) {
