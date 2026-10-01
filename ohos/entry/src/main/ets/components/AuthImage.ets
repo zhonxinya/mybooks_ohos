@@ -1,5 +1,4 @@
 import { common } from '@kit.AbilityKit';
-import { fileIo as fs } from '@kit.CoreFileKit';
 import { TalebookService } from '../services/TalebookService';
 import { CoverCache } from '../utils/CoverCache';
 
@@ -28,14 +27,6 @@ export struct AuthImage {
   private onUrlChanged(): void {
     this.localPath = '';
     void this.loadImage();
-  }
-
-  private hasCachedFile(path: string): boolean {
-    try {
-      return fs.accessSync(path);
-    } catch (_error) {
-      return false;
-    }
   }
 
   private resolveDecodeVp(explicit: number, layout: Length, fallback: number): number {
@@ -81,7 +72,7 @@ export struct AuthImage {
     CoverCache.ensureDir(context);
     const resolved = TalebookService.resolveCoverUrl(this.url);
     const destPath = CoverCache.pathFor(context, resolved);
-    if (this.hasCachedFile(destPath)) {
+    if (CoverCache.isPresent(destPath)) {
       this.localPath = destPath;
       return;
     }
@@ -90,7 +81,9 @@ export struct AuthImage {
       return;
     }
     if (envelope.status >= 200 && envelope.status < 300) {
-      this.localPath = String(envelope.body?.['filePath'] ?? destPath);
+      const finalPath = String(envelope.body?.['filePath'] ?? destPath);
+      CoverCache.markPresent(finalPath);
+      this.localPath = finalPath;
       // 淘汰放到下一事件循环，避免滚动中同步 listFile/stat 卡帧
       setTimeout(() => {
         CoverCache.maybeEvict(context);

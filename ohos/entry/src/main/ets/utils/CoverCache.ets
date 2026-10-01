@@ -51,6 +51,10 @@ export class CoverCache {
   private static readonly EVICT_INTERVAL_MS: number = 120000;
   private static lastEvictAt: number = 0;
   private static evictRunning: boolean = false;
+  /** 目录就绪标记：目录只会被本进程的淘汰任务删文件、不会删目录，确认一次即可复用。 */
+  private static dirReady: boolean = false;
+  /** 已确认落盘的封面路径：滚动回看时免去逐张 accessSync；淘汰前整体作废。 */
+  private static presentPaths: Set<string> = new Set();
 
   static cacheDir(context: common.UIAbilityContext): string {
     return `${context.filesDir}/.cache/covers`;
@@ -67,17 +71,45 @@ export class CoverCache {
   }
 
   static ensureDir(context: common.UIAbilityContext): void {
+    if (CoverCache.dirReady) {
+      return;
+    }
     const dir = CoverCache.cacheDir(context);
     try {
       if (!fs.accessSync(dir)) {
         fs.mkdirSync(dir, true);
       }
+      CoverCache.dirReady = true;
     } catch (_error) {
       try {
         fs.mkdirSync(dir, true);
+        CoverCache.dirReady = true;
       } catch (_ignored) {
       }
     }
+  }
+
+  /**
+   * 是否已确认落盘：先查内存命中集合，未命中才做一次 accessSync（结果回填集合）。
+   * 淘汰任务删文件前会整体清空集合，因此不会把已删文件误判为存在。
+   */
+  static isPresent(path: string): boolean {
+    if (CoverCache.presentPaths.has(path)) {
+      return true;
+    }
+    try {
+      if (fs.accessSync(path)) {
+        CoverCache.presentPaths.add(path);
+        return true;
+      }
+    } catch (_error) {
+    }
+    return false;
+  }
+
+  /** 下载成功落盘后登记，后续滚动回看直接走内存命中。 */
+  static markPresent(path: string): void {
+    CoverCache.presentPaths.add(path);
   }
 
   static maybeEvict(context: common.UIAbilityContext): void {
@@ -87,6 +119,8 @@ export class CoverCache {
     }
     CoverCache.lastEvictAt = now;
     CoverCache.evictRunning = true;
+    // 淘汰即将删文件：先作废内存命中集合，避免把已删文件误判为已缓存
+    CoverCache.presentPaths.clear();
     const dir = CoverCache.cacheDir(context);
     const maxFiles = CoverCache.MAX_FILES;
     const batch = CoverCache.EVICT_BATCH;

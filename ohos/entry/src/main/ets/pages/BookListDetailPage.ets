@@ -4,7 +4,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import {
   PageScaffold, LoadingState, EmptyState, AuthImage, IconCircleButton,
-  ChipButton, PrimaryButton, SearchBar,
+  ChipButton, PrimaryButton, SearchBar, LazyDataSource,
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { ApiMessageResult } from '../services/TalebookApi';
@@ -58,14 +58,20 @@ struct BookListDetailPage {
   @State shareUrl: string = '';
   @State shareSaving: boolean = false;
   @State addKeyword: string = '';
-  @State addResults: SheetBookItem[] = [];
+  @State @Watch('onAddResultsChanged') addResults: SheetBookItem[] = [];
   @State addSearching: boolean = false;
   @State addSearchingMore: boolean = false;
   @State addPage: number = 1;
   /** 当前账号是否管理员：服务端书单置顶为 `@is_admin`，据此决定菜单里是否出现「置顶」。 */
   @State isAdmin: boolean = false;
+  private addResultsSource: LazyDataSource<SheetBookItem> = new LazyDataSource<SheetBookItem>();
   private lastLoadTime: number = 0;
   private lastAddTime: number = 0;
+
+  /** addResults 变更后同步 LazyForEach 数据源。 */
+  private onAddResultsChanged(): void {
+    this.addResultsSource.update(this.addResults);
+  }
 
   aboutToAppear(): void {
     const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
@@ -839,7 +845,7 @@ struct BookListDetailPage {
           .padding(24);
       } else {
         List({ space: 8 }) {
-          ForEach(this.addResults, (item: SheetBookItem) => {
+          LazyForEach(this.addResultsSource, (item: SheetBookItem) => {
             ListItem() {
               Row({ space: 10 }) {
                 AuthImage({
@@ -879,6 +885,7 @@ struct BookListDetailPage {
         }
         .height(360)
         .width('100%')
+        .cachedCount(6)
         .onReachEnd(() => this.loadMoreAddResults());
       }
     }
