@@ -41,3 +41,9 @@ export function parseJsonArrayTask(raw: string): Array<Object> {
   }
   return JSON.parse(raw) as Array<Object>;
 }
+
+/** 通用 JSON 解析任务：大响应体在 taskpool 工作线程解析，返回数组或对象。 */
+@Concurrent
+export function parseJsonTask(raw: string): Object {
+  return JSON.parse(raw) as Object;
+}
