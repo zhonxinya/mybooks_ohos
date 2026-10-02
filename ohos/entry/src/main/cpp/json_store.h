@@ -1,5 +1,7 @@
 #pragma once
 
+#include <map>
+#include <mutex>
 #include <string>
 
 namespace talebook {
@@ -32,13 +34,30 @@ public:
     bool writeSecureGlobal(const std::string &key, const std::string &value) const;
 
 private:
+    /** 单个 JSON 文件的进程内读缓存：热点读路径无需每次读盘 + cJSON 解析。 */
+    struct FileCache {
+        bool valid = false;
+        std::map<std::string, std::string> fields;
+    };
+
     std::string rootDir_;
     /** 账号身份根；为空时回退 rootDir_（兼容单账号）。 */
     std::string identityDir_;
+    /** 保护三个 FileCache：UI 线程与 NAPI 工作线程并发读写。 */
+    mutable std::mutex cacheMutex_;
+    mutable FileCache prefCache_;
+    mutable FileCache secureCache_;
+    mutable FileCache globalSecureCache_;
+
     std::string pathFor(const std::string &name) const;
     std::string prefPath() const;
     std::string securePath() const;
     std::string globalSecurePath() const;
+    /** 带缓存读：缓存未命中时读盘解析整个文件并摊平为 string 字段表。 */
+    std::string readCached(FileCache &cache, const std::string &path, const std::string &key,
+                           const std::string &defaultValue) const;
+    /** 写入成功后失效对应缓存，下次读取重新加载。 */
+    void invalidate(FileCache &cache) const;
 };
 
 } // namespace talebook

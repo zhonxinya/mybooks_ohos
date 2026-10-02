@@ -69,15 +69,6 @@ bool saveObjectToFile(const std::string &path, cJSON *object)
     return writeFileAtomic(path, content);
 }
 
-std::string readStringField(cJSON *object, const std::string &key, const std::string &defaultValue)
-{
-    const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, key.c_str());
-    if (item == nullptr || !cJSON_IsString(item) || item->valuestring == nullptr) {
-        return defaultValue;
-    }
-    return item->valuestring;
-}
-
 bool writeStringField(cJSON *object, const std::string &key, const std::string &value)
 {
     cJSON *existing = cJSON_GetObjectItemCaseSensitive(object, key.c_str());
@@ -86,6 +77,18 @@ bool writeStringField(cJSON *object, const std::string &key, const std::string &
         return true;
     }
     return cJSON_AddStringToObject(object, key.c_str(), value.c_str()) != nullptr;
+}
+
+/** 摊平 JSON object 的 string 字段，供读缓存按 key 直查。 */
+void flattenStringFields(cJSON *object, std::map<std::string, std::string> &out)
+{
+    const cJSON *child = nullptr;
+    cJSON_ArrayForEach(child, object)
+    {
+        if (child->string != nullptr && cJSON_IsString(child) && child->valuestring != nullptr) {
+            out[child->string] = child->valuestring;
+        }
+    }
 }
 
 } // namespace
@@ -101,6 +104,8 @@ void JsonStore::setIdentityDir(const std::string &dir)
 {
     // 空目录回退全局根，保证单账号场景行为不变
     identityDir_ = dir.empty() ? rootDir_ : dir;
+    // secure 路径随身份根切换，旧账号的缓存必须失效，否则会读到上一个账号的凭据
+    invalidate(secureCache_);
     // 账号身份根是多层目录（accounts/<id>），必须递归创建：
     // 单层 mkdir 会因父目录不存在而失败，导致凭据/下载记录/历史/书签全部静默无法读写
     makeDirs(identityDir_);
@@ -128,6 +133,28 @@ std::string JsonStore::globalSecurePath() const
     return rootDir_ + "/secure/storage.json";
 }
 
+std::string JsonStore::readCached(FileCache &cache, const std::string &path, const std::string &key,
+                                  const std::string &defaultValue) const
+{
+    std::lock_guard<std::mutex> lock(cacheMutex_);
+    if (!cache.valid) {
+        cJSON *object = loadObjectFromFile(path);
+        cache.fields.clear();
+        flattenStringFields(object, cache.fields);
+        cJSON_Delete(object);
+        cache.valid = true;
+    }
+    const auto it = cache.fields.find(key);
+    return it != cache.fields.end() ? it->second : defaultValue;
+}
+
+void JsonStore::invalidate(FileCache &cache) const
+{
+    std::lock_guard<std::mutex> lock(cacheMutex_);
+    cache.valid = false;
+    cache.fields.clear();
+}
+
 std::string JsonStore::read(const std::string &name, const std::string &defaultValue) const
 {
     std::ifstream in(pathFor(name));
@@ -147,10 +174,7 @@ bool JsonStore::write(const std::string &name, const std::string &json) const
 
 std::string JsonStore::readPref(const std::string &key, const std::string &defaultValue) const
 {
-    cJSON *object = loadObjectFromFile(prefPath());
-    const std::string value = readStringField(object, key, defaultValue);
-    cJSON_Delete(object);
-    return value;
+    return readCached(prefCache_, prefPath(), key, defaultValue);
 }
 
 bool JsonStore::writePref(const std::string &key, const std::string &value) const
@@ -159,6 +183,9 @@ bool JsonStore::writePref(const std::string &key, const std::string &value) cons
     const bool ok = writeStringField(object, key, value);
     const bool saved = ok && saveObjectToFile(prefPath(), object);
     cJSON_Delete(object);
+    if (saved) {
+        invalidate(prefCache_);
+    }
     return saved;
 }
 
@@ -183,23 +210,20 @@ bool JsonStore::writePrefsBatch(const std::string &jsonObject) const
     const bool saved = saveObjectToFile(prefPath(), object);
     cJSON_Delete(object);
     cJSON_Delete(incoming);
+    if (saved) {
+        invalidate(prefCache_);
+    }
     return saved;
 }
 
 std::string JsonStore::readSecure(const std::string &key, const std::string &defaultValue) const
 {
-    cJSON *object = loadObjectFromFile(securePath());
-    const std::string value = readStringField(object, key, defaultValue);
-    cJSON_Delete(object);
-    return value;
+    return readCached(secureCache_, securePath(), key, defaultValue);
 }
 
 std::string JsonStore::readSecureGlobal(const std::string &key, const std::string &defaultValue) const
 {
-    cJSON *object = loadObjectFromFile(globalSecurePath());
-    const std::string value = readStringField(object, key, defaultValue);
-    cJSON_Delete(object);
-    return value;
+    return readCached(globalSecureCache_, globalSecurePath(), key, defaultValue);
 }
 
 bool JsonStore::writeSecureGlobal(const std::string &key, const std::string &value) const
@@ -208,6 +232,9 @@ bool JsonStore::writeSecureGlobal(const std::string &key, const std::string &val
     const bool ok = writeStringField(object, key, value);
     const bool saved = ok && saveObjectToFile(globalSecurePath(), object);
     cJSON_Delete(object);
+    if (saved) {
+        invalidate(globalSecureCache_);
+    }
     return saved;
 }
 
@@ -217,6 +244,9 @@ bool JsonStore::writeSecure(const std::string &key, const std::string &value) co
     const bool ok = writeStringField(object, key, value);
     const bool saved = ok && saveObjectToFile(securePath(), object);
     cJSON_Delete(object);
+    if (saved) {
+        invalidate(secureCache_);
+    }
     return saved;
 }
 
