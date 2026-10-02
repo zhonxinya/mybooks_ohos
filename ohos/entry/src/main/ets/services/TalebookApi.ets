@@ -423,7 +423,7 @@ export class TalebookApi {
       path = appendQuery(path, 'search', search);
     }
     const raw = await TalebookCoreService.talebookGet(path);
-    return JSON.parse(raw) as AdminBookListResponse;
+    return await parseJsonAsync(raw) as AdminBookListResponse;
   }
 
   static async getAdminUserList(page: number, num: number): Promise<AdminUsersResponse> {
@@ -431,7 +431,7 @@ export class TalebookApi {
     path = appendQuery(path, 'page', page);
     path = appendQuery(path, 'num', num);
     const raw = await TalebookCoreService.talebookGet(path);
-    return JSON.parse(raw) as AdminUsersResponse;
+    return await parseJsonAsync(raw) as AdminUsersResponse;
   }
 
   static async updateAdminUser(payload: Record<string, Object>): Promise<ApiMessageResult> {
@@ -454,7 +454,7 @@ export class TalebookApi {
   /** 回收站书籍列表（端点与响应键由 ServerProfile 决定：books/items）。 */
   static async getTrashBooks(): Promise<TrashBooksResponse> {
     const raw = await TalebookCoreService.talebookGet(ServerRegistry.trashBooksPath());
-    const parsed = JSON.parse(raw) as TrashBooksResponse;
+    const parsed = await parseJsonAsync(raw) as TrashBooksResponse;
     if (parsed.books === undefined) {
       const fallback = (parsed as Record<string, Object>)[ServerRegistry.trashItemsKey()];
       if (fallback !== undefined) {
@@ -539,12 +539,12 @@ export class TalebookApi {
   /** 系统日志（mybooks `/api/admin/syslog`；talebook `/api/admin/log`）。 */
   static async getAdminSyslog(): Promise<AdminSyslogResponse> {
     const raw = await TalebookCoreService.talebookGet(ServerRegistry.adminSyslogPath());
-    return JSON.parse(raw) as AdminSyslogResponse;
+    return await parseJsonAsync(raw) as AdminSyslogResponse;
   }
 
   static async getAdminResources(): Promise<AdminResourcesResponse> {
     const raw = await TalebookCoreService.adminResources();
-    return JSON.parse(raw) as AdminResourcesResponse;
+    return await parseJsonAsync(raw) as AdminResourcesResponse;
   }
 
   /** 书库统计（GET /api/library/stats）。 */
