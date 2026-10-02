@@ -1,6 +1,6 @@
 import {
   PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem,
-  ChipButton, PrimaryButton, SecondaryButton, TextButton, SectionTitle,
+  ChipButton, PrimaryButton, SecondaryButton, TextButton, SectionTitle, LazyDataSource,
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
@@ -28,7 +28,7 @@ struct BookAnnotationsPage {
   @State supported: boolean = true;
   @State loading: boolean = true;
   @State loadError: string = '';
-  @State items: AnnotationItem[] = [];
+  @State @Watch('onItemsChanged') items: AnnotationItem[] = [];
   @State scopeIndex: number = 0;
   @State editorOpen: boolean = false;
   @State editingId: number = 0;
@@ -43,6 +43,7 @@ struct BookAnnotationsPage {
   @State bookTitle: string = '';
   private bookId: number = 0;
   private formClientId: string = '';
+  private itemsSource: LazyDataSource<AnnotationItem> = new LazyDataSource<AnnotationItem>();
   private typeItems: FilterChipItem[] = [
     { label: '高亮', value: 1 },
     { label: '笔记', value: 2 },
@@ -80,6 +81,11 @@ struct BookAnnotationsPage {
     } catch (_error) {
       // 提示失败不影响主流程
     }
+  }
+
+  /** items 变更后同步 LazyForEach 数据源。 */
+  private onItemsChanged(): void {
+    this.itemsSource.update(this.items);
   }
 
   private async load(): Promise<void> {
@@ -313,14 +319,15 @@ struct BookAnnotationsPage {
         });
       } else {
         List({ space: 8 }) {
-          ForEach(this.items, (item: AnnotationItem) => {
+          LazyForEach(this.itemsSource, (item: AnnotationItem) => {
             ListItem() {
               this.annotationRow(item);
             }
-          }, (item: AnnotationItem) => `book-annotation-${item.id}`);
+          });
         }
         .layoutWeight(1)
         .width('100%')
+        .cachedCount(8)
         .padding({ left: 12, right: 12 });
       }
     }

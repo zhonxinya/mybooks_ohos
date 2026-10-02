@@ -1,4 +1,5 @@
 import { StorageKeys } from '../common/Constants';
+import { taskpool } from '@kit.ArkTS';
 import { BookNavResponse, UserInfoResponse } from '../common/Models';
 import { AudioFileInfo, AudioInfoResponse, AudioConversionResponse, AudioCollectionResponse, AudioPurchaseResponse, EditBookRequest, ReferBook } from '../common/ApiTypes';
 import { BookDetail, BookItem, parseBookDetail, parseBookItem } from './BookModels';
@@ -7,6 +8,7 @@ import { HomeBook, ReadingDashboard, ReadingStatsSummary, parseHomeBooks, parseR
 import { ExpectedItemModel, UserMemoItem, parseExpectedItems, parseUserMemos } from '../models/UserModels';
 import { FormatReadingStat, ReadingDevice, parseFormatStats, parseReadingDevices } from '../models/DeviceModels';
 import { TalebookCoreService } from './TalebookCoreService';
+import { parseJsonTask } from './TalebookJsonParser';
 import { ServerEndpoint, ServerRegistry } from './ServerProfile';
 import {
   AccessStatusResponse,
@@ -186,11 +188,25 @@ function buildPagePath(base: string, page: number, limit: number): string {
 }
 
 /**
+ * 大响应体阈值（与 TalebookService.LARGE_JSON_THRESHOLD 一致）：
+ * 超过阈值的 JSON.parse 下放 taskpool 工作线程，避免阻塞 UI 线程出帧。
+ */
+const LARGE_JSON_THRESHOLD: number = 32768;
+
+/** 解析 JSON；小响应同步解析（免 taskpool 往返），大响应在工作线程解析。 */
+async function parseJsonAsync(raw: string): Promise<Object> {
+  if (raw.length < LARGE_JSON_THRESHOLD) {
+    return JSON.parse(raw) as Object;
+  }
+  return await taskpool.execute(parseJsonTask, raw) as Object;
+}
+
+/**
  * 解析书籍列表响应。
  * 列表键两端不同：mybooks 用 `books`，talebook 用 `items`；直接返回数组也接受。
  */
-function parseList(raw: string): BookItem[] {
-  const data = JSON.parse(raw) as Array<Record<string, Object>> | BookListPayload;
+async function parseList(raw: string): Promise<BookItem[]> {
+  const data = await parseJsonAsync(raw) as Array<Record<string, Object>> | BookListPayload;
   let books: Array<Record<string, Object>> = [];
   if (Array.isArray(data)) {
     books = data;
@@ -407,7 +423,7 @@ export class TalebookApi {
       path = appendQuery(path, 'search', search);
     }
     const raw = await TalebookCoreService.talebookGet(path);
-    return JSON.parse(raw) as AdminBookListResponse;
+    return await parseJsonAsync(raw) as AdminBookListResponse;
   }
 
   static async getAdminUserList(page: number, num: number): Promise<AdminUsersResponse> {
@@ -415,7 +431,7 @@ export class TalebookApi {
     path = appendQuery(path, 'page', page);
     path = appendQuery(path, 'num', num);
     const raw = await TalebookCoreService.talebookGet(path);
-    return JSON.parse(raw) as AdminUsersResponse;
+    return await parseJsonAsync(raw) as AdminUsersResponse;
   }
 
   static async updateAdminUser(payload: Record<string, Object>): Promise<ApiMessageResult> {
@@ -438,7 +454,7 @@ export class TalebookApi {
   /** 回收站书籍列表（端点与响应键由 ServerProfile 决定：books/items）。 */
   static async getTrashBooks(): Promise<TrashBooksResponse> {
     const raw = await TalebookCoreService.talebookGet(ServerRegistry.trashBooksPath());
-    const parsed = JSON.parse(raw) as TrashBooksResponse;
+    const parsed = await parseJsonAsync(raw) as TrashBooksResponse;
     if (parsed.books === undefined) {
       const fallback = (parsed as Record<string, Object>)[ServerRegistry.trashItemsKey()];
       if (fallback !== undefined) {
@@ -523,12 +539,12 @@ export class TalebookApi {
   /** 系统日志（mybooks `/api/admin/syslog`；talebook `/api/admin/log`）。 */
   static async getAdminSyslog(): Promise<AdminSyslogResponse> {
     const raw = await TalebookCoreService.talebookGet(ServerRegistry.adminSyslogPath());
-    return JSON.parse(raw) as AdminSyslogResponse;
+    return await parseJsonAsync(raw) as AdminSyslogResponse;
   }
 
   static async getAdminResources(): Promise<AdminResourcesResponse> {
     const raw = await TalebookCoreService.adminResources();
-    return JSON.parse(raw) as AdminResourcesResponse;
+    return await parseJsonAsync(raw) as AdminResourcesResponse;
   }
 
   /** 书库统计（GET /api/library/stats）。 */
@@ -1676,7 +1692,7 @@ export class TalebookApi {
   /** 首页随机推荐 + 社交推荐 + 新书推荐（/api/index）。 */
   static async getIndexHome(): Promise<IndexHomeData> {
     const raw = await TalebookCoreService.talebookGet('/api/index');
-    const resp = JSON.parse(raw) as Record<string, Object>;
+    const resp = await parseJsonAsync(raw) as Record<string, Object>;
     return {
       randomBooks: parseHomeBooks(resp['random_books']),
       socialBooks: parseHomeBooks(resp['social_recommend_books']),

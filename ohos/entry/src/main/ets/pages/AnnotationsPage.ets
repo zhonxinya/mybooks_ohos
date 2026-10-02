@@ -1,6 +1,6 @@
 import {
   PageScaffold, LoadingState, EmptyState, SearchBar, FilterChips, FilterChipItem,
-  TextButton, SectionTitle,
+  TextButton, SectionTitle, LazyDataSource,
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
@@ -26,7 +26,7 @@ struct AnnotationsPage {
   @State loading: boolean = true;
   @State loadError: string = '';
   @State allItems: AnnotationItem[] = [];
-  @State rows: AnnotationItem[] = [];
+  @State @Watch('onRowsChanged') rows: AnnotationItem[] = [];
   @State hasMore: boolean = false;
   @State visibleCount: number = PaginationConstants.PAGE_SIZE;
   @State @Watch('onKeywordChanged') keyword: string = '';
@@ -35,6 +35,7 @@ struct AnnotationsPage {
   @State exportText: string = '';
   @State exportMeta: string = '';
   private lastLoadTime: number = 0;
+  private rowsSource: LazyDataSource<AnnotationItem> = new LazyDataSource<AnnotationItem>();
   private filterItems: FilterChipItem[] = [
     { label: '全部', value: 0 },
     { label: '高亮', value: 1 },
@@ -83,6 +84,11 @@ struct AnnotationsPage {
   private onKeywordChanged(): void {
     this.visibleCount = PaginationConstants.PAGE_SIZE;
     this.applyFilter();
+  }
+
+  /** rows 变更后同步 LazyForEach 数据源。 */
+  private onRowsChanged(): void {
+    this.rowsSource.update(this.rows);
   }
 
   private onTypeChanged(): void {
@@ -261,11 +267,11 @@ struct AnnotationsPage {
           EmptyState({ message: this.allItems.length === 0 ? '暂无标注' : '没有匹配的标注' });
         } else {
           List({ space: 8 }) {
-            ForEach(this.rows, (item: AnnotationItem) => {
+            LazyForEach(this.rowsSource, (item: AnnotationItem) => {
               ListItem() {
                 this.annotationRow(item);
               }
-            }, (item: AnnotationItem) => `annotation-${item.id}`);
+            });
             if (this.hasMore) {
               ListItem() {
                 Text('上滑加载更多')
@@ -279,6 +285,7 @@ struct AnnotationsPage {
           }
           .layoutWeight(1)
           .width('100%')
+          .cachedCount(8)
           .padding({ left: 12, right: 12 })
           .onReachEnd(() => this.loadMore());
         }

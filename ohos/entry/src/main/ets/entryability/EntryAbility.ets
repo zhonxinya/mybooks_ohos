@@ -27,15 +27,26 @@ export default class EntryAbility extends UIAbility {
     TalebookService.init(this.context.filesDir);
     TalebookCoreService.ensureInitialized(this.context);
     TalebookService.applyLocalConfig();
+    NotificationService.init();
+    DownloadTaskService.notifyChanged();
+    void TalebookService.warmLocalCaches();
+    BookshelfRefresh.init();
+    AppTheme.applyThemeMode(this.context, TalebookService.prefGet('theme_mode', 'system'));
+  }
+
+  /**
+   * 首帧之后再做的「迁移 + 自愈 + 会话恢复」：
+   * 账号迁移/凭据迁移只在升级首启真正做事，其余启动只是空转的读盘；
+   * 自动登录依赖网络握手，放在首帧后不影响观感，却能把 onCreate 缩到最短、尽早 loadContent。
+   * 迁移必须先于自动登录执行（登录要读迁移后的凭据），因此整段保持原顺序整体后移。
+   */
+  private startDeferredStartupWork(): void {
     // 升级迁移：把既有单账号配置落成默认账号（其身份根就是 filesDir，不搬移任何文件）
     AccountManager.ensureMigrated();
     // 按当前账号记录重新下发身份：自愈历史上未能落盘的账号配置，避免重启后请求打到空地址
     AccountManager.ensureActiveIdentity();
     // 凭据明文清理：把历史版本明文保存的密码/用户名/资料迁入 Asset Store 后从明文通道删除
     TalebookService.migratePlaintextSecrets();
-    NotificationService.init();
-    DownloadTaskService.notifyChanged();
-    void TalebookService.warmLocalCaches();
     // 先预热连接再恢复会话，减轻首次 API 握手等待
     void TalebookService.warmConnection().then(() => {
       void TalebookService.ensureAuthenticated().then((_ok: boolean) => {
@@ -49,10 +60,9 @@ export default class EntryAbility extends UIAbility {
         });
       });
     });
-    BookshelfRefresh.init();
-    // 初始化「可升级版本」提示键，供设置页订阅（值为空串表示暂无提示）
+    // 初始化「可升级版本」提示键，供设置页订阅（值为空串表示暂无提示）；
+    // 设置 Tab 懒构建，放这里不影响首帧，AppStorage 订阅会在值发布后自动刷新
     UpdateService.publishHint();
-    AppTheme.applyThemeMode(this.context, TalebookService.prefGet('theme_mode', 'system'));
   }
 
   onDestroy(): void {
@@ -74,6 +84,8 @@ export default class EntryAbility extends UIAbility {
       if (err.code !== 0) {
         hilog.error(0x0000, TAG, 'Failed to load MainTabs: %{public}s', err.message);
       }
+      // 内容已加载（首帧已出）：再跑账号迁移与自动登录，避免拖慢 onCreate
+      this.startDeferredStartupWork();
     });
     windowStage.getMainWindow((err, windowClass) => {
       if (err.code !== 0) {

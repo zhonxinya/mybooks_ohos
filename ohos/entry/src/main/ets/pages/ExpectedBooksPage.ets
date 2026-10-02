@@ -1,5 +1,6 @@
 import {
   PageScaffold, LoadingState, EmptyState, IconCircleButton, PrimaryButton, SecondaryButton,
+  LazyDataSource,
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, ApiMessageResult } from '../services/TalebookApi';
@@ -9,7 +10,7 @@ import { ExpectedItemModel } from '../models/UserModels';
 @Entry
 @Component
 struct ExpectedBooksPage {
-  @State items: ExpectedItemModel[] = [];
+  @State @Watch('onItemsChanged') items: ExpectedItemModel[] = [];
   @State loading: boolean = true;
   @State loadError: string = '';
   @State showAddSheet: boolean = false;
@@ -19,6 +20,12 @@ struct ExpectedBooksPage {
   @State submitting: boolean = false;
   /** 求书期望（/api/user/expected）为 mybooks 专有端点。 */
   @State supported: boolean = true;
+  private itemsSource: LazyDataSource<ExpectedItemModel> = new LazyDataSource<ExpectedItemModel>();
+
+  /** items 变更后同步 LazyForEach 数据源。 */
+  private onItemsChanged(): void {
+    this.itemsSource.update(this.items);
+  }
 
   aboutToAppear(): void {
     this.supported = ServerRegistry.supports(ServerFeature.USER_EXPECTED);
@@ -171,7 +178,7 @@ struct ExpectedBooksPage {
       });
     } else {
       List({ space: 10 }) {
-        ForEach(this.items, (item: ExpectedItemModel) => {
+        LazyForEach(this.itemsSource, (item: ExpectedItemModel) => {
           ListItem() {
             Row({ space: 10 }) {
               Column({ space: 4 }) {
@@ -211,10 +218,11 @@ struct ExpectedBooksPage {
             .backgroundColor($r('app.color.card_background'))
             .alignItems(VerticalAlign.Center);
           }
-        }, (item: ExpectedItemModel) => `expected-${item.id}`);
+        });
       }
       .layoutWeight(1)
       .width('100%')
+      .cachedCount(8)
       .padding({ left: 16, right: 16, top: 8, bottom: 16 });
     }
   }

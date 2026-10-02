@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <mutex>
 #include <string>
 
@@ -51,6 +52,22 @@ private:
     mutable std::mutex prefMutex_;
     mutable struct cJSON *prefObject_ = nullptr;
     mutable bool prefLoaded_ = false;
+
+    /** secure 凭据文件的进程内读缓存：ensureBaseUrl 等热点读免每次读盘 + cJSON 解析。 */
+    struct SecureCache {
+        bool valid = false;
+        std::map<std::string, std::string> fields;
+    };
+    /** 保护两个 SecureCache：UI 线程与 NAPI 工作线程并发读写。 */
+    mutable std::mutex secureMutex_;
+    mutable SecureCache secureCache_;
+    mutable SecureCache globalSecureCache_;
+
+    /** 带缓存读：缓存未命中时读盘解析整个文件并摊平为 string 字段表。 */
+    std::string readCached(SecureCache &cache, const std::string &path, const std::string &key,
+                           const std::string &defaultValue) const;
+    /** 写入成功后失效对应缓存，下次读取重新加载。 */
+    void invalidate(SecureCache &cache) const;
 };
 
 } // namespace talebook

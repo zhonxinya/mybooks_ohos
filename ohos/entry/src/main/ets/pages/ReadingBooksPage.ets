@@ -1,6 +1,6 @@
 import {
   PageScaffold, FilterChips, FilterChipItem, BookCatalogView, BookViewToggleButton,
-  BookListItemData, LoadingState, EmptyState, PrimaryButton,
+  BookListItemData, LoadingState, EmptyState, PrimaryButton, LazyDataSource,
 } from '../components';
 import { ApiEnvelope, TalebookService } from '../services/TalebookService';
 import { TalebookApi } from '../services/TalebookApi';
@@ -49,6 +49,18 @@ struct ReadingBooksPage {
     return true;
   });
   private lastLoadTime: number = 0;
+  private booksSource: LazyDataSource<BookItem> = new LazyDataSource<BookItem>();
+  /** selectedIds 的 O(1) 镜像：管理态每行都要判断是否选中，数组 indexOf 在长列表下是 O(n²)。 */
+  private selectedSet: Set<number> = new Set<number>();
+
+  /** books 变更后同步 LazyForEach 数据源。 */
+  private onBooksChanged(): void {
+    this.booksSource.update(this.books);
+  }
+
+  private isSelected(bookId: number): boolean {
+    return this.selectedSet.has(bookId);
+  }
 
   aboutToAppear(): void {
     this.isListMode = BookViewMode.isListMode();
@@ -169,17 +181,24 @@ struct ReadingBooksPage {
 
   private toggleManageMode(): void {
     this.manageMode = !this.manageMode;
+    this.clearSelection();
+  }
+
+  private clearSelection(): void {
     this.selectedIds = [];
+    this.selectedSet = new Set<number>();
   }
 
   private toggleSelect(bookId: number): void {
-    const index = this.selectedIds.indexOf(bookId);
-    if (index >= 0) {
-      const next = this.selectedIds.filter((id: number) => id !== bookId);
-      this.selectedIds = next;
+    if (this.selectedSet.has(bookId)) {
+      this.selectedSet.delete(bookId);
+      this.selectedIds = this.selectedIds.filter((id: number) => id !== bookId);
     } else {
+      this.selectedSet.add(bookId);
       this.selectedIds = this.selectedIds.concat([bookId]);
     }
+    // 选中态不在数据源里：LazyForEach 需显式通知才会重绘对应行
+    this.booksSource.update(this.books);
   }
 
   private confirmRemoveSelected(): void {
@@ -275,13 +294,13 @@ struct ReadingBooksPage {
   @Builder
   manageList() {
     List({ space: 2 }) {
-      ForEach(this.books, (book: BookItem) => {
+      LazyForEach(this.booksSource, (book: BookItem) => {
         ListItem() {
           Row({ space: 12 }) {
-            SymbolGlyph(this.selectedIds.indexOf(book.id) >= 0 ?
+            SymbolGlyph(this.isSelected(book.id) ?
               $r('sys.symbol.checkmark_circle_fill') : $r('sys.symbol.circle'))
               .fontSize(22)
-              .fontColor([this.selectedIds.indexOf(book.id) >= 0 ?
+              .fontColor([this.isSelected(book.id) ?
                 $r('app.color.brand_primary') : $r('app.color.text_tertiary')]);
             Column({ space: 2 }) {
               Text(book.title)
@@ -303,9 +322,11 @@ struct ReadingBooksPage {
           .alignItems(VerticalAlign.Center)
           .onClick(() => this.toggleSelect(book.id));
         }
-      }, (book: BookItem) => `mg-${book.id}`);
+        // key 带上选中态：勾选变化才能让 LazyForEach 重建该行
+      }, (book: BookItem) => `mg-${book.id}-${this.isSelected(book.id) ? 1 : 0}`);
     }
     .layoutWeight(1)
+    .cachedCount(6)
     .divider({ strokeWidth: 0.5, color: $r('app.color.divider') });
   }
 

@@ -42,6 +42,14 @@ struct TalebookBookSearchPage {
     }
   }
 
+  aboutToDisappear(): void {
+    // 防抖定时器可能还挂着：页面退栈后触发会对已销毁组件 setState
+    if (this.searchTimer >= 0) {
+      clearTimeout(this.searchTimer);
+      this.searchTimer = -1;
+    }
+  }
+
   private ensureTalebookUrl(): void {
     const url = TalebookService.secureGet('talebook_url');
     if (url.length > 0) {

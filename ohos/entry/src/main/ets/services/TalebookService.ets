@@ -338,6 +338,10 @@ export class TalebookService {
       }
       return;
     }
+    if (key === 'talebook_url') {
+      // cover 拼接记忆的是旧地址：改地址后必须作废，否则新封面仍按旧 base 拼
+      TalebookService.coverBaseUrl = null;
+    }
     if (TalebookService.isGlobalSecureKey(key)) {
       entry.secureSetGlobal(key, value);
       return;
@@ -607,6 +611,12 @@ export class TalebookService {
   }
 
   static applyLocalConfig(): void {
+    // 本地配置（身份根/服务器地址/TLS）可能刚被改动：作废会话通过结果，
+    // 让下一次 ensureAuthenticated 重新按新配置校验，而不是复用旧窗口
+    TalebookService.sessionOk = false;
+    TalebookService.sessionCheckedAt = 0;
+    // 切账号后 talebook_url 随身份根变化且不经过 secureSet，cover 拼接记忆一并作废
+    TalebookService.coverBaseUrl = null;
     // 先恢复当前账号的身份根：凭据/下载记录/历史/书签与其 Cookie 都随账号隔离
     const identityDir = identityDirFor(TalebookService.dataDir_, entry.prefGet(ACTIVE_ACCOUNT_KEY));
     TalebookService.setIdentityDir(identityDir);
@@ -657,6 +667,16 @@ export class TalebookService {
   }
 
   private static sessionRestorePromise: Promise<boolean> | null = null;
+  /**
+   * resolveCoverUrl 用的服务器根地址记忆：AuthImage 逐图、BookMapper 逐本都会调
+   * resolveCoverUrl，逐次同步 NAPI 读 secure 是纯浪费；值随账号身份根/改地址变化，
+   * 由 applyLocalConfig 与 secureSet('talebook_url') 作废。
+   */
+  private static coverBaseUrl: string | null = null;
+  /** 会话校验通过结果的复用窗口：进页高频，逐页 whoami 会把每次进页都串行卡在一个网络往返之后。 */
+  private static sessionOk: boolean = false;
+  private static sessionCheckedAt: number = 0;
+  private static readonly SESSION_RECHECK_TTL_MS: number = 60000;
   private static navCacheEnvelope: ApiEnvelope | null = null;
   private static navCacheAt: number = 0;
   private static siteInfoCacheEnvelope: ApiEnvelope | null = null;
@@ -665,6 +685,9 @@ export class TalebookService {
 
   static invalidateSession(): void {
     TalebookService.sessionRestorePromise = null;
+    // 切换/保存账号后会话必须重新校验，不能复用上一个账号的通过结果
+    TalebookService.sessionOk = false;
+    TalebookService.sessionCheckedAt = 0;
     TalebookService.invalidateNavCache();
   }
 
@@ -728,6 +751,12 @@ export class TalebookService {
     if (TalebookService.sessionRestorePromise !== null) {
       return TalebookService.sessionRestorePromise;
     }
+    // 刚校验通过的复用窗口内直接返回：60+ 页面的 aboutToAppear 都会进来，逐页 whoami
+    // 会把每次进页都串行卡在一个网络往返之后。失败不缓存，仍逐页重试（保住过期/断网时的恢复语义）
+    if (TalebookService.sessionOk &&
+      Date.now() - TalebookService.sessionCheckedAt < TalebookService.SESSION_RECHECK_TTL_MS) {
+      return Promise.resolve(true);
+    }
     // 先套用本地配置（身份根 + 两套模块的 base URL + TLS），
     // 否则新账号/未登录场景下两模块地址为空，请求会以 curl 的 malformed URL 报错
     TalebookService.applyLocalConfig();
@@ -735,9 +764,15 @@ export class TalebookService {
     if (url.length === 0) {
       return Promise.resolve(false);
     }
-    TalebookService.sessionRestorePromise = TalebookService.restoreSessionAsync().finally(() => {
-      TalebookService.sessionRestorePromise = null;
-    });
+    TalebookService.sessionRestorePromise = TalebookService.restoreSessionAsync()
+      .then((ok: boolean): boolean => {
+        TalebookService.sessionOk = ok;
+        TalebookService.sessionCheckedAt = Date.now();
+        return ok;
+      })
+      .finally((): void => {
+        TalebookService.sessionRestorePromise = null;
+      });
     return TalebookService.sessionRestorePromise;
   }
 
@@ -861,6 +896,9 @@ export class TalebookService {
   }
 
   static signOut(): ApiEnvelope {
+    // 登出后会话不再有效：作废通过结果，下次进页按原语义重新校验（含凭据自动重登）
+    TalebookService.sessionOk = false;
+    TalebookService.sessionCheckedAt = 0;
     return TalebookService.parseEnvelope(entry.apiSignOut());
   }
 
@@ -1111,7 +1149,10 @@ export class TalebookService {
     if (cover.startsWith('http://') || cover.startsWith('https://')) {
       return cover;
     }
-    const base = TalebookService.secureGet('talebook_url');
+    if (TalebookService.coverBaseUrl === null) {
+      TalebookService.coverBaseUrl = TalebookService.secureGet('talebook_url');
+    }
+    const base = TalebookService.coverBaseUrl;
     if (base.length === 0) {
       return cover;
     }

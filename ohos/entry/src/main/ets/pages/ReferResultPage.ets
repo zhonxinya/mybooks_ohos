@@ -1,6 +1,6 @@
 import {
   PageScaffold, EmptyState, LoadingState, PrimaryButton, SecondaryButton,
-  AuthImage, StarRating,
+  AuthImage, StarRating, LazyDataSource,
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, ReferSearchOpts, ReferSearchResponse } from '../services/TalebookApi';
@@ -14,13 +14,19 @@ struct ReferResultPage {
   @State queryTitle: string = '';
   @State queryIsbn: string = '';
   @State queryPublisher: string = '';
-  @State entries: ReferBook[] = [];
+  @State @Watch('onEntriesChanged') entries: ReferBook[] = [];
   @State loading: boolean = false;
   @State errorMessage: string = '';
   @State warningMessage: string = '';
   @State fromCache: boolean = false;
   @State applying: boolean = false;
   @State expandedKey: string = '';
+  private entriesSource: LazyDataSource<ReferBook> = new LazyDataSource<ReferBook>();
+
+  /** entries 变更后同步 LazyForEach 数据源。 */
+  private onEntriesChanged(): void {
+    this.entriesSource.update(this.entries);
+  }
 
   aboutToAppear(): void {
     const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
@@ -173,6 +179,8 @@ struct ReferResultPage {
 
   private toggleExpand(key: string): void {
     this.expandedKey = this.expandedKey === key ? '' : key;
+    // 展开态不属于数据源，LazyForEach 需显式通知才会重绘
+    this.entriesSource.update(this.entries);
   }
 
   private metaLine(entry: ReferBook): string {
@@ -364,13 +372,15 @@ struct ReferResultPage {
           .fontColor($r('app.color.text_tertiary'))
           .width('100%');
         List({ space: 10 }) {
-          ForEach(this.entries, (entry: ReferBook) => {
+          LazyForEach(this.entriesSource, (entry: ReferBook) => {
             ListItem() {
               this.referCard(entry);
             }
-          }, (entry: ReferBook) => this.entryKey(entry));
+            // key 带上展开态：切换展开/收起需要重建该行
+          }, (entry: ReferBook) => `${this.entryKey(entry)}-${this.expandedKey === this.entryKey(entry) ? 1 : 0}`);
         }
         .layoutWeight(1)
+        .cachedCount(6)
         .scrollBar(BarState.Off);
       }
     }
