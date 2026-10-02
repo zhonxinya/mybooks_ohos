@@ -4,6 +4,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BookEngine, ReaderBlock, ReaderBlockKind, ReaderCatalogItem, ReaderChapter } from '../model/ReaderTypes';
 import { BookFile } from './BookFile';
 import { EpubStructure, EpubStructureData } from './EpubStructure';
+import { LruCache } from './LruCache';
 import { loadEpubChapterTask, loadEpubStructureTask, prepareExtractDirTask } from './ReaderTasks';
 
 const TAG: string = 'EpubEngine';
@@ -24,7 +25,7 @@ export class EpubEngine implements BookEngine {
   private readonly spinePaths: string[] = [];
   private readonly spineTitles: string[] = [];
   private readonly catalogItems: ReaderCatalogItem[] = [];
-  private readonly cache: Map<number, ReaderChapter> = new Map();
+  private readonly cache: LruCache<number, ReaderChapter> = new LruCache<number, ReaderChapter>(MAX_CACHED_CHAPTERS);
 
   private constructor(bookTitle: string, extractDir: string) {
     this.bookTitle = bookTitle;
@@ -105,9 +106,6 @@ export class EpubEngine implements BookEngine {
       paragraphCount: paragraphCount,
       blocks: blocks,
     };
-    if (this.cache.size >= MAX_CACHED_CHAPTERS) {
-      this.cache.clear();
-    }
     this.cache.set(safeIndex, chapter);
     return chapter;
   }

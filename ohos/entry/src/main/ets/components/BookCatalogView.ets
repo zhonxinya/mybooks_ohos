@@ -46,7 +46,7 @@ export struct BookCatalogView {
   }
 
   onItemsChanged(): void {
-    this.dataSource.update(this.items);
+    this.dataSource.sync(this.items);
   }
 
   build() {

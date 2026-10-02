@@ -4,11 +4,14 @@
 #include <mutex>
 #include <string>
 
+struct cJSON;
+
 namespace talebook {
 
 class JsonStore {
 public:
     explicit JsonStore(std::string rootDir);
+    ~JsonStore();
 
     /**
      * 账号身份根目录：secure 凭据与各 JSON blob（下载记录/阅读历史/书签）的落盘位置；
@@ -34,30 +37,37 @@ public:
     bool writeSecureGlobal(const std::string &key, const std::string &value) const;
 
 private:
-    /** 单个 JSON 文件的进程内读缓存：热点读路径无需每次读盘 + cJSON 解析。 */
-    struct FileCache {
-        bool valid = false;
-        std::map<std::string, std::string> fields;
-    };
-
     std::string rootDir_;
     /** 账号身份根；为空时回退 rootDir_（兼容单账号）。 */
     std::string identityDir_;
-    /** 保护三个 FileCache：UI 线程与 NAPI 工作线程并发读写。 */
-    mutable std::mutex cacheMutex_;
-    mutable FileCache prefCache_;
-    mutable FileCache secureCache_;
-    mutable FileCache globalSecureCache_;
-
     std::string pathFor(const std::string &name) const;
     std::string prefPath() const;
     std::string securePath() const;
     std::string globalSecurePath() const;
+    /** 把 preferences.json 载入内存；之后的读写都走这份缓存。调用方须已持有 prefMutex_。 */
+    void ensurePrefLocked() const;
+    /** 用 updated 替换缓存并落盘。失败时不改缓存，并释放 updated。调用方须已持有 prefMutex_。 */
+    bool commitPrefLocked(struct cJSON *updated) const;
+
+    mutable std::mutex prefMutex_;
+    mutable struct cJSON *prefObject_ = nullptr;
+    mutable bool prefLoaded_ = false;
+
+    /** secure 凭据文件的进程内读缓存：ensureBaseUrl 等热点读免每次读盘 + cJSON 解析。 */
+    struct SecureCache {
+        bool valid = false;
+        std::map<std::string, std::string> fields;
+    };
+    /** 保护两个 SecureCache：UI 线程与 NAPI 工作线程并发读写。 */
+    mutable std::mutex secureMutex_;
+    mutable SecureCache secureCache_;
+    mutable SecureCache globalSecureCache_;
+
     /** 带缓存读：缓存未命中时读盘解析整个文件并摊平为 string 字段表。 */
-    std::string readCached(FileCache &cache, const std::string &path, const std::string &key,
+    std::string readCached(SecureCache &cache, const std::string &path, const std::string &key,
                            const std::string &defaultValue) const;
     /** 写入成功后失效对应缓存，下次读取重新加载。 */
-    void invalidate(FileCache &cache) const;
+    void invalidate(SecureCache &cache) const;
 };
 
 } // namespace talebook

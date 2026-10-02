@@ -9,6 +9,8 @@ import { util } from '@kit.ArkTS';
 const GBK_LABELS: string[] = ['gbk', 'gb18030'];
 
 export class TextCodec {
+  /** 解码器按编码复用，避免开书/切章时反复创建。 */
+  private static readonly decoders: Map<string, util.TextDecoder> = new Map<string, util.TextDecoder>();
   static decode(buffer: ArrayBuffer): string {
     const bytes = new Uint8Array(buffer);
     if (bytes.length === 0) {
@@ -38,7 +40,17 @@ export class TextCodec {
 
   /** 按显式编码解码（调用方已知编码时用，例如 MOBI 头里的代码页）。 */
   static decodeAs(bytes: Uint8Array, encoding: string): string {
-    return util.TextDecoder.create(encoding).decodeToString(bytes);
+    return TextCodec.decoder(encoding).decodeToString(bytes);
+  }
+
+  private static decoder(encoding: string): util.TextDecoder {
+    const cached: util.TextDecoder | undefined = TextCodec.decoders.get(encoding);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const created: util.TextDecoder = util.TextDecoder.create(encoding);
+    TextCodec.decoders.set(encoding, created);
+    return created;
   }
 
   /** 对字节切片做探测式解码（`decode` 的入参是整块 ArrayBuffer，切片场景用这个）。 */

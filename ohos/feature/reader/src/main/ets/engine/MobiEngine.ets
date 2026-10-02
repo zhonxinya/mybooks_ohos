@@ -8,6 +8,7 @@ import {
   ReaderChapter,
 } from '../model/ReaderTypes';
 import { MobiDoc, MobiDocData, MobiInfo, MobiSection } from './MobiDoc';
+import { LruCache } from './LruCache';
 import { loadMobiChapterTask, loadMobiDocTask } from './ReaderTasks';
 
 const TAG: string = 'MobiEngine';
@@ -33,7 +34,7 @@ export class MobiEngine implements BookEngine {
   private readonly flowResources: number[];
   private readonly bookTitle: string;
   private readonly catalogItems: ReaderCatalogItem[] = [];
-  private readonly cache: Map<number, ReaderChapter> = new Map();
+  private readonly cache: LruCache<number, ReaderChapter> = new LruCache<number, ReaderChapter>(MAX_CACHED_CHAPTERS);
 
   private constructor(filePath: string, imageDir: string, bookTitle: string, data: MobiDocData) {
     this.filePath = filePath;
@@ -101,9 +102,6 @@ export class MobiEngine implements BookEngine {
       paragraphCount: paragraphCount,
       blocks: blocks,
     };
-    if (this.cache.size >= MAX_CACHED_CHAPTERS) {
-      this.cache.clear();
-    }
     this.cache.set(safeIndex, chapter);
     return chapter;
   }
