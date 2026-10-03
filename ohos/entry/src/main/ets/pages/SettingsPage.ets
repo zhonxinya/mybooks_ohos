@@ -712,6 +712,25 @@ export struct SettingsPage {
                 showChevron: true,
                 onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/UpdatePage' }),
               });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '用户协议',
+                showChevron: true,
+                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/UserAgreementPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '隐私政策',
+                showChevron: true,
+                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/PrivacyPolicyPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '开源许可',
+                subtitle: '本应用及内置第三方组件的许可清单',
+                showChevron: true,
+                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/OpenSourceLicensesPage' }),
+              });
             }
             .width('100%')
             .borderRadius($r('app.float.card_radius'))
