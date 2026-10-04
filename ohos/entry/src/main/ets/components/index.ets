@@ -30,3 +30,4 @@ export { LazyDataSource } from './LazyDataSource';
 export { BookDetailReviewSheet } from './BookDetailReviewSheet';
 export { AccountPicker } from './AccountPicker';
 export { BookIdPicker } from './BookIdPicker';
+export { LegalDocument, LegalSection } from './LegalDocument';
