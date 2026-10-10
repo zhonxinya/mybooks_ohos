@@ -33,6 +33,12 @@ interface CoverRowSpec {
   showRecommender: boolean;
 }
 
+/**
+ * 「换一批」转圈的最短可见时长。首页接口通常几十毫秒就返回，
+ * 转圈一闪而过反而像闪屏，因此人为兜底到该时长。
+ */
+const RANDOM_REFRESH_MIN_MS: number = 500;
+
 
 @Component
 export struct BooksTabPage {
@@ -48,6 +54,8 @@ export struct BooksTabPage {
   @State isListMode: boolean = false;
   @State catalogItems: BookListItemData[] = [];
   @State randomBooks: HomeBook[] = [];
+  /** 「换一批」请求进行中：按钮显示转圈并屏蔽重复点击。 */
+  @State randomRefreshing: boolean = false;
   @State socialBooks: HomeBook[] = [];
   @State newBooks: HomeBook[] = [];
   @State libraryStats: LibraryStatsData | null = null;
@@ -658,6 +666,7 @@ export struct BooksTabPage {
       SectionTitle({
         title: '为你推荐',
         actionLabel: '换一批',
+        actionLoading: this.randomRefreshing,
         onAction: () => this.refreshRandomBooks(),
       });
       this.coverScroll({ books: this.randomBooks, showRecommender: false });
@@ -869,12 +878,28 @@ export struct BooksTabPage {
     .onClick(() => this.openBookDetail(book.id));
   }
 
+  /** 「换一批」：重取 /api/index 的随机推荐，请求期间按钮转圈并禁用（防连点重复请求）。 */
   private refreshRandomBooks(): void {
+    if (this.randomRefreshing) {
+      return;
+    }
+    this.randomRefreshing = true;
+    const startedAt = Date.now();
     TalebookApi.getIndexHome()
       .then((data: IndexHomeData) => {
         this.randomBooks = this.resolveHomeBooks(data.randomBooks);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        const remain = RANDOM_REFRESH_MIN_MS - (Date.now() - startedAt);
+        if (remain > 0) {
+          setTimeout(() => {
+            this.randomRefreshing = false;
+          }, remain);
+        } else {
+          this.randomRefreshing = false;
+        }
+      });
   }
 
 
