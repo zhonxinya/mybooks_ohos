@@ -69,6 +69,8 @@ export interface ReadingHistoryItem {
   progressPercent?: number;
   location?: string;
   lastReadTime: number;
+  /** 累计阅读时长（秒），阅读会话结束时累加。 */
+  readSeconds?: number;
 }
 
 export interface SoNovelBookPayload {
@@ -1207,6 +1209,10 @@ export class TalebookService {
       r.bookId === item.bookId ||
       (item.filePath !== undefined && item.filePath.length > 0 && r.filePath === item.filePath));
     if (index >= 0) {
+      // 进度条目每次新建，别把累计阅读时长冲掉
+      if (item.readSeconds === undefined && records[index].readSeconds !== undefined) {
+        item.readSeconds = records[index].readSeconds;
+      }
       records.splice(index, 1);
     }
     records.unshift(item);
