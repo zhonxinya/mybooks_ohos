@@ -107,6 +107,7 @@ struct BuiltInReaderPage {
     this.bookId = params.bookId ?? '';
     this.bookTitle = params.bookTitle ?? '';
     this.bookFormat = params.format ?? '';
+    ReadKitSession.beginSession(this.bookId, this.filePath);
     // 字体缓存目录初始化：与 ReaderKit 阅读器共用同一套 ReaderFontService（同一目录、同一份缓存）
     ReaderFontService.init(context.filesDir);
     const settings = BuiltInReaderPage.loadSettings();
@@ -153,6 +154,7 @@ struct BuiltInReaderPage {
   }
 
   aboutToDisappear(): void {
+    ReadKitSession.endSession();
     ReadKitSession.flushProgress();
     // 兜底：正常退出已由 onBackPress 恢复并等待，这里只覆盖进程被回收等异常路径
     if (!this.systemBarsRestored) {

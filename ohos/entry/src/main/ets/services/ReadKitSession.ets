@@ -7,6 +7,50 @@ export class ReadKitSession {
   private static readonly HISTORY_MAX: number = 200;
   private static progressTimer: number = -1;
   private static dirty: boolean = false;
+  private static sessionKey: string = '';
+  private static sessionStartMs: number = 0;
+  private static sessionAccumMs: number = 0;
+
+  /** 阅读器打开时开始计时；若上个会话没关干净（异常路径），先结算它。 */
+  static beginSession(bookId: string, filePath: string): void {
+    ReadKitSession.endSession();
+    ReadKitSession.sessionKey = bookId.length > 0 ? bookId : filePath;
+    ReadKitSession.sessionStartMs = Date.now();
+    ReadKitSession.sessionAccumMs = 0;
+  }
+
+  /** 应用退后台时暂停计时，后台停留不计入阅读时长。 */
+  static pauseSession(): void {
+    if (ReadKitSession.sessionStartMs > 0) {
+      ReadKitSession.sessionAccumMs += Date.now() - ReadKitSession.sessionStartMs;
+      ReadKitSession.sessionStartMs = 0;
+    }
+  }
+
+  static resumeSession(): void {
+    if (ReadKitSession.sessionKey.length > 0 && ReadKitSession.sessionStartMs === 0) {
+      ReadKitSession.sessionStartMs = Date.now();
+    }
+  }
+
+  /** 阅读器关闭时把本次会话时长累加进历史条目（条目不存在则跳过）。 */
+  static endSession(): void {
+    ReadKitSession.pauseSession();
+    const seconds = Math.round(ReadKitSession.sessionAccumMs / 1000);
+    const key = ReadKitSession.sessionKey;
+    ReadKitSession.sessionKey = '';
+    ReadKitSession.sessionAccumMs = 0;
+    if (key.length === 0 || seconds <= 0) {
+      return;
+    }
+    const history = TalebookService.getReadingHistory();
+    const index = history.findIndex((item) => item.bookId === key || item.filePath === key);
+    if (index < 0) {
+      return;
+    }
+    history[index].readSeconds = (history[index].readSeconds ?? 0) + seconds;
+    TalebookService.saveReadingHistory(history);
+  }
 
   static handleProgress(bookId: string, title: string, filePath: string, format: string,
     chapterName: string, currentPage: number, location: string): void {

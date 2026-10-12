@@ -96,6 +96,10 @@ struct ReadingHistoryPage {
     if (progress.length > 0) {
       parts.push(progress);
     }
+    const minutes = Math.round((item.readSeconds ?? 0) / 60);
+    if (minutes > 0) {
+      parts.push(`已读 ${minutes} 分钟`);
+    }
     const lastRead = DateFormat.lastReadLabel(item.lastReadTime);
     if (lastRead.length > 0) {
       parts.push(lastRead);

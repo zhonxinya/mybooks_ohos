@@ -155,6 +155,7 @@ struct ReadKitReader {
     this.initTtsService();
     void this.enterImmersiveMode();
     const params = this.getUIContext().getRouter().getParams() as ReadKitParams;
+    ReadKitSession.beginSession(params.bookId ?? '', params.filePath);
     const parsed = this.parseLocationParam(
       params.location,
       params.resourceIndex ?? 0,
@@ -1366,6 +1367,7 @@ struct ReadKitReader {
         location,
       );
     }
+    ReadKitSession.endSession();
     ReadKitSession.flushProgress();
     if (this.densityChangeCallback !== null) {
       display.off('change', this.densityChangeCallback);

@@ -119,6 +119,7 @@ export default class EntryAbility extends UIAbility {
 
   onForeground(): void {
     hilog.info(0x0000, TAG, 'Ability onForeground');
+    ReadKitSession.resumeSession();
     void NotificationService.refreshUnreadCount();
     DownloadTaskService.processQueue();
   }
@@ -126,6 +127,7 @@ export default class EntryAbility extends UIAbility {
   onBackground(): void {
     hilog.info(0x0000, TAG, 'Ability onBackground');
     // 退到后台只把阅读进度落盘。书架刷新留到回到前台 / 退出阅读器，避免后台整表重建。
+    ReadKitSession.pauseSession();
     ReadKitSession.flushProgress(false);
     DownloadTaskService.flushPersist();
   }
