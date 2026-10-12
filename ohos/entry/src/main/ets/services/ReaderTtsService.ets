@@ -1,3 +1,11 @@
+// TTS（文本转语音）依赖华为 `@kit.CoreSpeechKit`，**ArkUI-X 的 Android 端无对应模块**。
+//
+// 现状：Android 端全程走内置阅读器（见 `ReaderLauncher.isAvailable`），
+// 而 TTS 仅被 ReaderKit 阅读页 `pages/ReadKitReader` 调用，故 Android 端没有调用方。
+//
+// 未来若要在 Android 上提供朗读能力，正确做法是新增一个基于 Android
+// `TextToSpeech` 的实现并在此处分派（参照 `PasswordStore` 的平台后端写法），
+// 而不是试图在能力差异巨大的 CoreSpeechKit 上做条件编译。
 import { BusinessError } from '@kit.BasicServicesKit';
 import { textToSpeech } from '@kit.CoreSpeechKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
