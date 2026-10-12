@@ -85,6 +85,7 @@ add_library(mybooks_core SHARED
     api_service.cpp
     json_util.cpp
     epub_parser.cpp
+    secure_crypto.cpp
 )
 
 target_compile_definitions(mybooks_core PRIVATE
