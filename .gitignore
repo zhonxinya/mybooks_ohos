@@ -76,3 +76,10 @@ docs/mybooks/
 docs/talebook/
 docs/202*-*.md
 .github/skills/
+.dsh-verify/
+
+# ArkUI-X / Android 构建的本机环境（含绝对路径与 SDK 配置）
+scripts/android-env.sh
+ohos/.arkui-x/
+ohos/android/
+ohos/ios/
