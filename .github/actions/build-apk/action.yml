@@ -147,7 +147,7 @@ runs:
         ARCH: ${{ inputs.arch }}
       run: |
         set -euo pipefail
-        ./scripts/build-apk.sh "$MODE" "$ARCH"
+        bash ./scripts/build-apk.sh "$MODE" "$ARCH"
 
         APK=$(find ohos/.arkui-x/android/app/build/outputs/apk -name '*.apk' -type f | head -n 1)
         if [ -z "$APK" ]; then
