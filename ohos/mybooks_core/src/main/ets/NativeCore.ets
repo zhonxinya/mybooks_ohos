@@ -408,4 +408,29 @@ export class NativeCore {
     }
     return typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data);
   }
+
+  /** 当前身份根目录（切换账号后会变），供安全存储定位密钥文件。 */
+  static identityDir(): string {
+    return mybooksCore.identityDir() as string;
+  }
+
+  /**
+   * AES-256-GCM 加密，返回十六进制密文；失败返回空串。
+   *
+   * 供 ArkUI-X 的 Android 端安全存储使用（该端无 Asset Store）：
+   * @param input `identityDir|plaintext`，明文可含任意字符（含 `|`）
+   */
+  static secureSeal(identityDir: string, plaintext: string): string {
+    return mybooksCore.secureSeal(`${identityDir}|${plaintext}`) as string;
+  }
+
+  /**
+   * AES-256-GCM 解密，返回明文；格式非法、authTag 校验失败或密钥不匹配返回空串
+   * （**不返回部分明文**）。
+   *
+   * @param input `identityDir|hexSealed`
+   */
+  static secureOpen(identityDir: string, sealed: string): string {
+    return mybooksCore.secureOpen(`${identityDir}|${sealed}`) as string;
+  }
 }

@@ -14,6 +14,7 @@ import {
   DEFAULT_BOOKLIST_COLOR, booklistColorHex,
 } from '../models/BookListModels';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
+import { AppRouter } from '../utils/AppRouter';
 
 const TAB_PUBLIC: number = 0;
 const TAB_LIKED: number = 1;
@@ -241,7 +242,7 @@ struct BookListsPage {
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         if (TalebookService.isLoginRequiredResult(rsp.err, rsp.msg)) {
           this.toast('请先在「账号与服务器」中配置账号，应用会自动登录');
-          this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' });
+          AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookConfigPage' });
           return;
         }
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '操作失败');
@@ -408,7 +409,7 @@ struct BookListsPage {
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openDetail(item: BookListSummary): void {
-    this.getUIContext().getRouter().pushUrl({
+    AppRouter.pushUrl(this.getUIContext(), {
       url: 'pages/BookListDetailPage',
       params: { booklistId: item.id },
     });
@@ -497,7 +498,7 @@ struct BookListsPage {
         message: '请先配置账号',
         detail: '配置账号后应用会自动登录，即可查看点赞书单与我的书单',
         actionLabel: '去配置账号',
-        onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
+        onAction: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookConfigPage' }),
       });
     } else if (this.errorMessage.length > 0) {
       EmptyState({ message: this.errorMessage });

@@ -2,6 +2,7 @@ import { PageScaffold, PrimaryButton, LoadingState, ChipButton } from '../compon
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, MetaNameCount } from '../services/TalebookApi';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { AppRouter } from '../utils/AppRouter';
 
 
 @Entry
@@ -28,7 +29,7 @@ struct BookEditPage {
   private lastHintTime: number = 0;
 
   aboutToAppear(): void {
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object>;
     this.bookId = Number(params['bookId'] ?? 0);
     void this.loadDetail();
   }
@@ -136,7 +137,7 @@ struct BookEditPage {
     const envelope = await TalebookService.editBookAsync(this.bookId, payload);
     if (envelope.status >= 200 && envelope.status < 300) {
       this.getUIContext().getPromptAction().showToast({ message: '保存成功' });
-      this.getUIContext().getRouter().back();
+      AppRouter.back(this.getUIContext());
     } else {
       this.message = envelope.error.length > 0 ? envelope.error : '保存失败';
     }

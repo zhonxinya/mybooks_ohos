@@ -4,6 +4,9 @@ HarmonyOS 原生多源聚合阅读器（ArkTS UI + C++ 核心层），是 [MyBoo
 
 > 本项目仅提供服务端客户端，自身不包含、不提供任何电子书内容。
 
+同一份源码通过 [ArkUI-X](https://gitcode.com/arkui-x) 也可构建 **Android** 应用，
+详见 [ArkUI-X Android 迁移指南](docs/ArkUI-X-Android迁移指南.md)。
+
 > [!IMPORTANT]
 > **安装包需签名后才能使用。** 本仓库不包含任何签名证书与密钥，默认构建产出的是未签名 HAP，
 > 仅可用于编译校验，**无法安装到真机或模拟器**（安装报 `code:9568320 error: no signature file`）。
@@ -84,6 +87,12 @@ volumes:
 ..\scripts\hvigorw.ps1 assembleHap -p product=default -p buildMode=debug --no-daemon
 ```
 
+> ⚠️ 工程已切换为 **ArkUI-X 工程结构**（`hvigorfile.ts` 使用 ArkUI-X 任务类
+> `AppTasksForArkUIX` / `HapTasks`），**HAP 与 APK 都依赖 ArkUI-X 组件**：
+> Linux 下统一走 `scripts/build-hap.sh` / `scripts/build-apk.sh`（ACE Tools，见
+> [迁移指南](docs/ArkUI-X-Android迁移指南.md)）；Windows/DevEco 需先装 ArkUI-X 组件，
+> 纯 DevEco 默认工具链不含该插件，`hvigorw` 会因缺插件而失败。
+
 构建产物：`ohos/entry/build/default/outputs/default/` 下的 `entry-default-*.hap`
 
 > ⚠️ 未配置签名时产出的是 `entry-default-unsigned.hap`，**需签名后才能安装使用**，详见[签名](#签名)章节。
@@ -95,6 +104,24 @@ volumes:
 
 > `ohos/build-profile.json5` 为本地工程配置（已被 `.gitignore` 排除）。若缺失，hvigor 会报
 > `0304035 Not Found`，可参照 `ohos/build-profile.ci.json5` 重建。
+
+### Android（ArkUI-X）
+
+同一份 ArkTS 源码也可构建 Android APK，详见 [ArkUI-X Android 迁移指南](docs/ArkUI-X-Android迁移指南.md)。
+
+```bash
+# 配置环境（ArkUI-X SDK / Android SDK / NDK / JDK 17）
+cp scripts/android-env.example.sh scripts/android-env.sh
+$EDITOR scripts/android-env.sh
+
+# 构建 APK（第二个参数是目标架构：x86_64 供模拟器，缺省 arm64 供真机）
+./scripts/build-apk.sh release x86_64
+./scripts/build-apk.sh release          # arm64
+```
+
+> Android 端需要 **ArkUI-X SDK**（含 ACE Tools）。注意本项目切为 ArkUI-X 工程结构后，
+> **鸿蒙 HAP 构建同样依赖 ArkUI-X**（经 `scripts/build-hap.sh`），并非只有 Android 需要。
+> Linux 桌面暂不支持 —— ArkUI-X 官方仍将其标注为「规划中」。
 > 注意 `build-profile.ci.json5` 不含 `signingConfigs`，直接复制会产出未签名 HAP
 > （安装报 `9568320 no signature file`），真机安装前需按下节配置签名。
 
@@ -149,8 +176,14 @@ ohos/entry/src/main/
 ├── cpp/           # C++ NAPI 核心
 ├── ets/pages/     # ArkTS 页面
 ├── ets/services/  # TalebookService / ReadKitSession
+│                  # 跨端平台层：SecureStore / SecureStoreAndroid / AudioPlatform*
+├── ets/common/    # PlatformTarget（运行时平台判定）
 ├── ets/components/
 └── ets/entryability/
+
+ohos/mybooks_core/src/main/cpp/
+├── secure_crypto.cpp   # AES-256-GCM（Android 端密码存储的加密后端）
+└── include/secure_crypto.h
 
 ohos/feature/reader/   # 独立阅读器 HAR 模块（自研 EPUB/TXT 渲染，不依赖 ReaderKit）
 ├── Index.ets          # 对外出口：ReaderView / 类型 / 工具

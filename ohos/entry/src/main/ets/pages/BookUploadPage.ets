@@ -7,6 +7,7 @@ import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { TalebookApi, UploadBookResponse, UploadBatchStartResponse, UploadBatchStatusResponse,
   BatchUploadFile, AddIsbnResult, apiErrorMessage } from '../services/TalebookApi';
 import { BookUploadService, PickedBookFile } from '../services/BookUploadService';
+import { AppRouter } from '../utils/AppRouter';
 
 interface UploadItem {
   id: number;
@@ -136,7 +137,7 @@ struct BookUploadPage {
       this.isbnInput = '';
       const bookId = Number(rsp.book_id ?? 0);
       if (bookId > 0) {
-        this.getUIContext().getRouter().pushUrl({ url: 'pages/BookDetailPage', params: { bookId: bookId } });
+        AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookDetailPage', params: { bookId: bookId } });
       }
     } catch (e) {
       this.isbnError = `添加失败：${e}`;
@@ -934,14 +935,14 @@ struct BookUploadPage {
       if (item.status === ITEM_SUCCESS || (item.status === ITEM_FAILED && item.bookId > 0)) {
         TextButton({
           label: '编辑元数据',
-          onTap: () => this.getUIContext().getRouter().pushUrl({
+          onTap: () => AppRouter.pushUrl(this.getUIContext(), {
             url: 'pages/BookEditPage',
             params: { bookId: item.bookId },
           }),
         });
         TextButton({
           label: '查看详情',
-          onTap: () => this.getUIContext().getRouter().pushUrl({
+          onTap: () => AppRouter.pushUrl(this.getUIContext(), {
             url: 'pages/BookDetailPage',
             params: { bookId: item.bookId },
           }),

@@ -5,6 +5,7 @@ import {
   TalebookApi, ApiMessageResult, apiErrorMessage
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { AppRouter } from '../utils/AppRouter';
 
 @Entry
 @Component
@@ -147,7 +148,7 @@ struct EpubFixerToolPage {
             label: '查看运行中任务（设置 · 管理概览）',
             buttonEnabled: !this.busy,
             onTap: () => {
-              this.getUIContext().getRouter().pushUrl({
+              AppRouter.pushUrl(this.getUIContext(), {
                 url: 'pages/MainTabs',
                 params: { tab: 2, section: 'admin' },
               }).catch(() => {});

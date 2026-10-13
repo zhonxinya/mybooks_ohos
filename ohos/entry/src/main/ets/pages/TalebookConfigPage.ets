@@ -4,6 +4,7 @@ import { AccountStore } from '../services/AccountStore';
 import { ServerKind, ServerRegistry } from '../services/ServerProfile';
 import { TalebookService } from '../services/TalebookService';
 import { AccountInput, AccountRecord, accountHost } from '../models/AccountModels';
+import { AppRouter } from '../utils/AppRouter';
 
 /**
  * 账号管理：多账号列表 + 新增账号（可指向新服务器）+ 编辑 + 删除 + 切换。
@@ -245,8 +246,8 @@ struct TalebookConfigPage {
       const outcome: AccountSwitchOutcome = await AccountManager.switchTo(id);
       if (outcome.attempt.ok) {
         // 整栈重建：各页面 aboutToAppear 会读取新账号配置并重新请求
-        this.getUIContext().getRouter().clear();
-        this.getUIContext().getRouter().replaceUrl({ url: 'pages/MainTabs' });
+        AppRouter.clear(this.getUIContext());
+        AppRouter.replaceUrl(this.getUIContext(), { url: 'pages/MainTabs' });
         this.toast(outcome.corrected
           ? `${successHint}：${name}（已按服务器实际类型识别为 ${ServerRegistry.profile().displayName}）`
           : `${successHint}：${name}`);
@@ -296,8 +297,8 @@ struct TalebookConfigPage {
     if (wasActive) {
       // 删除的是当前账号：AccountManager 已切到剩余首个账号，这里重启 UI 使数据同步
       this.toast('已删除当前账号并切换到其他账号');
-      this.getUIContext().getRouter().clear();
-      this.getUIContext().getRouter().replaceUrl({ url: 'pages/MainTabs' });
+      AppRouter.clear(this.getUIContext());
+      AppRouter.replaceUrl(this.getUIContext(), { url: 'pages/MainTabs' });
       return;
     }
     this.toast('已删除');

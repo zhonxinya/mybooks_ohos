@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { PageScaffold, LoadingState, EmptyState, AuthImage } from '../components';
 import { AudioFileInfo } from '../common/ApiTypes';
 import { AudioPlaybackListener, AudioPlaybackService, AudioPlaybackState } from '../services/AudioPlaybackService';
+import { AppRouter } from '../utils/AppRouter';
 
 const SPEEDS: number[] = [0.75, 1, 1.25, 1.5, 2];
 
@@ -32,7 +33,7 @@ struct AudioPlayerPage {
   };
 
   aboutToAppear(): void {
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object>;
     // 书名/作者/封面要先存局部变量：applyState 会立刻用服务状态覆盖 @State，
     // 之后再从 this.* 取值会拿到被覆盖后的空串（元数据会因此丢掉书名与封面）。
     this.bookId = Number(params['bookId'] ?? 0);

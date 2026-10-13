@@ -1,6 +1,7 @@
 import { PageScaffold, PrimaryButton, SecondaryButton } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookCoreService } from '../services/TalebookCoreService';
+import { AppRouter } from '../utils/AppRouter';
 
 @Entry
 @Component
@@ -52,7 +53,7 @@ struct SoNovelConfigPage {
 
       SecondaryButton({
         label: '前往搜索',
-        onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/SoNovelSearchPage' }),
+        onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/SoNovelSearchPage' }),
       });
     }
     .padding($r('app.float.page_padding'));

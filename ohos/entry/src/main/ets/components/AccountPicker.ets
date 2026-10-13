@@ -3,6 +3,7 @@ import { AccountManager, AccountSwitchOutcome } from '../services/AccountManager
 import { AccountStore } from '../services/AccountStore';
 import { AccountRecord } from '../models/AccountModels';
 import { ServerKind, ServerRegistry } from '../services/ServerProfile';
+import { AppRouter } from '../utils/AppRouter';
 
 /**
  * 账号快速切换面板。
@@ -63,8 +64,8 @@ export struct AccountPicker {
         return;
       }
       // 整栈重建：各页面 aboutToAppear 会读取新账号配置并重新拉取数据
-      this.getUIContext().getRouter().clear();
-      this.getUIContext().getRouter().replaceUrl({ url: 'pages/MainTabs' });
+      AppRouter.clear(this.getUIContext());
+      AppRouter.replaceUrl(this.getUIContext(), { url: 'pages/MainTabs' });
       this.toast(outcome.corrected
         ? `已切换到 ${name}（服务端类型识别为 ${ServerRegistry.profile().displayName}）`
         : `已切换到 ${name}`);

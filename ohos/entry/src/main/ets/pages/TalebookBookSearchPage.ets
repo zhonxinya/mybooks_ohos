@@ -6,6 +6,7 @@ import { TalebookService, ApiEnvelope } from '../services/TalebookService';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
 import { mapTalebookBook } from '../utils/BookMapper';
+import { AppRouter } from '../utils/AppRouter';
 
 @Entry
 @Component
@@ -34,7 +35,7 @@ struct TalebookBookSearchPage {
   aboutToAppear(): void {
     this.isListMode = BookViewMode.isListMode();
     this.ensureTalebookUrl();
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object> | undefined;
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object> | undefined;
     const initial = String(params?.['keyword'] ?? '').trim();
     if (initial.length > 0) {
       this.keyword = initial;
@@ -211,7 +212,7 @@ struct TalebookBookSearchPage {
           items: this.catalogItems,
           isListMode: this.isListMode,
           loadingMore: this.loadingMore,
-          onItemTap: (item: BookListItemData) => this.getUIContext().getRouter().pushUrl({
+          onItemTap: (item: BookListItemData) => AppRouter.pushUrl(this.getUIContext(), {
             url: 'pages/BookDetailPage', params: { bookId: Number(item.id) }
           }),
           onLoadMore: () => this.loadMore(),

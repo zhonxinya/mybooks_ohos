@@ -1,6 +1,14 @@
 import { displaySync } from '@kit.ArkGraphics2D';
 
 /**
+ * `displaySync` 是否可用（模块级缓存，探测一次）。
+ * ArkUI-X 的 Android 端没有该插件（`graphics_displaysync` 在 SDK 中不存在），
+ * 首次调用即抛 `Cannot read property create of undefined`；缓存后不再重复尝试，
+ * 避免每次翻页都刷一条异常日志。
+ */
+let displaySyncUnavailable: boolean = false;
+
+/**
  * 翻页动画自驱动（按帧显式推进 `dragOffset`）。
  *
  * **为什么不用 `animateTo`**：仿真翻页的每一帧画面都由 `dragOffset` 现算出来——折痕曲线、
@@ -18,6 +26,10 @@ import { displaySync } from '@kit.ArkGraphics2D';
  */
 export class ReaderFlipAnimator {
   private sync: displaySync.DisplaySync | null = null;
+  /** 定时器帧源（displaySync 不可用时的退化路径，见 `start`）。 */
+  private timerId: number = -1;
+  /** 定时器帧间隔：约 60Hz。 */
+  private static readonly TIMER_FRAME_MS: number = 16;
   private running: boolean = false;
   private startNano: number = 0;
   private durationMs: number = 1;
@@ -65,21 +77,25 @@ export class ReaderFlipAnimator {
     this.onDone = onDone;
     this.startNano = 0;
     this.running = true;
-    if (this.sync !== null) {
+    if (this.sync !== null || this.timerId >= 0) {
       return;
     }
-    try {
-      const sync: displaySync.DisplaySync = displaySync.create();
-      sync.setExpectedFrameRateRange(rate);
-      sync.on('frame', this.frameHandler);
-      sync.start();
-      this.sync = sync;
-    } catch (error) {
-      // 拿不到帧源时不能把翻页卡住：直接把终值给出去，视觉上退化成瞬切
-      this.running = false;
-      this.apply(this.to);
-      this.onDone();
+    if (!displaySyncUnavailable) {
+      try {
+        const sync: displaySync.DisplaySync = displaySync.create();
+        sync.setExpectedFrameRateRange(rate);
+        sync.on('frame', this.frameHandler);
+        sync.start();
+        this.sync = sync;
+        return;
+      } catch (error) {
+        displaySyncUnavailable = true;
+      }
     }
+    // 退化路径：定时器帧源，动画照旧逐帧推进（本类每帧显式赋值，不依赖系统帧回调）
+    this.timerId = setInterval(() => {
+      this.step(Date.now() * 1000000);
+    }, ReaderFlipAnimator.TIMER_FRAME_MS);
   }
 
   /** 立即中止（手势被打断、组件销毁）：不触发结束回调。 */
@@ -90,15 +106,18 @@ export class ReaderFlipAnimator {
 
   private release(): void {
     const sync: displaySync.DisplaySync | null = this.sync;
-    if (sync === null) {
-      return;
+    if (sync !== null) {
+      this.sync = null;
+      try {
+        sync.stop();
+        sync.off('frame', this.frameHandler);
+      } catch (error) {
+        // 释放失败不影响交互，下次动画会重建
+      }
     }
-    this.sync = null;
-    try {
-      sync.stop();
-      sync.off('frame', this.frameHandler);
-    } catch (error) {
-      // 释放失败不影响交互，下次动画会重建
+    if (this.timerId >= 0) {
+      clearInterval(this.timerId);
+      this.timerId = -1;
     }
   }
 

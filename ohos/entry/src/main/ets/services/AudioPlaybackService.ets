@@ -1,22 +1,17 @@
 import { media } from '@kit.MediaKit';
-import { avSession } from '@kit.AVSessionKit';
-import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
-import { common, Want, WantAgent, wantAgent } from '@kit.AbilityKit';
+import { common, Want } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
-import { image } from '@kit.ImageKit';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AudioFileInfo, AudioInfoResponse } from '../common/ApiTypes';
 import { TalebookApi } from './TalebookApi';
 import { TalebookService } from './TalebookService';
 import { CoverCache } from '../utils/CoverCache';
+import { AudioPlatformOhos } from './AudioPlatformOhos';
+import { AudioPlatformAndroid } from './AudioPlatformAndroid';
+import { PlatformTarget } from '../common/PlatformTarget';
 
 const TAG: string = 'AudioPlayback';
-/** 播控中心会话标识：全应用只保留一个音频会话 */
-const SESSION_TAG: string = 'mybooks_audiobook';
-/** wantAgent 请求码：长时任务通知与播控中心卡片各用一个 */
-const REQUEST_CODE_TASK: number = 0x1010;
-const REQUEST_CODE_LAUNCH: number = 0x1011;
 /** 进度上报节流：1s 一次，避免高频 IPC */
 const POSITION_SYNC_MS: number = 1000;
 /** 页面刷新节流：约 4fps，避免整页高频重建 */
@@ -122,16 +117,28 @@ function emptyAudioState(): AudioPlaybackState {
  */
 export class AudioPlaybackService {
   private static readonly INSTANCE: AudioPlaybackService = new AudioPlaybackService();
+
+  /**
+   * 按目标平台挑选平台层实现。
+   *
+   * ArkUI-X 的 Android 端没有 AVSession / 后台长时任务，落到降级实现
+   * （前台播放可用，退后台不保活）；鸿蒙端用完整实现。
+   */
+  private static createPlatform(): AudioPlatformOhos | AudioPlatformAndroid {
+    return PlatformTarget.isAndroid() ? AudioPlatformAndroid.getInstance() : AudioPlatformOhos.getInstance();
+  }
+
   private context: common.UIAbilityContext | null = null;
   private avPlayer: media.AVPlayer | null = null;
-  private session: avSession.AVSession | null = null;
-  private taskRunning: boolean = false;
+  /**
+   * 平台能力委托（AVSession / 后台长时任务 / 封面解码）。
+   * 两个实现的方法签名一致，主服务因此不含任何鸿蒙专属 API。
+   */
+  private platform: AudioPlatformOhos | AudioPlatformAndroid = AudioPlaybackService.createPlatform();
   private audioDir: string = '';
   private switching: boolean = false;
   /** 当前播放文件保持打开的 fd（AVPlayer 通过 fdSrc 播放本地文件）。 */
   private localFd: number = -1;
-  private coverPixel: image.PixelMap | null = null;
-  private coverSource: string = '';
   private finished: boolean = false;
   private lastNotifyAt: number = 0;
   private lastPositionSyncAt: number = 0;
@@ -258,8 +265,8 @@ export class AudioPlaybackService {
       } catch (_error) {
       }
     }
-    void this.stopBackgroundTask();
-    void this.destroySession();
+    void this.platform.stopBackgroundTask(this.context ?? null);
+    void this.platform.destroySession();
   }
 
   private async loadTrack(index: number): Promise<void> {
@@ -291,8 +298,14 @@ export class AudioPlaybackService {
       const opened = fs.openSync(path, fs.OpenMode.READ_ONLY);
       this.localFd = opened.fd;
       this.avPlayer.fdSrc = { fd: opened.fd };
-      await this.ensureSession();
-      await this.syncMetadata();
+      const context = this.context;
+      if (context === null) {
+        return;
+      }
+      await this.platform.ensureSession(context, this.state, this.state.bookCover,
+        () => this.play(), () => this.pause(), () => this.next(), () => this.previous(),
+        (posMs: number) => this.seekToMs(posMs));
+      await this.platform.syncMetadata(this.state, this.state.bookCover);
       this.cleanupDistantAudioFiles();
     } catch (error) {
       this.state.isPlaying = false;
@@ -317,14 +330,14 @@ export class AudioPlaybackService {
         this.state.trackLoading = false;
         this.finished = false;
         this.notify(true);
-        void this.startBackgroundTask();
-        void this.syncPlaybackState();
+        void this.platform.startBackgroundTask(this.context ?? null, this.state);
+        void this.platform.syncPlaybackState(this.state, false);
       } else if (state === 'paused') {
         this.state.isPlaying = false;
         this.state.trackLoading = false;
         this.notify(true);
-        void this.stopBackgroundTask();
-        void this.syncPlaybackState();
+        void this.platform.stopBackgroundTask(this.context ?? null);
+        void this.platform.syncPlaybackState(this.state, false);
       } else if (state === 'completed') {
         this.state.isPlaying = false;
         void this.onTrackCompleted();
@@ -332,14 +345,14 @@ export class AudioPlaybackService {
         this.state.isPlaying = false;
         this.state.trackLoading = false;
         this.notify(true);
-        void this.stopBackgroundTask();
-        void this.syncPlaybackState();
+        void this.platform.stopBackgroundTask(this.context ?? null);
+        void this.platform.syncPlaybackState(this.state, false);
       } else if (state === 'error') {
         this.state.isPlaying = false;
         this.state.trackLoading = false;
         this.notify(true);
-        void this.stopBackgroundTask();
-        void this.syncPlaybackState();
+        void this.platform.stopBackgroundTask(this.context ?? null);
+        void this.platform.syncPlaybackState(this.state, false);
       }
     });
     player.on('timeUpdate', (time: number) => {
@@ -348,14 +361,14 @@ export class AudioPlaybackService {
       const now = Date.now();
       if (now - this.lastPositionSyncAt >= POSITION_SYNC_MS) {
         this.lastPositionSyncAt = now;
-        void this.syncPlaybackState();
+        void this.platform.syncPlaybackState(this.state, false);
       }
     });
     player.on('durationUpdate', (duration: number) => {
       this.state.durationMs = duration;
       this.notify(true);
-      void this.syncMetadata();
-      void this.syncPlaybackState();
+      void this.platform.syncMetadata(this.state, '');
+      void this.platform.syncPlaybackState(this.state, false);
     });
     player.on('error', (err: BusinessError) => {
       this.state.isPlaying = false;
@@ -373,18 +386,8 @@ export class AudioPlaybackService {
     this.finished = true;
     this.state.currentTimeMs = 0;
     this.notify(true);
-    await this.stopBackgroundTask();
-    const session = this.session;
-    if (session !== null) {
-      try {
-        await session.setAVPlaybackState({
-          state: avSession.PlaybackState.PLAYBACK_STATE_COMPLETED,
-          speed: this.state.speed,
-          position: { elapsedTime: 0, updateTime: Date.now() },
-        });
-      } catch (_error) {
-      }
-    }
+    await this.platform.stopBackgroundTask(this.context ?? null);
+    await this.platform.syncPlaybackState(this.state, true);
   }
 
   play(): void {
@@ -445,7 +448,7 @@ export class AudioPlaybackService {
     player.seek(target);
     this.state.currentTimeMs = target;
     this.notify(true);
-    void this.syncPlaybackState();
+    void this.platform.syncPlaybackState(this.state, false);
   }
 
   seekToPercent(percent: number): void {
@@ -462,7 +465,7 @@ export class AudioPlaybackService {
       player.setSpeed(speed);
     }
     this.notify(true);
-    void this.syncPlaybackState();
+    void this.platform.syncPlaybackState(this.state, false);
   }
 
   /** 播控中心「停止」：停播并回收会话，卡片随之消失。 */
@@ -478,8 +481,8 @@ export class AudioPlaybackService {
       }
     }
     this.notify(true);
-    void this.stopBackgroundTask();
-    void this.destroySession();
+    void this.platform.stopBackgroundTask(this.context ?? null);
+    void this.platform.destroySession();
   }
 
   /** Ability 销毁时彻底释放：播放器、fd、会话、长时任务。 */
@@ -495,293 +498,9 @@ export class AudioPlaybackService {
       }
     }
     this.closeLocalFd();
-    this.releaseCoverPixel();
-    void this.stopBackgroundTask();
-    void this.destroySession();
-  }
-
-  // ---------------- 系统播控中心（AVSession） ----------------
-
-  private async ensureSession(): Promise<void> {
-    if (this.session !== null) {
-      return;
-    }
-    const context = this.context;
-    if (context === null) {
-      return;
-    }
-    try {
-      const session = await avSession.createAVSession(context, SESSION_TAG, 'audio');
-      this.bindRemoteCommands(session);
-      const launchAgent = await this.buildWantAgent(REQUEST_CODE_LAUNCH, true);
-      if (launchAgent !== null) {
-        await session.setLaunchAbility(launchAgent);
-      }
-      await session.activate();
-      this.session = session;
-    } catch (error) {
-      hilog.error(0x0000, TAG, `createAVSession failed: ${error}`);
-    }
-  }
-
-  /** 播控中心/耳机/锁屏发来的控制命令，全部转成播放器动作；动作结果再回写状态。 */
-  private bindRemoteCommands(session: avSession.AVSession): void {
-    session.on('play', () => {
-      this.play();
-    });
-    session.on('pause', () => {
-      this.pause();
-    });
-    session.on('stop', () => {
-      this.stop();
-    });
-    session.on('playNext', () => {
-      this.next();
-    });
-    session.on('playPrevious', () => {
-      this.previous();
-    });
-    session.on('seek', (time: number) => {
-      this.seekToMs(time);
-    });
-    session.on('setSpeed', (speed: number) => {
-      this.setSpeed(speed);
-    });
-  }
-
-  private async destroySession(): Promise<void> {
-    const session = this.session;
-    this.session = null;
-    if (session === null) {
-      return;
-    }
-    try {
-      await session.deactivate();
-      await session.destroy();
-    } catch (error) {
-      hilog.warn(0x0000, TAG, `destroy session failed: ${error}`);
-    }
-  }
-
-  /** 元数据：书名 + 章节名 + 作者 + 封面，供播控中心卡片展示。 */
-  private async syncMetadata(): Promise<void> {
-    const session = this.session;
-    if (session === null) {
-      return;
-    }
-    const chapter = this.chapterName();
-    const metadata: avSession.AVMetadata = {
-      assetId: `${this.state.bookId}-${this.state.currentIndex}`,
-      title: this.state.bookTitle.length > 0 ? this.state.bookTitle : '有声书',
-      subtitle: chapter,
-      artist: this.state.bookAuthor,
-      album: this.state.bookTitle,
-      duration: this.state.durationMs,
-    };
-    const pixel = await this.coverPixelMap();
-    if (pixel !== null) {
-      metadata.mediaImage = pixel;
-    }
-    try {
-      await session.setAVMetadata(metadata);
-    } catch (error) {
-      hilog.error(0x0000, TAG, `setAVMetadata failed: ${error}`);
-    }
-  }
-
-  private async syncPlaybackState(): Promise<void> {
-    const session = this.session;
-    if (session === null) {
-      return;
-    }
-    const playbackState: avSession.AVPlaybackState = {
-      state: this.playbackStateOf(),
-      speed: this.state.speed,
-      position: { elapsedTime: this.state.currentTimeMs, updateTime: Date.now() },
-      duration: this.state.durationMs,
-    };
-    try {
-      await session.setAVPlaybackState(playbackState);
-    } catch (error) {
-      hilog.warn(0x0000, TAG, `setAVPlaybackState failed: ${error}`);
-    }
-  }
-
-  private playbackStateOf(): avSession.PlaybackState {
-    if (this.state.isPlaying) {
-      return avSession.PlaybackState.PLAYBACK_STATE_PLAY;
-    }
-    if (this.state.trackLoading) {
-      return avSession.PlaybackState.PLAYBACK_STATE_PREPARE;
-    }
-    return avSession.PlaybackState.PLAYBACK_STATE_PAUSE;
-  }
-
-  /** 封面转 PixelMap：播控中心服务读不到应用沙箱路径，只能给位图。 */
-  private async coverPixelMap(): Promise<image.PixelMap | null> {
-    const context = this.context;
-    const url = this.state.bookCover;
-    if (context === null || url.length === 0) {
-      return null;
-    }
-    if (this.coverPixel !== null && this.coverSource === url) {
-      return this.coverPixel;
-    }
-    try {
-      CoverCache.ensureDir(context);
-      const resolved = TalebookService.resolveCoverUrl(url);
-      const path = CoverCache.pathFor(context, resolved);
-      if (!this.hasLocalFile(path)) {
-        const envelope = await TalebookService.fetchImageCacheAsync(resolved, path);
-        if (envelope.status < 200 || envelope.status >= 300) {
-          return null;
-        }
-      }
-      const source = image.createImageSource(path);
-      if (source === null) {
-        return null;
-      }
-      const pixel = await source.createPixelMap();
-      await source.release();
-      this.releaseCoverPixel();
-      this.coverPixel = pixel;
-      this.coverSource = url;
-      return pixel;
-    } catch (error) {
-      hilog.warn(0x0000, TAG, `cover pixel map failed: ${error}`);
-      return null;
-    }
-  }
-
-  private releaseCoverPixel(): void {
-    const pixel = this.coverPixel;
-    this.coverPixel = null;
-    this.coverSource = '';
-    if (pixel !== null) {
-      try {
-        pixel.release().catch((error: BusinessError) => {
-          hilog.warn(0x0000, TAG, `release cover pixel failed: ${error}`);
-        });
-      } catch (_error) {
-      }
-    }
-  }
-
-  // ---------------- 后台长时任务 ----------------
-
-  /** 申请 AUDIO_PLAYBACK 长时任务：系统要求必须先有 AVSession 且音频确实在播，否则被拒。 */
-  private async startBackgroundTask(retry: boolean = true): Promise<void> {
-    if (this.taskRunning) {
-      return;
-    }
-    const context = this.context;
-    if (context === null) {
-      return;
-    }
-    await this.ensureSession();
-    const agent = await this.buildWantAgent(REQUEST_CODE_TASK, false);
-    if (agent === null) {
-      return;
-    }
-    try {
-      await this.requestContinuousTask(context, agent);
-      this.taskRunning = true;
-      hilog.info(0x0000, TAG, 'background task started');
-    } catch (error) {
-      const err = error as BusinessError;
-      hilog.error(0x0000, TAG, `startBackgroundRunning failed: code=${err.code} msg=${err.message}`);
-      if (retry && this.state.isPlaying) {
-        // 首次失败多为"音频尚未真正起播"，稍后重试一次
-        setTimeout(() => {
-          if (this.state.isPlaying && !this.taskRunning) {
-            void this.startBackgroundTask(false);
-          }
-        }, TASK_RETRY_DELAY_MS);
-      }
-    }
-  }
-
-  /**
-   * 申请 AUDIO_PLAYBACK 长时任务。API 21 起长时任务的主类型与子类型必须成对匹配：
-   * 已接入 AVSession 的音视频播放要用 MODE_AV_PLAYBACK_AND_RECORD + SUBMODE_AVSESSION_AUDIO_PLAYBACK
-   * （该子类型由 AVSession 出通知，后台任务模块不再另发通知）；直接用旧的
-   * BackgroundMode.AUDIO_PLAYBACK 会被判为 "The bgMode is invalid"（实测 9800005）。
-   * API 22 以下没有这套枚举，回退旧接口。
-   */
-  private async requestContinuousTask(context: common.UIAbilityContext, agent: WantAgent): Promise<void> {
-    if (deviceInfo.sdkApiVersion < 22) {
-      await backgroundTaskManager.startBackgroundRunning(context,
-        backgroundTaskManager.BackgroundMode.AUDIO_PLAYBACK, agent);
-      return;
-    }
-    const modes: backgroundTaskManager.BackgroundTaskMode[] = [
-      backgroundTaskManager.BackgroundTaskMode.MODE_AV_PLAYBACK_AND_RECORD,
-    ];
-    const subModes: backgroundTaskManager.BackgroundTaskSubmode[] = [
-      backgroundTaskManager.BackgroundTaskSubmode.SUBMODE_AVSESSION_AUDIO_PLAYBACK,
-    ];
-    const request = new backgroundTaskManager.ContinuousTaskRequest();
-    request.backgroundTaskModes = modes;
-    request.backgroundTaskSubmodes = subModes;
-    request.wantAgent = agent;
-    await backgroundTaskManager.startBackgroundRunning(context, request);
-  }
-
-  private async stopBackgroundTask(): Promise<void> {
-    if (!this.taskRunning) {
-      return;
-    }
-    this.taskRunning = false;
-    const context = this.context;
-    if (context === null) {
-      return;
-    }
-    try {
-      await backgroundTaskManager.stopBackgroundRunning(context);
-    } catch (error) {
-      hilog.warn(0x0000, TAG, `stopBackgroundRunning failed: ${error}`);
-    }
-  }
-
-  /**
-   * 构建 WantAgent：长时任务通知点击回应用；播控中心卡片点击回播放页（带书籍参数）。
-   * @throws 内部调用可能抛出异常，由调用方处理
-   */
-  private async buildWantAgent(requestCode: number, deepLink: boolean): Promise<WantAgent | null> {
-    const context = this.context;
-    if (context === null) {
-      return null;
-    }
-    const want: Want = deepLink ? {
-      bundleName: context.abilityInfo.bundleName,
-      abilityName: context.abilityInfo.name,
-      parameters: this.launchParameters(),
-    } : {
-      bundleName: context.abilityInfo.bundleName,
-      abilityName: context.abilityInfo.name,
-    };
-    try {
-      const info: wantAgent.WantAgentInfo = {
-        wants: [want],
-        actionType: wantAgent.OperationType.START_ABILITY,
-        requestCode: requestCode,
-        actionFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG],
-      };
-      return await wantAgent.getWantAgent(info);
-    } catch (error) {
-      hilog.error(0x0000, TAG, `getWantAgent failed: ${error}`);
-      return null;
-    }
-  }
-
-  private launchParameters(): Record<string, Object> {
-    const params: Record<string, Object> = {};
-    params[WANT_BOOK_ID] = this.state.bookId;
-    params[WANT_INDEX] = this.state.currentIndex;
-    params[WANT_TITLE] = this.state.bookTitle;
-    params[WANT_AUTHOR] = this.state.bookAuthor;
-    params[WANT_COVER] = this.state.bookCover;
-    return params;
+    this.platform.releaseCoverPixel();
+    void this.platform.stopBackgroundTask(this.context ?? null);
+    void this.platform.destroySession();
   }
 
   // ---------------- 本地文件与缓存 ----------------

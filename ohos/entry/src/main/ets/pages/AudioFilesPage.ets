@@ -11,6 +11,7 @@ import {
   AudioPurchaseResponse, AudioCollectionResponse
 } from '../common/ApiTypes';
 import { TalebookService } from '../services/TalebookService';
+import { AppRouter } from '../utils/AppRouter';
 
 interface VoiceOption {
   voiceName: string;
@@ -68,7 +69,7 @@ struct AudioFilesPage {
   }
 
   aboutToAppear(): void {
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object>;
     this.bookId = Number(params['bookId'] ?? 0);
     this.bookTitle = String(params['title'] ?? '');
     this.bookAuthor = String(params['author'] ?? '');
@@ -380,7 +381,7 @@ struct AudioFilesPage {
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private onFileTap(file: AudioFileInfo, index: number): void {
-    this.getUIContext().getRouter().pushUrl({
+    AppRouter.pushUrl(this.getUIContext(), {
       url: 'pages/AudioPlayerPage',
       params: {
         bookId: this.bookId,

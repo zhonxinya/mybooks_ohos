@@ -8,6 +8,7 @@ import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { BookItem as ApiBookItem } from '../services/BookModels';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
+import { AppRouter } from '../utils/AppRouter';
 
 interface BookItem {
   id: number;
@@ -64,7 +65,7 @@ struct ReadingBooksPage {
 
   aboutToAppear(): void {
     this.isListMode = BookViewMode.isListMode();
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object> | null;
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object> | null;
     this.activeTab = params?.['tab'] === 'favorites' ? 1 : 0;
     void this.loadBooks(true);
   }
@@ -370,7 +371,7 @@ struct ReadingBooksPage {
           items: this.catalogItems,
           isListMode: this.isListMode,
           loadingMore: this.loadingMore,
-          onItemTap: (item: BookListItemData) => this.getUIContext().getRouter().pushUrl({
+          onItemTap: (item: BookListItemData) => AppRouter.pushUrl(this.getUIContext(), {
             url: 'pages/BookDetailPage', params: { bookId: Number(item.id) }
           }),
           onLoadMore: () => this.loadMore(),

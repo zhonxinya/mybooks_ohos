@@ -2,6 +2,7 @@ import { PageScaffold, PrimaryButton, SecondaryButton } from '../components';
 import { SoNovelBookPayload } from '../services/TalebookService';
 import { DownloadTaskService } from '../services/DownloadTaskService';
 import { SoNovelMerge } from '../utils/SoNovelMerge';
+import { AppRouter } from '../utils/AppRouter';
 
 @Entry
 @Component
@@ -23,7 +24,7 @@ struct SoNovelBookDetailPage {
   };
 
   aboutToAppear(): void {
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object>;
     this.payload = {
       sourceId: Number(params['sourceId'] ?? 0),
       sourceName: String(params['sourceName'] ?? ''),
@@ -73,7 +74,7 @@ struct SoNovelBookDetailPage {
       } else {
         this.getUIContext().getPromptAction().showToast({ message: '已加入下载队列，由服务器下载' });
       }
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/DownloadManagerPage' });
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/DownloadManagerPage' });
     } finally {
       this.enqueueing = false;
     }
@@ -157,7 +158,7 @@ struct SoNovelBookDetailPage {
 
       SecondaryButton({
         label: '查看下载管理',
-        onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/DownloadManagerPage' }),
+        onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/DownloadManagerPage' }),
       });
     }
     .padding($r('app.float.page_padding'));

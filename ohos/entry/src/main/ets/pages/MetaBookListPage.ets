@@ -3,6 +3,7 @@ import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, MetaNameCount } from '../services/TalebookApi';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationConstants } from '../utils/PaginationHelper';
+import { AppRouter } from '../utils/AppRouter';
 
 interface MetaItem {
   name: string;
@@ -268,12 +269,12 @@ struct MetaBookListPage {
       return;
     }
     if (this.metaType === 'category') {
-      this.getUIContext().getRouter().pushUrl({
+      AppRouter.pushUrl(this.getUIContext(), {
         url: 'pages/BookListPage',
         params: { type: 'category', metaName: name },
       });
     } else {
-      this.getUIContext().getRouter().pushUrl({
+      AppRouter.pushUrl(this.getUIContext(), {
         url: 'pages/BookListPage',
         params: { type: 'meta', metaType: this.metaType, metaName: name },
       });
@@ -520,7 +521,7 @@ struct MetaBookListPage {
         EmptyState({
           message: this.errorMessage,
           actionLabel: this.errorMessage.includes('配置') ? '去配置' : '',
-          onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
+          onAction: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookConfigPage' }),
         });
       } else {
         // 卡片左右留白放在外层 Column 的 padding 上：

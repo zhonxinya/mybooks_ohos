@@ -1,4 +1,3 @@
-import { util } from '@kit.ArkTS';
 import { BookFile } from './BookFile';
 import { TextCodec } from './TextCodec';
 
@@ -65,18 +64,66 @@ export class TxtParser {
     return text.split('\n');
   }
 
+  /**
+   * UTF-8 编码（自带实现）。
+   *
+   * 不用 `util.TextEncoder`：实测在 ArkUI-X 的 Android 端，taskpool 子线程里
+   * `encodeInto()` 返回 `undefined`（本任务正是跑在 taskpool 里），
+   * 会在取 `byteLength` 时抛 `Cannot read property byteLength of undefined` → 开书失败。
+   */
+  private static utf8Encode(input: string): Uint8Array {
+    let len: number = 0;
+    for (let i = 0; i < input.length; i++) {
+      const c: number = input.charCodeAt(i);
+      if (c < 0x80) {
+        len += 1;
+      } else if (c < 0x800) {
+        len += 2;
+      } else if (c >= 0xD800 && c <= 0xDBFF) {
+        len += 4;
+        i++;
+      } else {
+        len += 3;
+      }
+    }
+    const out: Uint8Array = new Uint8Array(len);
+    let p: number = 0;
+    for (let i = 0; i < input.length; i++) {
+      const c: number = input.charCodeAt(i);
+      if (c < 0x80) {
+        out[p] = c;
+        p += 1;
+      } else if (c < 0x800) {
+        out[p] = 0xC0 | (c >> 6);
+        out[p + 1] = 0x80 | (c & 0x3F);
+        p += 2;
+      } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < input.length) {
+        const lo: number = input.charCodeAt(i + 1);
+        const cp: number = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00);
+        i++;
+        out[p] = 0xF0 | (cp >> 18);
+        out[p + 1] = 0x80 | ((cp >> 12) & 0x3F);
+        out[p + 2] = 0x80 | ((cp >> 6) & 0x3F);
+        out[p + 3] = 0x80 | (cp & 0x3F);
+        p += 4;
+      } else {
+        out[p] = 0xE0 | (c >> 12);
+        out[p + 1] = 0x80 | ((c >> 6) & 0x3F);
+        out[p + 2] = 0x80 | (c & 0x3F);
+        p += 3;
+      }
+    }
+    return out;
+  }
+
   /** 各章按出现顺序紧挨着写入，区间互不重叠，因此章与章之间不需要分隔符。 */
   private static writeCache(cachePath: string, sections: TxtSectionData[]): TxtChapterSpan[] {
-    const encoder: util.TextEncoder = new util.TextEncoder();
     const parts: Uint8Array[] = [];
     const spans: TxtChapterSpan[] = [];
     let cursor: number = 0;
     for (let i = 0; i < sections.length; i++) {
       const payload: string = sections[i].paragraphs.join('\n');
-      const encoded: Uint8Array = encoder.encodeInto(payload);
-      // 立刻拷贝：编码器可能复用内部缓冲，循环里直接留着上一次的视图会串章。
-      const bytes: Uint8Array = new Uint8Array(encoded.byteLength);
-      bytes.set(encoded);
+      const bytes: Uint8Array = TxtParser.utf8Encode(payload);
       spans.push({
         title: sections[i].title,
         byteStart: cursor,

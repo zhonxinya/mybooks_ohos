@@ -10,6 +10,7 @@ import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { AccountManager } from '../services/AccountManager';
 import { AccountRecord } from '../models/AccountModels';
 import { DownloadTaskService } from '../services/DownloadTaskService';
+import { AppRouter } from '../utils/AppRouter';
 
 /** 折叠分组键：默认全部折叠，仅展开态渲染子项。 */
 const SECTION_APPEARANCE: string = 'appearance';
@@ -279,7 +280,7 @@ export struct SettingsPage {
    * 避免默认折叠后无法直接看到目标内容。未传参时保持“全部折叠”。
    */
   private applySectionParam(): void {
-    const params: Record<string, Object> | null = this.getUIContext().getRouter().getParams() as Record<string, Object> | null;
+    const params: Record<string, Object> | null = AppRouter.getParams(this.getUIContext()) as Record<string, Object> | null;
     if (params === null || params === undefined) {
       return;
     }
@@ -408,7 +409,7 @@ export struct SettingsPage {
                   title: '个人中心',
                   subtitle: '收藏、消息与账号',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/ProfilePage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/ProfilePage' }),
                 });
                 Divider().color($r('app.color.divider')).strokeWidth(0.5);
               }
@@ -416,7 +417,7 @@ export struct SettingsPage {
                 title: '通知',
                 badgeText: this.unreadBadge(),
                 showChevron: true,
-                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/NotificationPage' }),
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/NotificationPage' }),
               });
               if (this.switchCandidates().length > 1) {
                 Divider().color($r('app.color.divider')).strokeWidth(0.5);
@@ -447,7 +448,7 @@ export struct SettingsPage {
                 title: '账号与服务器',
                 subtitle: this.accountSummary(),
                 showChevron: true,
-                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookConfigPage' }),
               });
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
@@ -455,7 +456,7 @@ export struct SettingsPage {
                 subtitle: '服务端与 SoNovel 统一下载队列',
                 badgeText: this.taskBadge(),
                 showChevron: true,
-                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/DownloadManagerPage' }),
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/DownloadManagerPage' }),
               });
               if (ServerRegistry.supports(ServerFeature.NETWORK_LIBRARY)) {
                 Divider().color($r('app.color.divider')).strokeWidth(0.5);
@@ -463,7 +464,7 @@ export struct SettingsPage {
                   title: '网络书库',
                   subtitle: '按书源搜索、阅读并保存到本地书库',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/NetworkLibraryPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/NetworkLibraryPage' }),
                 });
               }
             }
@@ -520,7 +521,7 @@ export struct SettingsPage {
               SettingCell({
                 title: '元数据书籍',
                 showChevron: true,
-                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/MetaBookListPage' }),
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/MetaBookListPage' }),
               });
               if (ServerRegistry.supports(ServerFeature.AUTHOR_META_EDIT)) {
                 Divider().color($r('app.color.divider')).strokeWidth(0.5);
@@ -528,7 +529,7 @@ export struct SettingsPage {
                   title: '作者元数据',
                   subtitle: '作者简介/头像与作者、出版商书籍刷新',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AuthorMetaPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AuthorMetaPage' }),
                 });
               }
               if (ServerRegistry.supports(ServerFeature.ADMIN_BATCH_ADD)) {
@@ -537,7 +538,7 @@ export struct SettingsPage {
                   title: '批量添加实体书',
                   subtitle: 'CSV 导入实体书并轮询进度',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminBatchAddPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminBatchAddPage' }),
                 });
               }
               if (ServerRegistry.supports(ServerFeature.ADMIN_AUDIO_IMPORT)) {
@@ -546,28 +547,28 @@ export struct SettingsPage {
                   title: '有声书导入',
                   subtitle: '扫描音频目录入库、测试音频服务',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminAudioImportPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminAudioImportPage' }),
                 });
               }
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
                 title: '管理员书籍',
                 showChevron: true,
-                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminBookListPage' }),
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminBookListPage' }),
               });
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
                 title: '用户管理',
                 subtitle: '账号、权限与配额管理',
                 showChevron: true,
-                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminUsersPage' }),
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminUsersPage' }),
               });
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
                 title: '回收站管理',
                 subtitle: '恢复或彻底删除书籍',
                 showChevron: true,
-                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminTrashPage' }),
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminTrashPage' }),
               });
               if (ServerRegistry.supports(ServerFeature.ADMIN_BOOK_REVIEWS)) {
                 Divider().color($r('app.color.divider')).strokeWidth(0.5);
@@ -575,7 +576,7 @@ export struct SettingsPage {
                   title: '评论审核',
                   subtitle: '通过、屏蔽用户书评',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminBookReviewsPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminBookReviewsPage' }),
                 });
               }
               if (ServerRegistry.supports(ServerFeature.ADMIN_IMPORT)) {
@@ -584,7 +585,7 @@ export struct SettingsPage {
                   title: '导入管理',
                   subtitle: '扫描导入、状态轮询与记录维护',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminImportsPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminImportsPage' }),
                 });
               }
               if (ServerRegistry.supports(ServerFeature.BOOK_SOURCES)) {
@@ -593,7 +594,7 @@ export struct SettingsPage {
                   title: '书源管理',
                   subtitle: '书源导入导出、启停、测试与体检',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/BookSourceManagePage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookSourceManagePage' }),
                 });
               }
               if (ServerRegistry.supports(ServerFeature.ADMIN_SCAN)) {
@@ -602,7 +603,7 @@ export struct SettingsPage {
                   title: '扫描与导入',
                   subtitle: '扫描记录、目录监控与批量导入',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminScanPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminScanPage' }),
                 });
               }
               if (ServerRegistry.supports(ServerFeature.ADMIN_OPDS)) {
@@ -611,7 +612,7 @@ export struct SettingsPage {
                   title: 'OPDS 源',
                   subtitle: '浏览目录、导入与失败重试',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminOpdsPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminOpdsPage' }),
                 });
               }
               if (ServerRegistry.supports(ServerFeature.ADMIN_PLUGINS)) {
@@ -620,7 +621,7 @@ export struct SettingsPage {
                   title: '插件中心',
                   subtitle: '插件启停、连接、能力测试与全局设置',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminPluginsPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminPluginsPage' }),
                 });
               }
               if (ServerRegistry.supports(ServerFeature.ADMIN_MAINTENANCE)) {
@@ -629,7 +630,7 @@ export struct SettingsPage {
                   title: '服务端维护',
                   subtitle: '更新、SSL、数据库与音频统计',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminMaintenancePage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminMaintenancePage' }),
                 });
               }
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
@@ -637,7 +638,7 @@ export struct SettingsPage {
                 title: '系统日志',
                 subtitle: '查看服务端运行日志',
                 showChevron: true,
-                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminSyslogPage' }),
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminSyslogPage' }),
               });
               if (ServerRegistry.supports(ServerFeature.ADMIN_RESOURCES)) {
                 Divider().color($r('app.color.divider')).strokeWidth(0.5);
@@ -645,7 +646,7 @@ export struct SettingsPage {
                   title: '资源导航',
                   subtitle: '站长推荐的外部资源',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminResourcesPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminResourcesPage' }),
                 });
               }
               if (ServerRegistry.supports(ServerFeature.ADMIN_TOOLBOX)) {
@@ -654,7 +655,7 @@ export struct SettingsPage {
                   title: '工具箱',
                   subtitle: '启停、卸载与商店安装',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminToolboxPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminToolboxPage' }),
                 });
               }
               if (ServerRegistry.supports(ServerFeature.ADMIN_MEMOS)) {
@@ -663,7 +664,7 @@ export struct SettingsPage {
                   title: '用户留言',
                   subtitle: '查看与处理用户反馈',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminMemosPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminMemosPage' }),
                 });
               }
               if (ServerRegistry.supports(ServerFeature.ADMIN_SETTINGS)) {
@@ -672,7 +673,7 @@ export struct SettingsPage {
                   title: '管理员设置',
                   subtitle: '站点、用户、邮件等服务端配置',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminSettingsPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminSettingsPage' }),
                 });
               }
               if (ServerRegistry.supports(ServerFeature.THEMES)) {
@@ -681,7 +682,7 @@ export struct SettingsPage {
                   title: '服务端主题',
                   subtitle: '选择服务端界面主题',
                   showChevron: true,
-                  onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/ThemesPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/ThemesPage' }),
                 });
               }
             }
@@ -710,26 +711,26 @@ export struct SettingsPage {
                   : '从 GitHub 获取最新发布版本与升级内容',
                 badgeText: this.updateAvailableVersion.length > 0 ? '有更新' : '',
                 showChevron: true,
-                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/UpdatePage' }),
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/UpdatePage' }),
               });
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
                 title: '用户协议',
                 showChevron: true,
-                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/UserAgreementPage' }),
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/UserAgreementPage' }),
               });
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
                 title: '隐私政策',
                 showChevron: true,
-                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/PrivacyPolicyPage' }),
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/PrivacyPolicyPage' }),
               });
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
                 title: '开源许可',
                 subtitle: '本应用及内置第三方组件的许可清单',
                 showChevron: true,
-                onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/OpenSourceLicensesPage' }),
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/OpenSourceLicensesPage' }),
               });
             }
             .width('100%')

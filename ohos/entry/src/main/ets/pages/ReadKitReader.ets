@@ -23,6 +23,7 @@ import {
 } from 'reader';
 import { ReaderTtsService, ReaderTtsProgress, ReaderTtsState, ReaderTtsVoice } from '../services/ReaderTtsService';
 import { HtmlTextUtil } from '../utils/HtmlTextUtil';
+import { AppRouter } from '../utils/AppRouter';
 
 interface ReadKitParams {
   filePath: string;
@@ -154,7 +155,7 @@ struct ReadKitReader {
     this.restoreResolvedFont();
     this.initTtsService();
     void this.enterImmersiveMode();
-    const params = this.getUIContext().getRouter().getParams() as ReadKitParams;
+    const params = AppRouter.getParams(this.getUIContext()) as ReadKitParams;
     ReadKitSession.beginSession(params.bookId ?? '', params.filePath);
     const parsed = this.parseLocationParam(
       params.location,
@@ -295,7 +296,7 @@ struct ReadKitReader {
     } catch (error) {
       hilog.warn(0x0000, TAG, 'exitImmersiveMode failed: %{public}s', error.message);
     }
-    this.getUIContext().getRouter().back();
+    AppRouter.back(this.getUIContext());
   }
 
   private onReadyChanged(): void {
@@ -1234,7 +1235,7 @@ struct ReadKitReader {
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private showFatalError(message: string): void {
     this.getUIContext().getPromptAction().showToast({ message: message });
-    this.getUIContext().getRouter().back();
+    AppRouter.back(this.getUIContext());
   }
 
   private async openCatalogItem(item: bookParser.CatalogItem): Promise<void> {

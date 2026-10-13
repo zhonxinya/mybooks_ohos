@@ -6,6 +6,14 @@ import { ReaderPalette } from '../model/ReaderPalette';
 const BATTERY_REFRESH_MS: number = 60000;
 
 /**
+ * 电量能力是否可用（模块级缓存，探测一次）。
+ * ArkUI-X 的 Android 端没有 `batteryinfo` 模块（SDK 中不存在该插件），
+ * 调用会抛 `Cannot read property batterySOC of undefined`；这里探测一次后不再轮询，
+ * 既避免每分钟刷异常日志，也让页脚干脆不渲染电量块。
+ */
+let batteryUnavailable: boolean = false;
+
+/**
  * 页脚电量指示：小电池图形 + 百分比。
  *
  * 自管轮询与 @State，避免父阅读器因电量刷新整树重建。
@@ -21,6 +29,9 @@ export struct ReaderBattery {
 
   aboutToAppear(): void {
     this.refresh();
+    if (batteryUnavailable) {
+      return;
+    }
     this.timerId = setInterval(() => {
       this.refresh();
     }, BATTERY_REFRESH_MS);
@@ -34,12 +45,21 @@ export struct ReaderBattery {
   }
 
   private refresh(): void {
+    if (batteryUnavailable) {
+      return;
+    }
     try {
       this.level = batteryInfo.batterySOC;
       this.charging = batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.ENABLE ||
         batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.FULL;
     } catch (_error) {
+      // 平台不支持电量查询（Android）：标记后停止轮询，页脚不显示电量
+      batteryUnavailable = true;
       this.level = -1;
+      if (this.timerId >= 0) {
+        clearInterval(this.timerId);
+        this.timerId = -1;
+      }
     }
   }
 

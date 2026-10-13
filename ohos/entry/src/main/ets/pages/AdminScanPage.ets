@@ -12,6 +12,7 @@ import {
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationHelper } from '../utils/PaginationHelper';
+import { AppRouter } from '../utils/AppRouter';
 
 const SCAN_PAGE_SIZE: number = 20;
 /** 轮询间隔与上限：约 3 分钟后自动停止，避免页面退出前的无界轮询。 */
@@ -1289,7 +1290,7 @@ struct AdminScanPage {
         if (ServerRegistry.supports(ServerFeature.ADMIN_OPDS)) {
           ChipButton({
             label: 'OPDS 导入',
-            onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminOpdsPage' }),
+            onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminOpdsPage' }),
           });
         }
         ChipButton({

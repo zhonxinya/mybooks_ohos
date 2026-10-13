@@ -14,6 +14,7 @@ import { ReadKitSession } from '../services/ReadKitSession';
 import { AppTheme } from '../theme/AppTheme';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { UpdateService } from '../services/UpdateService';
+import { PasswordStore } from '../services/PasswordStore';
 import { AudioPlaybackService, publishAudioLaunch } from '../services/AudioPlaybackService';
 
 const TAG: string = 'EntryAbility';
@@ -25,6 +26,9 @@ export default class EntryAbility extends UIAbility {
     publishAudioLaunch(want);
     WindowAbility.getInstance().initContext(this.context);
     TalebookService.init(this.context.filesDir);
+    // 凭据存储的 context 注入：Android 端底层存储靠它定位沙箱路径；
+    // 漏掉这一步会让密码读写静默失败（表现为「账号保存了但没存密码」）
+    PasswordStore.initContext(this.context);
     TalebookCoreService.ensureInitialized(this.context);
     TalebookService.applyLocalConfig();
     NotificationService.init();

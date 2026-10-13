@@ -13,6 +13,7 @@ import {
   NETWORK_AVAILABILITY_NO_PLUGINS, NETWORK_AVAILABILITY_NO_SOURCES,
 } from '../services/NetworkLibraryApi';
 import { PaginationHelper } from '../utils/PaginationHelper';
+import { AppRouter } from '../utils/AppRouter';
 
 /** 分组列表扁平行：书源标题或书目，供 LazyForEach 按需创建。 */
 interface GroupedListEntry {
@@ -600,7 +601,7 @@ struct NetworkLibraryPage {
     if (book === undefined) {
       return;
     }
-    this.getUIContext().getRouter().pushUrl({
+    AppRouter.pushUrl(this.getUIContext(), {
       url: 'pages/NetworkBookDetailPage',
       params: {
         sourceId: book.sourceId,
@@ -707,7 +708,7 @@ struct NetworkLibraryPage {
           .fontSize(14)
           .fontColor($r('app.color.brand_primary'))
           .padding({ left: 8, right: 16 })
-          .onClick(() => this.getUIContext().getRouter().pushUrl({ url: 'pages/BookSourceManagePage' }));
+          .onClick(() => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookSourceManagePage' }));
       }
     }
   }
@@ -812,7 +813,7 @@ struct NetworkLibraryPage {
               ? '去书源管理' : (this.progressText.length > 0 ? '重试' : ''),
             onAction: () => {
               if (this.sources.length === 0 && ServerRegistry.supports(ServerFeature.BOOK_SOURCES)) {
-                this.getUIContext().getRouter().pushUrl({ url: 'pages/BookSourceManagePage' });
+                AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookSourceManagePage' });
                 return;
               }
               this.startSearch(true);

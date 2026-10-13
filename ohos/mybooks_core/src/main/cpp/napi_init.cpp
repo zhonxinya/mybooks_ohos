@@ -1,4 +1,5 @@
 #include "core_engine.h"
+#include "secure_crypto.h"
 #include "database.h"
 #include "http_client.h"
 
@@ -402,6 +403,50 @@ static napi_value SetSslVerify(napi_env env, napi_callback_info info) {
     return undefined;
 }
 
+/** 返回当前身份根目录，供 ArkTS 侧安全存储定位密钥文件。 */
+static napi_value IdentityDir(napi_env env, napi_callback_info info) {
+    (void)info;
+    return CreateString(env, mybooks::CoreEngine::instance().filesDir());
+}
+
+/**
+ * 加密：ArkTS 传入 `identityDir|plain`（用 | 分隔，明文可含任意字符）。
+ * 成功返回十六进制密文，失败返回空串。
+ */
+static napi_value SecureSeal(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 1) return CreateString(env, "");
+    std::string input = GetString(env, args[0]);
+    size_t sep = input.find('|');
+    if (sep == std::string::npos) return CreateString(env, "");
+    std::string sealed;
+    if (!mybooks::SecureCrypto::seal(input.substr(0, sep), input.substr(sep + 1), sealed)) {
+        return CreateString(env, "");
+    }
+    return CreateString(env, sealed);
+}
+
+/**
+ * 解密：ArkTS 传入 `identityDir|sealed`。
+ * 成功返回明文；格式非法、authTag 校验失败或密钥不匹配均返回空串（不返回部分明文）。
+ */
+static napi_value SecureOpen(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 1) return CreateString(env, "");
+    std::string input = GetString(env, args[0]);
+    size_t sep = input.find('|');
+    if (sep == std::string::npos) return CreateString(env, "");
+    std::string plain;
+    if (!mybooks::SecureCrypto::open(input.substr(0, sep), input.substr(sep + 1), plain)) {
+        return CreateString(env, "");
+    }
+    return CreateString(env, plain);
+}
+
 static napi_value SetHttpMetrics(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -507,6 +552,9 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setBaseUrl", nullptr, SetBaseUrl, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setSslVerify", nullptr, SetSslVerify, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setHttpMetrics", nullptr, SetHttpMetrics, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"identityDir", nullptr, IdentityDir, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"secureSeal", nullptr, SecureSeal, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"secureOpen", nullptr, SecureOpen, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"registerProgressCallback", nullptr, RegisterCallback, nullptr, nullptr, nullptr,
          napi_default, nullptr},
     };

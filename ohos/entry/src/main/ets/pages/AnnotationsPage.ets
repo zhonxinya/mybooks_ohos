@@ -10,6 +10,7 @@ import {
   ANNOTATION_TYPE_CHAPTER_COMMENT, annotationTypeLabel,
 } from '../services/AnnotationApi';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
+import { AppRouter } from '../utils/AppRouter';
 
 const TYPE_ALL: number = 0;
 
@@ -176,7 +177,7 @@ struct AnnotationsPage {
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openBook(item: AnnotationItem): void {
-    this.getUIContext().getRouter().pushUrl({
+    AppRouter.pushUrl(this.getUIContext(), {
       url: 'pages/BookAnnotationsPage',
       params: { bookId: item.bookId },
     });

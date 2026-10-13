@@ -17,6 +17,7 @@ import {
 } from '../utils/BookSortMode';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { mapTalebookBook } from '../utils/BookMapper';
+import { AppRouter } from '../utils/AppRouter';
 
 /** 书架页底部面板类型。 */
 const SHEET_NONE: string = 'none';
@@ -277,7 +278,7 @@ export struct BookshelfPage {
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openAudioBook(item: BookListItemData): void {
-    this.getUIContext().getRouter().pushUrl({
+    AppRouter.pushUrl(this.getUIContext(), {
       url: 'pages/BookDetailPage',
       params: { bookId: Number(item.id) },
     });
@@ -340,7 +341,7 @@ export struct BookshelfPage {
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openDetail(record: DownloadRecord): void {
-    this.getUIContext().getRouter().pushUrl({
+    AppRouter.pushUrl(this.getUIContext(), {
       url: 'pages/BookDetailPage',
       params: {
         localOnly: true,
@@ -411,7 +412,7 @@ export struct BookshelfPage {
     }
     const remoteId = Number(record.bookId);
     if (remoteId > 0) {
-      this.getUIContext().getRouter().pushUrl({
+      AppRouter.pushUrl(this.getUIContext(), {
         url: 'pages/BookDetailPage',
         params: { bookId: remoteId },
       });
@@ -636,14 +637,14 @@ export struct BookshelfPage {
   toolbarRow() {
     Row({ space: 8 }) {
       Blank().layoutWeight(1);      this.iconToolButton($r('sys.symbol.magnifyingglass'), () => {
-        this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookBookSearchPage' });
+        AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookBookSearchPage' });
       });
       this.iconToolButton($r('sys.symbol.book'), () => {
-        this.getUIContext().getRouter().pushUrl({ url: 'pages/SoNovelSearchPage' });
+        AppRouter.pushUrl(this.getUIContext(), { url: 'pages/SoNovelSearchPage' });
       });
       this.iconToolButton($r('sys.symbol.folder'), () => {
         if (ServerRegistry.supports(ServerFeature.BOOKLISTS)) {
-          this.getUIContext().getRouter().pushUrl({ url: 'pages/BookListsPage' });
+          AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookListsPage' });
           return;
         }
         this.getUIContext().getPromptAction().showToast({
@@ -651,7 +652,7 @@ export struct BookshelfPage {
         });
       });
       this.iconToolButton($r('sys.symbol.arrowshape_turn_up_right'), () => {
-        this.getUIContext().getRouter().pushUrl({ url: 'pages/BookUploadPage' });
+        AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookUploadPage' });
       });
       this.iconToolButton($r('sys.symbol.plus'), () => {
         this.importLocalBook();
@@ -663,7 +664,7 @@ export struct BookshelfPage {
           BookViewMode.setListMode(this.isListMode);
         });
       this.iconToolButton($r('sys.symbol.clock'), () => {
-        this.getUIContext().getRouter().pushUrl({ url: 'pages/ReadingHistoryPage' });
+        AppRouter.pushUrl(this.getUIContext(), { url: 'pages/ReadingHistoryPage' });
       });
     }
     .width('100%')
@@ -784,7 +785,7 @@ export struct BookshelfPage {
         message: '暂无本地书籍',
         detail: '上传图书到服务器书库，或导入本地文件；也可用放大镜搜索书库、书本图标搜索 SoNovel、文件夹图标查看书单',
         actionLabel: '上传图书',
-        onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/BookUploadPage' }),
+        onAction: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookUploadPage' }),
       });
     } else {
       BookCatalogView({

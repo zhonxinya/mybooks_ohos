@@ -17,6 +17,7 @@ import {
   BookAttributes, BookMediaType, BookScope, ReadingProgressResponse,
   ShelfApi, isShelfApiOk, parseBookAttributes,
 } from '../services/ShelfApi';
+import { AppRouter } from '../utils/AppRouter';
 
 @Entry
 @Component
@@ -46,7 +47,7 @@ struct ReadingProgressPage {
   private mediaTypeValues: string[] = [BookMediaType.EBOOK, BookMediaType.COMIC];
 
   aboutToAppear(): void {
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object>;
     this.bookId = Number(params['bookId'] ?? 0);
     void this.load();
   }
@@ -293,7 +294,7 @@ struct ReadingProgressPage {
       EmptyState({
         message: this.loadError,
         actionLabel: this.loadError.includes('配置') ? '去配置' : '',
-        onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
+        onAction: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookConfigPage' }),
       });
     } else {
       Scroll() {

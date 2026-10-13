@@ -2,6 +2,8 @@ import { UIContext } from '@kit.ArkUI';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { READER_MODE_AUTO, READER_MODE_BUILTIN, READER_MODE_PREF_KEY, ReaderFormats } from 'reader';
 import { TalebookService } from './TalebookService';
+import { PlatformTarget } from '../common/PlatformTarget';
+import { AppRouter } from '../utils/AppRouter';
 
 /**
  * 打开阅读器的参数（与 `pages/ReadKitReader` 的入参一致）。
@@ -60,6 +62,23 @@ export class ReaderLauncher {
    * 避免把能正常阅读的华为真机拦掉。
    */
   static isAvailable(): boolean {
+    // Android 端（ArkUI-X）没有系统 ReaderKit（华为侧组件），一律走内置阅读器
+    if (PlatformTarget.isAndroid()) {
+      return false;
+    }
+    return ReaderLauncher.isHarmonyRuntime();
+  }
+
+  /**
+   * 鸿蒙运行时是否提供 ReaderKit。
+   *
+   * 只判定两类**已确认拿不到该组件**的场景，而不是去证实它存在：
+   * - **模拟器**：DevEco 模拟器镜像不含 `com.huawei.hmsapp.readerkit`（实测命中并崩溃过）。
+   * - **非 HarmonyOS 发行版**：ReaderKit 属华为侧组件，OpenHarmony 等发行版不预装。
+   * 判定刻意保守：只在明确命中上述场景时返回 false；取不到信息一律放行，
+   * 避免把能正常阅读的华为真机拦掉。
+   */
+  private static isHarmonyRuntime(): boolean {
     if (ReaderLauncher.isEmulator()) {
       return false;
     }
@@ -86,16 +105,16 @@ export class ReaderLauncher {
   static open(uiContext: UIContext, params: ReaderOpenParams): boolean {
     const builtinSupported: boolean = ReaderFormats.supports(params.format);
     if (builtinSupported && ReaderLauncher.prefersBuiltin()) {
-      uiContext.getRouter().pushUrl({ url: 'pages/BuiltInReaderPage', params: params });
+      AppRouter.pushUrl(uiContext, { url: 'pages/BuiltInReaderPage', params: params });
       return true;
     }
     if (ReaderLauncher.isAvailable()) {
-      uiContext.getRouter().pushUrl({ url: 'pages/ReadKitReader', params: params });
+      AppRouter.pushUrl(uiContext, { url: 'pages/ReadKitReader', params: params });
       return true;
     }
     // 无 ReaderKit：EPUB / TXT / MOBI/AZW/AZW3 交给内置阅读器（自研，不依赖系统组件）
     if (builtinSupported) {
-      uiContext.getRouter().pushUrl({ url: 'pages/BuiltInReaderPage', params: params });
+      AppRouter.pushUrl(uiContext, { url: 'pages/BuiltInReaderPage', params: params });
       return true;
     }
     return false;

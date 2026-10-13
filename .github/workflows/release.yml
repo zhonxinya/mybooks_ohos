@@ -32,7 +32,20 @@ jobs:
         id: build
         uses: ./.github/actions/build-hap
         with:
+          # 自托管命令行工具链 zip 的地址（仓库变量 Settings → Secrets and variables → Variables）
+          # 说明：工程需要 6.1.1.x 的官方命令行工具链，公开镜像仅 6.1.0.816，modelVersion 不兼容
+          tools-url: ${{ vars.HARMONY_TOOLS_URL }}
+          # 可选：自托管 ArkUI-X SDK（留空则用华为云官方镜像）
+          arkuix-sdk-url: ${{ vars.ARKUIX_SDK_URL }}
           build-mode: release
+
+      - name: Build Android APK
+        id: build-apk
+        uses: ./.github/actions/build-apk
+        with:
+          tools-url: ${{ vars.HARMONY_TOOLS_URL }}
+          build-mode: release
+          arch: arm64
 
       - name: Package Artifact
         id: package
@@ -42,6 +55,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp "${{ steps.build.outputs.hap-path }}" "dist/mybooks_ohos-${TAG}.hap"
+          cp "${{ steps.build-apk.outputs.apk-path }}" "dist/mybooks_ohos-${TAG}-android-arm64.apk"
           ls -lh dist/
 
       - name: Publish Release
@@ -51,13 +65,14 @@ jobs:
         run: |
           set -euo pipefail
           HAP="dist/mybooks_ohos-${TAG}.hap"
+          APK="dist/mybooks_ohos-${TAG}-android-arm64.apk"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG 已存在，更新产物"
-            gh release upload "$TAG" "$HAP" --clobber
+            gh release upload "$TAG" "$HAP" "$APK" --clobber
           else
             echo "创建 Release $TAG"
-            gh release create "$TAG" "$HAP" \
+            gh release create "$TAG" "$HAP" "$APK" \
               --title "mybooks_ohos $TAG" \
               --verify-tag \
               --generate-notes
@@ -67,5 +82,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: harmony-app-release
-          path: dist/*.hap
+          path: |
+            dist/*.hap
+            dist/*.apk
           if-no-files-found: error

@@ -76,3 +76,18 @@ docs/mybooks/
 docs/talebook/
 docs/202*-*.md
 .github/skills/
+.dsh-verify/
+
+# ArkUI-X / Android 构建的本机环境（含绝对路径与 SDK 配置）
+scripts/android-env.sh
+# ArkUI-X / Android：生成物不入库，仅保留跨端标记配置（含 ignoreCrossPlatform，构建所必需）
+ohos/.arkui-x/*
+!ohos/.arkui-x/arkui-x-config.json5
+ohos/android/
+ohos/ios/
+
+# Android 原生模块交叉编译中间产物
+ohos/build-android/
+
+# ace 需要的 APPScope 符号链接（Linux 大小写差异，见迁移指南）
+ohos/APPScope
