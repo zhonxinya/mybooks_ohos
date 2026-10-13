@@ -154,9 +154,14 @@ CI 的 HAP 构建（`.github/actions/build-hap`）与本地一致，走 **ACE To
   1. `hvigor` 直接拒绝 `modelVersion 6.1.1`（报 `Unsupported modelVersion of Hvigor 6.1.1`，
      提示 supported is 6.1.0）；
   2. 该版本工具链要求 **ArkUI-X 6.1.0.28**，而华为云 ArkUI-X 镜像里**没有这个版本**（只有 6.0.x 与 6.1.1.x）。
-- 因此需要**自托管** `commandline-tools-linux-x64-6.1.1.300.zip`（约 1.98GiB，未超 GitHub Release
-  单文件 2GiB 上限，可挂在任意公开地址），在仓库 **Settings → Variables** 建 `HARMONY_TOOLS_URL`
-  指向它；两条工作流已通过 `tools-url: ${{ vars.HARMONY_TOOLS_URL }}` 传入。
+- 因此工具链**已固定在本仓库的 Release** [`toolchain-6.1.1.300`](../../releases/tag/toolchain-6.1.1.300)：
+  | 资产 | 说明 | SHA256 |
+  |---|---|---|
+  | `commandline-tools-linux-x64-6.1.1.300.zip` | 官方 6.1.1.300 解压目录重新打包（`zip -y` 保留符号链接，1.994GiB ≤ 2GiB 上限） | `456de8af…fecdf0` |
+  | `arkui-x-linux-x64-6.1.1.111-Release.zip` | 华为云官方原件（含官方 `.sha256` 可对账） | `eddddab0…e674857` |
+- 仓库变量已配置：`HARMONY_TOOLS_URL`（CLT）与 `ARKUIX_SDK_URL`（ArkUI-X，留空则回退华为云镜像）；
+  两条工作流经 `tools-url` / `arkuix-sdk-url` 传入。
+- Android SDK/NDK 仍从 Google 官方源下载（公开稳定；且 NDK 约 2.5GB 超 GitHub 单资产上限，不宜自托管）。
 
 CI 里由 action 自动完成的准备（都是本地踩过的坑，缺一不可）：
 
