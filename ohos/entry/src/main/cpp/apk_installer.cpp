@@ -10,7 +10,7 @@ namespace {
 JavaVM *g_javaVm = nullptr;
 jclass g_installerClass = nullptr;
 
-constexpr const char *kInstallerClass = "com/zhonxinya/talebook/ApkInstaller";
+constexpr const char *kInstallerClass = "com/zhonxinya/mybooks/android/ApkInstaller";
 constexpr const char *kInstallMethod = "install";
 constexpr const char *kInstallSignature = "(Ljava/lang/String;)Ljava/lang/String;";
 

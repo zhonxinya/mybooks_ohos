@@ -2,10 +2,11 @@
 #
 # 把 Android 侧的自定义内容叠加到 ace 生成的 .arkui-x 壳工程上（应用内升级用）。
 #
-# 叠加三样东西：
-#   1) ApkFileProvider.java —— 以 content:// 提供 <filesDir>/updates/*.apk 给系统安装器；
-#   2) AndroidManifest.xml —— REQUEST_INSTALL_PACKAGES 权限 + 上面的 provider 声明；
-#   3) app/build.gradle —— versionCode/versionName 对齐 app.json5；存在签名材料时启用 release 签名。
+# 叠加四样东西：
+#   1) ApkFileProvider.java / ApkInstaller.java（android-overlay/）—— 应用内升级的 provider 与安装桥；
+#   2) AndroidManifest.xml —— REQUEST_INSTALL_PACKAGES 权限 + provider 声明（authority 用固定字面量）；
+#   3) app/build.gradle —— applicationId 改用安卓专属包名、versionCode/versionName 对齐 app.json5；
+#   4) release 签名（存在签名材料时）。
 #
 # 为什么用叠加而不是直接把壳工程入库：ohos/.arkui-x 是 ace 的生成物（已在 .gitignore 里），
 # 每次 `ace modify --project` 都会重建，故只能在其之后打补丁。脚本幂等，重复执行无副作用。
@@ -18,8 +19,17 @@ ANDROID_APP="$ROOT/ohos/.arkui-x/android/app"
 MANIFEST="$ANDROID_APP/src/main/AndroidManifest.xml"
 GRADLE="$ANDROID_APP/build.gradle"
 SRC_JAVA="$ROOT/android-overlay/java"
+JAVA_PACKAGE_DIR="$SRC_JAVA/com/zhonxinya/mybooks/android"
 JAVA_DIR="$ANDROID_APP/src/main/java"
 APP_JSON="$ROOT/ohos/AppScope/app.json5"
+
+# 安卓侧包名与鸿蒙侧（app.json5 的 bundleName）不同：ace 会用 bundleName 同时充当
+# 安卓的清单 package/applicationId，两端同名的话在同一台设备上会互相覆盖安装。
+ANDROID_APP_ID="com.zhonxinya.mybooks.android"
+# provider 的 authority 用固定字面量而非 ${applicationId}：安卓 applicationId 与 arkui-x 的
+# bundleName 已经不同，而 bundleManager.getBundleInfoForSelfSync() 返回的是后者，推导会与清单对不上。
+PROVIDER_AUTHORITY="${ANDROID_APP_ID}.apkprovider"
+PROVIDER_CLASS="${ANDROID_APP_ID}.ApkFileProvider"
 
 if [ ! -f "$MANIFEST" ] || [ ! -f "$GRADLE" ]; then
   echo "错误：找不到 Android 壳工程（$MANIFEST）" >&2
@@ -28,22 +38,26 @@ if [ ! -f "$MANIFEST" ] || [ ! -f "$GRADLE" ]; then
 fi
 
 # ---- 1) provider / 安装桥源码 ----
-mkdir -p "$JAVA_DIR/com/zhonxinya/talebook"
-cp -f "$SRC_JAVA"/com/zhonxinya/talebook/*.java "$JAVA_DIR/com/zhonxinya/talebook/"
+mkdir -p "$JAVA_DIR/com/zhonxinya/mybooks/android"
+cp -f "$JAVA_PACKAGE_DIR"/*.java "$JAVA_DIR/com/zhonxinya/mybooks/android/"
 echo "==> 已叠加 ApkFileProvider.java / ApkInstaller.java"
 
 # ---- 2) AndroidManifest.xml ----
 # 先删掉本脚本此前插入的行再重新插入：.arkui-x 跨次构建复用，只做「没有才插」的话，
 # 改动过期（例如 provider 属性调整）不会生效。
 sed -i '/REQUEST_INSTALL_PACKAGES/d' "$MANIFEST"
-sed -i '/com\.zhonxinya\.talebook\.ApkFileProvider/d' "$MANIFEST"
+sed -i '/\.ApkFileProvider/d' "$MANIFEST"
 sed -i 's|^\([[:space:]]*<application\)|    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>\n\1|' "$MANIFEST"
-sed -i 's|^\([[:space:]]*</application>\)|        <provider android:name="com.zhonxinya.talebook.ApkFileProvider" android:authorities="${applicationId}.apkprovider" android:exported="false" android:grantUriPermissions="true" />\n\1|' "$MANIFEST"
+sed -i "s|^\([[:space:]]*</application>\)|        <provider android:name=\"${PROVIDER_CLASS}\" android:authorities=\"${PROVIDER_AUTHORITY}\" android:exported=\"false\" android:grantUriPermissions=\"true\" />\n\1|" "$MANIFEST"
 grep -q "REQUEST_INSTALL_PACKAGES" "$MANIFEST" || { echo "错误：权限注入失败" >&2; exit 1; }
-grep -q "ApkFileProvider" "$MANIFEST" || { echo "错误：provider 注入失败" >&2; exit 1; }
-echo "==> 已注入 REQUEST_INSTALL_PACKAGES 与 provider"
+grep -q "$PROVIDER_CLASS" "$MANIFEST" || { echo "错误：provider 注入失败" >&2; exit 1; }
+echo "==> 已注入 REQUEST_INSTALL_PACKAGES 与 provider（$PROVIDER_AUTHORITY）"
 
-# ---- 3) app/build.gradle：版本号对齐 app.json5 ----
+# ---- 3) app/build.gradle：applicationId 与版本号 ----
+sed -i -E "0,/applicationId \"[^\"]*\"/s//applicationId \"$ANDROID_APP_ID\"/" "$GRADLE"
+grep -q "applicationId \"$ANDROID_APP_ID\"" "$GRADLE" || { echo "错误：applicationId 覆盖失败" >&2; exit 1; }
+echo "==> applicationId 已改为 $ANDROID_APP_ID"
+
 # ace 生成的壳工程把版本固定写成 1 / "1.0"，与 app.json5 脱节；不同步会导致
 # 应用内升级比较版本时始终认为「本地是旧版」，且系统看到的 versionName 也不对。
 VERSION_CODE="$(grep -oE '"versionCode"[[:space:]]*:[[:space:]]*[0-9]+' "$APP_JSON" | head -1 | grep -oE '[0-9]+$')"
