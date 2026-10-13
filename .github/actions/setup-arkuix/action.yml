@@ -58,6 +58,12 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        # 同一次 job 内二次调用（先 HAP 后 APK）时目录已存在，重复解压会触发 unzip 的
+        # 交互式覆盖询问 → 读不到 stdin → 退出码 1；直接跳过。
+        if [ -d command-line-tools/bin ]; then
+          echo "命令行工具链已存在，跳过下载"
+          exit 0
+        fi
         VER="${{ inputs.tools-version }}"
         URL="${{ inputs.tools-url }}"
         if [ -z "$URL" ]; then
@@ -72,7 +78,7 @@ runs:
           -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
           -e "https://developer.huawei.com/consumer/cn/download/" \
           -o tools.zip "$URL"
-        unzip -q tools.zip
+        unzip -oq tools.zip
         rm -f tools.zip
 
     - name: Cache ArkUI-X SDK
@@ -93,7 +99,8 @@ runs:
         ARKUIX_DIR="$(pwd)/arkui-x-sdk"
         ACE_BIN="$ARKUIX_DIR/24/arkui-x/toolchains/bin"
 
-        if [ "${{ steps.cache-arkuix.outputs.cache-hit }}" != "true" ]; then
+        if [ "${{ steps.cache-arkuix.outputs.cache-hit }}" != "true" ] \
+           && [ ! -d "$ARKUIX_DIR/24/arkui-x/toolchains/bin" ]; then
           VER="${{ inputs.arkuix-sdk-version }}"
           URL="${{ inputs.arkuix-sdk-url }}"
           if [ -z "$URL" ]; then
