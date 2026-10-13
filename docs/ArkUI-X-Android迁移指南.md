@@ -148,12 +148,11 @@ adb shell am start -n com.zhonxinya.talebook/com.zhonxinya.talebook.EntryEntryAb
 1. **Linux 桌面未实现** —— ArkUI-X 官方尚未支持。
 2. **Android 无后台音频保活** —— 见上文「音频播放」。
 3. **Android 无朗读功能** —— TTS 依赖华为 CoreSpeechKit。
-4. **Android 阅读界面待验证** —— `ReaderBattery`（`batteryInfo`）与 `ReaderFlipAnimator`
-   （`displaySync`）是仅鸿蒙有实现的 API。经核对，`batteryinfo` / `displaysync` / `wantagent` /
-   `avsession` / `backgroundtaskmanager` 这些模块**在 ArkUI-X 6.1.1 SDK 中根本不存在**
-   （既没有 `.so` 也没有 `.abc`），所以不是「补包」能解决的，必须在 ArkTS 侧做运行期降级
-   （Android 上跳过电量查询、动效帧回退为定时器）。目前验证范围只覆盖书架 / 设置 / 账号 /
-   下载管理等页面；**打开书籍进入阅读器前应先加这两处守卫**。
+4. **Android 阅读界面的两处能力降级（已实现）** —— `batteryinfo` 与 `graphics_displaysync`
+   在 ArkUI-X SDK 中**不存在**（既无 `.so` 也无 `.abc`），属运行期降级而非打包问题：
+   - `ReaderBattery`：探测一次失败即停止轮询 → 页脚不显示电量（不再每分钟刷异常日志）；
+   - `ReaderFlipAnimator`：拿不到 `displaySync` 时退化为 **16ms 定时器帧源**，翻页动画照旧逐帧推进
+     （本类每帧显式赋值，不依赖系统帧回调）；已同样加「探测一次」缓存。
 5. **`@arkui-x.android` 模块不可直接 import** —— 类型声明仅在 ArkUI-X SDK 中存在，
    鸿蒙构建链会因「找不到模块」失败；这也是加解密改走 NAPI 的原因。
 6. **签名与安装** —— 本仓库不含签名材料，HAP 产物未签名；APK 由 Gradle 用 debug 证书签名。
