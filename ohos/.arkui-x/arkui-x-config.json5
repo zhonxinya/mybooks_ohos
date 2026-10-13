@@ -1,0 +1,9 @@
+{
+  crossplatform: true,
+  modules: ['entry'],
+  // 平台专属 API 走运行时分派（PlatformTarget），静态跨端检查无法识别运行期守卫，
+  // 故将其从 error 降级为 warning：否则鸿蒙专属调用点（AssetStore/AVSession/ReaderKit 等）会阻断编译。
+  buildOption: {
+    ignoreCrossPlatform: true
+  }
+}

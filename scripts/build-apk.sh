@@ -1,44 +1,47 @@
 #!/usr/bin/env bash
 #
-# 构建 Android APK（ArkUI-X / ACE Tools）。
+# 构建 Android APK（ArkUI-X / ACE Tools 工具链）。
 #
-# 依赖：ArkUI-X SDK（内含 ACE Tools）+ Android SDK/NDK + JDK 11+
-# 获取 ArkUI-X SDK：DevEco Studio → Settings → ArkUI-X，或从 ArkUI-X Release Notes 下载。
+# 与 build-hap.sh 共用同一套 ACE Tools，只是 target 不同（apk=Android，hap=HarmonyOS）。
+#
+# 依赖：ArkUI-X SDK（内含 ACE Tools）+ Android SDK/NDK + JDK 17（Gradle 7.5 不支持 JDK 21），
+#       均见 scripts/android-env.sh。
 #
 # 用法：
-#   scripts/build-apk.sh              # debug APK
-#   scripts/build-apk.sh release      # release APK
-#
-# 环境变量：
-#   ARKUI_X_SDK    ArkUI-X SDK 根目录（含 arkui-x.json 的上一级）
-#   ANDROID_HOME   Android SDK 根目录
+#   scripts/build-apk.sh              # release APK（ace 默认 release）
+#   scripts/build-apk.sh debug        # debug APK
 #
 set -euo pipefail
 
-MODE="${1:-debug}"
+MODE="${1:-release}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR="$ROOT/ohos"
 
 # shellcheck source=/dev/null
-[ -f "$ROOT/scripts/android-env.sh" ] && source "$ROOT/scripts/android-env.sh"
+if [ -f "$ROOT/scripts/android-env.sh" ]; then
+  source "$ROOT/scripts/android-env.sh"
+else
+  echo "错误：缺少 scripts/android-env.sh（可从 android-env.example.sh 复制并填写路径）。" >&2
+  exit 1
+fi
 
 command -v ace >/dev/null 2>&1 || {
-  echo "错误：未找到 ace 命令（ACE Tools）。" >&2
-  echo "请先安装 ArkUI-X SDK 并将其 toolchains 加入 PATH，或在 scripts/android-env.sh 中配置。" >&2
+  echo "错误：未找到 ace 命令（ACE Tools）。请检查 scripts/android-env.sh 中的 ARKUI_X_SDK。" >&2
   exit 1
 }
 
 cd "$APP_DIR"
 
-if [ "$MODE" = "release" ]; then
-  echo "==> 构建 release APK"
-  ace build apk --mode release
+if [ "$MODE" = "debug" ]; then
+  echo "==> 构建 debug APK（target: Android）"
+  ace build apk --debug
 else
-  echo "==> 构建 debug APK"
-  ace build apk
+  echo "==> 构建 release APK（target: Android）"
+  ace build apk --release
 fi
 
-APK_DIR="$APP_DIR/build/default/outputs/arkui-x"
+# ace 把 gradle 产物放在 .arkui-x/android/app/build/outputs/apk/<buildType>/
+OUT="$APP_DIR/.arkui-x/android/app/build/outputs/apk"
 echo
-echo "构建完成，产物目录：$APK_DIR"
-find "$APK_DIR" -name '*.apk' -print 2>/dev/null || echo "（未找到 APK，请检查上方构建日志）"
+echo "构建完成，产物目录：$OUT"
+find "$OUT" -name '*.apk' -print 2>/dev/null || echo "（未找到 APK，请检查上方构建日志）"

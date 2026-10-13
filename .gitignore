@@ -80,6 +80,8 @@ docs/202*-*.md
 
 # ArkUI-X / Android 构建的本机环境（含绝对路径与 SDK 配置）
 scripts/android-env.sh
-ohos/.arkui-x/
+# ArkUI-X / Android：生成物不入库，仅保留跨端标记配置（含 ignoreCrossPlatform，构建所必需）
+ohos/.arkui-x/*
+!ohos/.arkui-x/arkui-x-config.json5
 ohos/android/
 ohos/ios/
