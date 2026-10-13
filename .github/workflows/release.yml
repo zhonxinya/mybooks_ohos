@@ -46,6 +46,11 @@ jobs:
           tools-url: ${{ vars.HARMONY_TOOLS_URL }}
           build-mode: release
           arch: arm64
+          # 固定的 release 签名：签名一致才能跨版本覆盖安装（应用内升级前提）
+          keystore-base64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          keystore-password: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          key-alias: ${{ secrets.ANDROID_KEY_ALIAS }}
+          key-password: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
       - name: Package Artifact
         id: package

@@ -28,5 +28,15 @@ export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/26.1.10909125}"
 # ArkTS 工具链要求 JDK 11+；若本机有多个版本，在此指定
 # export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
+# ---- Android release 签名（应用内升级必需）----
+# 同一包名的 APK 只有签名一致才能互相覆盖安装。CI 从 GitHub Secrets 还原同一份密钥，
+# 本机请指向同一份 keystore（约定放在仓库根 .signing/，已被 .gitignore 忽略）；
+# 否则本机出的包无法覆盖安装 CI 出的包（INSTALL_FAILED_UPDATE_INCOMPATIBLE）。
+# 不设置时 build-apk.sh 会退化为 ace 默认的 debug 签名，仅适合本机自测。
+# export MYBOOKS_KEYSTORE_PATH="/path/to/mybooks-release.jks"
+# export MYBOOKS_KEYSTORE_PASSWORD="<keystore 口令>"
+# export MYBOOKS_KEY_ALIAS="mybooks"
+# export MYBOOKS_KEY_PASSWORD="<key 口令>"
+
 # ---- 产物 ----
 export ARKUI_X_OUT="$ARKUI_X_SDK"

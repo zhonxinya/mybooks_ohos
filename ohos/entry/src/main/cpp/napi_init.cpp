@@ -1,4 +1,5 @@
 #include "talebook_core.h"
+#include "apk_installer.h"
 
 #include "napi/native_api.h"
 
@@ -724,6 +725,14 @@ napi_value ApiEditBookAsync(napi_env env, napi_callback_info info)
     });
 }
 
+napi_value ApiInstallApk(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    return MakeString(env, InstallApkWithSystemInstaller(GetStringArg(env, args[0])));
+}
+
 napi_value RegisterFn(napi_env env, napi_value exports)
 {
     napi_property_descriptor desc[] = {
@@ -793,6 +802,7 @@ napi_value RegisterFn(napi_env env, napi_value exports)
         {"apiMarkMessageReadAsync", nullptr, ApiMarkMessageReadAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"fetchImageCache", nullptr, FetchImageCache, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"fetchImageCacheAsync", nullptr, FetchImageCacheAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"apiInstallApk", nullptr, ApiInstallApk, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

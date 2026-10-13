@@ -1,12 +1,14 @@
 import { common, Want } from '@kit.AbilityKit';
 import { PageScaffold, LoadingState, PrimaryButton, SecondaryButton, TextButton } from '../components';
 import { ReleaseInfo, UpdateCheckResult, UpdateService } from '../services/UpdateService';
+import { ApkDownloadProgress, ApkUpdater } from '../services/ApkUpdater';
 import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * 客户端更新检查页：展示当前版本、GitHub 最新 release 版本与升级内容，并提供下载 / 发布页入口。
  *
  * 数据源：UpdateService（GitHub `releases/latest`）。进入页面即强制刷新一次，忽略缓存。
+ * Android 走应用内升级（下载 APK 后交系统安装器）；HarmonyOS 仍为下载 HAP 自行签名安装。
  */
 @Entry
 @Component
@@ -18,6 +20,12 @@ struct UpdatePage {
   @State hasUpdate: boolean = false;
   /** 用户是否已忽略本次版本（影响「忽略此版本」按钮的显隐，必须用状态而非直读偏好） */
   @State ignored: boolean = false;
+  /** Android 应用内升级：是否正在下载安装包 */
+  @State downloading: boolean = false;
+  /** 下载百分比；-1 表示服务端未给出总大小（进度条走不确定态） */
+  @State downloadPercent: number = -1;
+  /** 已下载 / 总大小文案，如「12.3 MB / 29.4 MB」 */
+  @State downloadSizeLabel: string = '';
 
   aboutToAppear(): void {
     void this.check();
@@ -101,20 +109,51 @@ struct UpdatePage {
     return release !== null ? release.tag : '';
   }
 
-  /** 「发布于 … · 安装包 …（… MB）」一行元信息。 */
-  private releaseMetaLabel(): string {
+  /** 平台对应的安装包附件（Android 取 .apk，其余取 .hap）。 */
+  private installAssetName(): string {
     const release: ReleaseInfo | null = this.release;
     if (release === null) {
       return '';
     }
+    return ApkUpdater.supported() ? release.apkName : release.hapName;
+  }
+
+  private installAssetSize(): number {
+    const release: ReleaseInfo | null = this.release;
+    if (release === null) {
+      return 0;
+    }
+    return ApkUpdater.supported() ? release.apkSize : release.hapSize;
+  }
+
+  private installAssetUrl(): string {
+    const release: ReleaseInfo | null = this.release;
+    if (release === null) {
+      return '';
+    }
+    return ApkUpdater.supported() ? release.apkUrl : release.hapUrl;
+  }
+
+  /** 该平台是否具备应用内安装能力（Android 且 release 带 APK 附件）。 */
+  private canInstallInApp(): boolean {
+    return ApkUpdater.supported() && this.installAssetUrl().length > 0;
+  }
+
+  /** 「发布于 … · 安装包 …（… MB）」一行元信息。 */
+  private releaseMetaLabel(): string {
     const bits: string[] = [];
+    const release: ReleaseInfo | null = this.release;
+    if (release === null) {
+      return '';
+    }
     const date: string = UpdateService.formatDate(release.publishedAt);
     if (date.length > 0) {
       bits.push(`发布于 ${date}`);
     }
-    const size: string = UpdateService.formatSize(release.hapSize);
-    if (release.hapName.length > 0) {
-      bits.push(size.length > 0 ? `安装包 ${release.hapName}（${size}）` : `安装包 ${release.hapName}`);
+    const assetName: string = this.installAssetName();
+    const size: string = UpdateService.formatSize(this.installAssetSize());
+    if (assetName.length > 0) {
+      bits.push(size.length > 0 ? `安装包 ${assetName}（${size}）` : `安装包 ${assetName}`);
     }
     return bits.join(' · ');
   }
@@ -129,16 +168,78 @@ struct UpdatePage {
   }
 
   private downloadUrl(): string {
-    const release: ReleaseInfo | null = this.release;
-    if (release === null) {
-      return '';
+    const url: string = this.installAssetUrl();
+    if (url.length > 0) {
+      return url;
     }
-    return release.hapUrl.length > 0 ? release.hapUrl : release.htmlUrl;
+    const release: ReleaseInfo | null = this.release;
+    return release !== null ? release.htmlUrl : '';
   }
 
   private releasePageUrl(): string {
     const release: ReleaseInfo | null = this.release;
     return release !== null ? release.htmlUrl : '';
+  }
+
+  /** 下载进度文案；总大小未知时只报已下载量。 */
+  private downloadProgressLabel(): string {
+    const size: string = this.downloadSizeLabel;
+    if (this.downloadPercent < 0) {
+      return size.length > 0 ? `正在下载 ${size}` : '正在下载安装包…';
+    }
+    return size.length > 0
+      ? `正在下载 ${this.downloadPercent}%（${size}）`
+      : `正在下载 ${this.downloadPercent}%`;
+  }
+
+  /** 下载安装包并唤起系统安装器（仅 Android）。 */
+  private async downloadAndInstall(): Promise<void> {
+    const release: ReleaseInfo | null = this.release;
+    if (release === null || this.downloading) {
+      return;
+    }
+    const url: string = this.installAssetUrl();
+    if (url.length === 0) {
+      this.toast('当前发布没有可安装的 APK 附件');
+      return;
+    }
+    this.downloading = true;
+    this.downloadPercent = -1;
+    this.downloadSizeLabel = '';
+    try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const fileName: string = ApkUpdater.safeFileName(release.apkName,
+        `mybooks-${release.version}-android.apk`);
+      // 回调按块触发，逐块 setState 会让整页高频重建：按百分比（总大小未知时按 1MB）步进更新
+      let lastPercent: number = -2;
+      let lastReportedBytes: number = 0;
+      await ApkUpdater.download(context, url, fileName, release.apkSize,
+        (progress: ApkDownloadProgress) => {
+          if (progress.total > 0) {
+            const percent: number = Math.floor((progress.received / progress.total) * 100);
+            if (percent === lastPercent) {
+              return;
+            }
+            lastPercent = percent;
+            this.downloadPercent = percent;
+            this.downloadSizeLabel =
+              `${UpdateService.formatSize(progress.received)} / ${UpdateService.formatSize(progress.total)}`;
+            return;
+          }
+          if (lastReportedBytes > 0 && progress.received - lastReportedBytes < 1024 * 1024) {
+            return;
+          }
+          lastReportedBytes = progress.received;
+          this.downloadPercent = -1;
+          this.downloadSizeLabel = UpdateService.formatSize(progress.received);
+        });
+      await ApkUpdater.install(fileName);
+      this.downloading = false;
+      this.toast('安装包已下载，请在系统安装界面确认安装');
+    } catch (error) {
+      this.downloading = false;
+      this.toast(ErrorFormat.message(error as Object));
+    }
   }
 
   build() {
@@ -342,18 +443,36 @@ struct UpdatePage {
   @Builder
   actionCard() {
     Column({ space: 10 }) {
-      PrimaryButton({
-        label: '下载最新安装包',
-        onTap: () => this.openUrl(this.downloadUrl()),
-      });
+      if (this.canInstallInApp()) {
+        PrimaryButton({
+          label: this.downloading ? '正在下载…' : '下载并安装',
+          buttonEnabled: !this.downloading,
+          onTap: () => {
+            void this.downloadAndInstall();
+          },
+        });
+        if (this.downloading) {
+          this.downloadProgressBlock();
+        }
+        Text('下载完成后会唤起系统安装器；若提示“未知来源”，请按系统引导允许本应用安装应用。')
+          .fontSize(12)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%');
+      } else {
+        PrimaryButton({
+          label: '下载最新安装包',
+          onTap: () => this.openUrl(this.downloadUrl()),
+        });
+        Text('发布附件为未签名 HAP，安装前需按仓库 README 完成签名。')
+          .fontSize(12)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%');
+      }
+
       SecondaryButton({
         label: '打开发布页',
         onTap: () => this.openUrl(this.releasePageUrl()),
       });
-      Text('发布附件为未签名 HAP，安装前需按仓库 README 完成签名。')
-        .fontSize(12)
-        .fontColor($r('app.color.text_tertiary'))
-        .width('100%');
 
       if (!this.ignored) {
         Row() {
@@ -372,5 +491,23 @@ struct UpdatePage {
     .padding($r('app.float.page_padding'))
     .borderRadius($r('app.float.card_radius'))
     .backgroundColor($r('app.color.card_background'));
+  }
+
+  /** 应用内升级的下载进度（百分比未知时只给文案，避免进度条撒谎）。 */
+  @Builder
+  downloadProgressBlock() {
+    Column({ space: 6 }) {
+      if (this.downloadPercent >= 0) {
+        Progress({ value: this.downloadPercent, total: 100, type: ProgressType.Linear })
+          .width('100%')
+          .color($r('app.color.brand_primary'));
+      }
+      Text(this.downloadProgressLabel())
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%');
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start);
   }
 }

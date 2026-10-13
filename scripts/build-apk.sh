@@ -138,6 +138,10 @@ for rel in "${PLUGIN_LIBS[@]}"; do
   fi
 done
 
+# ---- 1c) 叠加 Android 壳工程补丁（provider / 权限 / 版本号 / 签名）----
+# 应用内升级依赖这些补丁，必须在 gradle 打包前落地
+bash "$ROOT/scripts/android-shell-overlay.sh"
+
 # ---- 2) ace 打包（编译 ArkTS + gradle 组装 APK，jniLibs 取上一步的产物）----
 cd "$APP_DIR"
 ACE_ARGS=(build apk)

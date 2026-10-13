@@ -91,3 +91,6 @@ ohos/build-android/
 
 # ace 需要的 APPScope 符号链接（Linux 大小写差异，见迁移指南）
 ohos/APPScope
+
+# Android release 签名私钥（不入库；CI 从 GitHub Secrets 还原）
+.signing/
