@@ -41,6 +41,12 @@ export interface ReleaseInfo {
   hapUrl: string;
   /** HAP 附件字节数，0 表示未知 */
   hapSize: number;
+  /** APK 附件名，无附件时空串 */
+  apkName: string;
+  /** APK 附件下载地址，无附件时空串 */
+  apkUrl: string;
+  /** APK 附件字节数，0 表示未知 */
+  apkSize: number;
 }
 
 /** 一次更新检查的结果；失败同样返回对象，由调用方决定展示方式。 */
@@ -284,16 +290,23 @@ export class UpdateService {
     let hapName: string = '';
     let hapUrl: string = '';
     let hapSize: number = 0;
+    let apkName: string = '';
+    let apkUrl: string = '';
+    let apkSize: number = 0;
     const assets: Object[] | undefined = root['assets'] as Object[] | undefined;
     if (assets !== undefined && assets !== null) {
       for (let i = 0; i < assets.length; i++) {
         const asset: Record<string, Object> = assets[i] as Record<string, Object>;
         const name: string = UpdateService.readString(asset, 'name');
-        if (name.toLowerCase().endsWith('.hap')) {
+        const lower: string = name.toLowerCase();
+        if (hapName.length === 0 && lower.endsWith('.hap')) {
           hapName = name;
           hapUrl = UpdateService.readString(asset, 'browser_download_url');
           hapSize = UpdateService.readNumber(asset, 'size');
-          break;
+        } else if (apkName.length === 0 && lower.endsWith('.apk')) {
+          apkName = name;
+          apkUrl = UpdateService.readString(asset, 'browser_download_url');
+          apkSize = UpdateService.readNumber(asset, 'size');
         }
       }
     }
@@ -306,6 +319,9 @@ export class UpdateService {
       hapName: hapName,
       hapUrl: hapUrl,
       hapSize: hapSize,
+      apkName: apkName,
+      apkUrl: apkUrl,
+      apkSize: apkSize,
     };
     return release;
   }
@@ -378,6 +394,9 @@ export class UpdateService {
       'hapName': release.hapName,
       'hapUrl': release.hapUrl,
       'hapSize': release.hapSize,
+      'apkName': release.apkName,
+      'apkUrl': release.apkUrl,
+      'apkSize': release.apkSize,
     };
     TalebookService.prefSet(StorageKeys.UPDATE_RELEASE_CACHE, JSON.stringify(record));
     TalebookService.prefSet(StorageKeys.UPDATE_CHECKED_AT, `${Date.now()}`);
@@ -407,6 +426,9 @@ export class UpdateService {
       hapName: UpdateService.readString(record, 'hapName'),
       hapUrl: UpdateService.readString(record, 'hapUrl'),
       hapSize: UpdateService.readNumber(record, 'hapSize'),
+      apkName: UpdateService.readString(record, 'apkName'),
+      apkUrl: UpdateService.readString(record, 'apkUrl'),
+      apkSize: UpdateService.readNumber(record, 'apkSize'),
     };
     return release;
   }
