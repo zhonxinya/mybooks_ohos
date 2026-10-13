@@ -143,7 +143,7 @@ bool SecureCrypto::seal(const std::string &identityDir, const std::string &plain
 
     mbedtls_gcm_context gcm;
     mbedtls_gcm_init(&gcm);
-    int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key.data(), kKeyLen);
+    int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key.data(), kKeyLen * 8);
     std::vector<unsigned char> cipher(plain.size());
     unsigned char tag[kTagLen];
     if (rc == 0) {
@@ -177,7 +177,7 @@ bool SecureCrypto::open(const std::string &identityDir, const std::string &seale
 
     mbedtls_gcm_context gcm;
     mbedtls_gcm_init(&gcm);
-    int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key.data(), kKeyLen);
+    int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key.data(), kKeyLen * 8);
     std::vector<unsigned char> plain(bodyLen);
     if (rc == 0) {
         // mbedTLS 2.x 签名：(ctx, length, iv, iv_len, add, add_len, tag, tag_len, input, output)

@@ -117,6 +117,14 @@ build_native_module entry libentry.so "$APP_DIR/entry/src/main/cpp"
 # ArkUI-X 6.1.1 SDK 中**不存在**（非打包问题），需在 ArkTS 侧做运行期降级。
 PLUGIN_LIBS=(
   "promptaction/libpromptaction.so"
+  # 阅读器分页依赖文本测量与字体插件：缺 measure 会抛
+  # `Cannot read property measureTextSize of undefined`（正文排版失败）
+  "measure/libmeasure.so"
+  "font/libfont.so"
+  # ArkUI 组件扩展（部分组件/绘制描述符在 Kit 导入路径下漏拷）
+  "arkui/libarkui_componentutils.so"
+  "arkui/libarkui_drawabledescriptor.so"
+  "arkui/liboverlay.so"
 )
 for rel in "${PLUGIN_LIBS[@]}"; do
   src="$ARKUI_X_SDK/24/arkui-x/plugins/api/lib/$rel"
