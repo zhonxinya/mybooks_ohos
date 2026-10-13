@@ -87,6 +87,12 @@ volumes:
 ..\scripts\hvigorw.ps1 assembleHap -p product=default -p buildMode=debug --no-daemon
 ```
 
+> ⚠️ 工程已切换为 **ArkUI-X 工程结构**（`hvigorfile.ts` 使用 ArkUI-X 任务类
+> `AppTasksForArkUIX` / `HapTasks`），**HAP 与 APK 都依赖 ArkUI-X 组件**：
+> Linux 下统一走 `scripts/build-hap.sh` / `scripts/build-apk.sh`（ACE Tools，见
+> [迁移指南](docs/ArkUI-X-Android迁移指南.md)）；Windows/DevEco 需先装 ArkUI-X 组件，
+> 纯 DevEco 默认工具链不含该插件，`hvigorw` 会因缺插件而失败。
+
 构建产物：`ohos/entry/build/default/outputs/default/` 下的 `entry-default-*.hap`
 
 > ⚠️ 未配置签名时产出的是 `entry-default-unsigned.hap`，**需签名后才能安装使用**，详见[签名](#签名)章节。
@@ -104,16 +110,17 @@ volumes:
 同一份 ArkTS 源码也可构建 Android APK，详见 [ArkUI-X Android 迁移指南](docs/ArkUI-X-Android迁移指南.md)。
 
 ```bash
-# 配置环境（ArkUI-X SDK / Android SDK / NDK）
+# 配置环境（ArkUI-X SDK / Android SDK / NDK / JDK 17）
 cp scripts/android-env.example.sh scripts/android-env.sh
 $EDITOR scripts/android-env.sh
 
-# 构建 APK
-./scripts/build-apk.sh              # debug
-./scripts/build-apk.sh release      # release
+# 构建 APK（第二个参数是目标架构：x86_64 供模拟器，缺省 arm64 供真机）
+./scripts/build-apk.sh release x86_64
+./scripts/build-apk.sh release          # arm64
 ```
 
-> Android 端需要额外的 **ArkUI-X SDK**（含 ACE Tools）；鸿蒙端构建不需要它。
+> Android 端需要 **ArkUI-X SDK**（含 ACE Tools）。注意本项目切为 ArkUI-X 工程结构后，
+> **鸿蒙 HAP 构建同样依赖 ArkUI-X**（经 `scripts/build-hap.sh`），并非只有 Android 需要。
 > Linux 桌面暂不支持 —— ArkUI-X 官方仍将其标注为「规划中」。
 > 注意 `build-profile.ci.json5` 不含 `signingConfigs`，直接复制会产出未签名 HAP
 > （安装报 `9568320 no signature file`），真机安装前需按下节配置签名。
