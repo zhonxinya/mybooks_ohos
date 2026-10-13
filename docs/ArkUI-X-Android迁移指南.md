@@ -171,6 +171,12 @@ CI 里由 action 自动完成的准备（都是本地踩过的坑，缺一不可
 | `ace modify --project`（平台选 `1` = Android+iOS） | 干净检出没有 `.arkui-x/android\|ios`（生成物未入库），而 ace 构建需要它 |
 | `git checkout -- .arkui-x/arkui-x-config.json5` | modify 会重写该文件、丢掉 `buildOption.ignoreCrossPlatform` |
 
+**发布流程**：`.github/workflows/release.yml` 在打 `v*` 标签时同时构建 **HAP** 与
+**Android release APK（arm64）**，两个产物一并挂到 Release；APK 由
+`.github/actions/build-apk` 构建（额外装 Android SDK/NDK + JDK 17，并生成
+`scripts/android-env.sh`，随后走 `scripts/build-apk.sh release arm64`）。
+`build.yml`（PR 编译校验）仍只构建 debug HAP，保持 CI 时长可控。
+
 > 备选（若不想自托管 2GB 包）：让 CI 构建「鸿蒙专用形态」——用公开的 6.1.0.816 + 原始
 > `hvigorfile.ts` + `modelVersion 5.0.0` + 无 `.arkui-x`，走裸 `hvigorw assembleHap`
 > （已实测 36s 出 HAP）。代价是 CI 不再校验跨端链路，且需在仓库保留一套纯 hvigor 的

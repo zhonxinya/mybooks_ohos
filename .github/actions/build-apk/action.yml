@@ -1,0 +1,154 @@
+name: Build Android APK
+description: 用 ACE Tools（ace build apk）构建 Android APK（含原生模块 NDK 交叉编译）并输出路径
+
+# 与 build-hap 共用 `.github/actions/setup-arkuix` 的工具链准备；
+# 额外需要 Android SDK/NDK 与 JDK 17（Gradle 7.5 不支持 JDK 21）。
+# APK 打包链：NDK 交叉编译业务原生库 → ace 编译 ArkTS/组装 → Gradle 出包（详见 scripts/build-apk.sh）。
+
+inputs:
+  build-mode:
+    description: 构建模式（release 或 debug）
+    required: false
+    default: release
+  arch:
+    description: 目标架构（arm64 真机 / x86_64 模拟器）
+    required: false
+    default: arm64
+  tools-version:
+    description: 鸿蒙命令行工具链版本（须与工程 hvigor-config 的 modelVersion 配套）
+    required: false
+    default: '6.1.1.300'
+  tools-url:
+    description: 命令行工具链 zip 完整地址（自托管包请传入；见迁移指南 CI 章节）
+    required: false
+    default: ''
+  arkuix-sdk-version:
+    description: ArkUI-X SDK 版本
+    required: false
+    default: '6.1.1.111'
+  arkuix-sdk-sha256:
+    description: ArkUI-X SDK zip 的 SHA256
+    required: false
+    default: 'eddddab0e8a8da99079035d2fe2e07c01351d795477671e7d99ec8a67e674857'
+  ndk-version:
+    description: Android NDK 版本（编译业务原生库）
+    required: false
+    default: '26.1.10909125'
+
+outputs:
+  apk-path:
+    description: 构建产出的 APK 文件绝对路径
+    value: ${{ steps.build.outputs.apk-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    # Gradle 7.5 不支持 JDK 21（会报 Unsupported class file major version 65）
+    - name: Setup Java 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+
+    - name: Cache Android SDK
+      id: cache-android
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/android-sdk
+        key: ${{ runner.os }}-android-sdk-${{ inputs.ndk-version }}
+
+    - name: Install Android SDK / NDK
+      if: steps.cache-android.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        NDK_VERSION: ${{ inputs.ndk-version }}
+      run: |
+        set -euo pipefail
+        ANDROID_HOME="${{ github.workspace }}/android-sdk"
+        mkdir -p "$ANDROID_HOME/cmdline-tools"
+        URL="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+        curl -fL --retry 3 --retry-delay 5 -o cmdline-tools.zip "$URL"
+        unzip -q cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
+        rm -rf "$ANDROID_HOME/cmdline-tools/latest"
+        mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+        rm -f cmdline-tools.zip
+
+        SM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+        yes | "$SM" --licenses >/dev/null 2>&1 || true
+        "$SM" "ndk;${NDK_VERSION}" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+        echo "Android SDK 安装完成："
+        ls "$ANDROID_HOME"
+
+    - name: Setup ArkUI-X Toolchain
+      uses: ./.github/actions/setup-arkuix
+      with:
+        tools-version: ${{ inputs.tools-version }}
+        tools-url: ${{ inputs.tools-url }}
+        arkuix-sdk-version: ${{ inputs.arkuix-sdk-version }}
+        arkuix-sdk-sha256: ${{ inputs.arkuix-sdk-sha256 }}
+        android-sdk: ${{ github.workspace }}/android-sdk
+        android-ndk: ${{ github.workspace }}/android-sdk/ndk/${{ inputs.ndk-version }}
+
+    - name: Apply CI Build Profile
+      shell: bash
+      run: |
+        set -euo pipefail
+        cp ohos/build-profile.ci.json5 ohos/build-profile.json5
+        echo "已生成 build-profile.json5"
+
+    # APK 也需要 `.arkui-x/android`（Gradle 工程）；生成方式与 build-hap 一致
+    - name: Init ArkUI-X Project Structure
+      shell: bash
+      working-directory: ohos
+      run: |
+        set -euo pipefail
+        cp .arkui-x/arkui-x-config.json5 /tmp/arkui-x-config.json5
+        rm -rf .arkui-x
+        printf '1\n' | ace modify --project
+        cp /tmp/arkui-x-config.json5 .arkui-x/arkui-x-config.json5
+        echo "已生成 .arkui-x 工程结构并恢复跨端配置"
+
+    # scripts/build-apk.sh 从该文件读路径（本机版不入库），CI 里现生成
+    - name: Write Android Build Env
+      shell: bash
+      env:
+        NDK_VERSION: ${{ inputs.ndk-version }}
+      run: |
+        set -euo pipefail
+        ANDROID_HOME="${{ github.workspace }}/android-sdk"
+        cat > scripts/android-env.sh <<EOF
+        export ARKUI_X_SDK="\${ARKUI_X_SDK:-${{ github.workspace }}/arkui-x-sdk}"
+        if [ -d "\$ARKUI_X_SDK/24/arkui-x/toolchains/bin" ]; then
+          export PATH="\$ARKUI_X_SDK/24/arkui-x/toolchains/bin:\$PATH"
+        fi
+        export ANDROID_HOME="$ANDROID_HOME"
+        export ANDROID_SDK_ROOT="$ANDROID_HOME"
+        export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${NDK_VERSION}"
+        export JAVA_HOME="\${JAVA_HOME:-}"
+        [ -n "\$JAVA_HOME" ] && export PATH="\$JAVA_HOME/bin:\$PATH"
+        EOF
+        echo "已生成 scripts/android-env.sh"
+
+    - name: Build APK
+      id: build
+      shell: bash
+      env:
+        MODE: ${{ inputs.build-mode }}
+        ARCH: ${{ inputs.arch }}
+      run: |
+        set -euo pipefail
+        ./scripts/build-apk.sh "$MODE" "$ARCH"
+
+        APK=$(find ohos/.arkui-x/android/app/build/outputs/apk -name '*.apk' -type f | head -n 1)
+        if [ -z "$APK" ]; then
+          echo "::error::未找到构建产物 APK"
+          find ohos/.arkui-x -name '*.apk' -type f || true
+          exit 1
+        fi
+        echo "构建产物: $APK"
+        echo "apk-path=$(realpath "$APK")" >> "$GITHUB_OUTPUT"
