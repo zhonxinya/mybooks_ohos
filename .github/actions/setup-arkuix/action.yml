@@ -104,6 +104,11 @@ runs:
         mv arkuix_tmp/arkui-x arkuix-sdk/24/arkui-x
         rm -rf arkuix_tmp arkuix.zip
 
+        echo "ArkUI-X SDK 落地检查：$(pwd)"
+        ls -la arkuix-sdk/24/ | head -5
+        ls arkuix-sdk/24/arkui-x/toolchains/bin | head -3
+        df -h . | tail -1
+
     - name: Setup Build Environment
       id: env
       shell: bash
@@ -146,7 +151,17 @@ runs:
           echo "JAVA_HOME=$TOOLS_DIR/jbr" >> "$GITHUB_ENV"
         fi
 
-        chmod -R +x "$TOOLS_DIR/bin" "$ACE_BIN"
+        echo "工作目录：$(pwd)"
+        ls -d "$TOOLS_DIR" "$ARKUIX_DIR" 2>&1 || true
+        chmod -R +x "$TOOLS_DIR/bin"
+        if [ ! -d "$ACE_BIN" ]; then
+          echo "::error::ace 目录不存在：$ACE_BIN"
+          ls -la "$ARKUIX_DIR" 2>&1 || true
+          ls -la "$ARKUIX_DIR/24" 2>&1 || true
+          df -h . | tail -1
+          exit 1
+        fi
+        chmod -R +x "$ACE_BIN"
 
         # 5) 注册 ACE Tools 的各路径（ace 自身有配置文件，必须显式指向本次下载的目录）
         "$ACE_BIN/ace" config --arkui-x-sdk "$ARKUIX_DIR"
