@@ -97,6 +97,7 @@ add_library(entry SHARED
     download_store.cpp
     talebook_api.cpp
     sonovel_api.cpp
+    apk_installer.cpp
     ${SHARED_THIRD_PARTY}/cjson/cJSON.c
 )
 
@@ -105,6 +106,11 @@ target_compile_options(entry PRIVATE -fvisibility=hidden -Os)
 target_link_libraries(entry PUBLIC
     ${ENTRY_NAPI_LIBS}
 )
+
+# Android 侧 apk_installer.cpp 用 dlopen/dlsym 取 JNI 虚拟机
+if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    target_link_libraries(entry PUBLIC dl)
+endif()
 
 if(ENTRY_BUILD_DEPS_FROM_SOURCE OR OHOS_ARCH STREQUAL "x86_64")
     target_link_libraries(entry PUBLIC libcurl mbedtls mbedx509 mbedcrypto)
