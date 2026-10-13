@@ -82,34 +82,9 @@ runs:
         path: ./arkui-x-sdk
         key: ${{ runner.os }}-arkuix-${{ inputs.arkuix-sdk-version }}
 
-    - name: Download ArkUI-X SDK
-      if: steps.cache-arkuix.outputs.cache-hit != 'true'
-      shell: bash
-      run: |
-        set -euo pipefail
-        VER="${{ inputs.arkuix-sdk-version }}"
-        URL="${{ inputs.arkuix-sdk-url }}"
-        if [ -z "$URL" ]; then
-          URL="https://repo.huaweicloud.com/arkui-crossplatform/sdk/${VER}/linux/arkui-x-linux-x64-${VER}-Release.zip"
-        fi
-        echo "下载 ArkUI-X SDK: $URL"
-        curl -fL --retry 3 --retry-delay 5 -o arkuix.zip "$URL"
-        echo "${{ inputs.arkuix-sdk-sha256 }}  arkuix.zip" | sha256sum -c -
-
-        # 目录名必须是纯数字（ace 只认数字版本目录），且 = arkui-x.json 的 apiVersion（本例 24）；
-        # 另需 <root>/licenses/（ace 校验许可证目录）
-        mkdir -p arkuix_tmp
-        unzip -q arkuix.zip -d arkuix_tmp
-        mkdir -p arkuix-sdk/24 arkuix-sdk/licenses
-        mv arkuix_tmp/arkui-x arkuix-sdk/24/arkui-x
-        rm -rf arkuix_tmp arkuix.zip
-
-        echo "ArkUI-X SDK 落地检查：$(pwd)"
-        ls -la arkuix-sdk/24/ | head -5
-        ls arkuix-sdk/24/arkui-x/toolchains/bin | head -3
-        df -h . | tail -1
-
-    - name: Setup Build Environment
+    # SDK 落地与环境配置放在同一个步骤（同一 shell 进程）内：实测出现过
+    # 「下载步骤成功、下一独立步骤却看不到该目录」的现象，合并到同一进程即可规避。
+    - name: Setup ArkUI-X SDK & Environment
       id: env
       shell: bash
       run: |
@@ -117,6 +92,30 @@ runs:
         TOOLS_DIR="$(pwd)/command-line-tools"
         ARKUIX_DIR="$(pwd)/arkui-x-sdk"
         ACE_BIN="$ARKUIX_DIR/24/arkui-x/toolchains/bin"
+
+        if [ "${{ steps.cache-arkuix.outputs.cache-hit }}" != "true" ]; then
+          VER="${{ inputs.arkuix-sdk-version }}"
+          URL="${{ inputs.arkuix-sdk-url }}"
+          if [ -z "$URL" ]; then
+            URL="https://repo.huaweicloud.com/arkui-crossplatform/sdk/${VER}/linux/arkui-x-linux-x64-${VER}-Release.zip"
+          fi
+          echo "下载 ArkUI-X SDK: $URL"
+          curl -fL --retry 3 --retry-delay 5 -o arkuix.zip "$URL"
+          echo "${{ inputs.arkuix-sdk-sha256 }}  arkuix.zip" | sha256sum -c -
+
+          # 目录名必须是纯数字（ace 只认数字版本目录），且 = arkui-x.json 的 apiVersion（本例 24）；
+          # 另需 <root>/licenses/（ace 校验许可证目录）
+          rm -rf arkuix_tmp
+          mkdir -p arkuix_tmp
+          unzip -q arkuix.zip -d arkuix_tmp
+          mkdir -p "$ARKUIX_DIR/24" "$ARKUIX_DIR/licenses"
+          rm -rf "$ARKUIX_DIR/24/arkui-x"
+          mv arkuix_tmp/arkui-x "$ARKUIX_DIR/24/arkui-x"
+          rm -rf arkuix_tmp arkuix.zip
+        fi
+
+        echo "ArkUI-X SDK 落地检查：$ARKUIX_DIR"
+        ls "$ARKUIX_DIR/24/arkui-x/toolchains/bin" | head -3
 
         # 1) hvigor 通过 ohos/local.properties 定位两套 SDK（该文件含机器相关路径，不入库）
         {
@@ -151,14 +150,10 @@ runs:
           echo "JAVA_HOME=$TOOLS_DIR/jbr" >> "$GITHUB_ENV"
         fi
 
-        echo "工作目录：$(pwd)"
-        ls -d "$TOOLS_DIR" "$ARKUIX_DIR" 2>&1 || true
         chmod -R +x "$TOOLS_DIR/bin"
         if [ ! -d "$ACE_BIN" ]; then
           echo "::error::ace 目录不存在：$ACE_BIN"
           ls -la "$ARKUIX_DIR" 2>&1 || true
-          ls -la "$ARKUIX_DIR/24" 2>&1 || true
-          df -h . | tail -1
           exit 1
         fi
         chmod -R +x "$ACE_BIN"
@@ -170,8 +165,12 @@ runs:
         "$ACE_BIN/ace" config --openharmony-sdk "$TOOLS_DIR/sdk"
         "$ACE_BIN/ace" config --harmonyos-sdk "$TOOLS_DIR/sdk"
         "$ACE_BIN/ace" config --deveco-studio-path "$DEVECO_STUB"
-        [ -n "${{ inputs.android-sdk }}" ] && "$ACE_BIN/ace" config --android-sdk "${{ inputs.android-sdk }}" || true
-        [ -n "${{ inputs.android-ndk }}" ] && echo "ANDROID_NDK_HOME=${{ inputs.android-ndk }}" >> "$GITHUB_ENV" || true
+        if [ -n "${{ inputs.android-sdk }}" ]; then
+          "$ACE_BIN/ace" config --android-sdk "${{ inputs.android-sdk }}"
+        fi
+        if [ -n "${{ inputs.android-ndk }}" ]; then
+          echo "ANDROID_NDK_HOME=${{ inputs.android-ndk }}" >> "$GITHUB_ENV"
+        fi
         "$ACE_BIN/ace" check
 
         echo "arkuix-sdk=$ARKUIX_DIR" >> "$GITHUB_OUTPUT"
