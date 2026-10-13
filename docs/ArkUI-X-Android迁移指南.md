@@ -48,6 +48,21 @@ AVSession、ReaderKit 等）会报 `11706007 can't support crossplatform applica
 > 该文件已入库（`ohos/.arkui-x/*` 的其余生成物仍忽略）。**平台专属代码的正确性由运行时分派保证**：
 > 每个调用点都先经 `PlatformTarget` 判定，Android 端不会执行鸿蒙专属分支。
 
+### 两端包名不同
+
+| 端 | 包名 | 来源 |
+|---|---|---|
+| HarmonyOS | `com.zhonxinya.mybooks.harmonyos` | `ohos/AppScope/app.json5` 的 `app.bundleName` |
+| Android | `com.zhonxinya.mybooks.android` | `scripts/android-shell-overlay.sh` 覆写生成的 `app/build.gradle` |
+
+ace 会用 `app.bundleName` 同时充当 Android 壳工程的清单 `package` 与 `applicationId`，两端同名会在同一台
+设备上互相覆盖安装，故 Android 侧由 overlay 覆写 `applicationId`（清单 `package` 仍取自 bundleName，
+充当命名空间；二者不同是 AGP 允许的组合）。由此：
+
+- **provider 的 authority 必须写成固定字面量**（`com.zhonxinya.mybooks.android.apkprovider`），不能由
+  `bundleManager.getBundleInfoForSelfSync()` 推导——它返回的是 ArkUI-X 的 bundleName（`.harmonyos`），与清单对不上；
+- 鸿蒙签名 profile 绑定 bundleName，改包名后需重新签发（`.hapsign/`）。
+
 ### 平台能力对照
 
 | 能力 | 鸿蒙实现 | Android 实现 | 位置 |
@@ -61,6 +76,25 @@ AVSession、ReaderKit 等）会报 `11706007 can't support crossplatform applica
 | 音频播放 | AVPlayer + AVSession + 后台长时任务 | AVPlayer，前台播放 | `services/AudioPlatformOhos.ets`<br>`services/AudioPlatformAndroid.ets` |
 | 电量显示 | `batteryInfo` | **待适配**（打开内置阅读器时调用，Android 端行为未验证） | `feature/reader/src/main/ets/ui/ReaderBattery.ets` |
 | 翻页动效帧回调 | `displaySync` | **待适配**（同上，Android 端行为未验证） | `feature/reader/src/main/ets/ui/ReaderFlipAnimator.ets` |
+| 应用内升级 | 不支持（HAP 需自行签名安装，仍走外链下载） | 下载 `.apk` 附件 → 系统安装器 | `services/ApkUpdater.ets` |
+| 用 Want 打开外部链接 | `startAbility({action: viewData, uri})` | **不可用**（见下节第 1 点），Android 端按钮无反应 | `pages/UpdatePage.ets` |
+
+### 应用内升级（Android）
+
+`services/ApkUpdater.ets` 把 release 里的 `.apk` 附件下载到 `filesDir/updates`，再交给系统安装器。
+两个平台坑（均为实测结论）：
+
+1. **`context.startAbility` 在 Android 上拉不起系统组件**：隐式 Want 只在 ArkUI-X 自己的 bundle 内解析目标，
+   解析不到就直接抛 `Internal error`（用 `viewData` 打开 https 链接同样失败）。因此安装改走原生桥
+   `libentry.apiInstallApk(uri)`：Android 侧用 JNI 取 JavaVM（`JNI_OnLoad` 优先，兜底 `dlopen libart.so`
+   + `JNI_GetCreatedJavaVMs`），再调用 `android-overlay/java/.../ApkInstaller.java` 构造 Intent。
+   注意**应用类加载器只在 `JNI_OnLoad` 里可用**，故由 `ApkInstaller.init`（provider 的 `onCreate` 调用）
+   触发 `System.loadLibrary("entry")` 并把类缓存成全局引用；否则从 ArkTS 线程 `FindClass` 只会命中系统类加载器。
+2. **ArkTS 的 `context.filesDir` ≠ Android 的 `getFilesDir()`**：ArkUI-X 的
+   `StageApplicationDelegate#createStagePath` 把 filesDir 设为 `getFilesDir() + "/files"`，
+   因此 provider 按 `<getFilesDir>/files/updates` 读取安装包。
+
+首次安装需用户在系统弹窗里放开「从此来源安装应用」（`REQUEST_INSTALL_PACKAGES`）。
 
 ### 原生（C/C++）层的跨端
 
@@ -137,8 +171,11 @@ sdkmanager "emulator" "system-images;android-34;google_apis;x86_64"
 avdmanager create avd -n mybooks_x64 -k "system-images;android-34;google_apis;x86_64"
 emulator -avd mybooks_x64 -no-window -no-audio -gpu swiftshader_indirect &
 adb wait-for-device && adb install -r <apk>
-adb shell am start -n com.zhonxinya.talebook/com.zhonxinya.talebook.EntryEntryAbilityActivity
+adb shell am start -n com.zhonxinya.mybooks.android/com.zhonxinya.mybooks.harmonyos.EntryEntryAbilityActivity
 ```
+
+> 组件名 = `<applicationId>/<清单 package>.<Activity>`：安卓的 applicationId 是 `…mybooks.android`，
+> 而清单 package（命名空间）仍取自 `app.bundleName`（`…mybooks.harmonyos`），两者不同故不能省写成 `.EntryEntryAbilityActivity`。
 
 > 运行日志里 `libglobal_resmgr.so not found`（systemres 的 resmgr 插件）是无害告警：
 > 该 SDK 未附带此插件，加载失败后自动回退，不影响 UI 渲染。
@@ -199,7 +236,9 @@ CI 里由 action 自动完成的准备（都是本地踩过的坑，缺一不可
      （本类每帧显式赋值，不依赖系统帧回调）；已同样加「探测一次」缓存。
 5. **`@arkui-x.android` 模块不可直接 import** —— 类型声明仅在 ArkUI-X SDK 中存在，
    鸿蒙构建链会因「找不到模块」失败；这也是加解密改走 NAPI 的原因。
-6. **签名与安装** —— 本仓库不含签名材料，HAP 产物未签名；APK 由 Gradle 用 debug 证书签名。
+6. **签名与安装** —— 本仓库不含签名材料：HAP 产物未签名（本地签名材料见 `.hapsign/`）；APK 的 release
+   签名密钥不入库，CI 从 GitHub Secrets 还原（见 `.github/actions/build-apk`），本机指向 `.signing/`
+   （`scripts/android-env.sh`）。签名一致才能跨版本覆盖安装。
 7. **Android 端 `util` 插件编解码能力缺失**（实测 ArkUI-X 6.1.1，均已修复）：
    - `util.TextDecoder` **不支持 `gbk`**：`create('gbk')` 不抛错、却按拉丁系解码，整本 GBK 文本乱码
      → 已改为「探测引擎能力 + 内置 GBK 映射表兜底」（`feature/reader/engine/GbkTable.ets`）；
