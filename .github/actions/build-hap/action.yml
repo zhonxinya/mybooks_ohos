@@ -1,5 +1,9 @@
 name: Build HarmonyOS HAP
-description: 准备鸿蒙命令行工具链与构建配置，执行无签名构建并输出 HAP 路径
+description: 准备 ArkUI-X + 鸿蒙命令行工具链与跨端构建配置，经 ACE Tools 执行无签名构建并输出 HAP 路径
+
+# 说明：工程已切换为 ArkUI-X 工程结构（hvigorfile 用 AppTasksForArkUIX / HapTasks），
+# 因此 HAP 构建也要走 ACE Tools（`ace build hap`），裸 hvigorw 会因缺跨端配置失败。
+# 本 action 会把 ACE Tools 所需的全部路径与配置文件准备好（见 Setup 步骤里的逐条注释）。
 
 inputs:
   build-mode:
@@ -7,9 +11,21 @@ inputs:
     required: false
     default: debug
   tools-version:
-    description: 鸿蒙命令行工具链版本
+    description: 鸿蒙命令行工具链版本（须与本工程 hvigor-config 的 modelVersion 配套：6.1.1.x）
     required: false
-    default: '6.1.0.816'
+    default: '6.1.1.300'
+  tools-url:
+    description: 命令行工具链 zip 的完整下载地址（留空则用内置 GitHub 镜像拼 URL；自托管 6.1.1.x 时传入）
+    required: false
+    default: ''
+  arkuix-sdk-version:
+    description: ArkUI-X SDK 版本（需与本工程 hvigor-config 的 modelVersion/插件配套）
+    required: false
+    default: '6.1.1.111'
+  arkuix-sdk-sha256:
+    description: ArkUI-X SDK zip 的 SHA256（校验下载完整性）
+    required: false
+    default: 'eddddab0e8a8da99079035d2fe2e07c01351d795477671e7d99ec8a67e674857'
 
 outputs:
   hap-path:
@@ -38,21 +54,75 @@ runs:
       run: |
         set -euo pipefail
         VER="${{ inputs.tools-version }}"
-        URL="https://github.com/Okysu/harmony-auto-build/releases/download/commandline-tools-linux-x64-${VER}/commandline-tools-linux-x64-${VER}.zip"
+        URL="${{ inputs.tools-url }}"
+        if [ -z "$URL" ]; then
+          URL="https://github.com/Okysu/harmony-auto-build/releases/download/commandline-tools-linux-x64-${VER}/commandline-tools-linux-x64-${VER}.zip"
+        fi
         echo "下载鸿蒙命令行工具链: $URL"
+        echo "（本工程需要 6.1.1.x 的官方命令行工具链；公开镜像只有 6.1.0.816，二者 modelVersion 不兼容，"
+        echo " 故请自托管该 zip 并通过 inputs.tools-url 或仓库变量 HARMONY_TOOLS_URL 传入）"
         curl -fL --retry 3 --retry-delay 5 -o tools.zip "$URL"
         unzip -q tools.zip
         rm -f tools.zip
+
+    # ArkUI-X SDK 约 190MB，缓存命中可省去下载
+    - name: Cache ArkUI-X SDK
+      id: cache-arkuix
+      uses: actions/cache@v4
+      with:
+        path: ./arkui-x-sdk
+        key: ${{ runner.os }}-arkuix-${{ inputs.arkuix-sdk-version }}
+
+    - name: Download ArkUI-X SDK
+      if: steps.cache-arkuix.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        VER="${{ inputs.arkuix-sdk-version }}"
+        URL="https://repo.huaweicloud.com/arkui-crossplatform/sdk/${VER}/linux/arkui-x-linux-x64-${VER}-Release.zip"
+        echo "下载 ArkUI-X SDK: $URL"
+        curl -fL --retry 3 --retry-delay 5 -o arkuix.zip "$URL"
+        echo "${{ inputs.arkuix-sdk-sha256 }}  arkuix.zip" | sha256sum -c -
+
+        # 目录名必须是纯数字（ace 只认数字版本目录），且 = arkui-x.json 的 apiVersion（本例 24）；
+        # 另需 <root>/licenses/（ace 校验许可证目录）
+        mkdir -p arkuix_tmp
+        unzip -q arkuix.zip -d arkuix_tmp
+        mkdir -p arkuix-sdk/24 arkuix-sdk/licenses
+        mv arkuix_tmp/arkui-x arkuix-sdk/24/arkui-x
+        rm -rf arkuix_tmp arkuix.zip
 
     - name: Setup Build Environment
       shell: bash
       run: |
         set -euo pipefail
         TOOLS_DIR="$(pwd)/command-line-tools"
+        ARKUIX_DIR="$(pwd)/arkui-x-sdk"
+        ACE_BIN="$ARKUIX_DIR/24/arkui-x/toolchains/bin"
 
-        # hvigor 通过 ohos/local.properties 的 hwsdk.dir 定位 SDK（该文件含机器相关路径，不入库）
-        echo "hwsdk.dir=$TOOLS_DIR/sdk" > ohos/local.properties
+        # 1) hvigor 通过 ohos/local.properties 定位两套 SDK（该文件含机器相关路径，不入库）
+        {
+          echo "hwsdk.dir=$TOOLS_DIR/sdk"
+          echo "arkui-x.dir=$ARKUIX_DIR"
+        } > ohos/local.properties
 
+        # 2) ace 硬编码读 APPScope/app.json5，而工程目录是 AppScope（Linux 大小写敏感）
+        [ -e ohos/APPScope ] || ln -s AppScope ohos/APPScope
+
+        # 3) 鸿蒙 SDK 的数字版本目录 + licenses（ace 校验「数字版本目录/toolchains」与「licenses 目录」）
+        mkdir -p "$TOOLS_DIR/sdk/24" "$TOOLS_DIR/sdk/licenses"
+        ln -sfn ../default/openharmony/toolchains "$TOOLS_DIR/sdk/24/toolchains"
+        ln -sfn ../default/sdk-pkg.json "$TOOLS_DIR/sdk/24/sdk-pkg.json"
+
+        # 4) DevEco 桩目录：ace 用它判定「工程是否需要升级」，检测到版本 >=6 才会跳过；
+        #    否则会提示升级并把 hvigor-config 的 modelVersion 清空，导致 hvigor 拒绝构建。
+        DEVECO_STUB="$HOME/deveco-studio"
+        mkdir -p "$DEVECO_STUB/bin"
+        printf '{\n  "version": "6.1.1",\n  "product": "devecostudio"\n}\n' > "$DEVECO_STUB/product-info.json"
+        printf '#!/bin/sh\necho devecostudio stub\n' > "$DEVECO_STUB/bin/devecostudio.sh"
+        chmod +x "$DEVECO_STUB/bin/devecostudio.sh"
+
+        echo "$ACE_BIN" >> "$GITHUB_PATH"
         echo "$TOOLS_DIR/bin" >> "$GITHUB_PATH"
         echo "OHPM_HOME=$TOOLS_DIR/ohpm" >> "$GITHUB_ENV"
         echo "HOS_SDK_HOME=$TOOLS_DIR/sdk" >> "$GITHUB_ENV"
@@ -63,7 +133,16 @@ runs:
           echo "JAVA_HOME=$TOOLS_DIR/jbr" >> "$GITHUB_ENV"
         fi
 
-        chmod -R +x "$TOOLS_DIR/bin"
+        chmod -R +x "$TOOLS_DIR/bin" "$ACE_BIN"
+
+        # 5) 注册 ACE Tools 的各路径（ace 自身有配置文件，必须显式指向本次下载的目录）
+        "$ACE_BIN/ace" config --arkui-x-sdk "$ARKUIX_DIR"
+        "$ACE_BIN/ace" config --command-line-tools-path "$TOOLS_DIR"
+        "$ACE_BIN/ace" config --ohpm-dir "$TOOLS_DIR/ohpm"
+        "$ACE_BIN/ace" config --openharmony-sdk "$TOOLS_DIR/sdk"
+        "$ACE_BIN/ace" config --harmonyos-sdk "$TOOLS_DIR/sdk"
+        "$ACE_BIN/ace" config --deveco-studio-path "$DEVECO_STUB"
+        "$ACE_BIN/ace" check
 
     # 仓库不保存任何签名材料，CI 固定使用无签名配置
     - name: Apply CI Build Profile
@@ -72,6 +151,22 @@ runs:
         set -euo pipefail
         cp ohos/build-profile.ci.json5 ohos/build-profile.json5
         echo "已生成无签名 build-profile.json5"
+
+    # 干净检出里没有 `.arkui-x/android|ios`（生成物未入库），但 ace 构建需要它：
+    # 先 `ace modify --project` 生成。注意两点（均实测）：
+    #   1. 检出里已有提交版 arkui-x-config.json5，modify 见此会拒绝生成（「已是跨端工程」），
+    #      故先把它移走、生成后再放回；
+    #   2. 平台选 1 = Default(Android, iOS)（与本机一致）。
+    - name: Init ArkUI-X Project Structure
+      shell: bash
+      working-directory: ohos
+      run: |
+        set -euo pipefail
+        cp .arkui-x/arkui-x-config.json5 /tmp/arkui-x-config.json5
+        rm -rf .arkui-x
+        printf '1\n' | ace modify --project
+        cp /tmp/arkui-x-config.json5 .arkui-x/arkui-x-config.json5
+        echo "已生成 .arkui-x 工程结构并恢复跨端配置"
 
     - name: Install Dependencies
       shell: bash
@@ -84,10 +179,11 @@ runs:
       working-directory: ohos
       run: |
         set -euo pipefail
-        hvigorw assembleHap \
-          -p product=default \
-          -p buildMode=${{ inputs.build-mode }} \
-          --no-daemon
+        if [ "${{ inputs.build-mode }}" = "release" ]; then
+          ace build hap --release
+        else
+          ace build hap --debug
+        fi
 
         HAP=$(find . -path '*/outputs/*' -name '*.hap' -type f | head -n 1)
         if [ -z "$HAP" ]; then

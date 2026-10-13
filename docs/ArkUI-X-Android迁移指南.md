@@ -143,6 +143,39 @@ adb shell am start -n com.zhonxinya.talebook/com.zhonxinya.talebook.EntryEntryAb
 > 运行日志里 `libglobal_resmgr.so not found`（systemres 的 resmgr 插件）是无害告警：
 > 该 SDK 未附带此插件，加载失败后自动回退，不影响 UI 渲染。
 
+## CI（GitHub Actions）
+
+CI 的 HAP 构建（`.github/actions/build-hap`）与本地一致，走 **ACE Tools**：`ace build hap`。
+裸 `hvigorw` 已不适用（工程切为 ArkUI-X 结构后，`hvigorfile.ts` 引用 ArkUI-X 任务类）。
+
+**前提：CI 必须拿到与本工程配套的鸿蒙命令行工具链 6.1.1.x。**
+
+- 公开的第三方镜像（`Okysu/harmony-auto-build`）**只有 6.1.0.816**，它有两处不兼容：
+  1. `hvigor` 直接拒绝 `modelVersion 6.1.1`（报 `Unsupported modelVersion of Hvigor 6.1.1`，
+     提示 supported is 6.1.0）；
+  2. 该版本工具链要求 **ArkUI-X 6.1.0.28**，而华为云 ArkUI-X 镜像里**没有这个版本**（只有 6.0.x 与 6.1.1.x）。
+- 因此需要**自托管** `commandline-tools-linux-x64-6.1.1.300.zip`（约 1.98GiB，未超 GitHub Release
+  单文件 2GiB 上限，可挂在任意公开地址），在仓库 **Settings → Variables** 建 `HARMONY_TOOLS_URL`
+  指向它；两条工作流已通过 `tools-url: ${{ vars.HARMONY_TOOLS_URL }}` 传入。
+
+CI 里由 action 自动完成的准备（都是本地踩过的坑，缺一不可）：
+
+| 步骤 | 作用 |
+|---|---|
+| 下载并解压 ArkUI-X SDK（校验 SHA256） | 目录名必须是纯数字 `24`（= apiVersion），另需 `<root>/licenses/` |
+| 写 `ohos/local.properties` | `hwsdk.dir` + `arkui-x.dir`（hvigor 与 ace 插件都读它） |
+| `ln -s AppScope ohos/APPScope` | ace 硬编码读 `APPScope`（Linux 大小写敏感） |
+| 建 `sdk/24/{toolchains,sdk-pkg.json}` + `sdk/licenses` | ace 校验「数字版本目录 + 许可证目录」 |
+| 建 DevEco 桩（`product-info.json` 版本 6.1.1） | 否则 ace 会把工程标记为「需升级」并清空 `modelVersion` |
+| `ace config --arkui-x-sdk/--command-line-tools-path/--ohpm-dir/--openharmony-sdk/--harmonyos-sdk/--deveco-studio-path` | 注册本次下载的目录，`ace check` 全绿 |
+| `ace modify --project`（平台选 `1` = Android+iOS） | 干净检出没有 `.arkui-x/android\|ios`（生成物未入库），而 ace 构建需要它 |
+| `git checkout -- .arkui-x/arkui-x-config.json5` | modify 会重写该文件、丢掉 `buildOption.ignoreCrossPlatform` |
+
+> 备选（若不想自托管 2GB 包）：让 CI 构建「鸿蒙专用形态」——用公开的 6.1.0.816 + 原始
+> `hvigorfile.ts` + `modelVersion 5.0.0` + 无 `.arkui-x`，走裸 `hvigorw assembleHap`
+> （已实测 36s 出 HAP）。代价是 CI 不再校验跨端链路，且需在仓库保留一套纯 hvigor 的
+> `hvigorfile` 变体供 CI 替换。
+
 ## 已知限制
 
 1. **Linux 桌面未实现** —— ArkUI-X 官方尚未支持。
