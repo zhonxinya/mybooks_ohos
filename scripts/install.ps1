@@ -7,7 +7,7 @@ param(
 $PROJECT_ROOT = Split-Path -Parent $PSScriptRoot
 $LOG_FILE = Join-Path $PROJECT_ROOT "build\install.log"
 $HDC_PATH = "C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe"
-$BUNDLE_NAME = "com.zhonxinya.talebook"
+$BUNDLE_NAME = "com.zhonxinya.mybooks.harmonyos"
 $ABILITY_NAME = "EntryAbility"
 
 # 创建日志目录并清空上次日�?

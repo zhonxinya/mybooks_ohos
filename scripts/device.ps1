@@ -7,7 +7,7 @@ param(
 )
 
 $HDC_PATH = "C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe"
-$BUNDLE_NAME = "com.zhonxinya.talebook"
+$BUNDLE_NAME = "com.zhonxinya.mybooks.harmonyos"
 $ABILITY_NAME = "EntryAbility"
 
 if (-not (Test-Path $HDC_PATH)) {
