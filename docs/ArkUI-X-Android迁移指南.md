@@ -54,7 +54,7 @@ AVSession、ReaderKit 等）会报 `11706007 can't support crossplatform applica
 |---|---|---|---|
 | 平台判定 | — | 运行时检测 `osFullName` | `common/PlatformTarget.ets` |
 | 路由导航 | `UIContext.getRouter()` | 取不到（返回 undefined）→ 统一走 `AppRouter`（回退全局 `router`） | `utils/AppRouter.ets` |
-| 轻提示 toast | `promptAction` | **待适配**：`libpromptaction.so` 未随包（SDK 有，ace 未拷） | `scripts/build-apk.sh` 待补 |
+| 轻提示 toast | `promptAction` | 已适配：`build-apk.sh` 补拷插件 `libpromptaction.so`（ace 漏拷 Kit 形式导入的模块） | `scripts/build-apk.sh` |
 | 密码存储 | Asset Store（关键资产存储） | AES-256-GCM 密文 + 原生密钥文件 | `services/SecureStore.ets`（鸿蒙）<br>`services/SecureStoreAndroid.ets`（Android） |
 | 阅读器引擎 | 优先系统 ReaderKit | 一律用内置阅读器 | `services/ReaderLauncher.ets` |
 | 朗读（TTS） | `@kit.CoreSpeechKit` | **不提供**（Android 端无调用方） | `services/ReaderTtsService.ets` |
@@ -81,6 +81,13 @@ ACE Tools 的 APK 流程**用鸿蒙工具链**编译工程内的 C++（`.cxx` �
 > **为什么 C++ 标准库必须静态链接**：ArkUI-X 引擎自带 libc++ 的命名空间是 `std::__n1`
 > （OHOS 风格），而 NDK 编出来的是 `std::__ndk1`，二者不兼容且同名 `libc++_shared.so`
 > 同进程只能存在一份。静态链接后业务模块自包含，引擎继续用自己的 libc++。
+
+> **插件库按需补拷**：ace 只拷贝它识别到的 ArkUI-X 插件 `.so`，以 **Kit 形式**导入的模块
+> （例如 `@kit.ArkUI` 里的 `promptAction`）会被漏拷，运行期表现为
+> `moduleName:promptAction ... libpromptaction.so not found` + 功能**静默失效**（toast 不弹）。
+> `scripts/build-apk.sh` 维护一份实测清单（当前：`promptaction`），按目标 ABI 从
+> `<SDK>/24/arkui-x/plugins/api/lib/<plugin>/<abi>/` 补进 gradle 的 jniLibs。
+> 新功能若在 Android 上无声失效，先查 logcat 里有没有 `libX.so not found`。
 
 ## 环境准备（Linux）
 
@@ -142,9 +149,11 @@ adb shell am start -n com.zhonxinya.talebook/com.zhonxinya.talebook.EntryEntryAb
 2. **Android 无后台音频保活** —— 见上文「音频播放」。
 3. **Android 无朗读功能** —— TTS 依赖华为 CoreSpeechKit。
 4. **Android 阅读界面待验证** —— `ReaderBattery`（`batteryInfo`）与 `ReaderFlipAnimator`
-   （`displaySync`）是仅鸿蒙有实现的 API，位于 `feature/reader` 内置阅读器路径上。
-   目前验证范围只覆盖书架页 / 设置页；**打开书籍进入阅读器前，建议先给这两处加运行期守卫**
-   （Android 上跳过电量查询、动效帧回退为定时器），否则可能在进入阅读器时触发 JS 异常。
+   （`displaySync`）是仅鸿蒙有实现的 API。经核对，`batteryinfo` / `displaysync` / `wantagent` /
+   `avsession` / `backgroundtaskmanager` 这些模块**在 ArkUI-X 6.1.1 SDK 中根本不存在**
+   （既没有 `.so` 也没有 `.abc`），所以不是「补包」能解决的，必须在 ArkTS 侧做运行期降级
+   （Android 上跳过电量查询、动效帧回退为定时器）。目前验证范围只覆盖书架 / 设置 / 账号 /
+   下载管理等页面；**打开书籍进入阅读器前应先加这两处守卫**。
 5. **`@arkui-x.android` 模块不可直接 import** —— 类型声明仅在 ArkUI-X SDK 中存在，
    鸿蒙构建链会因「找不到模块」失败；这也是加解密改走 NAPI 的原因。
 6. **签名与安装** —— 本仓库不含签名材料，HAP 产物未签名；APK 由 Gradle 用 debug 证书签名。

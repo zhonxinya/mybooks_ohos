@@ -110,6 +110,26 @@ build_native_module() {
 build_native_module mybooks_core libmybooks_core.so "$APP_DIR/mybooks_core/src/main/cpp"
 build_native_module entry libentry.so "$APP_DIR/entry/src/main/cpp"
 
+# ---- 1b) 补拷 ArkUI-X 插件库 ----
+# ace 只拷贝「它识别到」的插件 .so；经实测（日志 `moduleName:X ... libX.so not found`），
+# Kit 形式导入的模块会漏拷，其中 promptaction（toast）在 SDK 里存在，补进 jniLibs 即生效。
+# 注：batteryinfo / displaysync / wantagent / avsession / backgroundtaskmanager 在
+# ArkUI-X 6.1.1 SDK 中**不存在**（非打包问题），需在 ArkTS 侧做运行期降级。
+PLUGIN_LIBS=(
+  "promptaction/libpromptaction.so"
+)
+for rel in "${PLUGIN_LIBS[@]}"; do
+  src="$ARKUI_X_SDK/24/arkui-x/plugins/api/lib/$rel"
+  # 插件目录名与引擎库目录名一致（android-arm64-release / android-arm-release / android-x86_64）
+  src_abi="$(dirname "$src")/$ENGINE_SUBDIR/$(basename "$src")"
+  if [ -f "$src_abi" ]; then
+    cp -f "$src_abi" "$JNI_ABI_DIR/"
+    echo "    -> 插件 $JNI_ABI_DIR/$(basename "$src")"
+  else
+    echo "    警告：SDK 中未找到插件库 $src_abi（跳过）" >&2
+  fi
+done
+
 # ---- 2) ace 打包（编译 ArkTS + gradle 组装 APK，jniLibs 取上一步的产物）----
 cd "$APP_DIR"
 ACE_ARGS=(build apk)
