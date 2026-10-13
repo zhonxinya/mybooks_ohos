@@ -9,6 +9,7 @@ import { TalebookApi } from '../services/TalebookApi';
 import { BookItem as ApiBookItem } from '../services/BookModels';
 import { ReadingStatsSummary } from '../models/HomeModels';
 import { DateFormat } from '../utils/DateFormat';
+import { AppRouter } from '../utils/AppRouter';
 
 interface OnlineBook {
   id: number;
@@ -256,7 +257,7 @@ struct ReadingHistoryPage {
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openBook(bookId: number): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/BookDetailPage', params: { bookId: bookId } });
+    AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookDetailPage', params: { bookId: bookId } });
   }
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
@@ -409,7 +410,7 @@ struct ReadingHistoryPage {
         message: '暂无阅读历史',
         detail: '打开任意书籍开始阅读后，这里会记录你的阅读进度',
         actionLabel: '去书架',
-        onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/MainTabs' }),
+        onAction: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/MainTabs' }),
       });
     } else {
       List({ space: 8 }) {

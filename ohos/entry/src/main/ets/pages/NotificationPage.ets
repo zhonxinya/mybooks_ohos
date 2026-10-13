@@ -4,6 +4,7 @@ import { TalebookApi } from '../services/TalebookApi';
 import { NotificationService } from '../services/NotificationService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
+import { AppRouter } from '../utils/AppRouter';
 
 /** 逐个标记已读时的单页大小（talebook 无「清空」端点，只能逐条打）。 */
 const CLEAR_PAGE_SIZE: number = 100;
@@ -307,7 +308,7 @@ struct NotificationPage {
       EmptyState({
         message: this.errorMessage,
         actionLabel: '去配置账号',
-        onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
+        onAction: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookConfigPage' }),
       });
     } else if (this.messages.length === 0) {
       EmptyState({ message: this.errorMessage.length > 0 ? this.errorMessage : '暂无通知' });

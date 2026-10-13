@@ -1,4 +1,5 @@
 import { IconCircleButton } from './IconCircleButton';
+import { AppRouter } from '../utils/AppRouter';
 
 @Component
 export struct HarmonyTopBar {
@@ -17,7 +18,7 @@ export struct HarmonyTopBar {
           IconCircleButton({
             icon: $r('sys.symbol.chevron_left'),
             variant: 'ghost',
-            onTap: () => this.getUIContext().getRouter().back(),
+            onTap: () => AppRouter.back(this.getUIContext()),
           });
         }
         Text(this.title)

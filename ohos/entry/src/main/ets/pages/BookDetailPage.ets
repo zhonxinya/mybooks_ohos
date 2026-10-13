@@ -13,6 +13,7 @@ import { FormatReadingStat, ReadingDevice, deviceTypeLabel, formatStatDuration }
 import { BookUploadService } from '../services/BookUploadService';
 import { DownloadTaskService } from '../services/DownloadTaskService';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
+import { AppRouter } from '../utils/AppRouter';
 
 interface BookFileFormat {
   format: string;
@@ -100,7 +101,7 @@ struct BookDetailPage {
   private downloadTaskId: string = '';
 
   aboutToAppear(): void {
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object>;
     this.bookId = Number(params['bookId'] ?? 0);
     this.localOnly = Boolean(params['localOnly'] ?? false);
     this.localFilePath = String(params['filePath'] ?? '');
@@ -365,7 +366,7 @@ struct BookDetailPage {
     if (metaName.length === 0) {
       return;
     }
-    this.getUIContext().getRouter().pushUrl({
+    AppRouter.pushUrl(this.getUIContext(), {
       url: 'pages/BookListPage',
       params: { type: 'meta', metaType: metaType, metaName: metaName },
     });
@@ -752,7 +753,7 @@ struct BookDetailPage {
         TalebookService.removeDownloadRecord(this.localBookId);
         this.toast('已删除');
         this.notifyLibraryChanged();
-        this.getUIContext().getRouter().back();
+        AppRouter.back(this.getUIContext());
         return;
       }
       await TalebookService.ensureAuthenticated();
@@ -763,7 +764,7 @@ struct BookDetailPage {
       }
       this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '已删除');
       this.notifyLibraryChanged();
-      this.getUIContext().getRouter().back();
+      AppRouter.back(this.getUIContext());
     } catch (error) {
       this.toast(`删除失败：${error}`);
     } finally {
@@ -1116,7 +1117,7 @@ struct BookDetailPage {
         message: '服务端会话已失效，请重新登录后再加入书单。',
         primaryButton: {
           value: '去账号与服务器',
-          action: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
+          action: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookConfigPage' }),
         },
         secondaryButton: { value: '取消', action: () => {} },
       });
@@ -1375,7 +1376,7 @@ struct BookDetailPage {
               ListItem() {
                 this.menuItem($r('sys.symbol.square_and_pencil'), '编辑元数据', '', () => {
                   this.closeSheet();
-                  this.getUIContext().getRouter().pushUrl({
+                  AppRouter.pushUrl(this.getUIContext(), {
                     url: 'pages/BookEditPage',
                     params: { bookId: this.bookId },
                   });
@@ -1384,7 +1385,7 @@ struct BookDetailPage {
               ListItem() {
                 this.menuItem($r('sys.symbol.doc_text'), '引用信息', '', () => {
                   this.closeSheet();
-                  this.getUIContext().getRouter().pushUrl({
+                  AppRouter.pushUrl(this.getUIContext(), {
                     url: 'pages/ReferResultPage',
                     params: {
                       bookId: this.bookId,
@@ -1400,7 +1401,7 @@ struct BookDetailPage {
                 ListItem() {
                   this.menuItem($r('sys.symbol.headphones'), '音频文件', '', () => {
                     this.closeSheet();
-                    this.getUIContext().getRouter().pushUrl({
+                    AppRouter.pushUrl(this.getUIContext(), {
                       url: 'pages/AudioFilesPage',
                       params: { bookId: this.bookId, title: this.title, author: this.author, cover: this.cover },
                     });
@@ -1411,7 +1412,7 @@ struct BookDetailPage {
                 ListItem() {
                   this.menuItem($r('sys.symbol.square_grid_2x2'), '漫画阅读', '在线阅读', () => {
                     this.closeSheet();
-                    this.getUIContext().getRouter().pushUrl({ url: 'pages/ComicReaderPage', params: { bookId: this.bookId } });
+                    AppRouter.pushUrl(this.getUIContext(), { url: 'pages/ComicReaderPage', params: { bookId: this.bookId } });
                   });
                 }
               }
@@ -1489,7 +1490,7 @@ struct BookDetailPage {
               ListItem() {
                 this.menuItem($r('sys.symbol.square_and_pencil'), '编辑元数据', '', () => {
                   this.closeSheet();
-                  this.getUIContext().getRouter().pushUrl({
+                  AppRouter.pushUrl(this.getUIContext(), {
                     url: 'pages/BookEditPage',
                     params: { bookId: this.bookId },
                   });
@@ -1498,7 +1499,7 @@ struct BookDetailPage {
               ListItem() {
                 this.menuItem($r('sys.symbol.doc_text'), '引用信息', '', () => {
                   this.closeSheet();
-                  this.getUIContext().getRouter().pushUrl({
+                  AppRouter.pushUrl(this.getUIContext(), {
                     url: 'pages/ReferResultPage',
                     params: {
                       bookId: this.bookId,
@@ -1554,7 +1555,7 @@ struct BookDetailPage {
               ListItem() {
                 this.menuItem($r('sys.symbol.doc_text'), '书内标注', '高亮、笔记与书签', () => {
                   this.closeSheet();
-                  this.getUIContext().getRouter().pushUrl({
+                  AppRouter.pushUrl(this.getUIContext(), {
                     url: 'pages/BookAnnotationsPage',
                     params: { bookId: this.bookId, bookTitle: this.title },
                   });
@@ -1565,7 +1566,7 @@ struct BookDetailPage {
               ListItem() {
                 this.menuItem($r('sys.symbol.doc_plaintext'), 'TXT 工具', '内容片段 / 目录解析 / 位置', () => {
                   this.closeSheet();
-                  this.getUIContext().getRouter().pushUrl({ url: 'pages/TxtBookPage', params: { bookId: this.bookId } });
+                  AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TxtBookPage', params: { bookId: this.bookId } });
                 });
               }
             }
@@ -1573,7 +1574,7 @@ struct BookDetailPage {
               ListItem() {
                 this.menuItem($r('sys.symbol.clock'), '阅读进度与属性', '跨端进度、可见范围、媒体类型', () => {
                   this.closeSheet();
-                  this.getUIContext().getRouter().pushUrl({ url: 'pages/ReadingProgressPage', params: { bookId: this.bookId } });
+                  AppRouter.pushUrl(this.getUIContext(), { url: 'pages/ReadingProgressPage', params: { bookId: this.bookId } });
                 });
               }
             }
@@ -1601,7 +1602,7 @@ struct BookDetailPage {
                 ListItem() {
                   this.menuItem($r('sys.symbol.headphones'), '音频文件', '', () => {
                     this.closeSheet();
-                    this.getUIContext().getRouter().pushUrl({
+                    AppRouter.pushUrl(this.getUIContext(), {
                       url: 'pages/AudioFilesPage',
                       params: { bookId: this.bookId, title: this.title, author: this.author, cover: this.cover },
                     });
@@ -1611,7 +1612,7 @@ struct BookDetailPage {
                   ListItem() {
                     this.menuItem($r('sys.symbol.square_grid_2x2'), '漫画阅读', '在线阅读', () => {
                       this.closeSheet();
-                      this.getUIContext().getRouter().pushUrl({ url: 'pages/ComicReaderPage', params: { bookId: this.bookId } });
+                      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/ComicReaderPage', params: { bookId: this.bookId } });
                     });
                   }
                 }
@@ -2353,7 +2354,7 @@ struct BookDetailPage {
                           .width(78);
                       }
                       .alignItems(HorizontalAlign.Start)
-                      .onClick(() => this.getUIContext().getRouter().pushUrl({
+                      .onClick(() => AppRouter.pushUrl(this.getUIContext(), {
                         url: 'pages/BookDetailPage',
                         params: { bookId: book.id },
                       }));
@@ -2389,7 +2390,7 @@ struct BookDetailPage {
                           .width(78);
                       }
                       .alignItems(HorizontalAlign.Start)
-                      .onClick(() => this.getUIContext().getRouter().pushUrl({
+                      .onClick(() => AppRouter.pushUrl(this.getUIContext(), {
                         url: 'pages/BookDetailPage',
                         params: { bookId: book.id },
                       }));

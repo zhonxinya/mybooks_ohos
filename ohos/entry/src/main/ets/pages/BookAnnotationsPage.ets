@@ -10,6 +10,7 @@ import {
   ANNOTATION_TYPE_CHAPTER_COMMENT, ANNOTATION_SCOPE_VISIBLE, ANNOTATION_SCOPE_PUBLIC,
   ANNOTATION_SCOPE_MINE, annotationTypeLabel,
 } from '../services/AnnotationApi';
+import { AppRouter } from '../utils/AppRouter';
 
 interface ColorPreset {
   label: string;
@@ -64,7 +65,7 @@ struct BookAnnotationsPage {
   ];
 
   aboutToAppear(): void {
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object> | null;
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object> | null;
     this.bookId = Number(params?.['bookId'] ?? 0);
     this.bookTitle = String(params?.['bookTitle'] ?? '');
     this.supported = ServerRegistry.supports(ServerFeature.ANNOTATIONS);

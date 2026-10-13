@@ -6,6 +6,7 @@ import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, ReferSearchOpts, ReferSearchResponse } from '../services/TalebookApi';
 import { ReferBook } from '../common/ApiTypes';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
+import { AppRouter } from '../utils/AppRouter';
 
 @Entry
 @Component
@@ -29,7 +30,7 @@ struct ReferResultPage {
   }
 
   aboutToAppear(): void {
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object>;
     this.bookId = Number(params['bookId'] ?? 0);
     this.queryTitle = String(params['title'] ?? '');
     this.queryIsbn = String(params['isbn'] ?? '');
@@ -139,7 +140,7 @@ struct ReferResultPage {
       // 标题/作者/标签/封面都变了：通知书架与小说导航页重取；详情页返回时会自己静默重取
       BookshelfRefresh.notify();
       BookshelfRefresh.notifyBooksTab();
-      this.getUIContext().getRouter().back();
+      AppRouter.back(this.getUIContext());
     } catch (error) {
       this.toast(`应用失败：${error}`);
     } finally {
@@ -171,7 +172,7 @@ struct ReferResultPage {
       this.toast('已重置');
       BookshelfRefresh.notify();
       BookshelfRefresh.notifyBooksTab();
-      this.getUIContext().getRouter().back();
+      AppRouter.back(this.getUIContext());
     } catch (error) {
       this.toast(`重置失败：${error}`);
     }

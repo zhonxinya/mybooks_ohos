@@ -11,6 +11,7 @@ import {
   MergedSoNovelResult, SoNovelMerge, SoNovelSearchItem, SoNovelSourceOption,
 } from '../utils/SoNovelMerge';
 import { hasSameBook, normalizeName } from '../utils/LibraryMatch';
+import { AppRouter } from '../utils/AppRouter';
 
 /** 核对书库的在途请求上限：结果可能有几十本，逐个串行太慢，放开太多又会压垮书库。 */
 const LIBRARY_CHECK_CONCURRENCY: number = 3;
@@ -300,7 +301,7 @@ struct SoNovelSearchPage {
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openSource(item: SoNovelSearchItem): void {
     const payload = SoNovelMerge.toPayload(item);
-    this.getUIContext().getRouter().pushUrl({
+    AppRouter.pushUrl(this.getUIContext(), {
       url: 'pages/SoNovelBookDetailPage',
       params: {
         sourceId: payload.sourceId,
@@ -470,7 +471,7 @@ struct SoNovelSearchPage {
         IconCircleButton({
           icon: $r('sys.symbol.arrow_down_circle'),
           variant: 'ghost',
-          onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/DownloadManagerPage' }),
+          onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/DownloadManagerPage' }),
         });
       }
       BookViewToggleButton({ isListMode: $isListMode });
@@ -519,7 +520,7 @@ struct SoNovelSearchPage {
           message: '请先配置 SoNovel 服务地址',
           actionLabel: '去配置',
           // SoNovel 地址已并入「账号与服务器」，统一引导到该页，避免出现两个配置入口
-          onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
+          onAction: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookConfigPage' }),
         });
       } else if (this.loading) {
         LoadingState({ hint: '正在聚合搜索，请稍候…' });

@@ -13,6 +13,7 @@ import {
   BOOK_SOURCE_ENABLED_ALL, BOOK_SOURCE_ENABLED_ONLY, BOOK_SOURCE_ENABLED_DISABLED,
 } from '../services/BookSourceApi';
 import { PaginationHelper } from '../utils/PaginationHelper';
+import { AppRouter } from '../utils/AppRouter';
 
 /** 书源列表每页数量（上游上限 200，默认 50）。 */
 const PAGE_SIZE: number = 50;
@@ -999,7 +1000,7 @@ struct BookSourceManagePage {
                 fullWidth: false,
                 onTap: () => {
                   // 上游书源工作台内嵌的「全局配置」实为 legado 插件连接配置，跳插件中心维护
-                  this.getUIContext().getRouter().pushUrl({ url: 'pages/AdminPluginsPage' });
+                  AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminPluginsPage' });
                 },
               });
             }

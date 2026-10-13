@@ -12,6 +12,7 @@ import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper
 import { BookViewMode } from '../utils/BookViewMode';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { mapTalebookBook } from '../utils/BookMapper';
+import { AppRouter } from '../utils/AppRouter';
 
 @Entry
 @Component
@@ -120,7 +121,7 @@ struct AdminBookListPage {
       ],
     }).then((result) => {
       if (result.index === 0) {
-        this.getUIContext().getRouter().pushUrl({ url: 'pages/BookEditPage', params: { bookId: bookId } });
+        AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookEditPage', params: { bookId: bookId } });
       } else if (result.index === 1) {
         this.confirmDelete(book);
       } else if (result.index === 2) {
@@ -464,7 +465,7 @@ struct AdminBookListPage {
       } else {
         TextButton({
           label: '上传图书',
-          onTap: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/BookUploadPage' }),
+          onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookUploadPage' }),
         });
         if (ServerRegistry.supports(ServerFeature.ADMIN_BOOK_FILL)
           || ServerRegistry.supports(ServerFeature.ADMIN_BOOK_BATCH)) {
@@ -593,7 +594,7 @@ struct AdminBookListPage {
           items: this.catalogItems,
           isListMode: this.isListMode,
           loadingMore: this.loadingMore,
-          onItemTap: (item: BookListItemData) => this.getUIContext().getRouter().pushUrl({
+          onItemTap: (item: BookListItemData) => AppRouter.pushUrl(this.getUIContext(), {
             url: 'pages/BookDetailPage', params: { bookId: Number(item.id) }
           }),
           onItemLongPress: (item: BookListItemData) => {

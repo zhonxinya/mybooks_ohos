@@ -22,6 +22,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
 import { mapTalebookBook } from '../utils/BookMapper';
+import { AppRouter } from '../utils/AppRouter';
 
 @Entry
 @Component
@@ -268,7 +269,7 @@ struct OnlineLibraryPage {
       EmptyState({
         message: this.loadError,
         actionLabel: this.loadError.includes('配置') ? '去配置' : '',
-        onAction: () => this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' }),
+        onAction: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookConfigPage' }),
       });
     } else if (this.catalogItems.length === 0) {
       EmptyState({ message: '在线书库暂无书籍', detail: '可先通过网络书源搜索并保存书籍。' });
@@ -294,7 +295,7 @@ struct OnlineLibraryPage {
             header: () => {
               this.listHeader();
             },
-            onItemTap: (item: BookListItemData) => this.getUIContext().getRouter().pushUrl({
+            onItemTap: (item: BookListItemData) => AppRouter.pushUrl(this.getUIContext(), {
               url: 'pages/BookDetailPage', params: { bookId: Number(item.id) }
             }),
             onLoadMore: () => this.loadMore(),

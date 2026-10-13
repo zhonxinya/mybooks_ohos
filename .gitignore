@@ -88,3 +88,6 @@ ohos/ios/
 
 # Android 原生模块交叉编译中间产物
 ohos/build-android/
+
+# ace 需要的 APPScope 符号链接（Linux 大小写差异，见迁移指南）
+ohos/APPScope

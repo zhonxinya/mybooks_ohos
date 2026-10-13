@@ -23,6 +23,7 @@ import { ReaderFontService } from '../services/ReaderFontService';
 import { TalebookService } from '../services/TalebookService';
 import { ReadKitSession } from '../services/ReadKitSession';
 import { WindowAbility } from '../entryability/WindowAbility';
+import { AppRouter } from '../utils/AppRouter';
 
 const TAG: string = 'BuiltInReaderPage';
 
@@ -102,7 +103,7 @@ struct BuiltInReaderPage {
 
   aboutToAppear(): void {
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const params = this.getUIContext().getRouter().getParams() as BuiltInReaderParams;
+    const params = AppRouter.getParams(this.getUIContext()) as BuiltInReaderParams;
     this.filePath = params.filePath ?? '';
     this.bookId = params.bookId ?? '';
     this.bookTitle = params.bookTitle ?? '';
@@ -212,7 +213,7 @@ struct BuiltInReaderPage {
     } catch (error) {
       hilog.warn(0x0000, TAG, 'restoreSystemBars failed: %{public}s', (error as Error).message);
     }
-    this.getUIContext().getRouter().back();
+    AppRouter.back(this.getUIContext());
   }
 
   private restoreSystemBars(): void {

@@ -10,6 +10,7 @@ import {
   NETWORK_SAVE_FMT_TXT, NETWORK_SAVE_FMT_EPUB,
   NETWORK_SAVE_RUNNING, NETWORK_SAVE_COMPLETED,
 } from '../services/NetworkLibraryApi';
+import { AppRouter } from '../utils/AppRouter';
 
 /** 保存任务轮询间隔（服务端按章节抓取，进度更新较慢）。 */
 const SAVE_POLL_INTERVAL_MS: number = 3000;
@@ -71,7 +72,7 @@ struct NetworkBookDetailPage {
   private savePolls: number = 0;
 
   aboutToAppear(): void {
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object>;
     this.sourceId = String(params['sourceId'] ?? '');
     this.bookUrl = String(params['bookUrl'] ?? '');
     this.bookName = String(params['bookName'] ?? '');
@@ -482,7 +483,7 @@ struct NetworkBookDetailPage {
           SecondaryButton({
             label: '打开书籍',
             fullWidth: false,
-            onTap: () => this.getUIContext().getRouter().pushUrl({
+            onTap: () => AppRouter.pushUrl(this.getUIContext(), {
               url: 'pages/BookDetailPage',
               params: { bookId: this.savedBookId },
             }),

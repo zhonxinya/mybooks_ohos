@@ -15,6 +15,7 @@ import { ReaderTheme } from '../models/ReaderTheme';
 import { ReaderChrome } from 'reader';
 import { ReaderThemeColors } from '../theme/ReaderThemeColors';
 import { CoverCache } from '../utils/CoverCache';
+import { AppRouter } from '../utils/AppRouter';
 
 /**
  * talebook 漫画阅读器（竖向连续翻页）。
@@ -73,7 +74,7 @@ struct ComicReaderPage {
   private immersiveExited: boolean = false;
 
   aboutToAppear(): void {
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object>;
     this.bookId = Number(params['bookId'] ?? 0);
     const page = Number(params['page'] ?? -1);
     this.routePage = Number.isNaN(page) ? -1 : page;
@@ -325,7 +326,7 @@ struct ComicReaderPage {
     } catch (error) {
       hilog.warn(0x0000, TAG, 'exitImmersiveMode failed: %{public}s', `${error}`);
     }
-    this.getUIContext().getRouter().back();
+    AppRouter.back(this.getUIContext());
   }
 
   private close(): void {

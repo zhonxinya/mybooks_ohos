@@ -8,6 +8,7 @@ import {
 } from '../services/AdminImportApi';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { AppRouter } from '../utils/AppRouter';
 
 /**
  * 单次读取的字节窗口上限。
@@ -52,7 +53,7 @@ struct TxtBookPage {
       this.loading = false;
       return;
     }
-    const rawParams = this.getUIContext().getRouter().getParams();
+    const rawParams = AppRouter.getParams(this.getUIContext());
     if (rawParams !== undefined) {
       const params = rawParams as Record<string, Object>;
       const rawId = params['bookId'];

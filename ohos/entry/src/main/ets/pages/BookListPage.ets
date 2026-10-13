@@ -7,6 +7,7 @@ import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
 import { mapTalebookBook } from '../utils/BookMapper';
+import { AppRouter } from '../utils/AppRouter';
 
 @Entry
 @Component
@@ -26,7 +27,7 @@ struct BookListPage {
 
   aboutToAppear(): void {
     this.isListMode = BookViewMode.isListMode();
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object>;
     this.listType = String(params['type'] ?? 'recent');
     this.metaType = String(params['metaType'] ?? '');
     this.metaName = String(params['metaName'] ?? '');
@@ -201,7 +202,7 @@ struct BookListPage {
         items: this.catalogItems,
         isListMode: this.isListMode,
         loadingMore: this.loadingMore,
-        onItemTap: (item: BookListItemData) => this.getUIContext().getRouter().pushUrl({
+        onItemTap: (item: BookListItemData) => AppRouter.pushUrl(this.getUIContext(), {
           url: 'pages/BookDetailPage', params: { bookId: Number(item.id) }
         }),
         onLoadMore: () => this.loadMore(),

@@ -3,6 +3,7 @@ import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem,
 import { TalebookApi, ApiMessageResult, ToolboxStoreIndexResponse } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { AppRouter } from '../utils/AppRouter';
 
 @Entry
 @Component
@@ -198,63 +199,63 @@ struct AdminToolboxPage {
 
   private openToolPage(toolId: string): void {
     if (toolId === 'mimo_tts') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/MimoTtsToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/MimoTtsToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'epub_beautify') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/EpubBeautifyToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/EpubBeautifyToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'chinese_converter') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/ChineseConverterToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/ChineseConverterToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'bookbarn_acceptor') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/BookbarnAcceptorToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookbarnAcceptorToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'minify_pdf') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/MinifyPdfToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/MinifyPdfToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'epub_fixer') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/EpubFixerToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/EpubFixerToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'epub_split') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/EpubSplitToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/EpubSplitToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'text_replace') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/TextReplaceToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TextReplaceToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'txt_encoding_fixer') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/TxtEncodingFixerToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TxtEncodingFixerToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'formats_pruning') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/FormatsPruningToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/FormatsPruningToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'author_clean') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/AuthorCleanToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AuthorCleanToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'text_processor') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/TextProcessorToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TextProcessorToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'merge_formats_tool' || toolId === 'merge_formats') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/MergeFormatsToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/MergeFormatsToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'rare_book_downloader') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/RareBookDownloaderToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/RareBookDownloaderToolPage' }).catch(() => {});
       return;
     }
     if (toolId === 'review_book_language') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/ReviewBookLanguageToolPage' }).catch(() => {});
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/ReviewBookLanguageToolPage' }).catch(() => {});
       return;
     }
     try {

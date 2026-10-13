@@ -11,6 +11,7 @@ import { HomeBook, ReadingDashboard, formatDuration } from '../models/HomeModels
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { AppRouter } from '../utils/AppRouter';
 
 interface BookSummary {
   id: number;
@@ -432,17 +433,17 @@ export struct BooksTabPage {
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private handleEmptyAction(): void {
     if (this.emptyActionLabel === '去搜索') {
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookBookSearchPage' });
+      AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookBookSearchPage' });
       return;
     }
     // 「去配置」与「去配置账号」都指向账号与服务器：登录页已移除，配置好账号后由应用自动登录
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' });
+    AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookConfigPage' });
   }
 
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openBookDetail(bookId: number): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/BookDetailPage', params: { bookId: bookId } });
+    AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookDetailPage', params: { bookId: bookId } });
   }
 
   private rebuildCatalogItems(): void {
@@ -692,7 +693,7 @@ export struct BooksTabPage {
         title: '推荐书单',
         actionLabel: '全部书单',
         onAction: () => {
-          this.getUIContext().getRouter().pushUrl({ url: 'pages/BookListsPage' });
+          AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookListsPage' });
         },
       });
       Scroll() {
@@ -811,7 +812,7 @@ export struct BooksTabPage {
       },
     })
     .onClick(() => {
-      this.getUIContext().getRouter().pushUrl({
+      AppRouter.pushUrl(this.getUIContext(), {
         url: 'pages/BookListDetailPage',
         params: { booklistId: item.id },
       });

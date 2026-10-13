@@ -53,6 +53,8 @@ AVSession、ReaderKit 等）会报 `11706007 can't support crossplatform applica
 | 能力 | 鸿蒙实现 | Android 实现 | 位置 |
 |---|---|---|---|
 | 平台判定 | — | 运行时检测 `osFullName` | `common/PlatformTarget.ets` |
+| 路由导航 | `UIContext.getRouter()` | 取不到（返回 undefined）→ 统一走 `AppRouter`（回退全局 `router`） | `utils/AppRouter.ets` |
+| 轻提示 toast | `promptAction` | **待适配**：`libpromptaction.so` 未随包（SDK 有，ace 未拷） | `scripts/build-apk.sh` 待补 |
 | 密码存储 | Asset Store（关键资产存储） | AES-256-GCM 密文 + 原生密钥文件 | `services/SecureStore.ets`（鸿蒙）<br>`services/SecureStoreAndroid.ets`（Android） |
 | 阅读器引擎 | 优先系统 ReaderKit | 一律用内置阅读器 | `services/ReaderLauncher.ets` |
 | 朗读（TTS） | `@kit.CoreSpeechKit` | **不提供**（Android 端无调用方） | `services/ReaderTtsService.ets` |

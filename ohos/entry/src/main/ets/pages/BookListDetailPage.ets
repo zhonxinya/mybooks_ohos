@@ -16,6 +16,7 @@ import {
   DEFAULT_BOOKLIST_COLOR, booklistColorHex,
 } from '../models/BookListModels';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
+import { AppRouter } from '../utils/AppRouter';
 
 interface SheetBookItem {
   bookId: number;
@@ -74,7 +75,7 @@ struct BookListDetailPage {
   }
 
   aboutToAppear(): void {
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object>;
     this.booklistId = Number(params['booklistId'] ?? 0);
     void this.prepareAndLoad();
   }
@@ -191,7 +192,7 @@ struct BookListDetailPage {
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         if (TalebookService.isLoginRequiredResult(rsp.err, rsp.msg)) {
           this.toast('请先在「账号与服务器」中配置账号，应用会自动登录');
-          this.getUIContext().getRouter().pushUrl({ url: 'pages/TalebookConfigPage' });
+          AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookConfigPage' });
           return;
         }
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '操作失败');
@@ -270,7 +271,7 @@ struct BookListDetailPage {
             .then((rsp: ApiMessageResult) => {
               if (rsp.err === undefined || rsp.err === 'ok') {
                 this.toast('已删除');
-                this.getUIContext().getRouter().back();
+                AppRouter.back(this.getUIContext());
               } else {
                 this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
               }
@@ -548,7 +549,7 @@ struct BookListDetailPage {
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openBook(bookId: number): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/BookDetailPage', params: { bookId: bookId } });
+    AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookDetailPage', params: { bookId: bookId } });
   }
 
   @Builder

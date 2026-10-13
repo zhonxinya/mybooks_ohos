@@ -3,6 +3,7 @@ import { deviceInfo } from '@kit.BasicServicesKit';
 import { READER_MODE_AUTO, READER_MODE_BUILTIN, READER_MODE_PREF_KEY, ReaderFormats } from 'reader';
 import { TalebookService } from './TalebookService';
 import { PlatformTarget } from '../common/PlatformTarget';
+import { AppRouter } from '../utils/AppRouter';
 
 /**
  * 打开阅读器的参数（与 `pages/ReadKitReader` 的入参一致）。
@@ -104,16 +105,16 @@ export class ReaderLauncher {
   static open(uiContext: UIContext, params: ReaderOpenParams): boolean {
     const builtinSupported: boolean = ReaderFormats.supports(params.format);
     if (builtinSupported && ReaderLauncher.prefersBuiltin()) {
-      uiContext.getRouter().pushUrl({ url: 'pages/BuiltInReaderPage', params: params });
+      AppRouter.pushUrl(uiContext, { url: 'pages/BuiltInReaderPage', params: params });
       return true;
     }
     if (ReaderLauncher.isAvailable()) {
-      uiContext.getRouter().pushUrl({ url: 'pages/ReadKitReader', params: params });
+      AppRouter.pushUrl(uiContext, { url: 'pages/ReadKitReader', params: params });
       return true;
     }
     // 无 ReaderKit：EPUB / TXT / MOBI/AZW/AZW3 交给内置阅读器（自研，不依赖系统组件）
     if (builtinSupported) {
-      uiContext.getRouter().pushUrl({ url: 'pages/BuiltInReaderPage', params: params });
+      AppRouter.pushUrl(uiContext, { url: 'pages/BuiltInReaderPage', params: params });
       return true;
     }
     return false;

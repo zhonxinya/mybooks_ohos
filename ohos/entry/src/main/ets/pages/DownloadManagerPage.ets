@@ -2,6 +2,7 @@ import { PageScaffold, EmptyState, LoadingState, SwipeDeleteAction, PrimaryButto
 import { DownloadTask, DownloadTaskStatus } from '../services/TalebookService';
 import { DownloadTaskService } from '../services/DownloadTaskService';
 import { DateFormat } from '../utils/DateFormat';
+import { AppRouter } from '../utils/AppRouter';
 
 const FILTER_ALL: number = 0;
 const FILTER_TALEBOOK: number = 1;
@@ -313,7 +314,7 @@ struct DownloadManagerPage {
               ? '在 SoNovel 搜索页选择书籍并下载'
               : 'Talebook 详情页或 SoNovel 搜索页均可添加任务',
           actionLabel: this.filterIndex === FILTER_TALEBOOK ? '去书库' : '去搜索',
-          onAction: () => this.getUIContext().getRouter().pushUrl({
+          onAction: () => AppRouter.pushUrl(this.getUIContext(), {
             url: this.filterIndex === FILTER_TALEBOOK ? 'pages/MainTabs' : 'pages/SoNovelSearchPage',
           }),
         });

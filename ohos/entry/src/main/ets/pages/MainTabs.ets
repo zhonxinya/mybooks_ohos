@@ -4,6 +4,7 @@ import { SettingsPage } from './SettingsPage';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { ReleaseInfo, UpdateCheckResult, UpdateService } from '../services/UpdateService';
 import { consumeAudioLaunch, AudioLaunchRequest } from '../services/AudioPlaybackService';
+import { AppRouter } from '../utils/AppRouter';
 
 @Entry
 @Component
@@ -26,7 +27,7 @@ struct MainTabs {
   aboutToAppear(): void {
     // 冷启动静默检查更新：命中缓存或无新版本时不会有任何打扰
     void this.checkUpdateOnStartup();
-    const params: Record<string, Object> | null = this.getUIContext().getRouter().getParams() as Record<string, Object> | null;
+    const params: Record<string, Object> | null = AppRouter.getParams(this.getUIContext()) as Record<string, Object> | null;
     if (params === null || params === undefined) {
       return;
     }
@@ -70,10 +71,10 @@ struct MainTabs {
       return;
     }
     try {
-      if (this.getUIContext().getRouter().getState().name === 'AudioPlayerPage') {
+      if (AppRouter.getState(this.getUIContext()).name === 'AudioPlayerPage') {
         return;
       }
-      this.getUIContext().getRouter().pushUrl({
+      AppRouter.pushUrl(this.getUIContext(), {
         url: 'pages/AudioPlayerPage',
         params: {
           bookId: request.bookId,
@@ -160,7 +161,7 @@ struct MainTabs {
       ],
     }).then((result) => {
       if (result.index === 0) {
-        this.getUIContext().getRouter().pushUrl({ url: 'pages/UpdatePage' }).catch(() => {
+        AppRouter.pushUrl(this.getUIContext(), { url: 'pages/UpdatePage' }).catch(() => {
         });
       } else if (result.index === 1) {
         UpdateService.skipVersion(tag);
