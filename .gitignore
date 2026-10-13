@@ -85,3 +85,6 @@ ohos/.arkui-x/*
 !ohos/.arkui-x/arkui-x-config.json5
 ohos/android/
 ohos/ios/
+
+# Android 原生模块交叉编译中间产物
+ohos/build-android/

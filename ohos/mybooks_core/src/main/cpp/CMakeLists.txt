@@ -6,6 +6,30 @@ set(NATIVERENDER_ROOT_PATH ${CMAKE_CURRENT_SOURCE_DIR})
 # cpp -> main -> src -> mybooks_core -> ohos（与 entry 模块共用的第三方库根目录）
 set(THIRD_PARTY ${NATIVERENDER_ROOT_PATH}/../../../../third_party)
 
+# --- 平台分支 ---
+# 鸿蒙：NAPI/hilog 来自系统库 libace_napi.z.so / libhilog_ndk.z.so，
+#       头文件由鸿蒙 SDK 提供。
+# Android（ArkUI-X）：两者都由引擎库 libarkui_android.so 提供（导出 napi_* 205 个符号
+#       与 HiLogPrint），头文件用 ArkUI-X 自带 include + 工程内 hilog shim。
+if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    if(NOT DEFINED ARKUIX_ANDROID_ENGINE_LIB)
+        message(FATAL_ERROR
+            "Android 构建需指定 -DARKUIX_ANDROID_ENGINE_LIB=<arkui-x engine/lib/arkui/<abi>/libarkui_android.so>")
+    endif()
+    get_filename_component(_arkuix_abi_dir ${ARKUIX_ANDROID_ENGINE_LIB} DIRECTORY)
+    get_filename_component(_arkuix_arkui_dir ${_arkuix_abi_dir} DIRECTORY)
+    get_filename_component(_arkuix_lib_dir ${_arkuix_arkui_dir} DIRECTORY)
+    include_directories(
+        ${_arkuix_lib_dir}/include
+        ${THIRD_PARTY}/arkuix_android/include
+    )
+    add_library(arkui_android SHARED IMPORTED GLOBAL)
+    set_target_properties(arkui_android PROPERTIES IMPORTED_LOCATION ${ARKUIX_ANDROID_ENGINE_LIB})
+    set(MYBOOKS_NAPI_LIBS arkui_android)
+else()
+    set(MYBOOKS_NAPI_LIBS libace_napi.z.so libhilog_ndk.z.so)
+endif()
+
 include_directories(
     ${NATIVERENDER_ROOT_PATH}/include
     ${THIRD_PARTY}/sqlite
@@ -95,8 +119,7 @@ target_compile_definitions(mybooks_core PRIVATE
 )
 
 target_link_libraries(mybooks_core PUBLIC
-    libace_napi.z.so
-    libhilog_ndk.z.so
+    ${MYBOOKS_NAPI_LIBS}
     sqlite3
     libcurl
     mbedtls
