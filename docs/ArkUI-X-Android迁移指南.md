@@ -157,6 +157,13 @@ adb shell am start -n com.zhonxinya.talebook/com.zhonxinya.talebook.EntryEntryAb
 5. **`@arkui-x.android` 模块不可直接 import** —— 类型声明仅在 ArkUI-X SDK 中存在，
    鸿蒙构建链会因「找不到模块」失败；这也是加解密改走 NAPI 的原因。
 6. **签名与安装** —— 本仓库不含签名材料，HAP 产物未签名；APK 由 Gradle 用 debug 证书签名。
+7. **Android 端 `util` 插件编解码能力缺失**（实测 ArkUI-X 6.1.1，均已修复）：
+   - `util.TextDecoder` **不支持 `gbk`**：`create('gbk')` 不抛错、却按拉丁系解码，整本 GBK 文本乱码
+     → 已改为「探测引擎能力 + 内置 GBK 映射表兜底」（`feature/reader/engine/GbkTable.ets`）；
+   - **taskpool 子线程里 `util.TextEncoder.encodeInto()` 返回 `undefined`** → 开书抛
+     `Cannot read property byteLength of undefined`，已改为自带 UTF-8 编码（`TxtParser`）。
+   排查手法备忘：ArkTS `hilog` 在 Android 上**进不了 logcat**，改用「把诊断信息写文件 / 拼进页面文本」
+   再截图或 `adb` 读取；纯 JS 异常与栈**能**在 logcat 看到（`ArkCompiler` 标签）。
 
 ## 目录结构
 
