@@ -17,6 +17,10 @@ inputs:
     description: ArkUI-X SDK 版本
     required: false
     default: '6.1.1.111'
+  arkuix-sdk-url:
+    description: ArkUI-X SDK zip 完整地址（留空用华为云官方镜像；自托管请传入）
+    required: false
+    default: ''
   arkuix-sdk-sha256:
     description: ArkUI-X SDK zip 的 SHA256
     required: false
@@ -84,7 +88,10 @@ runs:
       run: |
         set -euo pipefail
         VER="${{ inputs.arkuix-sdk-version }}"
-        URL="https://repo.huaweicloud.com/arkui-crossplatform/sdk/${VER}/linux/arkui-x-linux-x64-${VER}-Release.zip"
+        URL="${{ inputs.arkuix-sdk-url }}"
+        if [ -z "$URL" ]; then
+          URL="https://repo.huaweicloud.com/arkui-crossplatform/sdk/${VER}/linux/arkui-x-linux-x64-${VER}-Release.zip"
+        fi
         echo "下载 ArkUI-X SDK: $URL"
         curl -fL --retry 3 --retry-delay 5 -o arkuix.zip "$URL"
         echo "${{ inputs.arkuix-sdk-sha256 }}  arkuix.zip" | sha256sum -c -

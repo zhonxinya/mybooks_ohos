@@ -22,6 +22,10 @@ inputs:
     description: ArkUI-X SDK 版本
     required: false
     default: '6.1.1.111'
+  arkuix-sdk-url:
+    description: ArkUI-X SDK zip 完整地址（留空用华为云官方镜像）
+    required: false
+    default: ''
   arkuix-sdk-sha256:
     description: ArkUI-X SDK zip 的 SHA256
     required: false
@@ -46,6 +50,7 @@ runs:
         tools-version: ${{ inputs.tools-version }}
         tools-url: ${{ inputs.tools-url }}
         arkuix-sdk-version: ${{ inputs.arkuix-sdk-version }}
+        arkuix-sdk-url: ${{ inputs.arkuix-sdk-url }}
         arkuix-sdk-sha256: ${{ inputs.arkuix-sdk-sha256 }}
 
     # 仓库不保存任何签名材料，CI 固定使用无签名配置

@@ -35,6 +35,8 @@ jobs:
           # 自托管命令行工具链 zip 的地址（仓库变量 Settings → Secrets and variables → Variables）
           # 说明：工程需要 6.1.1.x 的官方命令行工具链，公开镜像仅 6.1.0.816，modelVersion 不兼容
           tools-url: ${{ vars.HARMONY_TOOLS_URL }}
+          # 可选：自托管 ArkUI-X SDK（留空则用华为云官方镜像）
+          arkuix-sdk-url: ${{ vars.ARKUIX_SDK_URL }}
           build-mode: release
 
       - name: Build Android APK
