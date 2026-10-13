@@ -10,7 +10,7 @@ inputs:
     required: false
     default: '6.1.1.300'
   tools-url:
-    description: 命令行工具链 zip 完整地址（留空则回退第三方镜像拼 URL；自托管包请传入）
+    description: 命令行工具链 zip 完整地址（留空则回退第三方镜像拼 URL；自托管或华为 CDN 签名链接请传入）
     required: false
     default: ''
   arkuix-sdk-version:
@@ -62,7 +62,12 @@ runs:
         echo "下载鸿蒙命令行工具链: $URL"
         echo "（本工程需要 6.1.1.x 的官方命令行工具链；公开镜像只有 6.1.0.816，其 hvigor 拒绝"
         echo "  modelVersion 6.1.1 且要求华为云没有的 ArkUI-X 6.1.0.28，故需自托管该 zip 并传入地址）"
-        curl -fL --retry 3 --retry-delay 5 -o tools.zip "$URL"
+        # 华为 CDN（contentcenter-vali-drcn.dbankcdn.cn）的签名链接需要浏览器 UA/Referer 才放行；
+        # 注意这类链接会过期，长期方案是把 zip 自托管到稳定地址
+        curl -fL --retry 3 --retry-delay 5 \
+          -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+          -e "https://developer.huawei.com/consumer/cn/download/" \
+          -o tools.zip "$URL"
         unzip -q tools.zip
         rm -f tools.zip
 
