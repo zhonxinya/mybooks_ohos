@@ -18,6 +18,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_APP="$ROOT/ohos/.arkui-x/android/app"
 MANIFEST="$ANDROID_APP/src/main/AndroidManifest.xml"
 GRADLE="$ANDROID_APP/build.gradle"
+ANDROID_STRINGS="$ANDROID_APP/src/main/res/values/strings.xml"
 SRC_JAVA="$ROOT/android-overlay/java"
 JAVA_PACKAGE_DIR="$SRC_JAVA/com/zhonxinya/mybooks/android"
 JAVA_DIR="$ANDROID_APP/src/main/java"
@@ -26,12 +27,15 @@ APP_JSON="$ROOT/ohos/AppScope/app.json5"
 # 安卓侧包名与鸿蒙侧（app.json5 的 bundleName）不同：ace 会用 bundleName 同时充当
 # 安卓的清单 package/applicationId，两端同名的话在同一台设备上会互相覆盖安装。
 ANDROID_APP_ID="com.zhonxinya.mybooks.android"
+# 应用显示名：ace 用 oh-package.json5 的工程名生成安卓 strings.xml，与鸿蒙侧的
+# AppScope / entry 资源是两套来源，故这里单独覆盖。
+APP_LABEL="NewYA阅读"
 # provider 的 authority 用固定字面量而非 ${applicationId}：安卓 applicationId 与 arkui-x 的
 # bundleName 已经不同，而 bundleManager.getBundleInfoForSelfSync() 返回的是后者，推导会与清单对不上。
 PROVIDER_AUTHORITY="${ANDROID_APP_ID}.apkprovider"
 PROVIDER_CLASS="${ANDROID_APP_ID}.ApkFileProvider"
 
-if [ ! -f "$MANIFEST" ] || [ ! -f "$GRADLE" ]; then
+if [ ! -f "$MANIFEST" ] || [ ! -f "$GRADLE" ] || [ ! -f "$ANDROID_STRINGS" ]; then
   echo "错误：找不到 Android 壳工程（$MANIFEST）" >&2
   echo "请先执行：cd ohos && ace modify --project" >&2
   exit 1
@@ -53,10 +57,14 @@ grep -q "REQUEST_INSTALL_PACKAGES" "$MANIFEST" || { echo "错误：权限注入�
 grep -q "$PROVIDER_CLASS" "$MANIFEST" || { echo "错误：provider 注入失败" >&2; exit 1; }
 echo "==> 已注入 REQUEST_INSTALL_PACKAGES 与 provider（$PROVIDER_AUTHORITY）"
 
-# ---- 3) app/build.gradle：applicationId 与版本号 ----
+# ---- 3) app/build.gradle 与 strings.xml：applicationId / 版本号 / 应用名 ----
 sed -i -E "0,/applicationId \"[^\"]*\"/s//applicationId \"$ANDROID_APP_ID\"/" "$GRADLE"
 grep -q "applicationId \"$ANDROID_APP_ID\"" "$GRADLE" || { echo "错误：applicationId 覆盖失败" >&2; exit 1; }
 echo "==> applicationId 已改为 $ANDROID_APP_ID"
+
+sed -i -E "s|(<string name=\"app_name\">)[^<]*(</string>)|\1${APP_LABEL}\2|" "$ANDROID_STRINGS"
+grep -q ">${APP_LABEL}<" "$ANDROID_STRINGS" || { echo "错误：应用名覆盖失败" >&2; exit 1; }
+echo "==> 应用名已改为 $APP_LABEL"
 
 # ace 生成的壳工程把版本固定写成 1 / "1.0"，与 app.json5 脱节；不同步会导致
 # 应用内升级比较版本时始终认为「本地是旧版」，且系统看到的 versionName 也不对。
