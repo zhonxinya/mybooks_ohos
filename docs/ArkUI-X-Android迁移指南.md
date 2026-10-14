@@ -74,8 +74,11 @@ ace 会用 `app.bundleName` 同时充当 Android 壳工程的清单 `package` �
 | 阅读器引擎 | 优先系统 ReaderKit | 一律用内置阅读器 | `services/ReaderLauncher.ets` |
 | 朗读（TTS） | `@kit.CoreSpeechKit` | **不提供**（Android 端无调用方） | `services/ReaderTtsService.ets` |
 | 音频播放 | AVPlayer + AVSession + 后台长时任务 | AVPlayer，前台播放 | `services/AudioPlatformOhos.ets`<br>`services/AudioPlatformAndroid.ets` |
-| 电量显示 | `batteryInfo` | **待适配**（打开内置阅读器时调用，Android 端行为未验证） | `feature/reader/src/main/ets/ui/ReaderBattery.ets` |
-| 翻页动效帧回调 | `displaySync` | **待适配**（同上，Android 端行为未验证） | `feature/reader/src/main/ets/ui/ReaderFlipAnimator.ets` |
+| 电量显示 | `batteryInfo` | **已实现**：SDK 无 `batteryinfo` 插件，改经原生桥 `apiGetBatteryInfo` 读 Android `BatteryManager`（JSON `{level,charging}`） | `ui/ReaderBattery.ets`<br>`android-overlay/java/.../BatteryReader.java` |
+| 翻页动效帧回调 | `displaySync` | **已降级**：SDK 无 `graphics_displaysync` 插件，退化为 **16ms 定时器帧源** | `ui/ReaderFlipAnimator.ets` |
+| 本地导入（文件选择） | `picker.DocumentViewPicker` | **已适配**：`fileSuffixFilters` → Android DocumentsUI `acceptMimes`（epub/txt/mobi 有对应 MIME，azw/azw3 映射为 null）；实测能拉起系统文件选择器 | `services/LocalBookService.ets` |
+| 复制到剪贴板 | `pasteboard` | **已适配**：APK 打包 `libpasteboard.so`（同 Kit 导入机制，与已验证可用的 `file_picker`/`intl` 同一套加载链）；应用内仅写入、无读取 | `pages/UserSettingsPage.ets` 等 |
+| 国际化 / 本地化 | `intl` | **已适配**：APK 打包 `libintl.so`，运行期已加载 | — |
 | 应用内升级 | 不支持（HAP 需自行签名安装，仍走外链下载） | 下载 `.apk` 附件 → 系统安装器 | `services/ApkUpdater.ets` |
 | 用 Want 打开外部链接 | `startAbility({action: viewData, uri})` | **不可用**（见下节第 1 点），Android 端按钮无反应 | `pages/UpdatePage.ets` |
 
@@ -229,11 +232,13 @@ CI 里由 action 自动完成的准备（都是本地踩过的坑，缺一不可
 1. **Linux 桌面未实现** —— ArkUI-X 官方尚未支持。
 2. **Android 无后台音频保活** —— 见上文「音频播放」。
 3. **Android 无朗读功能** —— TTS 依赖华为 CoreSpeechKit。
-4. **Android 阅读界面的两处能力降级（已实现）** —— `batteryinfo` 与 `graphics_displaysync`
-   在 ArkUI-X SDK 中**不存在**（既无 `.so` 也无 `.abc`），属运行期降级而非打包问题：
-   - `ReaderBattery`：探测一次失败即停止轮询 → 页脚不显示电量（不再每分钟刷异常日志）；
+4. **Android 阅读界面两处平台能力：一处走原生桥补齐、一处降级** —— `batteryinfo` 与
+   `graphics_displaysync` 在 ArkUI-X SDK 中**均不存在**（既无 `.so` 也无 `.abc`）：
+   - `ReaderBattery`：电量**已补上**——不使用缺失的 `batteryinfo` 插件，改由 `libentry` 原生桥
+     `apiGetBatteryInfo` 调 Android `BatteryManager`（见上表）；桥返回空串时本轮留空但不锁死，
+     下一轮轮询自愈。（鸿蒙端仍用系统 `batteryInfo`。）
    - `ReaderFlipAnimator`：拿不到 `displaySync` 时退化为 **16ms 定时器帧源**，翻页动画照旧逐帧推进
-     （本类每帧显式赋值，不依赖系统帧回调）；已同样加「探测一次」缓存。
+     （本类每帧显式赋值，不依赖系统帧回调）；已加「探测一次」缓存。
 5. **`@arkui-x.android` 模块不可直接 import** —— 类型声明仅在 ArkUI-X SDK 中存在，
    鸿蒙构建链会因「找不到模块」失败；这也是加解密改走 NAPI 的原因。
 6. **签名与安装** —— 本仓库不含签名材料：HAP 产物未签名（本地签名材料见 `.hapsign/`）；APK 的 release
