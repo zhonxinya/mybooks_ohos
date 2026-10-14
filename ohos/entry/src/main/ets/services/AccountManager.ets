@@ -232,6 +232,9 @@ export class AccountManager {
     // 丢弃上一账号的内存缓存，否则书架/历史仍显示旧账号数据
     TalebookService.invalidateLocalCaches();
     TalebookService.invalidateSession();
+    // 激活/切换账号是用户主动的登录动作，等于「重新登录」：先解除「已显式登出」标记，
+    // 否则标记会让下面这轮登录被拒，用户反而登不回来。
+    TalebookService.markSignedOut(false);
     AccountManager.notifySwitched();
     // 先完成自动登录，再刷新账号级数据。顺序不能反：
     // refreshUnreadCount 会同步调用 ensureAuthenticated() 发起另一轮登录，

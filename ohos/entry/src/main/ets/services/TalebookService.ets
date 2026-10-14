@@ -24,6 +24,14 @@ export interface ApiEnvelope {
  */
 export const AUTH_FAILURE_KEY: string = 'authFailureReason';
 
+/**
+ * 「用户已显式退出登录」标记的偏好键。
+ *
+ * 存在**账号身份根**下（`AccountManager.applyIdentity` 切了 native 身份根），因此天然按账号隔离：
+ * 退出 A 账号不影响 B 账号的自动登录。
+ */
+export const SIGNED_OUT_KEY: string = 'signed_out';
+
 /** 自动登录结果；失败时带可展示的原因。 */
 export interface AuthAttempt {
   ok: boolean;
@@ -823,6 +831,12 @@ export class TalebookService {
       const noUrl: AuthAttempt = { ok: false, reason: '未配置服务器地址' };
       return noUrl;
     }
+    // 显式登出过：不再静默重登。此时即使 cookie 还活着也不当作已登录——否则「退出登录」
+    // 会被下一轮自动登录撤销（用户明确登出了，就该真的处于未登录状态）。
+    if (TalebookService.isSignedOut()) {
+      const signedOut: AuthAttempt = { ok: false, reason: '已退出登录，请重新登录' };
+      return signedOut;
+    }
     const info = await TalebookService.getUserInfoAsync();
     if (TalebookService.isLoggedInEnvelope(info)) {
       TalebookService.saveUserProfileFromEnvelope(info);
@@ -897,8 +911,24 @@ export class TalebookService {
     });
   }
 
+  /**
+   * 用户是否已显式退出登录（该账号）。
+   *
+   * 置位后 `autoLoginInternal` 不再用存储凭据静默重登——否则「退出登录」会在下次进页被
+   * 自动登录悄悄撤销，形同虚设；下载入口也因此被拦住（见 ApkUpdater / DownloadTaskService）。
+   */
+  static isSignedOut(): boolean {
+    return TalebookService.prefGet(SIGNED_OUT_KEY, '') === 'true';
+  }
+
+  /** 置位/解除「已显式退出登录」标记。 */
+  static markSignedOut(signedOut: boolean): void {
+    TalebookService.prefSet(SIGNED_OUT_KEY, signedOut ? 'true' : '');
+  }
+
   static signOut(): ApiEnvelope {
-    // 登出后会话不再有效：作废通过结果，下次进页按原语义重新校验（含凭据自动重登）
+    // 显式登出要「记得住」：作废通过结果 + 打上标记，避免下次进页又用凭据自动重登
+    TalebookService.markSignedOut(true);
     TalebookService.sessionOk = false;
     TalebookService.sessionCheckedAt = 0;
     return TalebookService.parseEnvelope(entry.apiSignOut());

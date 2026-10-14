@@ -124,7 +124,8 @@ export struct SettingsPage {
   private refreshAccount(): void {
     // 以「凭据已保存」作为判定：新账号刚切换时资料尚未拉取（或曾因服务端不可达而拿不到），
     // 若以「已缓存用户资料」为门槛，「个人中心」入口会整个消失。
-    this.isLoggedIn = TalebookService.hasAuthCredentials();
+    // 显式登出后凭据仍在，但那不该算已登录（否则设置页会显示成还登着）。
+    this.isLoggedIn = TalebookService.hasAuthCredentials() && !TalebookService.isSignedOut();
   }
 
   /** 当前账号摘要：账号数与当前账号名，便于在设置页一眼看出正在用哪个账号。 */
