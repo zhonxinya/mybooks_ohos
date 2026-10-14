@@ -407,7 +407,18 @@ HttpResponse performCurlDownload(const std::string &url, const std::string &dest
             remove(destPath.c_str());
             result.error = "下载失败，HTTP " + std::to_string(result.statusCode);
         } else {
-            result.body = destPath;
+            // 会话失效时服务端会 302 到 /login，跟随重定向后拿到的是 200 + HTML 登录页。
+            // 只看状态码会把它当成下载成功，登录页就被存成了「书」，直到开书才以
+            // 「EPUB 解压失败：not ZIP format or damaged」暴露（实测：未登录拉 /api/book/1.epub
+            // 返回 200、text/html、约 4.9KB）。这里按 Content-Type 拦掉，让失败停在下载阶段。
+            char *contentType = nullptr;
+            curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &contentType);
+            if (contentType != nullptr && std::string(contentType).find("text/html") != std::string::npos) {
+                remove(destPath.c_str());
+                result.error = "下载失败：服务端返回的是网页（通常是登录页），请检查账号密码或重新登录";
+            } else {
+                result.body = destPath;
+            }
         }
     }
 
