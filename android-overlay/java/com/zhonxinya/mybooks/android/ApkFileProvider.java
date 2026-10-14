@@ -1,4 +1,4 @@
-package com.zhonxinya.talebook;
+package com.zhonxinya.mybooks.android;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;

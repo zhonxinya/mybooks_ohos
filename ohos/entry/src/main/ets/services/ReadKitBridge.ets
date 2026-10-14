@@ -16,7 +16,7 @@ export const READKIT_PROTOCOL_VERSION: number = 1;
 export type ReadKitEventHandler = (event: ReadKitEventPayload) => void;
 
 const TAG: string = 'ReadKitBridge';
-const BUNDLE_NAME: string = 'com.zhonxinya.talebook';
+const BUNDLE_NAME: string = 'com.zhonxinya.mybooks.harmonyos';
 const ABILITY_NAME: string = 'ReadKitAbility';
 
 interface LocationJson {

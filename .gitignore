@@ -94,3 +94,5 @@ ohos/APPScope
 
 # Android release 签名私钥（不入库；CI 从 GitHub Secrets 还原）
 .signing/
+# 鸿蒙本地签名材料（含应用/ profile 私钥与已签 HAP；CI 出包不签名）
+.hapsign/

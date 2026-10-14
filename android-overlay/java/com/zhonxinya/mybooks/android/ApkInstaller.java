@@ -1,4 +1,4 @@
-package com.zhonxinya.talebook;
+package com.zhonxinya.mybooks.android;
 
 import android.content.ActivityNotFoundException;
 import android.content.Context;

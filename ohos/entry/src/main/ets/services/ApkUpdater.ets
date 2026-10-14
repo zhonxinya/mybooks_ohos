@@ -1,4 +1,4 @@
-import { bundleManager, common } from '@kit.AbilityKit';
+import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { http } from '@kit.NetworkKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
@@ -14,8 +14,12 @@ export interface ApkDownloadProgress {
 
 /** 落盘目录名：Android 壳工程的 ApkFileProvider 按同一约定读取（<filesDir>/updates）。 */
 const UPDATES_DIR: string = 'updates';
-/** 与 AndroidManifest.xml 里 provider 的 android:authorities 后缀一致。 */
-const AUTHORITY_SUFFIX: string = '.apkprovider';
+/**
+ * provider 的 authority：与 scripts/android-shell-overlay.sh 注入清单的字面量一致。
+ * 这里不按 bundleManager 推导——安卓 applicationId（…mybooks.android）与 ArkUI-X 的
+ * bundleName（…mybooks.harmonyos）已经不同，推导出来的是后者，与清单对不上。
+ */
+const AUTHORITY: string = 'com.zhonxinya.mybooks.android.apkprovider';
 const CONNECT_TIMEOUT_MS: number = 20000;
 /** 读超时按“单次读”计时；安装包较大，放宽到 10 分钟。 */
 const READ_TIMEOUT_MS: number = 600000;
@@ -24,7 +28,7 @@ const USER_AGENT: string = 'mybooks_ohos-android';
 /**
  * Android 应用内升级：把 release 附件里的 APK 下载到应用私有目录，再交由系统安装器安装。
  *
- * 链路上两个平台约束（详见 docs/ArkUI-X-Android迁移指南.md）：
+ * 链路上两个平台约束（详见 docs/ArkUI-X-Android迁移指南.md 的「应用内升级（Android）」一节）：
  * - Android 7 起禁止把 file:// URI 交给别的应用，而 ArkUI-X 的 Want→Intent 映射只会 setData、
  *   不会附加 FLAG_GRANT_READ_URI_PERMISSION，所以必须经壳工程里声明的 ApkFileProvider 提供
  *   content:// URI（见 android-overlay/ 与 scripts/android-shell-overlay.sh）；
@@ -177,29 +181,11 @@ export class ApkUpdater {
    * 改走 libentry 的原生桥，由 Android 侧的 ApkInstaller 构造 Intent 并授予一次性读权限。
    */
   static async install(fileName: string): Promise<void> {
-    const authority: string = ApkUpdater.authority();
-    if (authority.length === 0) {
-      throw new Error('无法确定应用包名，不能发起安装');
-    }
-    const uri: string = `content://${authority}/${UPDATES_DIR}/${fileName}`;
+    const uri: string = `content://${AUTHORITY}/${UPDATES_DIR}/${fileName}`;
     const error: string = entry.apiInstallApk(uri) as string;
     if (error.length > 0) {
       throw new Error(error);
     }
-  }
-
-  /** provider 的 authority：AndroidManifest 里声明为 <applicationId>.apkprovider。 */
-  static authority(): string {
-    try {
-      const info: bundleManager.BundleInfo =
-        bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
-      if (info.name !== undefined && info.name.length > 0) {
-        return `${info.name}${AUTHORITY_SUFFIX}`;
-      }
-    } catch (_error) {
-      // 取不到包名时由调用方按空值处理
-    }
-    return '';
   }
 
   /** 只保留当前这次下载的文件，避免历史安装包堆积占用空间。 */
