@@ -419,6 +419,27 @@ struct BookDetailPage {
     }
     // 立即置灰，避免重复入队
     this.downloading = true;
+    // 未登录（含「有凭据但自动登录失败」）不给下载：服务端会把 /api/book/<id>.<ext> 302 到登录页、
+    // 跟随重定向后返回 200 + HTML，存下来就是一本打不开的「书」（开书才报 EPUB 解压失败）。
+    // 所以先要到一个有效会话，再谈下载配额。
+    TalebookService.ensureAuthenticated()
+      .then((authenticated: boolean) => {
+        if (!authenticated) {
+          this.downloading = false;
+          this.toast('请先登录后再下载');
+          return;
+        }
+        this.enqueueDownloadWithQuota();
+      })
+      .catch(() => {
+        this.downloading = false;
+        this.toast('请先登录后再下载');
+      });
+  }
+
+  /** 会话有效后的入队流程：支持配额的服务端先查配额。 */
+  /** @throws 内部调用可能抛出异常，由调用方处理 */
+  private enqueueDownloadWithQuota(): void {
     if (!ServerRegistry.supports(ServerFeature.DOWNLOAD_QUOTA)) {
       this.doEnqueueDownload();
       return;
