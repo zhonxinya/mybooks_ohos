@@ -2,11 +2,13 @@
 #
 # 把 Android 侧的自定义内容叠加到 ace 生成的 .arkui-x 壳工程上（应用内升级用）。
 #
-# 叠加四样东西：
+# 叠加这些内容：
 #   1) ApkFileProvider.java / ApkInstaller.java（android-overlay/）—— 应用内升级的 provider 与安装桥；
-#   2) AndroidManifest.xml —— REQUEST_INSTALL_PACKAGES 权限 + provider 声明（authority 用固定字面量）；
-#   3) app/build.gradle —— applicationId 改用安卓专属包名、versionCode/versionName 对齐 app.json5；
-#   4) release 签名（存在签名材料时）。
+#   2) 应用图标 app_icon.png —— 取自鸿蒙侧 AppScope 的那份，覆盖 ace 模板的通用图标 @drawable/arkuix；
+#   3) AndroidManifest.xml —— REQUEST_INSTALL_PACKAGES 权限 + provider 声明（authority 用固定字面量）+ 图标引用；
+#   4) app/build.gradle 与 strings.xml —— applicationId 改用安卓专属包名、versionCode/versionName 对齐 app.json5、
+#      应用显示名（ace 用 oh-package.json5 的工程名生成，与鸿蒙侧资源无关，故需覆盖）；
+#   5) release 签名（存在签名材料时）。
 #
 # 为什么用叠加而不是直接把壳工程入库：ohos/.arkui-x 是 ace 的生成物（已在 .gitignore 里），
 # 每次 `ace modify --project` 都会重建，故只能在其之后打补丁。脚本幂等，重复执行无副作用。
@@ -19,6 +21,9 @@ ANDROID_APP="$ROOT/ohos/.arkui-x/android/app"
 MANIFEST="$ANDROID_APP/src/main/AndroidManifest.xml"
 GRADLE="$ANDROID_APP/build.gradle"
 ANDROID_STRINGS="$ANDROID_APP/src/main/res/values/strings.xml"
+ANDROID_DRAWABLE="$ANDROID_APP/src/main/res/drawable"
+# 应用图标：直接取鸿蒙侧那份（AppScope 的 app_icon），避免两处维护同一张图
+APP_ICON_SRC="$ROOT/ohos/AppScope/resources/base/media/app_icon.png"
 SRC_JAVA="$ROOT/android-overlay/java"
 JAVA_PACKAGE_DIR="$SRC_JAVA/com/zhonxinya/mybooks/android"
 JAVA_DIR="$ANDROID_APP/src/main/java"
@@ -41,10 +46,13 @@ if [ ! -f "$MANIFEST" ] || [ ! -f "$GRADLE" ] || [ ! -f "$ANDROID_STRINGS" ]; th
   exit 1
 fi
 
-# ---- 1) provider / 安装桥源码 ----
+# ---- 1) provider / 安装桥源码 + 应用图标 ----
 mkdir -p "$JAVA_DIR/com/zhonxinya/mybooks/android"
 cp -f "$JAVA_PACKAGE_DIR"/*.java "$JAVA_DIR/com/zhonxinya/mybooks/android/"
-echo "==> 已叠加 ApkFileProvider.java / ApkInstaller.java"
+[ -f "$APP_ICON_SRC" ] || { echo "错误：找不到应用图标 $APP_ICON_SRC" >&2; exit 1; }
+mkdir -p "$ANDROID_DRAWABLE"
+cp -f "$APP_ICON_SRC" "$ANDROID_DRAWABLE/app_icon.png"
+echo "==> 已叠加 ApkFileProvider.java / ApkInstaller.java / app_icon.png"
 
 # ---- 2) AndroidManifest.xml ----
 # 先删掉本脚本此前插入的行再重新插入：.arkui-x 跨次构建复用，只做「没有才插」的话，
@@ -53,9 +61,12 @@ sed -i '/REQUEST_INSTALL_PACKAGES/d' "$MANIFEST"
 sed -i '/\.ApkFileProvider/d' "$MANIFEST"
 sed -i 's|^\([[:space:]]*<application\)|    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>\n\1|' "$MANIFEST"
 sed -i "s|^\([[:space:]]*</application>\)|        <provider android:name=\"${PROVIDER_CLASS}\" android:authorities=\"${PROVIDER_AUTHORITY}\" android:exported=\"false\" android:grantUriPermissions=\"true\" />\n\1|" "$MANIFEST"
+# 应用图标：ace 模板写死 @drawable/arkuix（ArkUI-X 的通用图标），换成上面拷贝的应用图标
+sed -i -E 's|(android:icon=")[^"]*(")|\1@drawable/app_icon\2|' "$MANIFEST"
 grep -q "REQUEST_INSTALL_PACKAGES" "$MANIFEST" || { echo "错误：权限注入失败" >&2; exit 1; }
 grep -q "$PROVIDER_CLASS" "$MANIFEST" || { echo "错误：provider 注入失败" >&2; exit 1; }
-echo "==> 已注入 REQUEST_INSTALL_PACKAGES 与 provider（$PROVIDER_AUTHORITY）"
+grep -q 'android:icon="@drawable/app_icon"' "$MANIFEST" || { echo "错误：应用图标替换失败" >&2; exit 1; }
+echo "==> 已注入 REQUEST_INSTALL_PACKAGES、provider（$PROVIDER_AUTHORITY）与 app_icon"
 
 # ---- 3) app/build.gradle 与 strings.xml：applicationId / 版本号 / 应用名 ----
 sed -i -E "0,/applicationId \"[^\"]*\"/s//applicationId \"$ANDROID_APP_ID\"/" "$GRADLE"
