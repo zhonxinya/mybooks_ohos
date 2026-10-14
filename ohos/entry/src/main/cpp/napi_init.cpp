@@ -733,6 +733,13 @@ napi_value ApiInstallApk(napi_env env, napi_callback_info info)
     return MakeString(env, InstallApkWithSystemInstaller(GetStringArg(env, args[0])));
 }
 
+/** 电池状态（仅 Android 有实现；HarmonyOS 端 ArkTS 直接用系统 batteryInfo 插件）。 */
+napi_value ApiGetBatteryInfo(napi_env env, napi_callback_info info)
+{
+    (void)info;
+    return MakeString(env, ReadBatteryJson());
+}
+
 napi_value RegisterFn(napi_env env, napi_value exports)
 {
     napi_property_descriptor desc[] = {
@@ -803,6 +810,7 @@ napi_value RegisterFn(napi_env env, napi_value exports)
         {"fetchImageCache", nullptr, FetchImageCache, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"fetchImageCacheAsync", nullptr, FetchImageCacheAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"apiInstallApk", nullptr, ApiInstallApk, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"apiGetBatteryInfo", nullptr, ApiGetBatteryInfo, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

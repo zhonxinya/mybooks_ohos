@@ -1,4 +1,5 @@
-import { batteryInfo } from '@kit.BasicServicesKit';
+import { batteryInfo, deviceInfo } from '@kit.BasicServicesKit';
+import entry from 'libentry.so';
 import { ReaderTheme } from '../model/ReaderTypes';
 import { ReaderPalette } from '../model/ReaderPalette';
 
@@ -7,11 +8,26 @@ const BATTERY_REFRESH_MS: number = 60000;
 
 /**
  * 电量能力是否可用（模块级缓存，探测一次）。
- * ArkUI-X 的 Android 端没有 `batteryinfo` 模块（SDK 中不存在该插件），
- * 调用会抛 `Cannot read property batterySOC of undefined`；这里探测一次后不再轮询，
+ * 鸿蒙端调 `batteryInfo` 抛异常说明平台不支持；这里探测一次后不再轮询，
  * 既避免每分钟刷异常日志，也让页脚干脆不渲染电量块。
+ * （安卓端不走 batteryInfo，也不落此标记，见 refreshAndroid。）
  */
 let batteryUnavailable: boolean = false;
+
+/** 安卓分支返回的电池状态。 */
+interface BatteryAndroidInfo {
+  level: number;
+  charging: boolean;
+}
+
+/**
+ * 平台判定与 entry 的 PlatformTarget 同依据（osFullName 含 android）；
+ * reader 是独立 HAR、不能反向依赖 entry，故在此本地实现。
+ */
+function isAndroidPlatform(): boolean {
+  const osName: string = deviceInfo.osFullName ?? '';
+  return osName.toLowerCase().indexOf('android') >= 0;
+}
 
 /**
  * 页脚电量指示：小电池图形 + 百分比。
@@ -48,18 +64,45 @@ export struct ReaderBattery {
     if (batteryUnavailable) {
       return;
     }
+    if (isAndroidPlatform()) {
+      this.refreshAndroid();
+      return;
+    }
     try {
       this.level = batteryInfo.batterySOC;
       this.charging = batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.ENABLE ||
         batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.FULL;
     } catch (_error) {
-      // 平台不支持电量查询（Android）：标记后停止轮询，页脚不显示电量
+      // 平台不支持电量查询：标记后停止轮询，页脚不显示电量
       batteryUnavailable = true;
       this.level = -1;
       if (this.timerId >= 0) {
         clearInterval(this.timerId);
         this.timerId = -1;
       }
+    }
+  }
+
+  /**
+   * 安卓分支：ArkUI-X 的 Android SDK 没有 batteryinfo 插件，
+   * 改经 libentry 原生桥读 BatteryManager（BatteryReader，见 android-overlay）。
+   * 拿到空串（理论上不该出现）时本轮留空但**不置 batteryUnavailable**——
+   * 桥就绪后下一轮轮询自愈，避免一次抖动永久关掉电量显示。
+   */
+  private refreshAndroid(): void {
+    const json: string = entry.apiGetBatteryInfo() as string;
+    if (json.length === 0) {
+      this.level = -1;
+      this.charging = false;
+      return;
+    }
+    try {
+      const info = JSON.parse(json) as BatteryAndroidInfo;
+      this.level = info.level;
+      this.charging = info.charging;
+    } catch (_error) {
+      this.level = -1;
+      this.charging = false;
     }
   }
 
