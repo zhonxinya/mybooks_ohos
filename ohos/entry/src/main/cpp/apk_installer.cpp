@@ -9,10 +9,14 @@ namespace {
 
 JavaVM *g_javaVm = nullptr;
 jclass g_installerClass = nullptr;
+jclass g_batteryClass = nullptr;
 
 constexpr const char *kInstallerClass = "com/zhonxinya/mybooks/android/ApkInstaller";
 constexpr const char *kInstallMethod = "install";
 constexpr const char *kInstallSignature = "(Ljava/lang/String;)Ljava/lang/String;";
+constexpr const char *kBatteryClass = "com/zhonxinya/mybooks/android/BatteryReader";
+constexpr const char *kBatteryMethod = "read";
+constexpr const char *kBatterySignature = "()Ljava/lang/String;";
 
 // 取 JavaVM 有两条路：模块被 System.loadLibrary 加载时 JNI_OnLoad 已经给过；
 // 否则（ArkUI-X 对 NAPI 模块多用 dlopen）退回 JNI 标准的 JNI_GetCreatedJavaVMs。
@@ -63,6 +67,39 @@ jclass ResolveInstallerClass(JNIEnv *env)
     return g_installerClass;
 }
 
+/** 取电池桥接类；成功则缓存成全局引用（同 ResolveInstallerClass 的理由）。 */
+jclass ResolveBatteryClass(JNIEnv *env)
+{
+    if (g_batteryClass != nullptr) {
+        return g_batteryClass;
+    }
+    jclass local = env->FindClass(kBatteryClass);
+    if (local == nullptr) {
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+        }
+        return nullptr;
+    }
+    g_batteryClass = static_cast<jclass>(env->NewGlobalRef(local));
+    env->DeleteLocalRef(local);
+    return g_batteryClass;
+}
+
+/** 附加到 JVM 拿 JNIEnv；attached 表示本次是新附加的（调用方负责 Detach）。 */
+bool AttachEnv(JavaVM *vm, JNIEnv **env, bool *attached)
+{
+    *attached = false;
+    const jint status = vm->GetEnv(reinterpret_cast<void **>(env), JNI_VERSION_1_6);
+    if (status == JNI_EDETACHED) {
+        if (vm->AttachCurrentThread(env, nullptr) != JNI_OK) {
+            return false;
+        }
+        *attached = true;
+        return true;
+    }
+    return status == JNI_OK && *env != nullptr;
+}
+
 }  // namespace
 
 // JNI_OnLoad 由 System.loadLibrary 触发（见 ApkInstaller.init），此刻的类加载器才是应用自身的，
@@ -74,6 +111,7 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved)
     JNIEnv *env = nullptr;
     if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) == JNI_OK && env != nullptr) {
         ResolveInstallerClass(env);
+        ResolveBatteryClass(env);
     }
     return JNI_VERSION_1_6;
 }
@@ -135,12 +173,60 @@ std::string InstallApkWithSystemInstaller(const std::string &contentUri)
     return result;
 }
 
+std::string ReadBatteryJson()
+{
+    JavaVM *vm = ResolveJavaVm();
+    if (vm == nullptr) {
+        return "";
+    }
+
+    JNIEnv *env = nullptr;
+    bool attached = false;
+    if (!AttachEnv(vm, &env, &attached)) {
+        return "";
+    }
+
+    std::string result;
+    jclass batteryClass = ResolveBatteryClass(env);
+    if (batteryClass == nullptr) {
+        result = "";
+    } else {
+        jmethodID method = env->GetStaticMethodID(batteryClass, kBatteryMethod, kBatterySignature);
+        if (method == nullptr) {
+            env->ExceptionClear();
+        } else {
+            auto ret = static_cast<jstring>(env->CallStaticObjectMethod(batteryClass, method));
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+            } else if (ret != nullptr) {
+                const char *chars = env->GetStringUTFChars(ret, nullptr);
+                if (chars != nullptr) {
+                    result.assign(chars);
+                    env->ReleaseStringUTFChars(ret, chars);
+                }
+                env->DeleteLocalRef(ret);
+            }
+        }
+    }
+
+    if (attached) {
+        vm->DetachCurrentThread();
+    }
+    return result;
+}
+
 #else
 
 std::string InstallApkWithSystemInstaller(const std::string &contentUri)
 {
     (void)contentUri;
     return "应用内安装仅支持 Android";
+}
+
+std::string ReadBatteryJson()
+{
+    // 鸿蒙端 ArkTS 直接用系统 batteryInfo 插件，不走原生桥
+    return "";
 }
 
 #endif

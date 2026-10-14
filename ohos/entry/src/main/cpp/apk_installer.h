@@ -10,4 +10,9 @@
 // HarmonyOS 端没有应用内安装能力，固定返回错误描述。
 std::string InstallApkWithSystemInstaller(const std::string &contentUri);
 
+// 读电池状态（仅 Android，壳工程的 BatteryReader.read 经 BatteryManager 取值）。
+// 成功返回 JSON 形如 {"level":87,"charging":true}；失败/不支持返回空串。
+// HarmonyOS 端由 ArkTS 直接用系统 batteryInfo 插件，不经此桥。
+std::string ReadBatteryJson();
+
 #endif  // MYBOOKS_APK_INSTALLER_H

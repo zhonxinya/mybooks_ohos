@@ -37,6 +37,8 @@ public class ApkFileProvider extends ContentProvider {
         // provider 在进程启动时由系统创建，比页面更早拿到 Application Context；
         // 安装时要用它 startActivity，见 ApkInstaller
         ApkInstaller.init(getContext());
+        // 电池状态读取同理，见 BatteryReader
+        BatteryReader.init(getContext());
         return true;
     }
 
