@@ -364,6 +364,11 @@ export class DownloadTaskService {
     if (payload === undefined) {
       throw new Error('缺少 Talebook 下载参数');
     }
+    // 未登录（含自动登录失败）不发下载请求：服务端会 302 到登录页并返回 200 + HTML，
+    // 存下来就是一本打不开的「书」。详情页入口已拦一次，这里再兜住「重试 / 队列内已存在的任务」。
+    if (!await TalebookService.ensureAuthenticated()) {
+      throw new Error('请先登录后再下载');
+    }
     const envelope = await TalebookService.downloadBookAsync(payload.bookId, payload.format, payload.destPath);
     if (!TalebookService.isApiSuccess(envelope)) {
       throw new Error(envelope.error.length > 0 ? envelope.error : '下载失败');
