@@ -90,132 +90,137 @@ struct ProfilePage {
     if (this.loading) {
       LoadingState({});
     } else {
-      Column({ space: 12 }) {
-        Column() {
-          Row({ space: 16 }) {
-            Column() {
-              Text((this.nickname.length > 0 ? this.nickname : '?').substring(0, 1))
-                .fontSize(24)
-                .fontColor($r('app.color.on_brand'));
-            }
-            .width(64)
-            .height(64)
-            .borderRadius(32)
-            .backgroundColor($r('app.color.brand_primary'))
-            .justifyContent(FlexAlign.Center);
-            Column({ space: 4 }) {
-              Text(this.nickname.length > 0 ? this.nickname : '未登录')
-                .fontSize(20)
-                .fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.text_primary'));
-              Text(this.isLogin ? this.username : '未登录：请在下方「账号与服务器」中配置账号，应用会自动登录')
-                .fontColor($r('app.color.text_secondary'));
-            }
-            .alignItems(HorizontalAlign.Start);
-          }
-          .padding($r('app.float.page_padding'));
-        }
-        .borderRadius($r('app.float.card_radius'))
-        .backgroundColor($r('app.color.card_background'));
-
-        Column() {
+      // 必须能滚动：内容比屏幕高时（Android 320×640 实测）底部的「退出登录」会被裁掉，
+      // uiautomator 里该按钮 bounds=[0,0][0,0]，点不到
+      Scroll() {
+        Column({ space: 12 }) {
           Column() {
-            SettingCell({
-              title: '我的阅读',
-              showChevron: true,
-              onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/ReadingBooksPage' }),
-            });
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: '我的书籍',
-              showChevron: true,
-              onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/MyBooksPage' }),
-            });
-            if (ServerRegistry.supports(ServerFeature.BOOK_SHELF)) {
+            Row({ space: 16 }) {
+              Column() {
+                Text((this.nickname.length > 0 ? this.nickname : '?').substring(0, 1))
+                  .fontSize(24)
+                  .fontColor($r('app.color.on_brand'));
+              }
+              .width(64)
+              .height(64)
+              .borderRadius(32)
+              .backgroundColor($r('app.color.brand_primary'))
+              .justifyContent(FlexAlign.Center);
+              Column({ space: 4 }) {
+                Text(this.nickname.length > 0 ? this.nickname : '未登录')
+                  .fontSize(20)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor($r('app.color.text_primary'));
+                Text(this.isLogin ? this.username : '未登录：请在下方「账号与服务器」中配置账号，应用会自动登录')
+                  .fontColor($r('app.color.text_secondary'));
+              }
+              .alignItems(HorizontalAlign.Start);
+            }
+            .padding($r('app.float.page_padding'));
+          }
+          .borderRadius($r('app.float.card_radius'))
+          .backgroundColor($r('app.color.card_background'));
+
+          Column() {
+            Column() {
+              SettingCell({
+                title: '我的阅读',
+                showChevron: true,
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/ReadingBooksPage' }),
+              });
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
-                title: '我的书架',
-                subtitle: '服务端书架（阅读计划）',
+                title: '我的书籍',
                 showChevron: true,
-                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/ShelfPage' }),
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/MyBooksPage' }),
               });
-            }
-            if (ServerRegistry.supports(ServerFeature.LIBRARY_ONLINE)) {
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-              SettingCell({
-                title: '在线书库',
-                subtitle: '已保存的网络书，可按连载状态筛选',
-                showChevron: true,
-                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/OnlineLibraryPage' }),
-              });
-            }
-            Divider().color($r('app.color.divider')).strokeWidth(0.5);
-            SettingCell({
-              title: '账号与服务器',
-              subtitle: this.accountSummary(),
-              showChevron: true,
-              onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookConfigPage' }),
-            });
-            if (this.isLogin) {
-              if (ServerRegistry.supports(ServerFeature.ANNOTATIONS)) {
+              if (ServerRegistry.supports(ServerFeature.BOOK_SHELF)) {
                 Divider().color($r('app.color.divider')).strokeWidth(0.5);
                 SettingCell({
-                  title: '我的标注',
-                  subtitle: '查看与导出全部书内标注',
+                  title: '我的书架',
+                  subtitle: '服务端书架（阅读计划）',
                   showChevron: true,
-                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AnnotationsPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/ShelfPage' }),
+                });
+              }
+              if (ServerRegistry.supports(ServerFeature.LIBRARY_ONLINE)) {
+                Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                SettingCell({
+                  title: '在线书库',
+                  subtitle: '已保存的网络书，可按连载状态筛选',
+                  showChevron: true,
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/OnlineLibraryPage' }),
                 });
               }
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
-                title: '消息通知',
-                badgeText: this.unreadBadge(),
+                title: '账号与服务器',
+                subtitle: this.accountSummary(),
                 showChevron: true,
-                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/NotificationPage' }),
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookConfigPage' }),
               });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-              SettingCell({
-                title: '个人设置',
-                showChevron: true,
-                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/UserSettingsPage' }),
-              });
-              if (ServerRegistry.supports(ServerFeature.USER_MEMO)) {
+              if (this.isLogin) {
+                if (ServerRegistry.supports(ServerFeature.ANNOTATIONS)) {
+                  Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                  SettingCell({
+                    title: '我的标注',
+                    subtitle: '查看与导出全部书内标注',
+                    showChevron: true,
+                    onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AnnotationsPage' }),
+                  });
+                }
                 Divider().color($r('app.color.divider')).strokeWidth(0.5);
                 SettingCell({
-                  title: '我的留言',
+                  title: '消息通知',
+                  badgeText: this.unreadBadge(),
                   showChevron: true,
-                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/UserMemosPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/NotificationPage' }),
                 });
-              }
-              if (ServerRegistry.supports(ServerFeature.USER_EXPECTED)) {
                 Divider().color($r('app.color.divider')).strokeWidth(0.5);
                 SettingCell({
-                  title: '求书期望',
+                  title: '个人设置',
                   showChevron: true,
-                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/ExpectedBooksPage' }),
+                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/UserSettingsPage' }),
                 });
+                if (ServerRegistry.supports(ServerFeature.USER_MEMO)) {
+                  Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                  SettingCell({
+                    title: '我的留言',
+                    showChevron: true,
+                    onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/UserMemosPage' }),
+                  });
+                }
+                if (ServerRegistry.supports(ServerFeature.USER_EXPECTED)) {
+                  Divider().color($r('app.color.divider')).strokeWidth(0.5);
+                  SettingCell({
+                    title: '求书期望',
+                    showChevron: true,
+                    onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/ExpectedBooksPage' }),
+                  });
+                }
               }
             }
           }
-        }
-        .borderRadius($r('app.float.card_radius'))
-        .backgroundColor($r('app.color.card_background'));
+          .borderRadius($r('app.float.card_radius'))
+          .backgroundColor($r('app.color.card_background'));
 
-        if (this.isLogin) {
-          DangerButton({
-            label: '退出登录',
-            onTap: () => {
-              TalebookService.signOut();
-              this.isLogin = false;
-              this.nickname = '';
-              this.username = '';
-              this.getUIContext().getPromptAction().showToast({ message: '已退出登录' });
-              AppRouter.back(this.getUIContext());
-            },
-          });
+          if (this.isLogin) {
+            DangerButton({
+              label: '退出登录',
+              onTap: () => {
+                TalebookService.signOut();
+                this.isLogin = false;
+                this.nickname = '';
+                this.username = '';
+                this.getUIContext().getPromptAction().showToast({ message: '已退出登录' });
+                AppRouter.back(this.getUIContext());
+              },
+            });
+          }
         }
+        .padding($r('app.float.page_padding'));
       }
-      .padding($r('app.float.page_padding'));
+      .width('100%');
     }
   }
 }

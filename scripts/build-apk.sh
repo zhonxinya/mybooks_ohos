@@ -159,7 +159,18 @@ if [ -n "$ACE_PLATFORM" ]; then
   ACE_ARGS+=(--target-platform "$ACE_PLATFORM")
 fi
 
-ace "${ACE_ARGS[@]}"
+ACE_LOG="$(mktemp -t ace-apk-XXXXXX.log)"
+set +e
+ace "${ACE_ARGS[@]}" 2>&1 | tee "$ACE_LOG"
+ACE_STATUS="${PIPESTATUS[0]}"
+set -e
+# ace 在 ArkTS 编译失败时**仍返回 0**（实测：日志里是 `COMPILE RESULT:FAIL`，退出码为 0），
+# 于是后续校验会在上一次的旧 APK 上「通过」——等于把坏构建放行，故这里显式判失败。
+if [ "$ACE_STATUS" -ne 0 ] || grep -q 'COMPILE RESULT:FAIL' "$ACE_LOG"; then
+  echo "错误：APK 构建失败（ace 退出码 $ACE_STATUS），完整日志：$ACE_LOG" >&2
+  exit 1
+fi
+rm -f "$ACE_LOG"
 
 OUT="$ANDROID_DIR/app/build/outputs/apk/$MODE"
 
