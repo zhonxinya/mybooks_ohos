@@ -9,7 +9,7 @@ import { TalebookApi, LibraryStatsResponse, AdminRunningTasksResponse } from '..
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { AccountManager } from '../services/AccountManager';
 import { AccountRecord } from '../models/AccountModels';
-import { DownloadTaskService } from '../services/DownloadTaskService';
+import { DownloadTaskService, DOWNLOAD_STATUS_TICK_KEY } from '../services/DownloadTaskService';
 import { AppRouter } from '../utils/AppRouter';
 
 /** 折叠分组键：默认全部折叠，仅展开态渲染子项。 */
@@ -97,7 +97,7 @@ export struct SettingsPage {
   @State runningTasksSummary: string = '';
   @State adminOverviewLoading: boolean = false;
   @StorageProp('unreadMessageCount') unreadCount: number = 0;
-  @StorageProp('downloadTasksTick') @Watch('refreshBadges') downloadTasksTick: number = 0;
+  @StorageProp(DOWNLOAD_STATUS_TICK_KEY) @Watch('refreshBadges') downloadTasksTick: number = 0;
   @State activeTaskCount: number = 0;
   @State expandedSections: string[] = [];
   /** 账号快速切换面板开关。 */

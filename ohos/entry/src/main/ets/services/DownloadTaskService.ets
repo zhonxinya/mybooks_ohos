@@ -10,6 +10,8 @@ import { ACCOUNT_LEGACY_ID, isLegacyAccount } from '../models/AccountModels';
 import { ErrorFormat } from '../utils/ErrorFormat';
 
 const TASKS_KEY: string = 'download_tasks';
+/** 「展示状态变化」AppStorage 键（详情页/设置页订阅它，而不是每 250ms 的进度 tick）。 */
+export const DOWNLOAD_STATUS_TICK_KEY: string = 'downloadStatusTick';
 
 export class DownloadTaskService {
   // /download-progress 为全局 SSE，并发时无法区分任务；并发下载仅依赖 book-fetch 结果。
@@ -21,9 +23,34 @@ export class DownloadTaskService {
   private static persistTimer: number = -1;
   private static tasksCache: DownloadTask[] | null = null;
   private static persistDirty: boolean = false;
+  /** 上一次「展示状态」指纹，用于只在真的变化时才发通知。 */
+  private static lastStatusSignature: string = '';
 
   static notifyChanged(): void {
     AppStorage.setOrCreate('downloadTasksTick', Date.now());
+    DownloadTaskService.publishStatusIfChanged();
+  }
+
+  /**
+   * 「展示状态」通道：任务的状态 / 错误 / 提示文案**真的变了**才更新。
+   *
+   * 为什么另开一条：`downloadTasksTick` 每 250ms 就会因进度回调而变，而订阅它的页面会因为
+   * 这个状态变量本身变化而重建（详情页 2500 行、设置页 700+ 行）——Talebook 下载期间文案
+   * 其实一直是「正在从 Talebook 下载…」，等于白重建。订阅本条通道后，只有文案/状态真的变化
+   * 才重建（SoNovel 的进度百分比也走这条，仍然实时）。
+   */
+  private static publishStatusIfChanged(): void {
+    const tasks: DownloadTask[] = DownloadTaskService.getTasks();
+    let signature: string = '';
+    for (let i = 0; i < tasks.length; i++) {
+      const task: DownloadTask = tasks[i];
+      signature += `${task.id}:${task.status}:${task.message}:${task.error}|`;
+    }
+    if (signature === DownloadTaskService.lastStatusSignature) {
+      return;
+    }
+    DownloadTaskService.lastStatusSignature = signature;
+    AppStorage.setOrCreate(DOWNLOAD_STATUS_TICK_KEY, Date.now());
   }
 
   private static normalizeTask(task: DownloadTask): DownloadTask {
