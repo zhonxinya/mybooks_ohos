@@ -1,4 +1,8 @@
 import { displaySync } from '@kit.ArkGraphics2D';
+import { FrameCallback, UIContext } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG: string = 'ReaderFlipAnimator';
 
 /**
  * `displaySync` 是否可用（模块级缓存，探测一次）。
@@ -19,15 +23,25 @@ let displaySyncUnavailable: boolean = false;
  * 抬手后的卷曲却根本不动。这里改成每帧显式赋值：每帧都是一次普通状态变更，构建必然重跑，
  * 折痕才会真的从一端扫到另一端。
  *
- * 帧源用 `displaySync` 而不是 `postFrameCallback`：除了拿到逐帧时间戳，还能用
- * `setExpectedFrameRateRange` 声明这一段动画期望的帧率，高刷屏（90/120Hz）上折痕才走得顺。
+ * 帧源按可用性分三级（见 `start`）：
+ * 1. 鸿蒙：`displaySync`——除逐帧时间戳外还能用 `setExpectedFrameRateRange` 声明期望帧率，
+ *    高刷屏（90/120Hz）上折痕才走得顺；
+ * 2. Android：`UIContext.postFrameCallback`——该 SDK 没有 `graphics_displaysync`，
+ *    但跨端引擎实现了 `postFrameCallback`（`ReaderFrameWatch` 已在两端用它采帧）。
+ *    它与渲染同步出帧，且动画结束后帧链自然断开；
+ * 3. 兜底：`setInterval(16ms)`——只在拿不到 UIContext 时用（构造顺序异常等），
+ *    不保证与 vsync 对齐。
  *
  * 同一个动画器也负责回弹（`to` 传 0），用轻微过冲的弹簧曲线保留「纸被松开」的手感。
  */
-export class ReaderFlipAnimator {
+export class ReaderFlipAnimator extends FrameCallback {
   private sync: displaySync.DisplaySync | null = null;
-  /** 定时器帧源（displaySync 不可用时的退化路径，见 `start`）。 */
+  /** 定时器帧源（最后兜底的退化路径，见 `start`）。 */
   private timerId: number = -1;
+  /** 帧回调帧源所需的 UIContext（Android 走这条）；未注入时退回定时器。 */
+  private uiContext: UIContext | null = null;
+  /** 是否已投递下一帧（避免一次重入里重复投递）。 */
+  private framePosted: boolean = false;
   /** 定时器帧间隔：约 60Hz。 */
   private static readonly TIMER_FRAME_MS: number = 16;
   private running: boolean = false;
@@ -77,7 +91,7 @@ export class ReaderFlipAnimator {
     this.onDone = onDone;
     this.startNano = 0;
     this.running = true;
-    if (this.sync !== null || this.timerId >= 0) {
+    if (this.sync !== null || this.timerId >= 0 || this.framePosted) {
       return;
     }
     if (!displaySyncUnavailable) {
@@ -92,10 +106,46 @@ export class ReaderFlipAnimator {
         displaySyncUnavailable = true;
       }
     }
-    // 退化路径：定时器帧源，动画照旧逐帧推进（本类每帧显式赋值，不依赖系统帧回调）
+    // Android（无 displaySync）：用帧回调当帧源，与渲染同步出帧，动画结束后帧链自动断开
+    if (this.uiContext !== null) {
+      hilog.debug(0x0000, TAG, '帧源=frameCallback');
+      this.scheduleFrame();
+      return;
+    }
+    // 兜底：定时器帧源，动画照旧逐帧推进（本类每帧显式赋值，不依赖系统帧回调）
+    hilog.debug(0x0000, TAG, '帧源=timer（未注入 UIContext）');
     this.timerId = setInterval(() => {
       this.step(Date.now() * 1000000);
     }, ReaderFlipAnimator.TIMER_FRAME_MS);
+  }
+
+  /**
+   * 注入 UIContext（宿主在 `aboutToAppear` 调一次）。
+   *
+   * 只有拿不到 `displaySync` 的平台才需要它——Android 用它投递逐帧回调当帧源。
+   */
+  attachUiContext(uiContext: UIContext): void {
+    this.uiContext = uiContext;
+  }
+
+  onFrame(frameTimeInNano: number): void {
+    this.framePosted = false;
+    if (!this.running) {
+      return;
+    }
+    this.step(frameTimeInNano);
+    // 动画已结束（step 里清了 running）就不再续投，帧链自然断开
+    this.scheduleFrame();
+  }
+
+  /** 投递下一帧；已在途或已结束则不重复投递。 */
+  private scheduleFrame(): void {
+    const ui: UIContext | null = this.uiContext;
+    if (!this.running || this.framePosted || ui === null) {
+      return;
+    }
+    this.framePosted = true;
+    ui.postFrameCallback(this);
   }
 
   /** 立即中止（手势被打断、组件销毁）：不触发结束回调。 */
@@ -105,6 +155,7 @@ export class ReaderFlipAnimator {
   }
 
   private release(): void {
+    this.framePosted = false;
     const sync: displaySync.DisplaySync | null = this.sync;
     if (sync !== null) {
       this.sync = null;
