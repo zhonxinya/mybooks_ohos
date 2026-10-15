@@ -1,6 +1,7 @@
 import { PageScaffold, EmptyState, LoadingState, SwipeDeleteAction, PrimaryButton, SecondaryButton, FilterChips, FilterChipItem } from '../components';
 import { DownloadTask, DownloadTaskStatus } from '../services/TalebookService';
 import { DownloadTaskService } from '../services/DownloadTaskService';
+import { SoNovelService } from '../services/SoNovelService';
 import { DateFormat } from '../utils/DateFormat';
 import { AppRouter } from '../utils/AppRouter';
 
@@ -16,23 +17,39 @@ struct DownloadManagerPage {
   @State loading: boolean = true;
   @State processing: boolean = false;
   @State filterIndex: number = FILTER_ALL;
+  /** SoNovel 是否已配置：没配就不给「SoNovel」页签，也不把空态指向搜索页 */
+  @State sonovelConfigured: boolean = false;
   @StorageProp('downloadTasksTick') @Watch('onTasksChanged') tasksTick: number = 0;
-  private filterItems: FilterChipItem[] = [
-    { label: '全部', value: FILTER_ALL },
-    { label: 'Talebook', value: FILTER_TALEBOOK },
-    { label: 'SoNovel', value: FILTER_SONOVEL },
-  ];
+  @State filterItems: FilterChipItem[] = [];
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   aboutToAppear(): void {
+    this.refreshSonovelFilter();
     this.reloadTasks(true);
     this.processQueue();
   }
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   onPageShow(): void {
+    this.refreshSonovelFilter();
     this.reloadTasks(false);
     this.processQueue();
+  }
+
+  private refreshSonovelFilter(): void {
+    this.sonovelConfigured = SoNovelService.isConfigured();
+    const items: FilterChipItem[] = [
+      { label: '全部', value: FILTER_ALL },
+      { label: 'Talebook', value: FILTER_TALEBOOK },
+    ];
+    if (this.sonovelConfigured) {
+      items.push({ label: 'SoNovel', value: FILTER_SONOVEL });
+    }
+    this.filterItems = items;
+    // 页签消失时把选中项收回「全部」，否则会停在一个不存在的筛选上
+    if (this.filterIndex === FILTER_SONOVEL && !this.sonovelConfigured) {
+      this.filterIndex = FILTER_ALL;
+    }
   }
 
   private onTasksChanged(): void {
@@ -312,10 +329,14 @@ struct DownloadManagerPage {
             ? '在 Talebook 书籍详情页点击下载'
             : this.filterIndex === FILTER_SONOVEL
               ? '在 SoNovel 搜索页选择书籍并下载'
-              : 'Talebook 详情页或 SoNovel 搜索页均可添加任务',
-          actionLabel: this.filterIndex === FILTER_TALEBOOK ? '去书库' : '去搜索',
+              : (this.sonovelConfigured
+                ? 'Talebook 详情页或 SoNovel 搜索页均可添加任务'
+                : '在 Talebook 书籍详情页点击下载'),
+          actionLabel: this.filterIndex === FILTER_TALEBOOK || !this.sonovelConfigured ? '去书库' : '去搜索',
           onAction: () => AppRouter.pushUrl(this.getUIContext(), {
-            url: this.filterIndex === FILTER_TALEBOOK ? 'pages/MainTabs' : 'pages/SoNovelSearchPage',
+            url: this.filterIndex === FILTER_TALEBOOK || !this.sonovelConfigured
+              ? 'pages/MainTabs'
+              : 'pages/SoNovelSearchPage',
           }),
         });
       } else {
