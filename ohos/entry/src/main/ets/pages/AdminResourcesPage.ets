@@ -1,8 +1,9 @@
-import { common, Want } from '@kit.AbilityKit';
+import { common } from '@kit.AbilityKit';
 import { PageScaffold, LoadingState, EmptyState } from '../components';
 import { TalebookApi } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { ExternalLinkOpener } from '../services/ExternalLinkOpener';
 
 @Entry
 @Component
@@ -46,18 +47,11 @@ struct AdminResourcesPage {
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   private openLink(url: string): void {
-    // 链接来自服务端数据，仅允许 http/https，避免隐式 Want 被注入任意协议 URI
-    if (!(url.startsWith('http://') || url.startsWith('https://'))) {
-      this.getUIContext().getPromptAction().showToast({ message: '链接协议不受支持' });
-      return;
-    }
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const want: Want = {
-      action: 'ohos.want.action.viewData',
-      uri: url,
-    };
-    context.startAbility(want).catch(() => {
-      this.getUIContext().getPromptAction().showToast({ message: '无法打开链接' });
+    ExternalLinkOpener.open(context, url).then((error: string) => {
+      if (error.length > 0) {
+        this.getUIContext().getPromptAction().showToast({ message: error });
+      }
     });
   }
 

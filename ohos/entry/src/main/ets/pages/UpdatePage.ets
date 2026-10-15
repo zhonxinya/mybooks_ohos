@@ -1,7 +1,8 @@
-import { common, Want } from '@kit.AbilityKit';
+import { common } from '@kit.AbilityKit';
 import { PageScaffold, LoadingState, PrimaryButton, SecondaryButton, TextButton } from '../components';
 import { ReleaseInfo, UpdateCheckResult, UpdateService } from '../services/UpdateService';
 import { ApkDownloadProgress, ApkUpdater } from '../services/ApkUpdater';
+import { ExternalLinkOpener } from '../services/ExternalLinkOpener';
 import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
@@ -63,23 +64,13 @@ struct UpdatePage {
     }
   }
 
-  /** 打开外部链接；链接可能来自 GitHub 响应，仅允许 http/https。 */
+  /** 打开外部链接（http/https）；跨端分派与协议校验见 `ExternalLinkOpener`。 */
   private openUrl(url: string): void {
-    if (url.length === 0) {
-      this.toast('链接不可用');
-      return;
-    }
-    if (!(url.startsWith('http://') || url.startsWith('https://'))) {
-      this.toast('链接协议不受支持');
-      return;
-    }
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const want: Want = {
-      action: 'ohos.want.action.viewData',
-      uri: url,
-    };
-    context.startAbility(want).catch(() => {
-      this.toast('无法打开链接');
+    ExternalLinkOpener.open(context, url).then((error: string) => {
+      if (error.length > 0) {
+        this.toast(error);
+      }
     });
   }
 

@@ -15,4 +15,9 @@ std::string InstallApkWithSystemInstaller(const std::string &contentUri);
 // HarmonyOS 端由 ArkTS 直接用系统 batteryInfo 插件，不经此桥。
 std::string ReadBatteryJson();
 
+// 用系统默认应用打开外部链接（仅 Android，壳工程的 ExternalLinkOpener.open 构造
+// ACTION_VIEW Intent）。返回空串表示已发起；否则返回错误描述供 UI 展示。
+// HarmonyOS 端由 ArkTS 直接用隐式 Want（viewData）拉起，不经此桥。
+std::string OpenUrlWithSystemBrowser(const std::string &url);
+
 #endif  // MYBOOKS_APK_INSTALLER_H

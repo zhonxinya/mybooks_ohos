@@ -39,6 +39,8 @@ public class ApkFileProvider extends ContentProvider {
         ApkInstaller.init(getContext());
         // 电池状态读取同理，见 BatteryReader
         BatteryReader.init(getContext());
+        // 外链打开同理，见 ExternalLinkOpener
+        ExternalLinkOpener.init(getContext());
         return true;
     }
 

@@ -10,6 +10,7 @@ namespace {
 JavaVM *g_javaVm = nullptr;
 jclass g_installerClass = nullptr;
 jclass g_batteryClass = nullptr;
+jclass g_openerClass = nullptr;
 
 constexpr const char *kInstallerClass = "com/zhonxinya/mybooks/android/ApkInstaller";
 constexpr const char *kInstallMethod = "install";
@@ -17,6 +18,9 @@ constexpr const char *kInstallSignature = "(Ljava/lang/String;)Ljava/lang/String
 constexpr const char *kBatteryClass = "com/zhonxinya/mybooks/android/BatteryReader";
 constexpr const char *kBatteryMethod = "read";
 constexpr const char *kBatterySignature = "()Ljava/lang/String;";
+constexpr const char *kOpenerClass = "com/zhonxinya/mybooks/android/ExternalLinkOpener";
+constexpr const char *kOpenMethod = "open";
+constexpr const char *kOpenSignature = "(Ljava/lang/String;)Ljava/lang/String;";
 
 // 取 JavaVM 有两条路：模块被 System.loadLibrary 加载时 JNI_OnLoad 已经给过；
 // 否则（ArkUI-X 对 NAPI 模块多用 dlopen）退回 JNI 标准的 JNI_GetCreatedJavaVMs。
@@ -85,6 +89,24 @@ jclass ResolveBatteryClass(JNIEnv *env)
     return g_batteryClass;
 }
 
+/** 取外链打开桥接类；成功则缓存成全局引用（同 ResolveInstallerClass 的理由）。 */
+jclass ResolveOpenerClass(JNIEnv *env)
+{
+    if (g_openerClass != nullptr) {
+        return g_openerClass;
+    }
+    jclass local = env->FindClass(kOpenerClass);
+    if (local == nullptr) {
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+        }
+        return nullptr;
+    }
+    g_openerClass = static_cast<jclass>(env->NewGlobalRef(local));
+    env->DeleteLocalRef(local);
+    return g_openerClass;
+}
+
 /** 附加到 JVM 拿 JNIEnv；attached 表示本次是新附加的（调用方负责 Detach）。 */
 bool AttachEnv(JavaVM *vm, JNIEnv **env, bool *attached)
 {
@@ -112,6 +134,7 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved)
     if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) == JNI_OK && env != nullptr) {
         ResolveInstallerClass(env);
         ResolveBatteryClass(env);
+        ResolveOpenerClass(env);
     }
     return JNI_VERSION_1_6;
 }
@@ -215,6 +238,57 @@ std::string ReadBatteryJson()
     return result;
 }
 
+std::string OpenUrlWithSystemBrowser(const std::string &url)
+{
+    if (url.empty()) {
+        return "链接不可用";
+    }
+    JavaVM *vm = ResolveJavaVm();
+    if (vm == nullptr) {
+        return "无法获取 Java 虚拟机";
+    }
+
+    JNIEnv *env = nullptr;
+    bool attached = false;
+    if (!AttachEnv(vm, &env, &attached)) {
+        return "无法获取 JNIEnv";
+    }
+
+    std::string result;
+    jclass openerClass = ResolveOpenerClass(env);
+    if (openerClass == nullptr) {
+        result = "找不到外链桥接类";
+    } else {
+        jmethodID method = env->GetStaticMethodID(openerClass, kOpenMethod, kOpenSignature);
+        if (method == nullptr) {
+            env->ExceptionClear();
+            result = "找不到外链打开方法";
+        } else {
+            jstring arg = env->NewStringUTF(url.c_str());
+            auto ret = static_cast<jstring>(env->CallStaticObjectMethod(openerClass, method, arg));
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+                result = "调用外链打开失败";
+            } else if (ret != nullptr) {
+                const char *chars = env->GetStringUTFChars(ret, nullptr);
+                if (chars != nullptr) {
+                    result.assign(chars);
+                    env->ReleaseStringUTFChars(ret, chars);
+                }
+                env->DeleteLocalRef(ret);
+            }
+            if (arg != nullptr) {
+                env->DeleteLocalRef(arg);
+            }
+        }
+    }
+
+    if (attached) {
+        vm->DetachCurrentThread();
+    }
+    return result;
+}
+
 #else
 
 std::string InstallApkWithSystemInstaller(const std::string &contentUri)
@@ -227,6 +301,13 @@ std::string ReadBatteryJson()
 {
     // 鸿蒙端 ArkTS 直接用系统 batteryInfo 插件，不走原生桥
     return "";
+}
+
+std::string OpenUrlWithSystemBrowser(const std::string &url)
+{
+    (void)url;
+    // 鸿蒙端 ArkTS 直接用隐式 Want（viewData）拉起系统应用，不走原生桥
+    return "打开外部链接仅支持 Android";
 }
 
 #endif

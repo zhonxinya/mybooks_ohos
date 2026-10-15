@@ -3,7 +3,8 @@
 # 把 Android 侧的自定义内容叠加到 ace 生成的 .arkui-x 壳工程上（应用内升级用）。
 #
 # 叠加这些内容：
-#   1) ApkFileProvider.java / ApkInstaller.java（android-overlay/）—— 应用内升级的 provider 与安装桥；
+#   1) ApkFileProvider.java / ApkInstaller.java / BatteryReader.java / ExternalLinkOpener.java（android-overlay/）
+#      —— 应用内升级的 provider 与安装桥、电池状态桥、外链打开桥；
 #   2) 应用图标 app_icon.png —— 取自鸿蒙侧 AppScope 的那份，覆盖 ace 模板的通用图标 @drawable/arkuix；
 #   3) AndroidManifest.xml —— REQUEST_INSTALL_PACKAGES 权限 + provider 声明（authority 用固定字面量）+ 图标引用；
 #   4) app/build.gradle 与 strings.xml —— applicationId 改用安卓专属包名、versionCode/versionName 对齐 app.json5、
@@ -52,7 +53,7 @@ cp -f "$JAVA_PACKAGE_DIR"/*.java "$JAVA_DIR/com/zhonxinya/mybooks/android/"
 [ -f "$APP_ICON_SRC" ] || { echo "错误：找不到应用图标 $APP_ICON_SRC" >&2; exit 1; }
 mkdir -p "$ANDROID_DRAWABLE"
 cp -f "$APP_ICON_SRC" "$ANDROID_DRAWABLE/app_icon.png"
-echo "==> 已叠加 ApkFileProvider.java / ApkInstaller.java / app_icon.png"
+echo "==> 已叠加 ApkFileProvider.java / ApkInstaller.java / BatteryReader.java / ExternalLinkOpener.java / app_icon.png"
 
 # ---- 2) AndroidManifest.xml ----
 # 先删掉本脚本此前插入的行再重新插入：.arkui-x 跨次构建复用，只做「没有才插」的话，

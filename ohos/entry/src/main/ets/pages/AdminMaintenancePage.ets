@@ -1,4 +1,4 @@
-import { common, Want } from '@kit.AbilityKit';
+import { common } from '@kit.AbilityKit';
 import { PageScaffold, LoadingState, EmptyState, PrimaryButton, SecondaryButton, DangerButton,
   SectionTitle, TextButton } from '../components';
 import {
@@ -8,6 +8,7 @@ import {
 import { BookUploadService, PickedBookFile } from '../services/BookUploadService';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { ExternalLinkOpener } from '../services/ExternalLinkOpener';
 
 /** 审计日志只渲染最近 N 条，避免长列表进入 Scroll。 */
 const AUDIT_RENDER_LIMIT: number = 30;
@@ -223,18 +224,11 @@ struct AdminMaintenancePage {
 
   private openReleasePage(): void {
     const url: string = this.updateStatus.latest_release_url ?? '';
-    // 链接来自服务端数据，仅允许 http/https，避免隐式 Want 被注入任意协议 URI
-    if (!(url.startsWith('http://') || url.startsWith('https://'))) {
-      this.toast('发布页链接不可用');
-      return;
-    }
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const want: Want = {
-      action: 'ohos.want.action.viewData',
-      uri: url,
-    };
-    context.startAbility(want).catch(() => {
-      this.toast('无法打开发布页链接');
+    ExternalLinkOpener.open(context, url).then((error: string) => {
+      if (error.length > 0) {
+        this.toast(error);
+      }
     });
   }
 
