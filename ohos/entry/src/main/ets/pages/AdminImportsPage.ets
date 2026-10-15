@@ -1,5 +1,5 @@
 import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem,
-  PrimaryButton, SecondaryButton } from '../components';
+  PrimaryButton, SecondaryButton, LazyDataSource } from '../components';
 import { TalebookApi, ApiMessageResult, ImportStatusResponse } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
@@ -10,7 +10,14 @@ const IMPORT_PAGE_SIZE: number = 20;
 @Entry
 @Component
 struct AdminImportsPage {
-  @State items: Record<string, Object>[] = [];
+  @State @Watch('onImportItemsChanged') items: Record<string, Object>[] = [];
+  /** items 的 LazyForEach 数据源（分页追加，只建可见行）。 */
+  private importItemsSource: LazyDataSource<Record<string, Object>> = new LazyDataSource<Record<string, Object>>();
+
+  /** items 变更后同步虚拟化数据源。 */
+  private onImportItemsChanged(): void {
+    this.importItemsSource.update(this.items);
+  }
   @State loading: boolean = true;
   @State loadingMore: boolean = false;
   @State currentPage: number = 1;
@@ -376,7 +383,7 @@ struct AdminImportsPage {
           EmptyState({ message: '暂无导入记录' });
         } else {
           List({ space: 8 }) {
-            ForEach(this.items, (item: Record<string, Object>) => {
+            LazyForEach(this.importItemsSource, (item: Record<string, Object>) => {
               ListItem() {
                 this.itemRow(item);
               }
@@ -389,6 +396,7 @@ struct AdminImportsPage {
           }
           .layoutWeight(1)
           .width('100%')
+          .cachedCount(8)
           .onReachEnd(() => this.loadMore());
         }
       }

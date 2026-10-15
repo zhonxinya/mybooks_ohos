@@ -1,7 +1,7 @@
 import { LengthMetrics } from '@kit.ArkUI';
 import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem,
   PrimaryButton, SecondaryButton, DangerButton, SectionTitle, SettingCell, TextButton,
-  ChipButton } from '../components';
+  ChipButton, LazyDataSource } from '../components';
 import {
   AdminScanApi, AdminScanItem, AdminScanSummary, AdminScanStatusCounts,
   AdminDirectoryEntry, AdminImportDirectoryCheck, AdminImportSettings, AdminWatchStatus,
@@ -198,7 +198,14 @@ struct ScanBatchBar {
 struct AdminScanPage {
   @State private supported: boolean = true;
   @State private view: number = 0;
-  @State private items: AdminScanItem[] = [];
+  @State @Watch('onScanItemsChanged') private items: AdminScanItem[] = [];
+  /** items 的 LazyForEach 数据源（分页追加，只建可见行）。 */
+  private scanItemsSource: LazyDataSource<AdminScanItem> = new LazyDataSource<AdminScanItem>();
+
+  /** items 变更后同步虚拟化数据源。 */
+  private onScanItemsChanged(): void {
+    this.scanItemsSource.update(this.items);
+  }
   @State private loading: boolean = true;
   @State private loadingMore: boolean = false;
   @State private loadError: string = '';
@@ -1152,7 +1159,7 @@ struct AdminScanPage {
             EmptyState({ message: '暂无扫描记录，先在上方运行一次扫描' });
           } else {
             List({ space: 8 }) {
-              ForEach(this.items, (item: AdminScanItem) => {
+              LazyForEach(this.scanItemsSource, (item: AdminScanItem) => {
                 ListItem() {
                   this.itemRow(item);
                 }
@@ -1166,6 +1173,7 @@ struct AdminScanPage {
             }
             .layoutWeight(1)
             .width('100%')
+            .cachedCount(8)
             .onReachEnd(() => this.loadMore());
           }
         }
