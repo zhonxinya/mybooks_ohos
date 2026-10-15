@@ -9,6 +9,7 @@ import { ReaderLauncher, ReaderOpenParams } from '../services/ReaderLauncher';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { AccountManager } from '../services/AccountManager';
 import { LocalBookService } from '../services/LocalBookService';
+import { SoNovelService } from '../services/SoNovelService';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { DateFormat } from '../utils/DateFormat';
 import { BookViewMode } from '../utils/BookViewMode';
@@ -51,6 +52,8 @@ export struct BookshelfPage {
   @State audioLoadingMore: boolean = false;
   @State audioHasMore: boolean = true;
   @State audioError: string = '';
+  /** SoNovel（网络搜书）入口的可见性：没配置服务地址就不显示该按钮 */
+  @State sonovelConfigured: boolean = false;
   @StorageProp('bookshelfRefreshTick') @Watch('onRefreshTick') refreshTick: number = 0;
   private baseFilters: FilterChipItem[] = [
     { label: '全部', value: 0 },
@@ -69,14 +72,21 @@ export struct BookshelfPage {
   aboutToAppear(): void {
     this.isListMode = BookViewMode.isListMode();
     this.sortMode = BookSortMode.load();
+    this.refreshSonovelEntry();
     this.loadData(false);
   }
   private onRefreshTick(): void {
+    // 切回书架时重算一次：用户可能刚在「账号与服务器」里配好/删除了 SoNovel
+    this.refreshSonovelEntry();
     if (this.selectedTab === 2) {
       void this.loadAudiobooks(true);
     } else {
       this.loadData(true);
     }
+  }
+
+  private refreshSonovelEntry(): void {
+    this.sonovelConfigured = SoNovelService.isConfigured();
   }
 
   private onSelectedTabChanged(): void {
@@ -639,9 +649,11 @@ export struct BookshelfPage {
       Blank().layoutWeight(1);      this.iconToolButton($r('sys.symbol.magnifyingglass'), () => {
         AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookBookSearchPage' });
       });
-      this.iconToolButton($r('sys.symbol.book'), () => {
-        AppRouter.pushUrl(this.getUIContext(), { url: 'pages/SoNovelSearchPage' });
-      });
+      if (this.sonovelConfigured) {
+        this.iconToolButton($r('sys.symbol.book'), () => {
+          AppRouter.pushUrl(this.getUIContext(), { url: 'pages/SoNovelSearchPage' });
+        });
+      }
       this.iconToolButton($r('sys.symbol.folder'), () => {
         if (ServerRegistry.supports(ServerFeature.BOOKLISTS)) {
           AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookListsPage' });
