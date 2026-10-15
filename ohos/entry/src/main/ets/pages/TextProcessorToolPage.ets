@@ -10,6 +10,12 @@ class TpRule {
   style: string = 'bold';
 }
 
+/** 预处理后的规则：正则已编译、替换串已拼好，逐行套用时不再重复这两步。 */
+class TpCompiledRule {
+  regex: RegExp = new RegExp('');
+  replacement: string = '';
+}
+
 @Entry
 @Component
 struct TextProcessorToolPage {
@@ -122,18 +128,23 @@ struct TextProcessorToolPage {
     return text.replace(/《([^》]+)》/g, '<b>《$1》</b>');
   }
 
-  private applyRules(escapedLine: string): string {
-    let processed = escapedLine;
+  /**
+   * 预处理规则：按关键词长度降序排一次 + 正则只编译一次。
+   *
+   * 原来这两件事都在 `applyRules` 里做，而它按**每个段落、每一行**调用（整本书数千行），
+   * 于是「排序 + 逐规则 new RegExp」被重复了数千次——纯浪费，正确性上等价。
+   */
+  private compileRules(): TpCompiledRule[] {
     const sorted: TpRule[] = this.rules.slice().sort((a: TpRule, b: TpRule) => {
       return b.keyword.length - a.keyword.length;
     });
+    const compiled: TpCompiledRule[] = [];
     for (let i = 0; i < sorted.length; i++) {
       const rule = sorted[i];
       if (rule.keyword.length === 0) {
         continue;
       }
       const escapedKeyword = this.escapeHtml(rule.keyword);
-      const regex = new RegExp(this.escapeRegExp(escapedKeyword), 'g');
       let replacement = escapedKeyword;
       if (rule.style === 'bold') {
         replacement = `<span class="highlight-bold">${escapedKeyword}</span>`;
@@ -142,7 +153,16 @@ struct TextProcessorToolPage {
       } else if (rule.style === 'color') {
         replacement = `<span class="highlight-color">${escapedKeyword}</span>`;
       }
-      processed = processed.replace(regex, replacement);
+      // 全局正则只用于 replace（replace 会自行归零 lastIndex），跨行复用安全
+      compiled.push({ regex: new RegExp(this.escapeRegExp(escapedKeyword), 'g'), replacement: replacement });
+    }
+    return compiled;
+  }
+
+  private applyRules(escapedLine: string, compiled: TpCompiledRule[]): string {
+    let processed = escapedLine;
+    for (let i = 0; i < compiled.length; i++) {
+      processed = processed.replace(compiled[i].regex, compiled[i].replacement);
     }
     return processed;
   }
@@ -171,6 +191,7 @@ struct TextProcessorToolPage {
     }
     const normalized = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const paragraphs = normalized.split(/\n{2,}/).filter((p: string) => p.trim().length > 0);
+    const compiled: TpCompiledRule[] = this.compileRules();
     const htmlParts: string[] = [];
     for (let i = 0; i < paragraphs.length; i++) {
       const para = paragraphs[i];
@@ -180,7 +201,7 @@ struct TextProcessorToolPage {
       }
       const escapedLines: string[] = [];
       for (let j = 0; j < lines.length; j++) {
-        escapedLines.push(this.formatBookNames(this.applyRules(this.escapeHtml(lines[j]))));
+        escapedLines.push(this.formatBookNames(this.applyRules(this.escapeHtml(lines[j]), compiled)));
       }
       htmlParts.push(`<p>${escapedLines.join('<br>')}</p>`);
     }
