@@ -34,15 +34,28 @@ command -v ace >/dev/null 2>&1 || {
 
 cd "$APP_DIR"
 
+OUT="$APP_DIR/entry/build/default/outputs/default"
+# 先删掉上一次的产物：ace 构建失败时**仍返回 0**（实测日志里是 `COMPILE RESULT:FAIL`、
+# 退出码 0），留着旧 HAP 会让后面「未找到 HAP」的判断把陈旧产物当成新构建结果。
+rm -f "$OUT"/*.hap
+
+ACE_LOG="$(mktemp -t ace-hap-XXXXXX.log)"
+set +e
 if [ "$MODE" = "release" ]; then
   echo "==> 构建 release HAP（target: HarmonyOS）"
-  ace build hap --release
+  ace build hap --release 2>&1 | tee "$ACE_LOG"
 else
   echo "==> 构建 debug HAP（target: HarmonyOS）"
-  ace build hap --debug
+  ace build hap --debug 2>&1 | tee "$ACE_LOG"
 fi
+ACE_STATUS="${PIPESTATUS[0]}"
+set -e
+if [ "$ACE_STATUS" -ne 0 ] || grep -q 'COMPILE RESULT:FAIL' "$ACE_LOG"; then
+  echo "错误：HAP 构建失败（ace 退出码 $ACE_STATUS），完整日志：$ACE_LOG" >&2
+  exit 1
+fi
+rm -f "$ACE_LOG"
 
-OUT="$APP_DIR/entry/build/default/outputs/default"
 echo
 echo "构建完成，产物目录：$OUT"
 find "$OUT" -name '*.hap' -print 2>/dev/null || echo "（未找到 HAP，请检查上方构建日志）"

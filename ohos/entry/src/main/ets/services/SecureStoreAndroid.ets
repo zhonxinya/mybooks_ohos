@@ -40,7 +40,7 @@ export class SecureStoreAndroid {
   static put(context: common.UIAbilityContext, key: Uint8Array, value: Uint8Array): void {
     try {
       const plain: string = SecureStoreAndroid.toUtf8(value);
-      const sealed: string = NativeCore.secureSeal(SecureStoreAndroid.identityDir(context), plain);
+      const sealed: string = NativeCore.secureSeal(SecureStoreAndroid.keyDir(context), plain);
       if (sealed.length === 0) {
         throw new Error('secure store: seal failed');
       }
@@ -62,7 +62,7 @@ export class SecureStoreAndroid {
       if (typeof sealed !== 'string' || sealed.length === 0) {
         return null;
       }
-      const plain: string = NativeCore.secureOpen(SecureStoreAndroid.identityDir(context), sealed);
+      const plain: string = NativeCore.secureOpen(SecureStoreAndroid.keyDir(context), sealed);
       // 密文被篡改 / 密钥不匹配时原生层返回空串，此时按「不存在」处理
       if (plain.length === 0) {
         return null;
@@ -88,12 +88,21 @@ export class SecureStoreAndroid {
   }
 
   /**
-   * 身份根目录：密钥文件与账号数据同目录，切换账号时自动跟随
-   * （与原生层 `CoreEngine::setIdentityDir` 一致）。
+   * 密钥目录：**应用级固定目录，不随账号身份根变化**。
+   *
+   * 这里刻意不用 `NativeCore.identityDir()`：密文存放在**全局**的
+   * `mybooks_secure_store`（preferences 按应用一份，见 `openStore`），密钥若随身份根
+   * 变化就会与密文的作用域错配——`AccountManager.add()` 是在 `activate()` **之前**
+   * 写密码的，那时身份根还是上一个（首装时即应用根），于是密码用旧密钥封装，
+   * 切根后永远解不开。实测（2026-10-15 设备端）：`talebook_url`/`talebook_username`
+   * 正常而 `talebook_password` 恒为空 → `hasAuthCredentials()` 恒 false →
+   * 安卓端「个人中心／退出登录」入口整个消失。
+   *
+   * 账号隔离本来就靠**别名**（`account_<id>_password`），与鸿蒙端 Asset Store 的做法一致：
+   * 那种实现里也没有「按身份根换密钥」这回事。
    */
-  private static identityDir(context: common.UIAbilityContext): string {
-    const dir: string = NativeCore.identityDir();
-    return dir.length > 0 ? dir : context.filesDir;
+  private static keyDir(context: common.UIAbilityContext): string {
+    return context.filesDir;
   }
 
   /** 打开（或复用）安全存储的 preferences。 */
