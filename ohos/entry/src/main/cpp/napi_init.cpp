@@ -740,6 +740,15 @@ napi_value ApiGetBatteryInfo(napi_env env, napi_callback_info info)
     return MakeString(env, ReadBatteryJson());
 }
 
+/** 用系统默认应用打开外链（仅 Android 有实现；HarmonyOS 端 ArkTS 直接用隐式 Want）。 */
+napi_value ApiOpenExternalUrl(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    return MakeString(env, OpenUrlWithSystemBrowser(GetStringArg(env, args[0])));
+}
+
 napi_value RegisterFn(napi_env env, napi_value exports)
 {
     napi_property_descriptor desc[] = {
@@ -811,6 +820,7 @@ napi_value RegisterFn(napi_env env, napi_value exports)
         {"fetchImageCacheAsync", nullptr, FetchImageCacheAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"apiInstallApk", nullptr, ApiInstallApk, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"apiGetBatteryInfo", nullptr, ApiGetBatteryInfo, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"apiOpenExternalUrl", nullptr, ApiOpenExternalUrl, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

@@ -1,5 +1,6 @@
-import { common, Want } from '@kit.AbilityKit';
+import { common } from '@kit.AbilityKit';
 import { ChipButton } from './ChipButton';
+import { ExternalLinkOpener } from '../services/ExternalLinkOpener';
 
 export interface FriendLink {
   text: string;
@@ -11,16 +12,9 @@ export struct FriendsLinksRow {
   links: FriendLink[] = [];
 
   private openLink(href: string): void {
-    // 链接来自服务端数据，仅允许 http/https，避免隐式 Want 被注入任意协议 URI
-    if (!(href.startsWith('http://') || href.startsWith('https://'))) {
-      return;
-    }
+    // 打开失败静默处理：链接来自服务端数据，失败不打断当前页面（协议校验见 ExternalLinkOpener）
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    const want: Want = {
-      action: 'ohos.want.action.viewData',
-      uri: href,
-    };
-    context.startAbility(want).catch(() => {
+    ExternalLinkOpener.open(context, href).then(() => {
     });
   }
 

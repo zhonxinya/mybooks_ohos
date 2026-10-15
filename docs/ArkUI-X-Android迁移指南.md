@@ -76,11 +76,11 @@ ace 会用 `app.bundleName` 同时充当 Android 壳工程的清单 `package` �
 | 音频播放 | AVPlayer + AVSession + 后台长时任务 | AVPlayer，前台播放 | `services/AudioPlatformOhos.ets`<br>`services/AudioPlatformAndroid.ets` |
 | 电量显示 | `batteryInfo` | **已实现**：SDK 无 `batteryinfo` 插件，改经原生桥 `apiGetBatteryInfo` 读 Android `BatteryManager`（JSON `{level,charging}`） | `ui/ReaderBattery.ets`<br>`android-overlay/java/.../BatteryReader.java` |
 | 翻页动效帧回调 | `displaySync` | **已降级**：SDK 无 `graphics_displaysync` 插件，退化为 **16ms 定时器帧源** | `ui/ReaderFlipAnimator.ets` |
-| 本地导入（文件选择） | `picker.DocumentViewPicker` | **已适配**：`fileSuffixFilters` → Android DocumentsUI `acceptMimes`（epub/txt/mobi 有对应 MIME，azw/azw3 映射为 null）；实测能拉起系统文件选择器 | `services/LocalBookService.ets` |
+| 本地导入（文件选择） | `picker.DocumentViewPicker` | **可用（类型过滤降级）**：能拉起系统文件选择器；但类型过滤在 Android 上不生效——file_picker 在 Java 侧用 `URLConnection.guessContentTypeFromName` 把后缀映射成 MIME（每条都过这张表，传 MIME 串也救不了），azw/azw3 查不到即得到 `null`，整组 MIME 失效，故导入由应用侧后缀校验兜底 | `services/LocalBookService.ets` |
 | 复制到剪贴板 | `pasteboard` | **已适配**：APK 打包 `libpasteboard.so`（同 Kit 导入机制，与已验证可用的 `file_picker`/`intl` 同一套加载链）；应用内仅写入、无读取 | `pages/UserSettingsPage.ets` 等 |
 | 国际化 / 本地化 | `intl` | **已适配**：APK 打包 `libintl.so`，运行期已加载 | — |
 | 应用内升级 | 不支持（HAP 需自行签名安装，仍走外链下载） | 下载 `.apk` 附件 → 系统安装器 | `services/ApkUpdater.ets` |
-| 用 Want 打开外部链接 | `startAbility({action: viewData, uri})` | **不可用**（见下节第 1 点），Android 端按钮无反应 | `pages/UpdatePage.ets` |
+| 打开外部链接 | `startAbility({action: viewData, uri})` | **已实现**：隐式 Want 在 Android 到不了平台侧，改经原生桥 `apiOpenExternalUrl` 构造 `Intent.ACTION_VIEW`；协议白名单两端统一 | `services/ExternalLinkOpener.ets`<br>`android-overlay/java/.../ExternalLinkOpener.java` |
 
 ### 应用内升级（Android）
 
@@ -122,9 +122,17 @@ ACE Tools 的 APK 流程**用鸿蒙工具链**编译工程内的 C++（`.cxx` �
 > **插件库按需补拷**：ace 只拷贝它识别到的 ArkUI-X 插件 `.so`，以 **Kit 形式**导入的模块
 > （例如 `@kit.ArkUI` 里的 `promptAction`）会被漏拷，运行期表现为
 > `moduleName:promptAction ... libpromptaction.so not found` + 功能**静默失效**（toast 不弹）。
-> `scripts/build-apk.sh` 维护一份实测清单（当前：`promptaction`），按目标 ABI 从
+> `scripts/build-apk.sh` 维护一份实测清单（`PLUGIN_LIBS`：promptaction / measure / font /
+> arkui_componentutils / arkui_drawabledescriptor / overlay），按目标 ABI 从
 > `<SDK>/24/arkui-x/plugins/api/lib/<plugin>/<abi>/` 补进 gradle 的 jniLibs。
 > 新功能若在 Android 上无声失效，先查 logcat 里有没有 `libX.so not found`。
+>
+> **打包后有两道自动核对**（`build-apk.sh` 第 3 步，不满足即构建失败）：① `PLUGIN_LIBS` 每个库
+> 都在 SDK 与本 ABI 的 APK 中；② 源码里 `import { x } from '@kit.*'` 且 `x` 与某插件库**同名**
+> （`promptAction` → `libpromptaction.so`）的库也在 APK 中。只断言「小写开头 + 精确同名」是为了
+> 零误报：大写开头是 ArkTS 类型（`Configuration` 会假命中 `libconfiguration.so`），模糊匹配也会
+> 误伤（`common` → `libcommoneventmanager`、`media` → `libmediaquery`）。代价是改名映射查不到
+> （`picker` → `libfile_picker.so`），这类仍以 logcat 为准。
 
 ## 环境准备（Linux）
 

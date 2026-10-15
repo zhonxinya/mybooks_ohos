@@ -8,7 +8,20 @@ const SUPPORTED_SUFFIXES: string[] = ['.epub', '.txt', '.mobi', '.azw', '.azw3']
 const MAX_FILE_SIZE: number = 300 * 1024 * 1024;
 
 export class LocalBookService {
-  /** @throws 内部调用可能抛出异常，由调用方处理 */
+  /**
+   * 选文件并导入。
+   *
+   * `fileSuffixFilters` 在 Android 端**过滤不生效**（已实测，不再重复排查）：ArkUI-X 的
+   * file_picker 在 Java 侧用 `URLConnection.guessContentTypeFromName` 把每个后缀映射成 MIME
+   * 再塞进 `Intent.EXTRA_MIME_TYPES`，而 .azw / .azw3 在该表里查不到 → 数组里出现 null，
+   * 类型过滤整组失效（实测 logcat：`acceptMimes=[application/epub+zip, text/plain,
+   * application/x-mobipocket-ebook, null, null]`）。MIME 串本身也走同一张表，传 MIME 无用。
+   *
+   * 因此**选择结果一律由 `importFile` 的后缀校验把关**（不能改成只留 epub/txt/mobi——
+   * 那样过滤会真的生效，反而把 azw/azw3 文件挡在选择列表外）。鸿蒙端无此问题。
+   *
+   * @throws 内部调用可能抛出异常，由调用方处理
+   */
   static async pickAndImport(context: common.UIAbilityContext): Promise<DownloadRecord | null> {
     const options = new picker.DocumentSelectOptions();
     options.fileSuffixFilters = SUPPORTED_SUFFIXES;
