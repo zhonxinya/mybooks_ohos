@@ -61,6 +61,7 @@ export struct BookCatalogView {
               item: item,
               onTap: () => this.onItemTap(item),
             })
+              .reuseId('book-list-item')
               .gesture(
                 LongPressGesture({ repeat: false })
                   .onAction(() => this.onItemLongPress(item)),
@@ -105,7 +106,8 @@ export struct BookCatalogView {
               badge: item.badge ?? '',
               onTap: () => this.onItemTap(item),
               onLongPress: () => this.onItemLongPress(item),
-            });
+            })
+              .reuseId('book-grid-card');
           }
         }, (item: BookListItemData) => `grid-${item.id}-${item.badge ?? ''}`);
 

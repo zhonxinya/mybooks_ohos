@@ -1,7 +1,7 @@
 import { promptAction } from '@kit.ArkUI';
 import {
   PageScaffold, FilterChips, FilterChipItem, LoadingState, EmptyState,
-  BookListCardItem, IconCircleButton, PrimaryButton,
+  BookListCardItem, IconCircleButton, PrimaryButton, LazyDataSource,
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { ApiMessageResult } from '../services/TalebookApi';
@@ -41,7 +41,8 @@ function bookListCardKey(item: BookListSummary): string {
 @Component
 struct BookListsPage {
   @State activeTab: number = TAB_PUBLIC;
-  @State lists: BookListSummary[] = [];
+  /** 分页追加的书单列表。用 @Watch 同步到 LazyForEach 数据源（赋值点有多处，避免漏一处）。 */
+  @State @Watch('onListsChanged') lists: BookListSummary[] = [];
   @State loading: boolean = true;
   @State loadingMore: boolean = false;
   @State currentPage: number = 1;
@@ -57,7 +58,14 @@ struct BookListsPage {
   @State saving: boolean = false;
   /** 当前账号是否管理员：服务端书单置顶为 `@is_admin`，据此决定菜单里是否出现「置顶」。 */
   @State isAdmin: boolean = false;
+  /** 书单列表的 LazyForEach 数据源（分页追加，只建可见行）。 */
+  private listsSource: LazyDataSource<BookListSummary> = new LazyDataSource<BookListSummary>();
   private lastLoadTime: number = 0;
+
+  /** lists 变更后同步虚拟化数据源。 */
+  private onListsChanged(): void {
+    this.listsSource.update(this.lists);
+  }
   /**
    * 已实际加载过的 Tab。
    *
@@ -510,7 +518,7 @@ struct BookListsPage {
       });
     } else {
       List({ space: 12 }) {
-        ForEach(this.lists, (item: BookListSummary) => {
+        LazyForEach(this.listsSource, (item: BookListSummary) => {
           ListItem() {
             BookListCardItem({
               item: item,
@@ -538,6 +546,7 @@ struct BookListsPage {
       .layoutWeight(1)
       .width('100%')
       .padding({ left: 16, right: 16, bottom: 16 })
+      .cachedCount(8)
       .onReachEnd(() => this.loadMore());
     }
   }

@@ -1,4 +1,4 @@
-import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem } from '../components';
+import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem, LazyDataSource } from '../components';
 import { TalebookApi, ApiMessageResult } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
@@ -22,7 +22,14 @@ const REVIEW_PAGE_SIZE: number = 20;
 @Entry
 @Component
 struct AdminBookReviewsPage {
-  @State reviews: Record<string, Object>[] = [];
+  @State @Watch('onReviewsChanged') reviews: Record<string, Object>[] = [];
+  /** reviews 的 LazyForEach 数据源（分页追加，只建可见行）。 */
+  private reviewsSource: LazyDataSource<Record<string, Object>> = new LazyDataSource<Record<string, Object>>();
+
+  /** reviews 变更后同步虚拟化数据源。 */
+  private onReviewsChanged(): void {
+    this.reviewsSource.update(this.reviews);
+  }
   @State loading: boolean = true;
   @State loadingMore: boolean = false;
   @State currentPage: number = 1;
@@ -225,7 +232,7 @@ struct AdminBookReviewsPage {
         EmptyState({ message: '暂无评论' });
       } else {
         List({ space: 8 }) {
-          ForEach(this.reviews, (review: Record<string, Object>) => {
+          LazyForEach(this.reviewsSource, (review: Record<string, Object>) => {
             ListItem() {
               this.reviewRow(review);
             }
@@ -238,6 +245,7 @@ struct AdminBookReviewsPage {
         }
         .layoutWeight(1)
         .width('100%')
+        .cachedCount(8)
         .onReachEnd(() => this.loadMore());
       }
     }

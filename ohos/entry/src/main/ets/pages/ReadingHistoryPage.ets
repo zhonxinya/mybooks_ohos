@@ -293,7 +293,8 @@ struct ReadingHistoryPage {
       BookListItem({
         item: this.toListItem(row),
         onTap: () => this.openHistory(row),
-      });
+      })
+        .reuseId('book-list-item');
     }
   }
 

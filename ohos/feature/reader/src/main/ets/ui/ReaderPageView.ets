@@ -68,8 +68,8 @@ export struct ReaderPageView {
   @Prop selectable: boolean = false;
   /** 当前章序号（批注锚点的一部分）。 */
   @Prop chapterIndex: number = 0;
-  /** 全部划线批注（本页只画落在本页块里的那些）。 */
-  @Prop annotations: ReaderAnnotation[] = [];
+  /** 全部划线批注（本页只画落在本页块里的那些）。改后重建按「章:段」预分组的索引。 */
+  @Prop @Watch('onAnnotationsChanged') annotations: ReaderAnnotation[] = [];
   /** 命中「划线」菜单项：把（段落序号, 原文）交给宿主记录。 */
   onMark: (paragraphIndex: number, text: string) => void = (_p: number, _t: string): void => {};
   /** 命中「取消划线」：删除同段落里原文匹配（或该段全部）的划线。 */
@@ -184,14 +184,55 @@ export struct ReaderPageView {
     }
   }
 
-  /** 文案：该块所在章的划线清单。 */
-  private marksOf(block: ReaderBlock): ReaderAnnotation[] {
-    const out: ReaderAnnotation[] = [];
+  /**
+   * 按「章序号:段序号」预分组的划线索引。
+   *
+   * 原来每块都全量扫 `annotations`（最多 500 条），而一页约 30 块、每块还会被 `hasMark` 与
+   * `segmentsOf` 各扫一遍——拖拽翻页时父组件每帧改 `offsetX`，这份扫描就每帧重跑一遍。
+   * 索引只在批注变化时重建（`ReaderView` 每次变更都是整组替换，故 @Watch 可靠）。
+   */
+  private marksByParagraph: Map<string, ReaderAnnotation[]> = new Map<string, ReaderAnnotation[]>();
+  private marksIndexReady: boolean = false;
+
+  private onAnnotationsChanged(): void {
+    this.marksIndexReady = false;
+  }
+
+  private marksIndex(): Map<string, ReaderAnnotation[]> {
+    if (this.marksIndexReady) {
+      return this.marksByParagraph;
+    }
+    const map: Map<string, ReaderAnnotation[]> = new Map<string, ReaderAnnotation[]>();
     for (let i = 0; i < this.annotations.length; i++) {
       const item: ReaderAnnotation = this.annotations[i];
-      if (item.chapterIndex === this.chapterIndex && item.paragraphIndex === block.paragraphIndex &&
-        item.text.length > 0 && block.text.indexOf(item.text) >= 0) {
-        out.push(item);
+      if (item.text.length === 0) {
+        continue;
+      }
+      const key: string = `${item.chapterIndex}:${item.paragraphIndex}`;
+      const bucket: ReaderAnnotation[] | undefined = map.get(key);
+      if (bucket === undefined) {
+        map.set(key, [item]);
+      } else {
+        bucket.push(item);
+      }
+    }
+    this.marksByParagraph = map;
+    this.marksIndexReady = true;
+    return map;
+  }
+
+  /** 文案：该块所在章的划线清单。 */
+  private marksOf(block: ReaderBlock): ReaderAnnotation[] {
+    const bucket: ReaderAnnotation[] | undefined =
+      this.marksIndex().get(`${this.chapterIndex}:${block.paragraphIndex}`);
+    if (bucket === undefined) {
+      return [];
+    }
+    const out: ReaderAnnotation[] = [];
+    for (let i = 0; i < bucket.length; i++) {
+      // 同一段可能被分页器切成多个块，故还要确认划线原文确实落在本块里
+      if (block.text.indexOf(bucket[i].text) >= 0) {
+        out.push(bucket[i]);
       }
     }
     return out;

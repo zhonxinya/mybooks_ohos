@@ -11,7 +11,7 @@ import { BookListQuickItem, booklistColorHex, parseBookListQuickItems } from '..
 import { BookReviewItem, BookSocialStats } from '../models/BookReviewModels';
 import { FormatReadingStat, ReadingDevice, deviceTypeLabel, formatStatDuration } from '../models/DeviceModels';
 import { BookUploadService } from '../services/BookUploadService';
-import { DownloadTaskService } from '../services/DownloadTaskService';
+import { DownloadTaskService, DOWNLOAD_STATUS_TICK_KEY } from '../services/DownloadTaskService';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { AppRouter } from '../utils/AppRouter';
 
@@ -58,7 +58,7 @@ struct BookDetailPage {
   @State downloadMessage: string = '';
   @State readEnabled: boolean = false;
   @State downloading: boolean = false;
-  @StorageProp('downloadTasksTick') @Watch('onDownloadTasksChanged') downloadTasksTick: number = 0;
+  @StorageProp(DOWNLOAD_STATUS_TICK_KEY) @Watch('onDownloadTasksChanged') downloadTasksTick: number = 0;
   @State activeSheet: string = '';
   @State showSheet: boolean = false;
   @State booklistItems: BookListQuickItem[] = [];

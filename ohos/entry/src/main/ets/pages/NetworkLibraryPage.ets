@@ -877,7 +877,8 @@ struct NetworkLibraryPage {
                   this.openBook(row);
                 }
               },
-            });
+            })
+              .reuseId('book-list-item');
           }
           .height($r('app.float.list_item_height'))
           .padding({ left: 16, right: 16 });

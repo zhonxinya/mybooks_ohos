@@ -1,6 +1,5 @@
 import {
-  PageScaffold, LoadingState, EmptyState, PrimaryButton, IconCircleButton,
-} from '../components';
+  PageScaffold, LoadingState, EmptyState, PrimaryButton, IconCircleButton, LazyDataSource } from '../components';
 import { TalebookApi } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
@@ -33,7 +32,14 @@ const SHEET_ADD: string = 'add';
 @Entry
 @Component
 struct AdminUsersPage {
-  @State users: Record<string, Object>[] = [];
+  @State @Watch('onUsersChanged') users: Record<string, Object>[] = [];
+  /** users 的 LazyForEach 数据源（分页追加，只建可见行）。 */
+  private usersSource: LazyDataSource<Record<string, Object>> = new LazyDataSource<Record<string, Object>>();
+
+  /** users 变更后同步虚拟化数据源。 */
+  private onUsersChanged(): void {
+    this.usersSource.update(this.users);
+  }
   @State loading: boolean = true;
   @State loadingMore: boolean = false;
   @State currentPage: number = 1;
@@ -383,7 +389,7 @@ struct AdminUsersPage {
         EmptyState({ message: '暂无用户' });
       } else {
         List({ space: 8 }) {
-          ForEach(this.users, (user: Record<string, Object>) => {
+          LazyForEach(this.usersSource, (user: Record<string, Object>) => {
             ListItem() {
               this.userRow(user);
             }
@@ -396,6 +402,7 @@ struct AdminUsersPage {
         }
         .layoutWeight(1)
         .width('100%')
+        .cachedCount(8)
         .onReachEnd(() => this.loadMore());
       }
     }

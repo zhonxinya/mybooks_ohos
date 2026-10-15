@@ -4,8 +4,7 @@ import { util } from '@kit.ArkTS';
 import { pasteboard } from '@kit.BasicServicesKit';
 import {
   PageScaffold, LoadingState, EmptyState, SearchBar, FilterChips, FilterChipItem,
-  SettingCell, PrimaryButton, SecondaryButton, DangerButton, TextButton,
-} from '../components';
+  SettingCell, PrimaryButton, SecondaryButton, DangerButton, TextButton, LazyDataSource } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import {
@@ -82,7 +81,14 @@ function checkStatusLabel(status: string): string {
 @Entry
 @Component
 struct BookSourceManagePage {
-  @State sources: BookSourceItem[] = [];
+  @State @Watch('onSourcesChanged') sources: BookSourceItem[] = [];
+  /** sources 的 LazyForEach 数据源（分页追加，只建可见行）。 */
+  private sourcesSource: LazyDataSource<BookSourceItem> = new LazyDataSource<BookSourceItem>();
+
+  /** sources 变更后同步虚拟化数据源。 */
+  private onSourcesChanged(): void {
+    this.sourcesSource.update(this.sources);
+  }
   @State loading: boolean = true;
   @State loadError: string = '';
   @State loadingMore: boolean = false;
@@ -1031,7 +1037,7 @@ struct BookSourceManagePage {
           });
         } else {
           List({ space: 8 }) {
-            ForEach(this.sources, (source: BookSourceItem) => {
+            LazyForEach(this.sourcesSource, (source: BookSourceItem) => {
               ListItem() {
                 this.sourceRow(source);
               }

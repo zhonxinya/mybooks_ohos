@@ -457,6 +457,8 @@ export struct ReaderView {
 
   aboutToAppear(): void {
     const settings = this.options.settings;
+    // 翻页动画的帧源：Android 拿不到 displaySync，改用帧回调（与渲染同步出帧）
+    this.flipAnim.attachUiContext(this.getUIContext());
     this.fontSize = settings.fontSize;
     this.lineHeight = settings.lineHeight;
     this.theme = settings.theme;
