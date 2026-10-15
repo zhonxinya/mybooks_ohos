@@ -80,7 +80,7 @@ ace 会用 `app.bundleName` 同时充当 Android 壳工程的清单 `package` �
 | 复制到剪贴板 | `pasteboard` | **已适配**：APK 打包 `libpasteboard.so`（同 Kit 导入机制，与已验证可用的 `file_picker`/`intl` 同一套加载链）；应用内仅写入、无读取 | `pages/UserSettingsPage.ets` 等 |
 | 国际化 / 本地化 | `intl` | **已适配**：APK 打包 `libintl.so`，运行期已加载 | — |
 | 应用内升级 | 不支持（HAP 需自行签名安装，仍走外链下载） | 下载 `.apk` 附件 → 系统安装器 | `services/ApkUpdater.ets` |
-| 用 Want 打开外部链接 | `startAbility({action: viewData, uri})` | **不可用**（见下节第 1 点），Android 端按钮无反应 | `pages/UpdatePage.ets` |
+| 打开外部链接 | `startAbility({action: viewData, uri})` | **已实现**：隐式 Want 在 Android 到不了平台侧，改经原生桥 `apiOpenExternalUrl` 构造 `Intent.ACTION_VIEW`；协议白名单两端统一 | `services/ExternalLinkOpener.ets`<br>`android-overlay/java/.../ExternalLinkOpener.java` |
 
 ### 应用内升级（Android）
 
