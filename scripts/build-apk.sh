@@ -160,6 +160,9 @@ if [ -n "$ACE_PLATFORM" ]; then
 fi
 
 ACE_LOG="$(mktemp -t ace-apk-XXXXXX.log)"
+# 先删掉上一次的 APK：ace 构建失败时**仍返回 0**（见下），留着旧产物会让打包后校验
+# 在陈旧 APK 上「通过」——等于把坏构建放行。
+rm -f "$ANDROID_DIR/app/build/outputs/apk/$MODE"/*.apk
 set +e
 ace "${ACE_ARGS[@]}" 2>&1 | tee "$ACE_LOG"
 ACE_STATUS="${PIPESTATUS[0]}"
