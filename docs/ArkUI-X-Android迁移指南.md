@@ -122,9 +122,17 @@ ACE Tools 的 APK 流程**用鸿蒙工具链**编译工程内的 C++（`.cxx` �
 > **插件库按需补拷**：ace 只拷贝它识别到的 ArkUI-X 插件 `.so`，以 **Kit 形式**导入的模块
 > （例如 `@kit.ArkUI` 里的 `promptAction`）会被漏拷，运行期表现为
 > `moduleName:promptAction ... libpromptaction.so not found` + 功能**静默失效**（toast 不弹）。
-> `scripts/build-apk.sh` 维护一份实测清单（当前：`promptaction`），按目标 ABI 从
+> `scripts/build-apk.sh` 维护一份实测清单（`PLUGIN_LIBS`：promptaction / measure / font /
+> arkui_componentutils / arkui_drawabledescriptor / overlay），按目标 ABI 从
 > `<SDK>/24/arkui-x/plugins/api/lib/<plugin>/<abi>/` 补进 gradle 的 jniLibs。
 > 新功能若在 Android 上无声失效，先查 logcat 里有没有 `libX.so not found`。
+>
+> **打包后有两道自动核对**（`build-apk.sh` 第 3 步，不满足即构建失败）：① `PLUGIN_LIBS` 每个库
+> 都在 SDK 与本 ABI 的 APK 中；② 源码里 `import { x } from '@kit.*'` 且 `x` 与某插件库**同名**
+> （`promptAction` → `libpromptaction.so`）的库也在 APK 中。只断言「小写开头 + 精确同名」是为了
+> 零误报：大写开头是 ArkTS 类型（`Configuration` 会假命中 `libconfiguration.so`），模糊匹配也会
+> 误伤（`common` → `libcommoneventmanager`、`media` → `libmediaquery`）。代价是改名映射查不到
+> （`picker` → `libfile_picker.so`），这类仍以 logcat 为准。
 
 ## 环境准备（Linux）
 

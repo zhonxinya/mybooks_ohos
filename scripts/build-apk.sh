@@ -134,7 +134,10 @@ for rel in "${PLUGIN_LIBS[@]}"; do
     cp -f "$src_abi" "$JNI_ABI_DIR/"
     echo "    -> 插件 $JNI_ABI_DIR/$(basename "$src")"
   else
-    echo "    警告：SDK 中未找到插件库 $src_abi（跳过）" >&2
+    # 以前只是警告后跳过，结果换 SDK 后整条能力静默消失（功能还在，只是不再被拷进包）
+    echo "错误：SDK 中找不到 PLUGIN_LIBS 中的插件库 $src_abi" >&2
+    echo "      该 ABI 为 $ABI；若 SDK 调整了目录布局，请同步修本脚本。" >&2
+    exit 1
   fi
 done
 
@@ -159,6 +162,52 @@ fi
 ace "${ACE_ARGS[@]}"
 
 OUT="$ANDROID_DIR/app/build/outputs/apk/$MODE"
+
+# ---- 3) 校验插件库真的进了 APK ----
+# 目的：ace 漏拷插件 .so 时功能是「静默失效」——包里没这个库，只有 logcat 里能看到
+# `libX.so not found`（历史事故：promptaction / measure / font）。
+# 这里做两道核对，任一不满足即失败：
+#   a) PLUGIN_LIBS 里每个库都在 APK 内（含拷贝成功但 gradle 没打进去的情况）；
+#   b) 源码中以 `import { x } from '@kit.*'` 导入、且 x 恰好与某个插件库同名
+#      （如 promptAction→libpromptaction.so）的库也在 APK 内。
+#   为什么限定「小写开头 + 精确同名」两个条件：小写开头可排除 `Configuration` 这类
+#   ArkTS 类型（它们来自同名系统库、不需要插件）；精确匹配可排除模糊匹配的误伤
+#   （`common` → libcommoneventmanager、`media` → libmediaquery 都是假阳性）。
+#   代价是覆盖不全：`picker` → libfile_picker 这类改名映射查不到，仍需以 logcat 为准。
+SDK_PLUGIN_LIBS="$(find "$ARKUI_X_SDK/24/arkui-x/plugins/api/lib" -path "*${ENGINE_SUBDIR}*" \
+  -name '*.so' -printf '%f\n' 2>/dev/null | sort -u)"
+APK_FILE="$(find "$OUT" -name '*.apk' -print 2>/dev/null | head -n 1)"
+[ -n "$APK_FILE" ] || { echo "错误：未找到 APK 产物（$OUT）" >&2; exit 1; }
+APK_LIBS="$(unzip -l "$APK_FILE" | grep -oE "lib/$ABI/lib[^ ]*\.so" | sed 's#.*/##' | sort -u)"
+
+require_in_apk() {
+  local lib="$1"
+  local why="$2"
+  if ! grep -qx "$lib" <<<"$APK_LIBS"; then
+    echo "错误：APK 里缺少 native 库 $lib（$why）" >&2
+    echo "      若是 Kit 形式导入被 ace 漏拷，把该库加进本脚本的 PLUGIN_LIBS 即可。" >&2
+    exit 1
+  fi
+}
+
+for rel in "${PLUGIN_LIBS[@]}"; do
+  require_in_apk "$(basename "$rel")" "PLUGIN_LIBS"
+done
+
+for sym in $(grep -rhoE "^import \{[^}]*\} from '(@kit\.[A-Za-z]+|@ohos\.[a-z.]+)'" \
+    "$APP_DIR/entry/src/main/ets" "$APP_DIR"/feature/*/src/main/ets 2>/dev/null \
+  | sed -E 's/^import \{//; s/\} from .*//' | tr ',' '\n' \
+  | sed -E 's/ as .*//; s/[[:space:]]//g' | grep -v '^$' | sort -u); do
+  case "$sym" in
+    [a-z]*) ;;
+    *) continue ;; # 大写开头：ArkTS 类型/类，不是插件模块名
+  esac
+  lib="lib$(echo "$sym" | tr 'A-Z' 'a-z').so"
+  grep -qx "$lib" <<<"$SDK_PLUGIN_LIBS" || continue # 该 SDK 没有同名插件库，本脚本不做断言
+  require_in_apk "$lib" "源码导入了 $sym"
+done
+echo "==> 插件库校验通过（APK 内 native 库 $(grep -c . <<<"$APK_LIBS") 个）"
+
 echo
 echo "构建完成，产物目录：$OUT"
-find "$OUT" -name '*.apk' -print 2>/dev/null || echo "（未找到 APK，请检查上方构建日志）"
+echo "$APK_FILE"
