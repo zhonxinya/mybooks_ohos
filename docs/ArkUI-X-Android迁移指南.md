@@ -76,7 +76,7 @@ ace 会用 `app.bundleName` 同时充当 Android 壳工程的清单 `package` �
 | 音频播放 | AVPlayer + AVSession + 后台长时任务 | AVPlayer，前台播放 | `services/AudioPlatformOhos.ets`<br>`services/AudioPlatformAndroid.ets` |
 | 电量显示 | `batteryInfo` | **已实现**：SDK 无 `batteryinfo` 插件，改经原生桥 `apiGetBatteryInfo` 读 Android `BatteryManager`（JSON `{level,charging}`） | `ui/ReaderBattery.ets`<br>`android-overlay/java/.../BatteryReader.java` |
 | 翻页动效帧回调 | `displaySync` | **已降级**：SDK 无 `graphics_displaysync` 插件，退化为 **16ms 定时器帧源** | `ui/ReaderFlipAnimator.ets` |
-| 本地导入（文件选择） | `picker.DocumentViewPicker` | **已适配**：`fileSuffixFilters` → Android DocumentsUI `acceptMimes`（epub/txt/mobi 有对应 MIME，azw/azw3 映射为 null）；实测能拉起系统文件选择器 | `services/LocalBookService.ets` |
+| 本地导入（文件选择） | `picker.DocumentViewPicker` | **可用（类型过滤降级）**：能拉起系统文件选择器；但类型过滤在 Android 上不生效——file_picker 在 Java 侧用 `URLConnection.guessContentTypeFromName` 把后缀映射成 MIME（每条都过这张表，传 MIME 串也救不了），azw/azw3 查不到即得到 `null`，整组 MIME 失效，故导入由应用侧后缀校验兜底 | `services/LocalBookService.ets` |
 | 复制到剪贴板 | `pasteboard` | **已适配**：APK 打包 `libpasteboard.so`（同 Kit 导入机制，与已验证可用的 `file_picker`/`intl` 同一套加载链）；应用内仅写入、无读取 | `pages/UserSettingsPage.ets` 等 |
 | 国际化 / 本地化 | `intl` | **已适配**：APK 打包 `libintl.so`，运行期已加载 | — |
 | 应用内升级 | 不支持（HAP 需自行签名安装，仍走外链下载） | 下载 `.apk` 附件 → 系统安装器 | `services/ApkUpdater.ets` |
