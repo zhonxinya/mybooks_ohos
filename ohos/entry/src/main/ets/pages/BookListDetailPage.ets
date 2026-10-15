@@ -26,6 +26,26 @@ interface SheetBookItem {
 }
 
 const DETAIL_PAGE_SIZE: number = 24;
+/** 封面网格列数：与原 `GridCol({span:4})`（12 栅格）一致。 */
+const COVER_COLUMNS: number = 3;
+/** 封面网格的虚拟化缓存行数（约 2 屏），过大反而白建节点。 */
+const COVER_CACHE_ROWS: number = 8;
+/** 距末尾还有这么多行时就预取下一页。 */
+const LOAD_MORE_THRESHOLD_ROWS: number = 2;
+/** 网格前的固定项数：头部卡片 + 排序条（onScrollIndex 的下标口径含它们）。 */
+const COVER_HEADER_ITEMS: number = 2;
+
+/** 网格单元格：`book` 为 null 表示「添加书籍」虚线格（仅 owner 的首格）。 */
+interface CoverCell {
+  book: BookListCoverBook | null;
+}
+
+/** 行键：只依赖行首与格数，追加翻页时已有行的键保持不变（只重建新增行）。 */
+function coverRowKey(row: CoverCell[]): string {
+  const first: CoverCell = row[0];
+  const head: string = first.book === null ? 'add' : `b${first.book.bookId}`;
+  return `${head}-${row.length}`;
+}
 
 /** 对齐服务端约束：BookList.name 为 String(100)、description 服务端截断到 500。 */
 const BOOKLIST_NAME_MAX: number = 100;
@@ -66,8 +86,31 @@ struct BookListDetailPage {
   /** 当前账号是否管理员：服务端书单置顶为 `@is_admin`，据此决定菜单里是否出现「置顶」。 */
   @State isAdmin: boolean = false;
   private addResultsSource: LazyDataSource<SheetBookItem> = new LazyDataSource<SheetBookItem>();
+  /**
+   * 封面网格的 LazyForEach 数据源，每项是「一行」（≤3 格）。
+   *
+   * 为什么按行分块：头部卡片是全宽出血（无左右内边距），封面区却要左右各 16，
+   * 二者没法共用一个带 padding 的 Grid；按行虚拟化后由行容器自己带内边距，版式与改造前一致。
+   */
+  private coverRows: LazyDataSource<CoverCell[]> = new LazyDataSource<CoverCell[]>();
   private lastLoadTime: number = 0;
   private lastAddTime: number = 0;
+
+  /** books / 归属人变化后重算封面行（owner 首格为「添加书籍」虚线格）。 */
+  private syncCoverRows(): void {
+    const cells: CoverCell[] = [];
+    if (this.isOwner()) {
+      cells.push({ book: null });
+    }
+    for (let i = 0; i < this.books.length; i++) {
+      cells.push({ book: this.books[i] });
+    }
+    const rows: CoverCell[][] = [];
+    for (let i = 0; i < cells.length; i += COVER_COLUMNS) {
+      rows.push(cells.slice(i, i + COVER_COLUMNS));
+    }
+    this.coverRows.update(rows);
+  }
 
   /** addResults 变更后同步 LazyForEach 数据源。 */
   private onAddResultsChanged(): void {
@@ -153,6 +196,7 @@ struct BookListDetailPage {
       const fetched = data.books;
       this.books = reset ? fetched : this.books.concat(fetched);
       this.hasMore = this.books.length < data.booksTotal;
+      this.syncCoverRows();
     } catch (error) {
       if (reset) {
         this.errorMessage = error instanceof Error ? error.message : `${error}`;
@@ -520,6 +564,7 @@ struct BookListDetailPage {
               if (rsp.err === undefined || rsp.err === 'ok') {
                 this.toast('已从书单移出');
                 this.books = this.books.filter((item: BookListCoverBook) => item.bookId !== book.bookId);
+                this.syncCoverRows();
                 if (this.detail !== null) {
                   const nextTotal: number = Math.max(0, this.detail.booksTotal - 1);
                   this.detail = {
@@ -662,91 +707,89 @@ struct BookListDetailPage {
     .padding({ left: 16, right: 16 });
   }
 
+  /** 「添加书籍」虚线格（仅 owner 的首格）。 */
   @Builder
-  booksGrid() {
+  addBookCell() {
+    GridCol({ span: 4 }) {
+      Column({ space: 6 }) {
+        SymbolGlyph($r('sys.symbol.plus'))
+          .fontSize(28)
+          .fontColor([$r('app.color.text_tertiary')]);
+        Text('添加书籍')
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'));
+      }
+      .width('100%')
+      .height(158)
+      .justifyContent(FlexAlign.Center)
+      .borderRadius($r('app.float.card_radius'))
+      .backgroundColor($r('app.color.card_background'))
+      .border({
+        width: 1,
+        color: $r('app.color.divider'),
+        style: BorderStyle.Dashed,
+        // 圆角必须写进 border：否则虚线框会盖成直角
+        radius: $r('app.float.card_radius'),
+      })
+      .onClick(() => this.openAddSheet());
+    }
+  }
+
+  /** 一格的封面。 */
+  @Builder
+  coverCell(book: BookListCoverBook) {
+    GridCol({ span: 4 }) {
+      Column({ space: 4 }) {
+        Stack({ alignContent: Alignment.TopEnd }) {
+          AuthImage({
+            url: book.thumb.length > 0 ? book.thumb : book.img,
+            imageWidth: '100%',
+            imageHeight: 140,
+          });
+          if (this.isOwner()) {
+            Column() {
+              SymbolGlyph($r('sys.symbol.xmark'))
+                .fontSize(12)
+                .fontColor([Color.White]);
+            }
+            .width(22)
+            .height(22)
+            .justifyContent(FlexAlign.Center)
+            .borderRadius(11)
+            .backgroundColor('#99000000')
+            .margin(4)
+            .onClick(() => {
+              this.removeBook(book);
+            });
+          }
+        }
+        .width('100%');
+        Text(book.title)
+          .fontSize(12)
+          .fontColor($r('app.color.text_primary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%');
+      }
+      .alignItems(HorizontalAlign.Start)
+      .onClick(() => this.openBook(book.bookId));
+    }
+  }
+
+  /** 一行封面（≤3 格），左右内边距与原 GridRow 一致。 */
+  @Builder
+  coverRow(row: CoverCell[]) {
     GridRow({
       columns: 12,
       gutter: { x: 10, y: 12 },
     }) {
-      if (this.isOwner()) {
-        GridCol({ span: 4 }) {
-          Column({ space: 6 }) {
-            SymbolGlyph($r('sys.symbol.plus'))
-              .fontSize(28)
-              .fontColor([$r('app.color.text_tertiary')]);
-            Text('添加书籍')
-              .fontSize(12)
-              .fontColor($r('app.color.text_secondary'));
-          }
-          .width('100%')
-          .height(158)
-          .justifyContent(FlexAlign.Center)
-          .borderRadius($r('app.float.card_radius'))
-          .backgroundColor($r('app.color.card_background'))
-          .border({
-            width: 1,
-            color: $r('app.color.divider'),
-            style: BorderStyle.Dashed,
-            // 圆角必须写进 border：否则虚线框会盖成直角
-            radius: $r('app.float.card_radius'),
-          })
-          .onClick(() => this.openAddSheet());
+      ForEach(row, (cell: CoverCell) => {
+        if (cell.book === null) {
+          this.addBookCell();
+        } else {
+          this.coverCell(cell.book);
         }
-      }
-      ForEach(this.books, (book: BookListCoverBook) => {
-        GridCol({ span: 4 }) {
-          Column({ space: 4 }) {
-            Stack({ alignContent: Alignment.TopEnd }) {
-              AuthImage({
-                url: book.thumb.length > 0 ? book.thumb : book.img,
-                imageWidth: '100%',
-                imageHeight: 140,
-              });
-              if (this.isOwner()) {
-                Column() {
-                  SymbolGlyph($r('sys.symbol.xmark'))
-                    .fontSize(12)
-                    .fontColor([Color.White]);
-                }
-                .width(22)
-                .height(22)
-                .justifyContent(FlexAlign.Center)
-                .borderRadius(11)
-                .backgroundColor('#99000000')
-                .margin(4)
-                .onClick(() => {
-                  this.removeBook(book);
-                });
-              }
-            }
-            .width('100%');
-            Text(book.title)
-              .fontSize(12)
-              .fontColor($r('app.color.text_primary'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .width('100%');
-          }
-          .alignItems(HorizontalAlign.Start)
-          .onClick(() => this.openBook(book.bookId));
-        }
-      }, (book: BookListCoverBook) => `book-${book.bookId}`);
-      if (this.books.length === 0 && !this.isOwner()) {
-        // owner 空书单有上面的虚线「添加书籍」格已是引导；非 owner 之前完全空白
-        GridCol({ span: 12 }) {
-          Column({ space: 6 }) {
-            SymbolGlyph($r('sys.symbol.book'))
-              .fontSize(28)
-              .fontColor([$r('app.color.text_tertiary')]);
-            Text('这个书单还没有书籍')
-              .fontSize(13)
-              .fontColor($r('app.color.text_secondary'));
-          }
-          .width('100%')
-          .padding({ top: 24, bottom: 24 })
-          .alignItems(HorizontalAlign.Center);
-        }
-      }
+      }, (cell: CoverCell) => cell.book === null ? 'add-book' : `book-${cell.book.bookId}`);
     }
     .width('100%')
     .padding({ left: 16, right: 16 });
@@ -1037,12 +1080,37 @@ struct BookListDetailPage {
     } else if (this.detail === null) {
       EmptyState({ message: '书单不存在' });
     } else {
-      Scroll() {
-        Column({ space: 12 }) {
+      // 按行虚拟化：封面再多也只建可见行（原实现是 Scroll 里全量 ForEach，越滑越多节点）
+      List({ space: 12 }) {
+        ListItem() {
           this.headerCard();
+        }
+        ListItem() {
           this.orderChips();
-          this.booksGrid();
-          if (this.loadingMore) {
+        }
+        LazyForEach(this.coverRows, (row: CoverCell[]) => {
+          ListItem() {
+            this.coverRow(row);
+          }
+        }, (row: CoverCell[]) => coverRowKey(row));
+        if (this.books.length === 0 && !this.isOwner()) {
+          // owner 空书单有虚线「添加书籍」格已是引导；非 owner 之前完全空白
+          ListItem() {
+            Column({ space: 6 }) {
+              SymbolGlyph($r('sys.symbol.book'))
+                .fontSize(28)
+                .fontColor([$r('app.color.text_tertiary')]);
+              Text('这个书单还没有书籍')
+                .fontSize(13)
+                .fontColor($r('app.color.text_secondary'));
+            }
+            .width('100%')
+            .padding({ top: 24, bottom: 24, left: 16, right: 16 })
+            .alignItems(HorizontalAlign.Center);
+          }
+        }
+        if (this.loadingMore) {
+          ListItem() {
             Text('加载中…')
               .fontSize(13)
               .fontColor($r('app.color.text_tertiary'))
@@ -1051,15 +1119,17 @@ struct BookListDetailPage {
               .padding(12);
           }
         }
-        .width('100%')
-        .padding({ top: 12, bottom: 16 });
       }
       .layoutWeight(1)
       .width('100%')
-      // Scroll 默认 align 为 Alignment.Center：内容不足一屏时会把卡片整体推到页面中部，
-      // 书单为空或只有几本书时表现为「标题栏下一大片空白」，必须显式顶对齐。
-      .align(Alignment.TopStart)
-      .onReachEnd(() => this.loadMore());
+      .padding({ bottom: 16 })
+      .cachedCount(COVER_CACHE_ROWS)
+      .onScrollIndex((_first: number, last: number) => {
+        const rowCount: number = this.coverRows.totalCount();
+        if (last + LOAD_MORE_THRESHOLD_ROWS >= COVER_HEADER_ITEMS + rowCount) {
+          this.loadMore();
+        }
+      });
     }
   }
 }
