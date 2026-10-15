@@ -38,6 +38,17 @@ export class SoNovelService {
     return TalebookService.secureGet('sonovel_url').replace(/\/+$/, '');
   }
 
+  /**
+   * 是否已配置 SoNovel 服务地址（全局键 `sonovel_url`，不随书库账号切换）。
+   *
+   * 供 UI 决定是否显示 SoNovel 入口：没配地址时搜书页只会报「未配置」，不如不显示入口。
+   * 判定用配置键本身而不是「账号列表里有 SONOVEL 账号」——升级前的老安装只有这个键、
+   * 没有对应的账号记录，按账号列表判会误隐藏。
+   */
+  static isConfigured(): boolean {
+    return SoNovelService.getBaseUrl().length > 0;
+  }
+
   private static buildBookFetchUrl(base: string, payload: SoNovelBookPayload): string {
     // so-novel BookFetchServlet 只识别 url/format/language/concurrency，
     // 书源由服务端根据 url 自行解析（SourceUtils.getRule(bookUrl)）。
