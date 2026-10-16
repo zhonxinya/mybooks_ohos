@@ -30,7 +30,9 @@ struct ProfilePage {
       if (TalebookService.hasAuthCredentials()) {
         await TalebookService.ensureAuthenticated();
         const saved = TalebookService.getSavedUserProfile();
-        if (saved !== null) {
+        // 只信「已登录」的缓存：如果缓存里是一条未登录记录（登录前拉到过访客响应、或历史脏数据），
+        // 这里必须继续往下问服务端，否则本页会永远停在未登录且不会自愈。
+        if (saved !== null && TalebookService.isLoggedInUser(saved)) {
           this.applyUser(saved);
           return;
         }
@@ -68,7 +70,7 @@ struct ProfilePage {
   private applyUser(user: Record<string, Object>): void {
     this.nickname = String(user['nickname'] ?? user['name'] ?? '');
     this.username = String(user['username'] ?? '');
-    this.isLogin = Boolean(user['is_login'] ?? false);
+    this.isLogin = TalebookService.isLoggedInUser(user);
   }
 
   build() {

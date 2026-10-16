@@ -554,7 +554,30 @@ export class TalebookService {
     TalebookService.secureSet('talebook_password', password);
   }
 
+  /**
+   * 记录/响应里的 `is_login` 是否表示「已登录」。
+   *
+   * 服务端现在给布尔，但历史上有过 0/1 与字符串写法，故按真值判断（对外来数据宽容）。
+   * 判定口径统一走这里，避免各处 `Boolean(...)` 与 `=== true` 各写一套。
+   */
+  static isLoggedInUser(record: Record<string, Object>): boolean {
+    const raw: Object | undefined = record['is_login'];
+    if (raw === undefined || raw === null) {
+      return false;
+    }
+    if (typeof raw === 'boolean') {
+      return raw;
+    }
+    const text: string = String(raw);
+    return text === '1' || text === 'true';
+  }
+
   static saveUserProfile(user: Record<string, Object>): void {
+    // 登录前（匿名/访客）的 user/info 响应同样带 `is_login:false`，也满足 isUserProfile 的
+    // 字段存在性检查；一旦把它缓存成资料，「个人中心」会按未登录渲染且**不再刷新**。
+    if (user['is_login'] !== undefined && !TalebookService.isLoggedInUser(user)) {
+      return;
+    }
     TalebookService.secureSet('talebook_user_profile', JSON.stringify(user));
   }
 
@@ -663,7 +686,7 @@ export class TalebookService {
     }
     const user = (envelope.body['user'] as Record<string, Object> | undefined) ?? envelope.body;
     if (user['is_login'] !== undefined) {
-      return Boolean(user['is_login']);
+      return TalebookService.isLoggedInUser(user);
     }
     return true;
   }
