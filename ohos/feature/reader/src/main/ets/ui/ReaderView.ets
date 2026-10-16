@@ -1115,8 +1115,8 @@ export struct ReaderView {
       onBack: () => this.callbacks.onClose(),
       onRefresh: () => this.reloadChapter(),
       onToggleNight: () => this.toggleNightTheme(),
-      onPrevChapter: () => this.goToChapter(this.chapterIndex - 1),
-      onNextChapter: () => this.goToChapter(this.chapterIndex + 1),
+      onPrevChapter: () => this.goToChapter(this.chapterIndex - 1, true),
+      onNextChapter: () => this.goToChapter(this.chapterIndex + 1, true),
       onChapterProgressChange: (value: number) => this.jumpToChapterProgress(value),
       onOpenToc: () => this.openPanel(READER_PANEL_TOC),
       onOpenAppearance: () => this.openPanel(READER_PANEL_APPEARANCE),
@@ -1312,7 +1312,8 @@ export struct ReaderView {
     }
   }
 
-  private async loadChapter(index: number, paragraphIndex: number, toLastPage: boolean): Promise<void> {
+  private async loadChapter(index: number, paragraphIndex: number, toLastPage: boolean,
+    keepBars: boolean = false): Promise<void> {
     const engine = this.engine;
     if (engine === null || this.chapterLoading) {
       return;
@@ -1329,11 +1330,19 @@ export struct ReaderView {
       this.chapterBlocks = chapter.blocks;
       this.blockCount = chapter.blocks.length;
       this.blocks.update(chapter.blocks);
-      // 选词模式下工具栏常驻（它是关掉选词模式的唯一入口），切章也不收起
-      if (!this.selectMode) {
+      // 工具栏收起的规则：
+      // - 选词模式：常驻（它是关掉选词模式的唯一入口），切章也不收起；
+      // - 「上一章/下一章」触发的切章：保留（按钮就在工具栏上，切完立刻收起就点不了第二下，
+      //   也看不到章节进度变化），但仍按空闲时间自动收起，不长期占住正文；
+      // - 其余（目录跳转、翻页越界切章等）：收起，直接回到正文阅读态。
+      if (this.selectMode) {
+        this.cancelBarsAutoHide();
+      } else if (keepBars) {
+        this.scheduleBarsAutoHide();
+      } else {
         this.showBars = false;
+        this.cancelBarsAutoHide();
       }
-      this.cancelBarsAutoHide();
       this.restoreParagraph = paragraphIndex < 0 ? 0 : paragraphIndex;
       this.pendingLastPage = toLastPage;
       this.pages = [];
@@ -1359,13 +1368,18 @@ export struct ReaderView {
     }
   }
 
-  /** 切章（含上一章/下一章/目录跳转）；越界直接忽略。 */
-  private goToChapter(index: number): void {
+  /**
+   * 切章（含上一章/下一章/目录跳转）；越界直接忽略。
+   *
+   * @param keepBars 是否保留底部工具栏。「上一章/下一章」按钮长在工具栏上，传 true；
+   *                 目录跳转不传（跳完收起工具栏、回到正文阅读态）。
+   */
+  private goToChapter(index: number, keepBars: boolean = false): void {
     if (index < 0 || index >= this.catalogSize || index === this.chapterIndex) {
       return;
     }
     this.showPanel = false;
-    void this.loadChapter(index, 0, false);
+    void this.loadChapter(index, 0, false, keepBars);
   }
 
   // ---- 分页 ----
