@@ -523,15 +523,6 @@ export struct SettingsPage {
                 showChevron: true,
                 onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/MetaBookListPage' }),
               });
-              if (ServerRegistry.supports(ServerFeature.AUTHOR_META_EDIT)) {
-                Divider().color($r('app.color.divider')).strokeWidth(0.5);
-                SettingCell({
-                  title: '作者元数据',
-                  subtitle: '作者简介/头像与作者、出版商书籍刷新',
-                  showChevron: true,
-                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AuthorMetaPage' }),
-                });
-              }
               if (ServerRegistry.supports(ServerFeature.ADMIN_BATCH_ADD)) {
                 Divider().color($r('app.color.divider')).strokeWidth(0.5);
                 SettingCell({
