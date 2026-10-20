@@ -88,6 +88,8 @@ export default class EntryAbility extends UIAbility {
       if (err.code !== 0) {
         hilog.error(0x0000, TAG, 'Failed to load MainTabs: %{public}s', err.message);
       }
+      // 墨水屏灰阶必须等窗口内容加载完才能设置（setWindowGrayScale 要求在 loadContent 之后调用）
+      AppTheme.applyGrayScale(this.context, TalebookService.prefGet('theme_mode', 'system'));
       // 内容已加载（首帧已出）：再跑账号迁移与自动登录，避免拖慢 onCreate
       this.startDeferredStartupWork();
     });

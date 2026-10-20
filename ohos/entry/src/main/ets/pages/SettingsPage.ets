@@ -231,7 +231,9 @@ export struct SettingsPage {
   private applyTheme(mode: string): void {
     this.themeMode = mode;
     TalebookService.prefSet(StorageKeys.THEME_MODE, mode);
-    AppTheme.applyThemeMode(this.getUIContext().getHostContext() as common.UIAbilityContext, mode);
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    AppTheme.applyThemeMode(ctx, mode);
+    AppTheme.applyGrayScale(ctx, mode);
   }
 
   private showThemePicker(): void {
@@ -241,9 +243,10 @@ export struct SettingsPage {
         { text: '跟随系统', color: '#007DFF' },
         { text: '浅色', color: '#007DFF' },
         { text: '深色', color: '#007DFF' },
+        { text: '墨水屏（灰阶高对比）', color: '#007DFF' },
       ],
     }).then((result) => {
-      const modes: string[] = ['system', 'light', 'dark'];
+      const modes: string[] = ['system', 'light', 'dark', 'eink'];
       if (result.index >= 0 && result.index < modes.length) {
         this.applyTheme(modes[result.index]);
       }
