@@ -1,5 +1,6 @@
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { common } from '@kit.AbilityKit';
+import { window } from '@kit.ArkUI';
 
 export class AppTheme {
   static readonly pagePadding: number = 16;
@@ -10,7 +11,9 @@ export class AppTheme {
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   static applyThemeMode(context: common.UIAbilityContext, mode: string): void {
     const appContext = context.getApplicationContext();
-    if (mode === 'light') {
+    // 墨水屏与浅色同样强制 COLOR_MODE_LIGHT：反射屏上白底黑字对比度最高，
+    // 深色模式需要整屏涂黑，既费电又在刷新时闪黑，不适合墨水屏
+    if (mode === 'light' || mode === 'eink') {
       appContext.setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT);
       return;
     }
@@ -21,12 +24,27 @@ export class AppTheme {
     appContext.setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
   }
 
+  /**
+   * 墨水屏整窗灰阶：彩色画面按亮度转灰（1=纯灰阶，0=恢复彩色），适配只有黑白灰的墨水屏面板。
+   * 必须在窗口 loadContent 之后调用；设备能力不支持（801）或窗口异常时静默降级，
+   * 「强制浅色」那一层仍然生效。
+   * @throws 不向外抛出（内部已捕获）
+   */
+  static applyGrayScale(context: common.UIAbilityContext, mode: string): void {
+    window.getLastWindow(context).then((win: window.Window) => {
+      win.setWindowGrayScale(mode === 'eink' ? 1 : 0).catch(() => {});
+    }).catch(() => {});
+  }
+
   static themeModeLabel(mode: string): string {
     if (mode === 'light') {
       return '浅色';
     }
     if (mode === 'dark') {
       return '深色';
+    }
+    if (mode === 'eink') {
+      return '墨水屏';
     }
     return '跟随系统';
   }
@@ -37,6 +55,9 @@ export class AppTheme {
     }
     if (mode === 'light') {
       return 'dark';
+    }
+    if (mode === 'dark') {
+      return 'eink';
     }
     return 'system';
   }

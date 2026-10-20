@@ -147,6 +147,16 @@ struct ReadKitReader {
   private ttsPageTurnTimer: number = -1;
   private ttsChapterStartTimer: number = -1;
   private pendingTtsChapterIndex: number = -1;
+  /** 墨水屏模式（theme_mode=eink）：淡入/滑动过渡在低刷新率面板上会留残影，一律瞬时显示。 */
+  private einkMode: boolean = false;
+
+  /**
+   * 面板/提示的过渡效果选择：墨水屏模式下换成 IDENTITY（不播动画，瞬时出现消失），
+   * 其余模式保持原有的淡入/滑动动画。
+   */
+  private transitionOrInstant(effect: TransitionEffect): TransitionEffect {
+    return this.einkMode ? TransitionEffect.IDENTITY : effect;
+  }
 
   aboutToAppear(): void {
     this.loadReaderPrefs();
@@ -477,6 +487,7 @@ struct ReadKitReader {
     }
     this.readerTheme = Number(TalebookService.prefGet('reader_theme', '0')) as ReaderTheme;
     this.flipMode = TalebookService.prefGet('reader_flip_mode', '0');
+    this.einkMode = TalebookService.prefGet('theme_mode', 'system') === 'eink';
     this.keepScreenOn = TalebookService.prefGet('reader_keep_screen_on', 'false') === 'true';
     this.ttsSpeed = Number(TalebookService.prefGet('reader_tts_speed', '1'));
     this.ttsPerson = Number(TalebookService.prefGet('reader_tts_person', '0'));
@@ -1429,7 +1440,7 @@ struct ReadKitReader {
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
     .backgroundColor(ReaderThemeColors.pageBackground(this.readerTheme))
-    .transition(TransitionEffect.OPACITY.animation({ duration: HINT_FADE_MS, curve: Curve.EaseOut }));
+    .transition(this.transitionOrInstant(TransitionEffect.OPACITY.animation({ duration: HINT_FADE_MS, curve: Curve.EaseOut })));
   }
 
   /**
@@ -1544,7 +1555,7 @@ struct ReadKitReader {
         .width('100%')
         .height('100%')
         .hitTestBehavior(HitTestMode.None)
-        .transition(TransitionEffect.OPACITY.animation({ duration: HINT_FADE_MS, curve: Curve.EaseOut }))
+        .transition(this.transitionOrInstant(TransitionEffect.OPACITY.animation({ duration: HINT_FADE_MS, curve: Curve.EaseOut })))
         .zIndex(3);
 
         Stack({ alignContent: Alignment.Bottom }) {
@@ -1553,7 +1564,7 @@ struct ReadKitReader {
         .width('100%')
         .height('100%')
         .hitTestBehavior(HitTestMode.None)
-        .transition(TransitionEffect.OPACITY.animation({ duration: HINT_FADE_MS, curve: Curve.EaseOut }))
+        .transition(this.transitionOrInstant(TransitionEffect.OPACITY.animation({ duration: HINT_FADE_MS, curve: Curve.EaseOut })))
         .zIndex(3);
       }
 
@@ -1580,13 +1591,13 @@ struct ReadKitReader {
             },
           })
             .width('100%')
-            .transition(TransitionEffect.translate({ y: '-100%' }).animation({ duration: PANEL_SLIDE_MS, curve: Curve.EaseOut }));
+            .transition(this.transitionOrInstant(TransitionEffect.translate({ y: '-100%' }).animation({ duration: PANEL_SLIDE_MS, curve: Curve.EaseOut })));
 
           Column()
             .layoutWeight(1)
             .width('100%')
             .backgroundColor(ReaderThemeColors.overlay(this.readerTheme))
-            .transition(TransitionEffect.OPACITY.animation({ duration: SCRIM_FADE_MS, curve: Curve.EaseOut }))
+            .transition(this.transitionOrInstant(TransitionEffect.OPACITY.animation({ duration: SCRIM_FADE_MS, curve: Curve.EaseOut })))
             .hitTestBehavior(HitTestMode.Default)
             .onClick(() => {
               if (this.subPanelSheet.length > 0) {
@@ -1719,7 +1730,7 @@ struct ReadKitReader {
             });
           }
           .width('100%')
-          .transition(TransitionEffect.translate({ y: '100%' }).animation({ duration: PANEL_SLIDE_MS, curve: Curve.EaseOut }));
+          .transition(this.transitionOrInstant(TransitionEffect.translate({ y: '100%' }).animation({ duration: PANEL_SLIDE_MS, curve: Curve.EaseOut })));
         }
         .width('100%')
         .height('100%')
