@@ -321,6 +321,8 @@ interface SimLayerSpec {
 export struct ReaderView {
   /** 打开参数（宿主一次性传入）。 */
   options: ReaderOpenOptions = DEFAULT_OPTIONS;
+  /** 墨水屏模式：整页加载/分页转圈改为只显示静态文字，避免低刷新率面板持续残影。 */
+  @StorageProp('eink_mode') private einkMode: boolean = false;
   /** 宿主回调。 */
   callbacks: ReaderCallbacks = {
     onProgress: (location: ReaderLocation, chapterTitle: string): void => {},
@@ -1026,10 +1028,12 @@ export struct ReaderView {
   @Builder
   loadingView() {
     Column({ space: 12 }) {
-      LoadingProgress()
-        .width(36)
-        .height(36)
-        .color(ReaderPalette.accentColor());
+      if (!this.einkMode) {
+        LoadingProgress()
+          .width(36)
+          .height(36)
+          .color(ReaderPalette.accentColor());
+      }
       Text('正在打开…')
         .fontSize(14)
         .fontColor(ReaderPalette.hintColor(this.theme));
@@ -1043,10 +1047,12 @@ export struct ReaderView {
   @Builder
   paginatingView() {
     Column({ space: 10 }) {
-      LoadingProgress()
-        .width(28)
-        .height(28)
-        .color(ReaderPalette.accentColor());
+      if (!this.einkMode) {
+        LoadingProgress()
+          .width(28)
+          .height(28)
+          .color(ReaderPalette.accentColor());
+      }
       Text('正在分页…')
         .fontSize(13)
         .fontColor(ReaderPalette.hintColor(this.theme));

@@ -20,6 +20,8 @@ struct DownloadManagerPage {
   /** SoNovel 是否已配置：没配就不给「SoNovel」页签，也不把空态指向搜索页 */
   @State sonovelConfigured: boolean = false;
   @StorageProp('downloadTasksTick') @Watch('onTasksChanged') tasksTick: number = 0;
+  /** 墨水屏模式：下载转圈改为不渲染——下方线性进度条与状态文字已表达进度。 */
+  @StorageProp('eink_mode') private einkMode: boolean = false;
   @State filterItems: FilterChipItem[] = [];
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
@@ -263,10 +265,12 @@ struct DownloadManagerPage {
       .layoutWeight(1);
 
       if (task.status === 'downloading') {
-        LoadingProgress()
-          .width(24)
-          .height(24)
-          .color($r('app.color.brand_primary'));
+        if (!this.einkMode) {
+          LoadingProgress()
+            .width(24)
+            .height(24)
+            .color($r('app.color.brand_primary'));
+        }
       } else if (task.status === 'completed') {
         SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
           .fontSize(20)

@@ -1427,10 +1427,12 @@ struct ReadKitReader {
   @Builder
   loadingOverlay() {
     Column({ space: 12 }) {
-      LoadingProgress()
-        .width(48)
-        .height(48)
-        .color($r('app.color.brand_primary'));
+      if (!this.einkMode) {
+        LoadingProgress()
+          .width(48)
+          .height(48)
+          .color($r('app.color.brand_primary'));
+      }
       Text('正在打开阅读器')
         .fontSize(14)
         .fontColor(ReaderThemeColors.textHint(this.readerTheme));
