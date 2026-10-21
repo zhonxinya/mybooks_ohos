@@ -10,6 +10,9 @@ export class AppTheme {
 
   /** @throws 内部调用可能抛出异常，由调用方处理 */
   static applyThemeMode(context: common.UIAbilityContext, mode: string): void {
+    // 同步发布墨水屏开关给全局组件：转圈类加载动画在墨水屏下会持续触发局部刷新，
+    // 只产生残影与耗电，组件据此改为静态呈现（调用点：启动 onCreate 与设置页切换）
+    AppStorage.setOrCreate('eink_mode', mode === 'eink');
     const appContext = context.getApplicationContext();
     // 墨水屏与浅色同样强制 COLOR_MODE_LIGHT：反射屏上白底黑字对比度最高，
     // 深色模式需要整屏涂黑，既费电又在刷新时闪黑，不适合墨水屏

@@ -38,6 +38,8 @@ import {
 export struct ReaderControlPanel {
   /** 当前标签页：toc / appearance / settings / bookmarks / aloud。 */
   @Prop sheetOnly: string = READER_PANEL_TOC;
+  /** 墨水屏模式：字体下载处去掉转圈（「下载中…」文字仍表达状态）。 */
+  @StorageProp('eink_mode') private einkMode: boolean = false;
 
   // ---- 目录 ----
   @Prop catalogItems: ReaderCatalogItem[] = [];
@@ -211,11 +213,13 @@ export struct ReaderControlPanel {
                     .fontSize(14)
                     .fontColor(ReaderPalette.textColor(this.theme))
                     .layoutWeight(1);
-                  if (this.fontDownloading) {
+                  if (this.fontDownloading && !this.einkMode) {
                     LoadingProgress()
                       .width(16)
                       .height(16)
                       .color(ReaderPalette.accentColor());
+                  }
+                  if (this.fontDownloading) {
                     Text('下载中…')
                       .fontSize(12)
                       .fontColor(ReaderPalette.hintColor(this.theme));
