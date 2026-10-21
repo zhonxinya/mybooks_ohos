@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { PageScaffold, LoadingState, EmptyState, AuthImage } from '../components';
+import { PageScaffold, LoadingState, EmptyState, AuthImage, LazyDataSource } from '../components';
 import { AudioFileInfo } from '../common/ApiTypes';
 import { AudioPlaybackListener, AudioPlaybackService, AudioPlaybackState } from '../services/AudioPlaybackService';
 import { AppRouter } from '../utils/AppRouter';
@@ -16,18 +16,16 @@ struct AudioPlayerPage {
   @State bookTitle: string = '';
   @State bookAuthor: string = '';
   @State bookCover: string = '';
-  @State files: AudioFileInfo[] = [];
+  @State @Watch('onFilesChanged') files: AudioFileInfo[] = [];
   @State loading: boolean = true;
   @State errorMessage: string = '';
-  @State currentIndex: number = 0;
-  @State isPlaying: boolean = false;
-  @State currentTimeMs: number = 0;
-  @State durationMs: number = 0;
-  @State trackLoading: boolean = false;
+  @State @Watch('onTrackStateChanged') currentIndex: number = 0;
+  @State @Watch('onTrackStateChanged') isPlaying: boolean = false;
+  @State @Watch('onTrackStateChanged') trackLoading: boolean = false;
   @State speed: number = 1;
-  @State sliderValue: number = 0;
   private bookId: number = 0;
-  private sliderDragging: boolean = false;
+  /** 章节列表懒加载数据源；行内高亮/播放图标依赖 currentIndex 等页级状态，变更后须手动通知（见 onTrackStateChanged）。 */
+  private filesSource: LazyDataSource<AudioFileInfo> = new LazyDataSource<AudioFileInfo>();
   private listener: AudioPlaybackListener = (state: AudioPlaybackState): void => {
     this.applyState(state);
   };
@@ -49,6 +47,8 @@ struct AudioPlayerPage {
     service.addListener(this.listener);
     // 先按服务当前状态渲染（同一本书回跳时能立刻显示播放进度）
     this.applyState(service.currentState());
+    // @Watch 在首帧前的赋值不保证触发，这里显式同步一次章节懒加载数据源
+    this.filesSource.update(this.files);
     void service.openBook(context, this.bookId, title, author, cover, startIndex, resume);
   }
 
@@ -66,13 +66,8 @@ struct AudioPlayerPage {
     this.errorMessage = state.errorMessage;
     this.currentIndex = state.currentIndex;
     this.isPlaying = state.isPlaying;
-    this.currentTimeMs = state.currentTimeMs;
-    this.durationMs = state.durationMs;
     this.trackLoading = state.trackLoading;
     this.speed = state.speed;
-    if (!this.sliderDragging) {
-      this.sliderValue = state.durationMs > 0 ? state.currentTimeMs / state.durationMs * 100 : 0;
-    }
     if (state.notice.length > 0) {
       const notice = AudioPlaybackService.getInstance().consumeNotice();
       if (notice.length > 0) {
@@ -81,19 +76,26 @@ struct AudioPlayerPage {
     }
   }
 
+  /** 章节数据整体替换（新书/重新加载）后同步进懒加载数据源。 */
+  private onFilesChanged(): void {
+    this.filesSource.update(this.files);
+  }
+
+  /**
+   * 播放进度以 NOTIFY_THROTTLE_MS（250ms）节流回调，时间/滑杆只在 AudioProgressRow 子组件内刷新；
+   * 本页 @State 仅保留切章/播放态。行内高亮依赖这些页级状态，
+   * LazyForEach 只认数据源，必须把状态变更手动通知进数据源（并编进 keyGenerator），行才会重绘。
+   */
+  private onTrackStateChanged(): void {
+    this.filesSource.update(this.files);
+  }
+
   private toast(message: string): void {
     try {
       this.getUIContext().getPromptAction().showToast({ message: message });
     } catch (_error) {
       // 提示失败不影响主流程
     }
-  }
-
-  private formatTime(ms: number): string {
-    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
   }
 
   private displayName(file: AudioFileInfo, index: number): string {
@@ -177,7 +179,7 @@ struct AudioPlayerPage {
       }
       .width('100%');
       List({ space: 4 }) {
-        ForEach(this.files, (file: AudioFileInfo, index: number) => {
+        LazyForEach(this.filesSource, (file: AudioFileInfo, index: number) => {
           ListItem() {
             Row({ space: 10 }) {
               Text(`${index + 1}`)
@@ -204,8 +206,12 @@ struct AudioPlayerPage {
             .backgroundColor(index === this.currentIndex ? $r('app.color.brand_primary_light') : Color.Transparent)
             .onClick(() => AudioPlaybackService.getInstance().playIndex(index));
           }
-        }, (file: AudioFileInfo, index: number) => `${file.filename}_${index}`);
+        }, (file: AudioFileInfo, index: number) =>
+          `${file.filename}_${index}_${index === this.currentIndex ? 'c' : ''}` +
+          `${index === this.currentIndex && this.trackLoading ? 'l' : ''}` +
+          `${index === this.currentIndex && this.isPlaying ? 'p' : ''}`)
       }
+      .cachedCount(8)
       .layoutWeight(1)
       .width('100%')
       .scrollBar(BarState.Off);
@@ -217,33 +223,7 @@ struct AudioPlayerPage {
   @Builder
   controlSection() {
     Column({ space: 10 }) {
-      Row() {
-        Text(this.formatTime(this.currentTimeMs))
-          .fontSize(12)
-          .fontColor($r('app.color.text_secondary'));
-        Slider({
-          value: this.sliderValue,
-          min: 0,
-          max: 100,
-          step: 0.5,
-          style: SliderStyle.OutSet,
-        })
-          .layoutWeight(1)
-          .onChange((value: number, mode: SliderChangeMode) => {
-            if (mode === SliderChangeMode.Begin) {
-              this.sliderDragging = true;
-            } else if (mode === SliderChangeMode.Moving) {
-              this.sliderValue = value;
-            } else if (mode === SliderChangeMode.End) {
-              this.sliderDragging = false;
-              AudioPlaybackService.getInstance().seekToPercent(value);
-            }
-          });
-        Text(this.formatTime(this.durationMs))
-          .fontSize(12)
-          .fontColor($r('app.color.text_secondary'));
-      }
-      .width('100%');
+      AudioProgressRow();
 
       Row({ space: 24 }) {
         SymbolGlyph($r('sys.symbol.arrow_left'))
@@ -281,6 +261,76 @@ struct AudioPlayerPage {
       }
       .width('100%')
       .justifyContent(FlexAlign.Center);
+    }
+    .width('100%');
+  }
+}
+
+/**
+ * 播放进度行（时间 + 滑杆）。
+ *
+ * 单独成组件的原因：播放期间 `timeUpdate` 以 NOTIFY_THROTTLE_MS（250ms）节流回调，
+ * 若时间/滑杆挂在播放页上，每次回调都会重建整页（含章节 LazyForEach、速度档、按钮组）。
+ * 拆出后 4 次/秒的刷新只重建本组件的两段文本与滑杆。
+ */
+@Component
+struct AudioProgressRow {
+  @State currentTimeMs: number = 0;
+  @State durationMs: number = 0;
+  @State sliderValue: number = 0;
+  private sliderDragging: boolean = false;
+  private listener: AudioPlaybackListener = (state: AudioPlaybackState): void => {
+    this.currentTimeMs = state.currentTimeMs;
+    this.durationMs = state.durationMs;
+    if (!this.sliderDragging) {
+      this.sliderValue = state.durationMs > 0 ? state.currentTimeMs / state.durationMs * 100 : 0;
+    }
+  };
+
+  aboutToAppear(): void {
+    const service = AudioPlaybackService.getInstance();
+    service.addListener(this.listener);
+    // 进入本组件时可能已在播放：先按服务当前状态渲染一次
+    this.listener(service.currentState());
+  }
+
+  aboutToDisappear(): void {
+    AudioPlaybackService.getInstance().removeListener(this.listener);
+  }
+
+  private formatTime(ms: number): string {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+  }
+
+  build() {
+    Row() {
+      Text(this.formatTime(this.currentTimeMs))
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'));
+      Slider({
+        value: this.sliderValue,
+        min: 0,
+        max: 100,
+        step: 0.5,
+        style: SliderStyle.OutSet,
+      })
+        .layoutWeight(1)
+        .onChange((value: number, mode: SliderChangeMode) => {
+          if (mode === SliderChangeMode.Begin) {
+            this.sliderDragging = true;
+          } else if (mode === SliderChangeMode.Moving) {
+            this.sliderValue = value;
+          } else if (mode === SliderChangeMode.End) {
+            this.sliderDragging = false;
+            AudioPlaybackService.getInstance().seekToPercent(value);
+          }
+        });
+      Text(this.formatTime(this.durationMs))
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'));
     }
     .width('100%');
   }

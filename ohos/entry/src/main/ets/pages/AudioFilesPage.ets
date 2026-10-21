@@ -510,6 +510,7 @@ struct AudioFilesPage {
               }
             }, (file: AudioFileInfo, index: number) => `${file.filename}_${index}`);
           }
+          .cachedCount(8)
           .layoutWeight(1)
           .width('100%')
           .scrollBar(BarState.Off);
