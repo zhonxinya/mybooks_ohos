@@ -24,6 +24,8 @@ struct AudioPlayerPage {
   @State @Watch('onTrackStateChanged') trackLoading: boolean = false;
   @State speed: number = 1;
   private bookId: number = 0;
+  /** 上一次高亮的章节索引，用于在切章时只通知旧/新两行而非整表 reload。 */
+  private prevHighlightIndex: number = -1;
   /** 章节列表懒加载数据源；行内高亮/播放图标依赖 currentIndex 等页级状态，变更后须手动通知（见 onTrackStateChanged）。 */
   private filesSource: LazyDataSource<AudioFileInfo> = new LazyDataSource<AudioFileInfo>();
   private listener: AudioPlaybackListener = (state: AudioPlaybackState): void => {
@@ -49,6 +51,7 @@ struct AudioPlayerPage {
     this.applyState(service.currentState());
     // @Watch 在首帧前的赋值不保证触发，这里显式同步一次章节懒加载数据源
     this.filesSource.update(this.files);
+    this.prevHighlightIndex = this.currentIndex;
     void service.openBook(context, this.bookId, title, author, cover, startIndex, resume);
   }
 
@@ -79,15 +82,27 @@ struct AudioPlayerPage {
   /** 章节数据整体替换（新书/重新加载）后同步进懒加载数据源。 */
   private onFilesChanged(): void {
     this.filesSource.update(this.files);
+    this.prevHighlightIndex = this.currentIndex;
   }
 
   /**
    * 播放进度以 NOTIFY_THROTTLE_MS（250ms）节流回调，时间/滑杆只在 AudioProgressRow 子组件内刷新；
    * 本页 @State 仅保留切章/播放态。行内高亮依赖这些页级状态，
    * LazyForEach 只认数据源，必须把状态变更手动通知进数据源（并编进 keyGenerator），行才会重绘。
+   *
+   * 优化：play/pause 只影响当前行，切章只影响旧/新两行——用 updateAt 单条通知替代整表 reload。
    */
   private onTrackStateChanged(): void {
-    this.filesSource.update(this.files);
+    const cur = this.currentIndex;
+    const prev = this.prevHighlightIndex;
+    // 数据源里的条目引用不变（AudioFileInfo 对象未修改），updateAt 只需触发框架重绘
+    if (prev >= 0 && prev !== cur && prev < this.files.length) {
+      this.filesSource.updateAt(prev, this.files[prev]);
+    }
+    if (cur >= 0 && cur < this.files.length) {
+      this.filesSource.updateAt(cur, this.files[cur]);
+    }
+    this.prevHighlightIndex = cur;
   }
 
   private toast(message: string): void {

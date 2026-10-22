@@ -11,6 +11,7 @@ import {
   AudioPurchaseResponse, AudioCollectionResponse
 } from '../common/ApiTypes';
 import { TalebookService } from '../services/TalebookService';
+import { AudioPlaybackService } from '../services/AudioPlaybackService';
 import { AppRouter } from '../utils/AppRouter';
 
 interface VoiceOption {
@@ -143,6 +144,12 @@ struct AudioFilesPage {
         return;
       }
       this.files = rsp.audios ?? [];
+      for (let i = 0; i < this.files.length; i++) {
+        const f = this.files[i];
+        if (f.filename.length > 0) {
+          f.filename = AudioPlaybackService.cleanChapterTitle(f.filename);
+        }
+      }
       this.isPaid = Boolean(rsp.is_paid);
       this.errorMessage = this.files.length === 0
         ? (rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '暂无音频文件')
