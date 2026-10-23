@@ -91,6 +91,15 @@ export class BookFile {
     }
   }
 
+  /** 文件最后修改时间（秒；读不到时返回 0）。用于判断解析缓存是否过期。 */
+  static modifiedTime(path: string): number {
+    try {
+      return Math.floor(Number(fs.statSync(path).mtime));
+    } catch (_error) {
+      return 0;
+    }
+  }
+
   /**
    * 读取文件的指定区间（MOBI 按记录偏移随机读取用，避免把整本书读进内存）。
    * 区间会被夹到文件范围内；越界时返回空缓冲。

@@ -20,6 +20,8 @@ const MAX_TITLE_LENGTH: number = 50;
 const FALLBACK_CHUNK_CHARS: number = 3000;
 /** 超大文件只解析前 50MB，避免「全文 + 缓存」同时驻留导致 OOM。 */
 const MAX_PARSE_SIZE: number = 50 * 1024 * 1024;
+/** 索引缓存格式版本：切章规则变化时 +1，旧索引自动失效。 */
+const INDEX_VERSION: number = 1;
 
 /** 切章结果：标题 + 在解码后全文中的字符区间（左闭右开），不复制正文。 */
 export interface TxtSectionData {
@@ -41,16 +43,32 @@ export interface TxtBookIndex {
   chapters: TxtChapterSpan[];
 }
 
+/** 索引缓存：与格式版本、源文件 size/mtime、UTF-8 缓存的字节数绑定，任一不符即重建。 */
+interface TxtIndexCache {
+  version: number;
+  size: number;
+  mtime: number;
+  bytes: number;
+  chapters: TxtChapterSpan[];
+}
+
 export class TxtParser {
   /**
    * TXT 索引：读取（超大文件截断）→ 编码探测 → 按字符偏移切章 → 写 UTF-8 缓存。
    *
    * 章节只记字符区间，写入时再按区间取正文，避免为整本生成数万行字符串数组。
+   * 章界连同源文件 size/mtime 存进 `.idx`：重开同一本书直接命中，不再解码与重写整本缓存。
    */
   static index(filePath: string, cachePath: string): TxtBookIndex {
     const fileSize: number = BookFile.size(filePath);
     if (fileSize <= 0) {
       return { cachePath, chapters: [] };
+    }
+    const mtime: number = BookFile.modifiedTime(filePath);
+    const indexPath: string = `${cachePath}.idx`;
+    const cached: TxtChapterSpan[] | null = TxtParser.readIndex(indexPath, cachePath, fileSize, mtime);
+    if (cached !== null) {
+      return { cachePath, chapters: cached };
     }
     let readSize: number = Math.min(fileSize, MAX_PARSE_SIZE);
     if (readSize < fileSize) {
@@ -76,7 +94,55 @@ export class TxtParser {
     }
     const sections: TxtSectionData[] = TxtParser.splitChapters(text);
     const chapters: TxtChapterSpan[] = TxtParser.writeCache(cachePath, text, sections);
+    TxtParser.writeIndex(indexPath, cachePath, fileSize, mtime, chapters);
     return { cachePath, chapters };
+  }
+
+  /**
+   * 读索引缓存：源文件 size/mtime 与 UTF-8 缓存字节数全部对上才命中。
+   * 缓存被清理、或上次写到一半就退出时，字节数对不上，自动退回全量解析。
+   */
+  private static readIndex(indexPath: string, cachePath: string, size: number, mtime: number): TxtChapterSpan[] | null {
+    try {
+      if (!BookFile.exists(indexPath)) {
+        return null;
+      }
+      const data: TxtIndexCache = JSON.parse(BookFile.readText(indexPath)) as TxtIndexCache;
+      if (data.version !== INDEX_VERSION || data.size !== size || data.mtime !== mtime) {
+        return null;
+      }
+      if (!Array.isArray(data.chapters) || data.chapters.length === 0) {
+        return null;
+      }
+      if (BookFile.size(cachePath) !== data.bytes) {
+        return null;
+      }
+      return data.chapters;
+    } catch (_error) {
+      // 索引损坏时按未命中处理，不阻塞开书
+      return null;
+    }
+  }
+
+  /** 写索引缓存；写失败不影响开书（下次重新解析即可）。 */
+  private static writeIndex(indexPath: string, cachePath: string, size: number, mtime: number,
+    chapters: TxtChapterSpan[]): void {
+    if (chapters.length === 0) {
+      return;
+    }
+    try {
+      const data: TxtIndexCache = {
+        version: INDEX_VERSION,
+        size: size,
+        mtime: mtime,
+        bytes: BookFile.size(cachePath),
+        chapters: chapters,
+      };
+      const json: string = JSON.stringify(data);
+      BookFile.writeBytes(indexPath, TxtParser.utf8Encode(json).buffer as ArrayBuffer);
+    } catch (error) {
+      hilog.warn(0x0000, 'TxtParser', 'write index failed: %{public}s', (error as Error).message);
+    }
   }
 
   /** 从 `size` 向前找最后一个换行符，返回其后的字节位置（找不到时原样返回）。 */
