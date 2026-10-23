@@ -1,14 +1,20 @@
-import { PageScaffold, LoadingState, EmptyState } from '../components';
+import { PageScaffold, LoadingState, EmptyState, LazyDataSource } from '../components';
 import { TalebookApi } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 
 @Entry
 @Component
 struct AdminSyslogPage {
-  @State lines: string[] = [];
+  @State @Watch('onLinesChanged') lines: string[] = [];
   @State loading: boolean = true;
   @State loadError: string = '';
   @State refreshing: boolean = false;
+  /** 日志可达数百行，懒加载避免一次性构建全部行。 */
+  private linesSource: LazyDataSource<string> = new LazyDataSource<string>();
+
+  private onLinesChanged(): void {
+    this.linesSource.update(this.lines);
+  }
 
   aboutToAppear(): void {
     void this.loadLog();
@@ -91,7 +97,7 @@ struct AdminSyslogPage {
           .width('100%')
           .padding({ left: 16, right: 16, top: 8, bottom: 4 });
         List() {
-          ForEach(this.lines, (line: string, index: number) => {
+          LazyForEach(this.linesSource, (line: string, index: number) => {
             ListItem() {
               Text(line.length > 0 ? line : ' ')
                 .fontSize(11)
@@ -101,6 +107,7 @@ struct AdminSyslogPage {
             }
           }, (line: string, index: number) => `log-${index}-${line.length}`);
         }
+        .cachedCount(10)
         .layoutWeight(1)
         .width('100%')
         .backgroundColor($r('app.color.card_background'))

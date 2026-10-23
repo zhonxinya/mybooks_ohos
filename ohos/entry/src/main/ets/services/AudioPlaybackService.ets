@@ -152,6 +152,16 @@ export class AudioPlaybackService {
     return AudioPlaybackService.INSTANCE;
   }
 
+  /**
+   * 清洗章节标题：去掉文件名中常见的前导编号前缀。
+   *
+   * 匹配模式：^\d+[_\-\s]+  →  "0001_第一章 初入江湖" → "第一章 初入江湖"
+   * 不匹配时原样返回（如 "第一章"、"序章" 等无前导编号的标题）。
+   */
+  static cleanChapterTitle(name: string): string {
+    return name.replace(/^\d+[_\-\s]+/, '');
+  }
+
   addListener(listener: AudioPlaybackListener): void {
     if (this.listeners.indexOf(listener) < 0) {
       this.listeners.push(listener);
@@ -237,6 +247,13 @@ export class AudioPlaybackService {
         return;
       }
       this.state.files = rsp.audios ?? [];
+      // 一次性清洗章节标题：去掉服务端返回的裸文件名中的前导编号（如 0001_、01-）
+      for (let i = 0; i < this.state.files.length; i++) {
+        const f = this.state.files[i];
+        if (f.filename.length > 0) {
+          f.filename = AudioPlaybackService.cleanChapterTitle(f.filename);
+        }
+      }
       if (this.state.files.length === 0) {
         this.state.errorMessage = rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '暂无音频文件';
         return;
@@ -306,7 +323,10 @@ export class AudioPlaybackService {
         () => this.play(), () => this.pause(), () => this.next(), () => this.previous(),
         (posMs: number) => this.seekToMs(posMs));
       await this.platform.syncMetadata(this.state, this.state.bookCover);
-      this.cleanupDistantAudioFiles();
+      // 缓存清理不涉及播放，延迟到下一 tick 避免阻塞切歌动画
+      setTimeout(() => {
+        this.cleanupDistantAudioFiles();
+      }, 0);
     } catch (error) {
       this.state.isPlaying = false;
       this.state.trackLoading = false;

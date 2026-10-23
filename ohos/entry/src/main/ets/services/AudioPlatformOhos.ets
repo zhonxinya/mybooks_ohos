@@ -301,7 +301,10 @@ export class AudioPlatformOhos {
       if (source === null) {
         return null;
       }
-      const pixel = await source.createPixelMap();
+      // 播控中心卡片封面只用到 ~300px，按显示尺寸解码避免全分辨率占内存
+      const pixel = await source.createPixelMap({
+        desiredSize: { width: 300, height: 300 },
+      });
       await source.release();
       this.releaseCoverPixel();
       this.coverPixel = pixel;

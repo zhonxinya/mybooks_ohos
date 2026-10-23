@@ -29,4 +29,18 @@ export class LazyDataSource<T> implements IDataSource {
     this.items = items;
     this.listeners.forEach((listener: DataChangeListener) => listener.onDataReloaded());
   }
+
+  /** 单条更新：只通知框架指定索引变化，避免整表 reload。 */
+  updateAt(index: number, item: T): void {
+    if (index < 0 || index >= this.items.length) {
+      return;
+    }
+    this.items[index] = item;
+    this.listeners.forEach((listener: DataChangeListener) => listener.onDataChange(index));
+  }
+
+  /** 只替换数据但不发通知（调用方自行决定通知粒度）。 */
+  replaceAll(items: T[]): void {
+    this.items = items;
+  }
 }
