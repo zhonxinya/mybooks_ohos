@@ -17,6 +17,12 @@ const CHAPTER_PATTERN: RegExp = new RegExp(
 const MAX_TITLE_LENGTH: number = 50;
 /** 无法识别章节时，按固定字数切节，避免整本变成一个巨大章节。 */
 const FALLBACK_CHUNK_CHARS: number = 3000;
+/** 流式索引块大小（1MB），兼顾内存占用与跨块匹配精度。 */
+const STREAM_BLOCK_SIZE: number = 1024 * 1024;
+/** 块间重叠区（2KB），保证章节标题不被截断。 */
+const STREAM_OVERLAP: number = 2048;
+/** 流式索引文件大小阈值：超过此值退回全量解析，避免 byte offset 追踪错误。 */
+const STREAM_INDEX_THRESHOLD: number = 10 * 1024 * 1024; // 10MB
 
 /** 切章结果（仅解析过程使用，不随引擎常驻）。 */
 export interface TxtSectionData {
@@ -39,15 +45,231 @@ export interface TxtBookIndex {
 
 export class TxtParser {
   /**
-   * 读取整本 TXT、按标题行切章，并把各章正文写成 UTF-8 缓存。
-   * 返回的索引只有标题和字节区间，整本字符串随任务结束释放。
+   * TXT 索引：按文件大小选择策略。
+   * 
+   * - ≤10MB：流式索引（分块读取，内存恒定 ~2MB）
+   * - >10MB：全量解析（避免 byte offset 追踪错误）
    */
   static index(filePath: string, cachePath: string): TxtBookIndex {
+    const fileSize = BookFile.size(filePath);
+    if (fileSize <= 0) {
+      return { cachePath, chapters: [] };
+    }
+
+    // 大文件退回全量解析，保证正确性
+    if (fileSize > STREAM_INDEX_THRESHOLD) {
+      hilog.info(0x0000, 'TxtParser', 'file %{public}s is %{public}d bytes, using fallback parser',
+        filePath, fileSize);
+      return TxtParser.indexFallback(filePath, cachePath);
+    }
+
+    // 小文件用流式索引
+    return TxtParser.indexStreaming(filePath, cachePath, fileSize);
+  }
+
+  /**
+   * 流式索引实现：按块读取，边读边匹配章节标题。
+   * 仅用于 ≤10MB 的文件。
+   */
+  private static indexStreaming(filePath: string, cachePath: string, fileSize: number): TxtBookIndex {
+    // 先探测编码（只读前 1KB）
+    const probeLen = Math.min(1024, fileSize);
+    const probeBytes = new Uint8Array(BookFile.readRange(filePath, 0, probeLen));
+    const encoding = TextCodec.detectEncoding(probeBytes);
+
+    const chapters: TxtChapterSpan[] = [];
+    let offset = 0;           // 当前块在文件中的起始字节偏移
+    let carryText = '';       // 跨块携带的未完整行（文本）
+    let carryByteOffset = 0;  // carryText 在文件中的起始字节偏移
+    let chapterStart = 0;     // 当前章起始字节偏移（原始文件）
+    let currentTitle = '';    // 当前章标题
+    let preTitleBuffer = '';  // 首个标题前的正文缓冲
+
+    while (offset < fileSize) {
+      const remaining = fileSize - offset;
+      const readLen = Math.min(STREAM_BLOCK_SIZE, remaining);
+      const chunkBytes = new Uint8Array(BookFile.readRange(filePath, offset, readLen));
+      const chunkText = TextCodec.decodeAs(chunkBytes, encoding);
+
+      // 拼接上一块的残留行
+      const combined = carryText + chunkText;
+      // 统一换行符
+      const normalized = combined.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const lines = normalized.split('\n');
+
+      // 最后一行可能不完整，留到下一块处理
+      const isLastBlock = (offset + readLen >= fileSize);
+      const processCount = isLastBlock ? lines.length : lines.length - 1;
+      const leftover = isLastBlock ? '' : lines[lines.length - 1];
+
+      // 计算 leftover 在文件中的起始字节偏移
+      // leftover 是 lines 的最后一行，它前面的所有行的总字节数 = combined 总字节 - leftover 字节
+      let leftoverStartOffset = offset; // 默认从当前块起始开始算
+      if (carryText.length > 0) {
+        // 如果有 carryText，leftoverStartOffset 要加上 carryText 的字节数
+        const carryEncoded = TxtParser.utf8Encode(carryText);
+        leftoverStartOffset += carryEncoded.byteLength;
+      }
+      // 再加上 processLines 的字节数
+      for (let i = 0; i < processCount; i++) {
+        const lineEnc = TxtParser.utf8Encode(lines[i] + '\n');
+        leftoverStartOffset += lineEnc.byteLength;
+      }
+
+      // 逐行匹配章节标题
+      for (let i = 0; i < processCount; i++) {
+        const rawLine = lines[i];
+        const line = rawLine.trim();
+
+        if (TxtParser.isChapterTitle(line)) {
+          // 关闭上一章（或首个标题前的正文）
+          if (currentTitle.length > 0) {
+            // 正常章节：byteEnd 指向新标题行的起始位置
+            const titleLineStart = offset + this.calcLineByteOffset(lines, i, carryText, carryByteOffset, encoding);
+            chapters.push({
+              title: currentTitle,
+              byteStart: chapterStart,
+              byteEnd: titleLineStart,
+            });
+          } else if (chapters.length === 0) {
+            // 第一个标题前的正文单独成章
+            if (preTitleBuffer.length > 0) {
+              const preTitleBytes = TxtParser.utf8Encode(preTitleBuffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n'));
+              chapters.push({
+                title: '开始',
+                byteStart: 0,
+                byteEnd: preTitleBytes.byteLength,
+              });
+            }
+          }
+          currentTitle = line;
+          const titleLineStart = offset + this.calcLineByteOffset(lines, i, carryText, carryByteOffset, encoding);
+          chapterStart = titleLineStart;
+          preTitleBuffer = ''; // 清空预缓冲
+        } else {
+          // 非标题行，累积到预缓冲（仅在还没遇到任何标题时）
+          if (currentTitle.length === 0 && chapters.length === 0) {
+            preTitleBuffer += rawLine + '\n';
+          }
+        }
+      }
+
+      // 更新状态
+      carryText = leftover;
+      carryByteOffset = leftoverStartOffset;
+      offset += readLen;
+    }
+
+    // 处理最后一章
+    if (currentTitle.length > 0) {
+      chapters.push({
+        title: currentTitle,
+        byteStart: chapterStart,
+        byteEnd: fileSize,
+      });
+    } else if (preTitleBuffer.length > 0 && chapters.length === 0) {
+      // 整个文件没有标题，全部内容作为一章
+      const preTitleBytes = TxtParser.utf8Encode(preTitleBuffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n'));
+      chapters.push({
+        title: '开始',
+        byteStart: 0,
+        byteEnd: preTitleBytes.byteLength,
+      });
+    }
+
+    // 如果没识别到章节，退化为全量解析
+    if (chapters.length === 0) {
+      return TxtParser.indexFallback(filePath, cachePath);
+    }
+
+    // 补空标题
+    for (let i = 0; i < chapters.length; i++) {
+      if (chapters[i].title.length === 0) {
+        chapters[i].title = `第${i + 1}章`;
+      }
+    }
+
+    // 写入缓存文件
+    TxtParser.writeCacheFromSpans(cachePath, filePath, chapters, encoding);
+
+    return { cachePath, chapters };
+  }
+
+  /**
+   * 计算第 i 行在 combined 文本中的字节偏移（相对于 offset）。
+   */
+  private static calcLineByteOffset(lines: string[], lineIndex: number, 
+                                     carryText: string, carryByteOffset: number,
+                                     encoding: string): number {
+    let byteOffset = 0;
+    // 如果有 carryText，先加它的字节数
+    if (carryText.length > 0 && lineIndex > 0) {
+      const carryEncoded = TxtParser.utf8Encode(carryText);
+      byteOffset += carryEncoded.byteLength;
+    }
+    // 累加前面所有行的字节数（含换行符）
+    for (let j = 0; j < lineIndex; j++) {
+      const lineEnc = TxtParser.utf8Encode(lines[j] + '\n');
+      byteOffset += lineEnc.byteLength;
+    }
+    return byteOffset;
+  }
+
+  /**
+   * 兜底方案：当流式索引未识别到章节时，退回全量读取+正则切分。
+   * 仅在小文件或无章节结构的文本中触发。
+   */
+  private static indexFallback(filePath: string, cachePath: string): TxtBookIndex {
     const text = BookFile.readText(filePath).replace(/\r\n?/g, '\n');
     const sections: TxtSectionData[] = TxtParser.splitChapters(text);
     const chapters: TxtChapterSpan[] = TxtParser.writeCache(cachePath, sections);
-    const indexed: TxtBookIndex = { cachePath: cachePath, chapters: chapters };
-    return indexed;
+    return { cachePath, chapters };
+  }
+
+  /**
+   * 按章节区间从原文件读取并写入缓存，避免持有整本字符串。
+   * 优化：先收集所有章节的 UTF-8 字节，再一次性写入，避免 O(n²) 追加。
+   */
+  private static writeCacheFromSpans(cachePath: string, srcPath: string, 
+                                      chapters: TxtChapterSpan[], encoding: string): void {
+    const dir = BookFile.dirName(cachePath);
+    if (dir.length > 0) {
+      BookFile.ensureDir(dir);
+    }
+
+    // 第一趟：逐章读取、解码、重新编码为 UTF-8，收集字节数组
+    const parts: Uint8Array[] = [];
+    let totalBytes = 0;
+    for (let i = 0; i < chapters.length; i++) {
+      const ch = chapters[i];
+      const len = ch.byteEnd - ch.byteStart;
+      if (len <= 0) {
+        parts.push(new Uint8Array(0));
+        continue;
+      }
+
+      const rawBytes = new Uint8Array(BookFile.readRange(srcPath, ch.byteStart, len));
+      const text = TextCodec.decodeAs(rawBytes, encoding);
+      const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const utf8Bytes = TxtParser.utf8Encode(normalized);
+
+      // 更新区间为新的 UTF-8 缓存文件中的位置
+      ch.byteStart = totalBytes;
+      totalBytes += utf8Bytes.byteLength;
+      ch.byteEnd = totalBytes;
+
+      parts.push(utf8Bytes);
+    }
+
+    // 第二趟：合并所有部分，一次性写入
+    const merged = new Uint8Array(totalBytes);
+    let cursor = 0;
+    for (let i = 0; i < parts.length; i++) {
+      merged.set(parts[i], cursor);
+      cursor += parts[i].byteLength;
+    }
+    const exact = merged.buffer.slice(merged.byteOffset, merged.byteOffset + merged.byteLength);
+    BookFile.writeBytes(cachePath, exact);
   }
 
   /** 按字节区间读回一章，并拆成段落。 */
