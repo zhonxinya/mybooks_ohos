@@ -193,16 +193,23 @@ export class TxtParser {
    * 会在取 `byteLength` 时抛 `Cannot read property byteLength of undefined` → 开书失败。
    */
   private static utf8Encode(input: string): Uint8Array {
+    const len: number = TxtParser.byteLengthOfRange(input, 0, input.length);
+    const out: Uint8Array = new Uint8Array(len);
+    TxtParser.encodeRange(input, 0, input.length, out, 0);
+    return out;
+  }
+
+  /** 统计 `[start, end)` 的 UTF-8 字节数；代理对判定必须与 `encodeRange` 完全一致。 */
+  private static byteLengthOfRange(input: string, start: number, end: number): number {
     let len: number = 0;
-    for (let i = 0; i < input.length; i++) {
+    for (let i = start; i < end; i++) {
       const c: number = input.charCodeAt(i);
       if (c < 0x80) {
         len += 1;
       } else if (c < 0x800) {
         len += 2;
-      } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < input.length) {
-        // 必须与下面的写入分支一致：落单的高代理只按 3 字节写，
-        // 若这里固定算 4 字节，尾部会多出未使用的 0x00 写进缓存
+      } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < end) {
+        // 落单的高代理只按 3 字节写；若这里固定算 4 字节，尾部会多出 0x00
         const lo: number = input.charCodeAt(i + 1);
         if (lo >= 0xDC00 && lo <= 0xDFFF) {
           len += 4;
@@ -214,9 +221,13 @@ export class TxtParser {
         len += 3;
       }
     }
-    const out: Uint8Array = new Uint8Array(len);
-    let p: number = 0;
-    for (let i = 0; i < input.length; i++) {
+    return len;
+  }
+
+  /** 把 `[start, end)` 编码写入 `out` 的 `offset` 处，返回写入后的偏移。 */
+  private static encodeRange(input: string, start: number, end: number, out: Uint8Array, offset: number): number {
+    let p: number = offset;
+    for (let i = start; i < end; i++) {
       const c: number = input.charCodeAt(i);
       if (c < 0x80) {
         out[p] = c;
@@ -225,7 +236,7 @@ export class TxtParser {
         out[p] = 0xC0 | (c >> 6);
         out[p + 1] = 0x80 | (c & 0x3F);
         p += 2;
-      } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < input.length) {
+      } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < end) {
         const lo: number = input.charCodeAt(i + 1);
         if (lo >= 0xDC00 && lo <= 0xDFFF) {
           const cp: number = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00);
@@ -248,30 +259,40 @@ export class TxtParser {
         p += 3;
       }
     }
-    return out;
+    return p;
   }
 
-  /** 各章按出现顺序紧挨着写入，区间互不重叠，因此章与章之间不需要分隔符。 */
+  /** 与 `String.prototype.trim` 对齐的空白字符（含全角空格、BOM、零宽不换行空格）。 */
+  private static isSpace(c: number): boolean {
+    if (c <= 0x20) {
+      return true;
+    }
+    if (c < 0xA0) {
+      return false;
+    }
+    return c === 0xA0 || c === 0x1680 || (c >= 0x2000 && c <= 0x200A) ||
+      c === 0x2028 || c === 0x2029 || c === 0x202F || c === 0x205F ||
+      c === 0x3000 || c === 0xFEFF;
+  }
+
+  /**
+   * 各章按出现顺序紧挨着写入，区间互不重叠，因此章与章之间不需要分隔符。
+   *
+   * 先统计总字节数、一次分配合并缓冲，再直接按区间编码写入：
+   * 不再为每章生成正文字符串、UTF-8 缓冲与合并副本，峰值内存和拷贝次数都明显下降。
+   */
   private static writeCache(cachePath: string, text: string, sections: TxtSectionData[]): TxtChapterSpan[] {
-    const parts: Uint8Array[] = [];
+    let total: number = 0;
+    for (let i = 0; i < sections.length; i++) {
+      total += TxtParser.sectionByteLength(text, sections[i].start, sections[i].end);
+    }
+    const merged: Uint8Array = new Uint8Array(total);
     const spans: TxtChapterSpan[] = [];
     let cursor: number = 0;
     for (let i = 0; i < sections.length; i++) {
-      const payload: string = TxtParser.sectionText(text, sections[i].start, sections[i].end);
-      const bytes: Uint8Array = TxtParser.utf8Encode(payload);
-      spans.push({
-        title: sections[i].title,
-        byteStart: cursor,
-        byteEnd: cursor + bytes.byteLength,
-      });
-      parts.push(bytes);
-      cursor += bytes.byteLength;
-    }
-    const merged: Uint8Array = new Uint8Array(cursor);
-    let offset: number = 0;
-    for (let i = 0; i < parts.length; i++) {
-      merged.set(parts[i], offset);
-      offset += parts[i].byteLength;
+      const byteStart: number = cursor;
+      cursor = TxtParser.encodeSection(text, sections[i].start, sections[i].end, merged, cursor);
+      spans.push({ title: sections[i].title, byteStart: byteStart, byteEnd: cursor });
     }
     const dir: string = BookFile.dirName(cachePath);
     if (dir.length > 0) {
@@ -281,22 +302,68 @@ export class TxtParser {
     return spans;
   }
 
-  /** 取章节区间的正文：逐行 trim、丢弃空行，用 '\n' 连接（缓存文件的段落分隔）。 */
-  private static sectionText(text: string, start: number, end: number): string {
-    const lines: string[] = [];
+  /**
+   * 章节正文的缓存字节数：逐行去掉首尾空白、丢弃空行、行间补一个 '\n'。
+   * 与 `encodeSection` 共用同一套行遍历规则，先量后写，无需中间字符串。
+   */
+  private static sectionByteLength(text: string, start: number, end: number): number {
+    let total: number = 0;
+    let hasLine: boolean = false;
     let lineStart: number = start;
     while (lineStart < end) {
       let lineEnd: number = text.indexOf('\n', lineStart);
       if (lineEnd < 0 || lineEnd > end) {
         lineEnd = end;
       }
-      const line: string = text.substring(lineStart, lineEnd).trim();
-      if (line.length > 0) {
-        lines.push(line);
+      let s: number = lineStart;
+      let e: number = lineEnd;
+      while (s < e && TxtParser.isSpace(text.charCodeAt(s))) {
+        s++;
+      }
+      while (e > s && TxtParser.isSpace(text.charCodeAt(e - 1))) {
+        e--;
+      }
+      if (e > s) {
+        if (hasLine) {
+          total += 1;
+        }
+        total += TxtParser.byteLengthOfRange(text, s, e);
+        hasLine = true;
       }
       lineStart = lineEnd + 1;
     }
-    return lines.join('\n');
+    return total;
+  }
+
+  /** 把章节正文直接编码进合并缓冲，返回写入后的偏移（规则与 `sectionByteLength` 一致）。 */
+  private static encodeSection(text: string, start: number, end: number, out: Uint8Array, offset: number): number {
+    let p: number = offset;
+    let hasLine: boolean = false;
+    let lineStart: number = start;
+    while (lineStart < end) {
+      let lineEnd: number = text.indexOf('\n', lineStart);
+      if (lineEnd < 0 || lineEnd > end) {
+        lineEnd = end;
+      }
+      let s: number = lineStart;
+      let e: number = lineEnd;
+      while (s < e && TxtParser.isSpace(text.charCodeAt(s))) {
+        s++;
+      }
+      while (e > s && TxtParser.isSpace(text.charCodeAt(e - 1))) {
+        e--;
+      }
+      if (e > s) {
+        if (hasLine) {
+          out[p] = 0x0A;
+          p++;
+        }
+        p = TxtParser.encodeRange(text, s, e, out, p);
+        hasLine = true;
+      }
+      lineStart = lineEnd + 1;
+    }
+    return p;
   }
 
   /** 按标题行切章；识别不到标题时退化为定长切节。 */
@@ -314,12 +381,25 @@ export class TxtParser {
       }
       // 章节标题必然很短：先按原始行长度过滤，正文长行连子串都不生成
       if (lineEnd - lineStart <= MAX_TITLE_LENGTH + 16) {
-        const line: string = text.substring(lineStart, lineEnd).trim();
-        if (TxtParser.isChapterTitle(line)) {
-          titleStarts.push(lineStart);
-          contentStarts.push(lineEnd + 1);
-          titleTexts.push(line);
-        } else if (titleTexts.length === 0 && line.length > 0) {
+        // 再按首个非空白字符预筛：正文行绝大多数不以「第/序/楔/引…」开头，
+        // 这样就不用为每一行生成子串、跑正则
+        let s: number = lineStart;
+        while (s < lineEnd && TxtParser.isSpace(text.charCodeAt(s))) {
+          s++;
+        }
+        const empty: boolean = s >= lineEnd;
+        const maybeTitle: boolean = !empty && TxtParser.isTitlePrefix(text.charCodeAt(s));
+        if (maybeTitle) {
+          const line: string = text.substring(lineStart, lineEnd).trim();
+          if (TxtParser.isChapterTitle(line)) {
+            titleStarts.push(lineStart);
+            contentStarts.push(lineEnd + 1);
+            titleTexts.push(line);
+          } else if (titleTexts.length === 0) {
+            // 以「第…」等开头但不是标题的正文行，同样算首个标题前的内容
+            hasPreTitleContent = true;
+          }
+        } else if (!empty && titleTexts.length === 0) {
           hasPreTitleContent = true;
         }
       } else if (titleTexts.length === 0) {
@@ -344,6 +424,24 @@ export class TxtParser {
       });
     }
     return sections;
+  }
+
+  /** 标题候选首字：第/序/楔/引/前/后/尾/终/番（与 `CHAPTER_PATTERN` 的各分支一一对应）。 */
+  private static isTitlePrefix(c: number): boolean {
+    switch (c) {
+      case 0x7B2C: // 第
+      case 0x5E8F: // 序
+      case 0x6954: // 楔
+      case 0x5F15: // 引
+      case 0x524D: // 前
+      case 0x540E: // 后
+      case 0x5C3E: // 尾
+      case 0x7EC8: // 终
+      case 0x756A: // 番
+        return true;
+      default:
+        return false;
+    }
   }
 
   private static isChapterTitle(line: string): boolean {
