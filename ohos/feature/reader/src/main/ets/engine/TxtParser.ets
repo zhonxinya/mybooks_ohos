@@ -9,19 +9,39 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
  * 必须能在 taskpool 子线程里跑（见 `ReaderTasks`），不能在 UI 线程同步执行。
  */
 /**
- * 章节标题行：中文小说常见写法（第X章/节/回/卷/篇 + 序章/楔子/番外 等）。
- * 限定整行长度，避免把正文里提到「第三章」的句子误判为标题。
+ * 章节标题行：中文小说常见写法（第X章/节/回/卷/部/篇/集/幕/话 + 序章/楔子/番外 等），
+ * 兼容「正文」前缀、半角/全角数字、以及 "Chapter 12" 这类外文写法。
+ *
+ * 标题行尾的句号、感叹号、括号（【第一章】、第1章（求收藏））在识别前会被去掉，
+ * 正文句子里提到「第三章 …。」则因句中仍含句末标点被排除——避免误判又不漏真标题。
  */
 const CHAPTER_PATTERN: RegExp = new RegExp(
-  '^(?:第[0-9零一二三四五六七八九十百千万两]{1,12}[章节回卷篇集幕]' +
-  '|序章|序言|序|楔子|引子|前言|后记|尾声|终章|番外)[^。！？!?]{0,40}$');
-const MAX_TITLE_LENGTH: number = 50;
+  '^(?:正文[\\s　:：\\-—]*)?(?:' +
+    '第[\\s　]*[0-9０-９零〇一二三四五六七八九十百千万两]{1,12}[\\s　]*[章节回卷部篇集幕话]' +
+    '|[卷部篇集][\\s　]*[0-9０-９零〇一二三四五六七八九十百千两]{1,6}' +
+    // 单个「序」只有带分隔符才是标题；「序列化数据」这类正文行随之排除
+    '|序(?=[\\s　:：、，,·\\-—（(【\\[])' +
+    // 关键字标题要么独占一行，要么用分隔符接副标题；「外传小道消息」是正文
+    '|(?:序章|序言|楔子|引子|前言|后记|尾声|终章|结局|番外篇|番外|外传)(?=[\\s　:：、，,·\\-—（(【\\[]|$)' +
+  ')' +
+  // 章号后紧跟「的/了/是/他…」多半是正文句子（「第三章的内容让他震惊」），不是标题
+  '(?![的了吗呢是在他她它们这那中里后时被把让就也和与为有没不])' +
+  '[^\\n]{0,60}$' +
+  // 外文标题：Chapter 12 / Chapter 1: The Boy（副标题须以大写开头，「Chapter 1 is long.」是正文）
+  '|^(?:正文[\\s　:：\\-—]*)?[Cc]hapter[\\s　]*[0-9IVXLCivxlc]{1,6}' +
+  '(?:[\\s　:：.\\-—]+[A-Z][^\\n]{0,50})?$');
+/** 只有关键字、没有副标题的独立标题行（「序：」这类结尾冒号在识别前会被去掉）。 */
+const BARE_TITLES: string[] = ['序', '序章', '序言', '楔子', '引子', '前言', '后记',
+  '尾声', '终章', '结局', '番外', '外传'];
+/** 句末标点：真标题只会出现在结尾（已被去掉），句中还有说明是正文句子。 */
+const SENTENCE_PUNCT: RegExp = new RegExp('[。！？!?]');
+const MAX_TITLE_LENGTH: number = 80;
 /** 无法识别章节时，按固定字数切节，避免整本变成一个巨大章节。 */
 const FALLBACK_CHUNK_CHARS: number = 3000;
 /** 超大文件只解析前 50MB，避免「全文 + 缓存」同时驻留导致 OOM。 */
 const MAX_PARSE_SIZE: number = 50 * 1024 * 1024;
 /** 索引缓存格式版本：切章规则变化时 +1，旧索引自动失效。 */
-const INDEX_VERSION: number = 1;
+const INDEX_VERSION: number = 2;
 
 /** 切章结果：标题 + 在解码后全文中的字符区间（左闭右开），不复制正文。 */
 export interface TxtSectionData {
@@ -384,7 +404,11 @@ export class TxtParser {
         // 再按首个非空白字符预筛：正文行绝大多数不以「第/序/楔/引…」开头，
         // 这样就不用为每一行生成子串、跑正则
         let s: number = lineStart;
-        while (s < lineEnd && TxtParser.isSpace(text.charCodeAt(s))) {
+        while (s < lineEnd) {
+          const c: number = text.charCodeAt(s);
+          if (!TxtParser.isSpace(c) && !TxtParser.isTitleOpenBracket(c)) {
+            break;
+          }
           s++;
         }
         const empty: boolean = s >= lineEnd;
@@ -426,10 +450,14 @@ export class TxtParser {
     return sections;
   }
 
-  /** 标题候选首字：第/序/楔/引/前/后/尾/终/番（与 `CHAPTER_PATTERN` 的各分支一一对应）。 */
+  /** 标题候选首字（与 `CHAPTER_PATTERN` 的各分支一一对应）。 */
   private static isTitlePrefix(c: number): boolean {
     switch (c) {
       case 0x7B2C: // 第
+      case 0x5377: // 卷
+      case 0x90E8: // 部
+      case 0x7BC7: // 篇
+      case 0x96C6: // 集
       case 0x5E8F: // 序
       case 0x6954: // 楔
       case 0x5F15: // 引
@@ -438,17 +466,110 @@ export class TxtParser {
       case 0x5C3E: // 尾
       case 0x7EC8: // 终
       case 0x756A: // 番
+      case 0x5916: // 外
+      case 0x6B63: // 正（正文 第1章）
+      case 0x0043: // C
+      case 0x0063: // c
         return true;
       default:
         return false;
     }
   }
 
+  /** 标题行开头的括注符号（【第一章】、[第1章]），不是引号——避免把对话行当标题。 */
+  private static isTitleOpenBracket(c: number): boolean {
+    return c === 0x3010 || c === 0x005B || c === 0xFF08 || c === 0x0028;
+  }
+
+  /** 标题行尾可安全剥掉的标点/连字符：真标题的句末点号常被作者误加。 */
+  private static isTitleTailNoise(c: number): boolean {
+    switch (c) {
+      case 0x3002: // 。
+      case 0xFF01: // ！
+      case 0xFF1F: // ？
+      case 0x0021: // !
+      case 0x003F: // ?
+      case 0xFF0C: // ，
+      case 0x002C: // ,
+      case 0x3001: // 、
+      case 0xFF1A: // ：
+      case 0x003A: // :
+      case 0xFF1B: // ；
+      case 0x003B: // ;
+      case 0x00B7: // ·
+      case 0x2026: // …
+      case 0x2014: // —
+      case 0xFF0D: // －
+      case 0x002D: // -
+      case 0x005F: // _
+      case 0x002E: // .
+      case 0xFF0E: // ．
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /** 去掉标题行首的空白与【[（( 括注。 */
+  private static stripTitleHead(line: string): string {
+    let start: number = 0;
+    while (start < line.length) {
+      const c: number = line.charCodeAt(start);
+      if (!TxtParser.isSpace(c) && !TxtParser.isTitleOpenBracket(c)) {
+        break;
+      }
+      start++;
+    }
+    return start === 0 ? line : line.substring(start);
+  }
+
+  /**
+   * 去掉标题行尾的标点、空白与括号注释（「第一章 初见。（求收藏）」）。
+   * 只剥成对出现的括号注释，避免把正文尾巴当成标题的一部分。
+   */
+  private static stripTitleTail(line: string): string {
+    let end: number = line.length;
+    while (end > 0) {
+      const c: number = line.charCodeAt(end - 1);
+      if (TxtParser.isSpace(c) || TxtParser.isTitleTailNoise(c)) {
+        end--;
+        continue;
+      }
+      let open: number = -1;
+      if (c === 0xFF09) {
+        open = line.lastIndexOf('（', end - 1);
+      } else if (c === 0x0029) {
+        open = line.lastIndexOf('(', end - 1);
+      } else if (c === 0x3011) {
+        open = line.lastIndexOf('【', end - 1);
+      } else if (c === 0x005D) {
+        open = line.lastIndexOf('[', end - 1);
+      }
+      if (open >= 0) {
+        end = open;
+        continue;
+      }
+      break;
+    }
+    return end === line.length ? line : line.substring(0, end);
+  }
+
   private static isChapterTitle(line: string): boolean {
     if (line.length === 0 || line.length > MAX_TITLE_LENGTH) {
       return false;
     }
-    return CHAPTER_PATTERN.test(line);
+    const body: string = TxtParser.stripTitleTail(TxtParser.stripTitleHead(line));
+    if (body.length === 0) {
+      return false;
+    }
+    // 句中还有句末标点说明是正文句子；标题的句末点号已在 stripTitleTail 去掉
+    if (SENTENCE_PUNCT.test(body)) {
+      return false;
+    }
+    if (BARE_TITLES.indexOf(body.replace(/\s/g, '')) >= 0) {
+      return true;
+    }
+    return CHAPTER_PATTERN.test(body);
   }
 
   /** 无章节标题时的兜底切分（按行边界切成约 `FALLBACK_CHUNK_CHARS` 字一节）。 */
