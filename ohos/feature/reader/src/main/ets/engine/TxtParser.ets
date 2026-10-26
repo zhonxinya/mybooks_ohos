@@ -43,11 +43,13 @@ const MAX_PARSE_SIZE: number = 50 * 1024 * 1024;
 /** 索引缓存格式版本：切章规则变化时 +1，旧索引自动失效。 */
 const INDEX_VERSION: number = 2;
 
-/** 切章结果：标题 + 在解码后全文中的字符区间（左闭右开），不复制正文。 */
+/** 切章结果：标题 + 在解码后全文中的字符区间（左闭右开）+ 该章正文写入缓存的字节数。 */
 export interface TxtSectionData {
   title: string;
   start: number;
   end: number;
+  /** 按缓存写入规则（逐行去空白、丢空行、行间 '\n'）算出的字节数，切章时顺带统计。 */
+  bytes: number;
 }
 
 /** 一章在 UTF-8 缓存文件中的字节区间。正文按章再读，开书后不再保留整本字符串。 */
@@ -103,7 +105,8 @@ export class TxtParser {
       return { cachePath, chapters: [] };
     }
     if (text.indexOf('\r') >= 0) {
-      text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      // 一次替换吃掉 CRLF 与孤立 CR（原来两次 replace 要全量拷贝两遍）
+      text = text.replace(/\r\n?/g, '\n');
     }
     if (readSize < fileSize) {
       // 退到最后一个完整行，丢掉可能被截断的半行
@@ -298,13 +301,13 @@ export class TxtParser {
   /**
    * 各章按出现顺序紧挨着写入，区间互不重叠，因此章与章之间不需要分隔符。
    *
-   * 先统计总字节数、一次分配合并缓冲，再直接按区间编码写入：
-   * 不再为每章生成正文字符串、UTF-8 缓冲与合并副本，峰值内存和拷贝次数都明显下降。
+   * 每章字节数由切章时顺带统计（`TxtSectionData.bytes`），这里只做一遍编码：
+   * 不再为每章生成正文字符串、UTF-8 缓冲与合并副本，也不再多扫一遍全文量长度。
    */
   private static writeCache(cachePath: string, text: string, sections: TxtSectionData[]): TxtChapterSpan[] {
     let total: number = 0;
     for (let i = 0; i < sections.length; i++) {
-      total += TxtParser.sectionByteLength(text, sections[i].start, sections[i].end);
+      total += sections[i].bytes;
     }
     const merged: Uint8Array = new Uint8Array(total);
     const spans: TxtChapterSpan[] = [];
@@ -322,37 +325,30 @@ export class TxtParser {
     return spans;
   }
 
-  /**
-   * 章节正文的缓存字节数：逐行去掉首尾空白、丢弃空行、行间补一个 '\n'。
-   * 与 `encodeSection` 共用同一套行遍历规则，先量后写，无需中间字符串。
-   */
-  private static sectionByteLength(text: string, start: number, end: number): number {
-    let total: number = 0;
-    let hasLine: boolean = false;
-    let lineStart: number = start;
-    while (lineStart < end) {
-      let lineEnd: number = text.indexOf('\n', lineStart);
-      if (lineEnd < 0 || lineEnd > end) {
-        lineEnd = end;
-      }
-      let s: number = lineStart;
-      let e: number = lineEnd;
-      while (s < e && TxtParser.isSpace(text.charCodeAt(s))) {
-        s++;
-      }
-      while (e > s && TxtParser.isSpace(text.charCodeAt(e - 1))) {
-        e--;
-      }
-      if (e > s) {
-        if (hasLine) {
-          total += 1;
-        }
-        total += TxtParser.byteLengthOfRange(text, s, e);
-        hasLine = true;
-      }
-      lineStart = lineEnd + 1;
+  /** 行首空白结束位置（与 `isSpace` 一致）。 */
+  private static trimStart(text: string, from: number, to: number): number {
+    let s: number = from;
+    while (s < to && TxtParser.isSpace(text.charCodeAt(s))) {
+      s++;
     }
-    return total;
+    return s;
+  }
+
+  /** 行尾空白之后的位置（与 `isSpace` 一致）。 */
+  private static trimEnd(text: string, from: number, to: number): number {
+    let e: number = to;
+    while (e > from && TxtParser.isSpace(text.charCodeAt(e - 1))) {
+      e--;
+    }
+    return e;
+  }
+
+  /** 把一行计入当前章节字节数（与 `encodeSection` 的行规则一致）。返回累加后的值。 */
+  private static addLineBytes(text: string, s: number, e: number, total: number, hasLine: boolean): number {
+    if (e <= s) {
+      return total;
+    }
+    return total + (hasLine ? 1 : 0) + TxtParser.byteLengthOfRange(text, s, e);
   }
 
   /** 把章节正文直接编码进合并缓冲，返回写入后的偏移（规则与 `sectionByteLength` 一致）。 */
@@ -386,13 +382,22 @@ export class TxtParser {
     return p;
   }
 
-  /** 按标题行切章；识别不到标题时退化为定长切节。 */
+  /**
+   * 按标题行切章；识别不到标题时退化为定长切节。
+   *
+   * 遍历行的同时顺带统计每节正文的缓存字节数（规则与 `encodeSection` 一致），
+   * 写缓存时只差一遍编码，不用再全量扫一遍量长度。
+   */
   private static splitChapters(text: string): TxtSectionData[] {
     const titleStarts: number[] = [];
     const contentStarts: number[] = [];
     const titleTexts: string[] = [];
+    const contentBytes: number[] = [];
     const n: number = text.length;
     let hasPreTitleContent: boolean = false;
+    let preBytes: number = 0;
+    let bytes: number = 0;
+    let hasLine: boolean = false;
     let lineStart: number = 0;
     while (lineStart < n) {
       let lineEnd: number = text.indexOf('\n', lineStart);
@@ -403,31 +408,49 @@ export class TxtParser {
       if (lineEnd - lineStart <= MAX_TITLE_LENGTH + 16) {
         // 再按首个非空白字符预筛：正文行绝大多数不以「第/序/楔/引…」开头，
         // 这样就不用为每一行生成子串、跑正则
-        let s: number = lineStart;
-        while (s < lineEnd) {
-          const c: number = text.charCodeAt(s);
+        let probe: number = lineStart;
+        while (probe < lineEnd) {
+          const c: number = text.charCodeAt(probe);
           if (!TxtParser.isSpace(c) && !TxtParser.isTitleOpenBracket(c)) {
             break;
           }
-          s++;
+          probe++;
         }
-        const empty: boolean = s >= lineEnd;
-        const maybeTitle: boolean = !empty && TxtParser.isTitlePrefix(text.charCodeAt(s));
-        if (maybeTitle) {
+        const empty: boolean = probe >= lineEnd;
+        let title: string = '';
+        if (!empty && TxtParser.isTitlePrefix(text.charCodeAt(probe))) {
           const line: string = text.substring(lineStart, lineEnd).trim();
           if (TxtParser.isChapterTitle(line)) {
-            titleStarts.push(lineStart);
-            contentStarts.push(lineEnd + 1);
-            titleTexts.push(line);
-          } else if (titleTexts.length === 0) {
-            // 以「第…」等开头但不是标题的正文行，同样算首个标题前的内容
-            hasPreTitleContent = true;
+            title = line;
           }
-        } else if (!empty && titleTexts.length === 0) {
+        }
+        if (title.length > 0) {
+          // 标题行本身不属于任何一章正文，字节数只结算到它为止
+          if (titleTexts.length === 0) {
+            preBytes = bytes;
+          } else {
+            contentBytes.push(bytes);
+          }
+          bytes = 0;
+          hasLine = false;
+          titleStarts.push(lineStart);
+          contentStarts.push(lineEnd + 1);
+          titleTexts.push(title);
+          lineStart = lineEnd + 1;
+          continue;
+        }
+        if (!empty && titleTexts.length === 0) {
+          // 以「第…」等开头但不是标题的正文行，同样算首个标题前的内容
           hasPreTitleContent = true;
         }
       } else if (titleTexts.length === 0) {
         hasPreTitleContent = true;
+      }
+      const s: number = TxtParser.trimStart(text, lineStart, lineEnd);
+      const e: number = TxtParser.trimEnd(text, s, lineEnd);
+      if (e > s) {
+        bytes = TxtParser.addLineBytes(text, s, e, bytes, hasLine);
+        hasLine = true;
       }
       lineStart = lineEnd + 1;
     }
@@ -435,16 +458,18 @@ export class TxtParser {
     if (titleTexts.length === 0 || (titleTexts.length === 1 && !hasPreTitleContent)) {
       return TxtParser.chunkByLength(text);
     }
+    contentBytes.push(bytes);
     const sections: TxtSectionData[] = [];
     // 首个标题之前若有正文，单独作为「开始」章节保留，避免丢内容
     if (hasPreTitleContent) {
-      sections.push({ title: '开始', start: 0, end: titleStarts[0] });
+      sections.push({ title: '开始', start: 0, end: titleStarts[0], bytes: preBytes });
     }
     for (let i = 0; i < titleTexts.length; i++) {
       sections.push({
         title: titleTexts[i],
         start: contentStarts[i],
         end: i + 1 < titleTexts.length ? titleStarts[i + 1] : n,
+        bytes: contentBytes[i],
       });
     }
     return sections;
@@ -572,11 +597,13 @@ export class TxtParser {
     return CHAPTER_PATTERN.test(body);
   }
 
-  /** 无章节标题时的兜底切分（按行边界切成约 `FALLBACK_CHUNK_CHARS` 字一节）。 */
+  /** 无章节标题时的兜底切分（按行边界切成约 `FALLBACK_CHUNK_CHARS` 字一节），顺带统计字节数。 */
   private static chunkByLength(text: string): TxtSectionData[] {
     const sections: TxtSectionData[] = [];
     const n: number = text.length;
     let chunkStart: number = 0;
+    let chunkBytes: number = 0;
+    let chunkHasLine: boolean = false;
     let part: number = 1;
     let lineStart: number = 0;
     while (lineStart < n) {
@@ -584,18 +611,26 @@ export class TxtParser {
       if (lineEnd < 0) {
         lineEnd = n;
       }
+      const s: number = TxtParser.trimStart(text, lineStart, lineEnd);
+      const e: number = TxtParser.trimEnd(text, s, lineEnd);
+      if (e > s) {
+        chunkBytes = TxtParser.addLineBytes(text, s, e, chunkBytes, chunkHasLine);
+        chunkHasLine = true;
+      }
       if (lineEnd - chunkStart >= FALLBACK_CHUNK_CHARS) {
-        sections.push({ title: `第${part}节`, start: chunkStart, end: lineEnd });
+        sections.push({ title: `第${part}节`, start: chunkStart, end: lineEnd, bytes: chunkBytes });
         chunkStart = lineEnd + 1;
+        chunkBytes = 0;
+        chunkHasLine = false;
         part++;
       }
       lineStart = lineEnd + 1;
     }
     if (chunkStart < n) {
-      sections.push({ title: `第${part}节`, start: chunkStart, end: n });
+      sections.push({ title: `第${part}节`, start: chunkStart, end: n, bytes: chunkBytes });
     }
     if (sections.length === 0) {
-      sections.push({ title: '开始', start: 0, end: 0 });
+      sections.push({ title: '开始', start: 0, end: 0, bytes: 0 });
     }
     return sections;
   }

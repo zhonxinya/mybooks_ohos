@@ -8,14 +8,20 @@ import { util } from '@kit.ArkTS';
 import { GBK_TABLE_B64 } from './GbkTable';
 
 const GBK_LABELS: string[] = ['gbk', 'gb18030'];
+/** 解码器缓存键：带 `:fatal` 后缀表示严格模式（非标准标签，只在本类内部用）。 */
+const STRICT_UTF8: string = 'utf-8:fatal';
 /** GBK 双字节区每个 lead 的合法 trail 数：0x40–0xFE 去掉 0x7F。 */
 const GBK_TRAIL_COUNT: number = 190;
+/** 内置表解码时每次 `fromCharCode` 的码元数（太大会撑爆参数上限）。 */
+const GBK_DECODE_CHUNK: number = 8192;
 
 export class TextCodec {
   /** 解码器按编码复用，避免开书/切章时反复创建。 */
   private static readonly decoders: Map<string, util.TextDecoder> = new Map<string, util.TextDecoder>();
   /** 引擎 gbk 能力探测结果：-1 未探测，0 不可用，1 可用。 */
   private static engineGbkProbe: number = -1;
+  /** 引擎「严格 UTF-8 解码会抛错」探测结果：-1 未探测，0 不可用，1 可用。 */
+  private static utf8FatalProbe: number = -1;
   /** 内置 GBK 表（懒加载）。 */
   private static gbkTableBytes: Uint8Array | null = null;
   static decode(buffer: ArrayBuffer): string {
@@ -32,7 +38,15 @@ export class TextCodec {
     if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) {
       return TextCodec.decodeAs(bytes.subarray(2), 'utf-16be');
     }
-    if (TextCodec.isUtf8(bytes)) {
+    // 严格 UTF-8 解码可用时直接试解：ICD 遇到非法序列即抛错，
+    // 省掉 `isUtf8` 那遍逐字节校验（大文件实测占解码耗时的 3/4）
+    if (TextCodec.utf8FatalUsable()) {
+      try {
+        return TextCodec.decodeAs(bytes, STRICT_UTF8);
+      } catch (_error) {
+        // 非法 UTF-8 → 按 GBK 继续
+      }
+    } else if (TextCodec.isUtf8(bytes)) {
       return TextCodec.decodeAs(bytes, 'utf-8');
     }
     if (TextCodec.engineGbkUsable()) {
@@ -46,6 +60,21 @@ export class TextCodec {
     }
     // 引擎不支持 gbk（ArkUI-X Android 实测）→ 用内置映射表兜底
     return TextCodec.decodeGbk(bytes);
+  }
+
+  /** 引擎的 `fatal` 选项是否真的生效（部分移植实现会静默忽略）；首次调用探测一次。 */
+  private static utf8FatalUsable(): boolean {
+    if (TextCodec.utf8FatalProbe < 0) {
+      let ok: number = 0;
+      try {
+        // 0x81 不是合法的 UTF-8 起始字节，严格解码必须抛错
+        TextCodec.decodeAs(new Uint8Array([0x81, 0x40]), STRICT_UTF8);
+      } catch (_error) {
+        ok = 1;
+      }
+      TextCodec.utf8FatalProbe = ok;
+    }
+    return TextCodec.utf8FatalProbe === 1;
   }
 
   /**
@@ -72,41 +101,44 @@ export class TextCodec {
   /** 用内置映射表解码 GBK（单字节 ASCII/0x80 直通，双字节查表，非法序列给 U+FFFD）。 */
   private static decodeGbk(bytes: Uint8Array): string {
     const table: Uint8Array = TextCodec.gbkTable();
+    // 每块攒够 GBK_DECODE_CHUNK 个码元再一次性 fromCharCode：逐字符 `chunk += ...`
+    // 在大书上要拼上百万次，实测比 ICU 慢 30 倍（79MB 6.8s vs 0.2s）
+    let codes: number[] = [];
     const parts: string[] = [];
-    let chunk: string = '';
     const n: number = bytes.length;
     let i: number = 0;
     while (i < n) {
       const b0: number = bytes[i];
       if (b0 < 0x80) {
-        chunk += String.fromCharCode(b0);
+        codes.push(b0);
         i++;
       } else if (b0 === 0x80) {
-        chunk += '€';
+        codes.push(0x20AC);
         i++;
       } else if (i + 1 >= n) {
-        chunk += String.fromCharCode(0xFFFD);
+        codes.push(0xFFFD);
         i++;
       } else {
         const b1: number = bytes[i + 1];
         if (b1 < 0x40 || b1 === 0x7F || b1 > 0xFE) {
-          chunk += String.fromCharCode(0xFFFD);
+          codes.push(0xFFFD);
           i++;
         } else {
           const index: number = 1 + (b0 - 0x81) * GBK_TRAIL_COUNT +
             (b1 < 0x7F ? b1 - 0x40 : b1 - 0x41);
           const code: number = table[index * 2] | (table[index * 2 + 1] << 8);
-          chunk += code === 0 ? String.fromCharCode(0xFFFD) : String.fromCharCode(code);
+          codes.push(code === 0 ? 0xFFFD : code);
           i += 2;
         }
       }
-      // 分块拼接，避免超长字符串反复扩容
-      if (chunk.length >= 4096) {
-        parts.push(chunk);
-        chunk = '';
+      if (codes.length >= GBK_DECODE_CHUNK) {
+        parts.push(String.fromCharCode(...codes));
+        codes = [];
       }
     }
-    parts.push(chunk);
+    if (codes.length > 0) {
+      parts.push(String.fromCharCode(...codes));
+    }
     return parts.join('');
   }
 
@@ -129,7 +161,10 @@ export class TextCodec {
     if (cached !== undefined) {
       return cached;
     }
-    const created: util.TextDecoder = util.TextDecoder.create(encoding);
+    const fatal: boolean = encoding.length > 6 && encoding.endsWith(':fatal');
+    const created: util.TextDecoder = fatal
+      ? util.TextDecoder.create(encoding.substring(0, encoding.length - 6), { fatal: true })
+      : util.TextDecoder.create(encoding);
     TextCodec.decoders.set(encoding, created);
     return created;
   }
