@@ -25,7 +25,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const ENGINE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..',
   'ohos', 'feature', 'reader', 'src', 'main', 'ets', 'engine');
 /** 纯解析链路：都不碰 ArkUI/文件 IO，只用 TextCodec 解码。 */
-const MODULES = ['PalmDoc', 'MarkupText', 'TextCodec', 'MobiIndex', 'MobiKf8', 'HuffCdic', 'MobiDoc'];
+const MODULES = ['PalmDoc', 'MarkupText', 'TextCodec', 'GbkTable', 'MobiIndex', 'MobiKf8', 'HuffCdic', 'MobiDoc'];
 const SHIM = `export const util = {
   TextDecoder: {
     create(encoding) {

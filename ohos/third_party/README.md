@@ -32,10 +32,11 @@ curl -o cjson/cJSON.h https://raw.githubusercontent.com/DaveGamble/cJSON/master/
 
 ## sqlite (public domain)
 
-- Version: amalgamation 3.46.1 (`sqlite-amalgamation-3460100`)
+- Version: amalgamation 3.54.1 (`sqlite-amalgamation-3540100`)
 - Files: `sqlite/sqlite3.c`, `sqlite/sqlite3.h`
 - License: Public Domain (https://www.sqlite.org/copyright.html)
 - Usage: primary persistence for download records, history, bookmarks, KV/secure store
+- 升级记录：3.46.1 → 3.54.1（2026-10-16），修 CVE-2025-6965 / CVE-2025-29087 / CVE-2025-70873
 
 ## curl 8.5.0 source (MIT/curl license)
 
@@ -44,12 +45,14 @@ curl -o cjson/cJSON.h https://raw.githubusercontent.com/DaveGamble/cJSON/master/
 - License: https://curl.se/docs/copyright.html
 - Build: static `libcurl` via CMake (`HTTP_ONLY`, **mbedTLS SSL backend**)
 - Usage: HTTP/HTTPS client, cookies, streaming download, SoNovel SSE
-- Note: 上游后续版本修复了多项低/中危问题（8.21.0 单版即修复 18 项）。建议按发布节奏
-  定期评估升级，升级后需回归 HTTPS 请求 / 下载 / Cookie 会话。
+- Note: 上游后续版本修复了多项低/中危问题（8.21.0 单版即修复 18 项）。本目录源码锁定
+  8.5.0 是受 mbedTLS 2.x 约束：curl ≥ 8.18.0 的 CMake 要求 mbedTLS ≥ 3.2.0，
+  跨大版本迁移 mbedTLS 需同步改 curl + 全部调用点，本周期不实施。8.5.0 已按上游
+  CVE-2024-2466 修复打补丁（`lib/vtls/mbedtls.c` 无条件调用 `set_hostname`）。
 
 ## mbedtls (Apache-2.0)
 
-- Version: 2.28.9 LTS (self-contained; curl mbedtls backend)
+- Version: 2.28.10 LTS (self-contained; curl mbedtls backend)
 - Path: `mbedtls/`
 - License: Apache-2.0
 - Build: static `mbedtls` / `mbedx509` / `mbedcrypto`
@@ -58,26 +61,30 @@ curl -o cjson/cJSON.h https://raw.githubusercontent.com/DaveGamble/cJSON/master/
   「跳过 SSL 验证」（偏好键 `allow_insecure_ssl`）时才关闭。校验开关见 `include/http_client.h`
   的 `setSslVerify()`。
 
-### ⚠️ 待处理项（2026-09-11 安全审计发现，均需真机 TLS 回归后处理）
+### 已处理的历史安全项
 
-1. **CVE-2025-27809（HIGH）— 客户端可能静默跳过服务器身份校验**
+1. **CVE-2025-27809 / CVE-2025-27810（HIGH）— 客户端可能静默跳过服务器身份校验**
    - mbedtls 在客户端未调用 `mbedtls_ssl_set_hostname()` 时会跳过证书 CN/SAN 校验
      （影响所有 ≤ 2.28.9 版本）。
    - curl 的 mbedtls 后端**仅在 `peer.sni` 非空时**调用该函数
      （`curl-8.5.0/lib/vtls/mbedtls.c:642`），而 `curl-8.5.0/lib/vtls/vtls.c:1600-1602`
      对 IP 形式主机名**不设置 `sni`**。因此以 `https://<IP>:端口` 连接时（本项目自建服务端
      的常见形态），签发链会被校验但**证书主体不会被校验**。
-   - 修复：升级至 **mbedtls ≥ 2.28.10**。公告：
-     https://mbed-tls.readthedocs.io/en/latest/security-advisories/mbedtls-security-advisory-2025-03-1/
+   - **状态：已修复（2026-10-29）**。mbedtls 升至 2.28.10；同时把 curl 的
+     `set_hostname` 调用改为无条件（sni 为空时回退 `peer.hostname`），即上游
+     CVE-2024-2466 修复。
    - 注：`entry` 模块使用预编译 `libcurl.so`（OpenSSL 系后端，见下），**不受此条影响**。
 
-2. **缺少 CA 信任库 — 默认开启校验时 HTTPS 无法握手**
+2. **缺少 CA 信任库 — 默认开启校验时 HTTPS 无法握手**（**未处理，仍待办**）
    - 本模块未设置 `CURLOPT_CAINFO` / `CURLOPT_CAPATH`，mbedtls 亦无内置信任库，
      故签发链校验必然失败（`MBEDTLS_X509_BADCERT_NOT_TRUSTED`），
      即 `sslVerify=true`（默认）下 HTTPS 不可用，用户只能通过关闭校验使用 HTTPS。
    - 修复：随包提供 CA bundle，并设置 `CURLOPT_CAINFO`（或 `CURLOPT_CAINFO_BLOB`）。
-   - ⚠️ **必须与第 1 项同时处理**：只补 CA 而不升级 mbedtls，会在 IP 场景下形成
-     "看着在验签、实际不校验主体"的假安全。
+   - ⚠️ **剩余边界（mbedTLS 2.x 固有限制）**：2.28.x 的 `x509_crt_check_san()` 只匹配
+     dNSName，**不支持 iPAddress SAN**（`MBEDTLS_X509_SAN_IP_ADDRESS` 常量存在但无匹配分支，
+     见 `library/x509_crt.c:3024`）。因此对 `https://<IP>` 且证书只带 IP SAN 的场景，
+     校验会以 `BADCERT_CN_MISMATCH` 失败（失败即拒绝，不再是静默放行）。彻底支持需
+     mbedTLS ≥ 3.x，属大版本跨越，本周期不做。
 
 ## 关联：`entry` 模块的 libcurl
 
@@ -90,17 +97,20 @@ curl -o cjson/cJSON.h https://raw.githubusercontent.com/DaveGamble/cJSON/master/
 
 ## miniz (MIT)
 
-- Version: 3.0.2 (headers + `miniz.c` / `miniz_tinfl.c`)
+- Version: 3.1.2（`miniz.h` 的 `MZ_VERSION` 宏；README 旧记录 3.0.2 为笔误，实际文件头即 3.1.2）
 - Path: `miniz/`
 - License: MIT
 - Usage: raw deflate inflate for EPUB ZIP method 8 entries (`epub_parser.cpp`)
 
 ## tinyxml2 (zlib license)
 
-- Version: 10.0.0
+- Version: 11.0.0
 - Path: `tinyxml2/tinyxml2.{h,cpp}`
 - License: zlib
 - Status: vendored for optional EPUB OPF XML parsing; current parser uses lightweight string tags
+- 升级记录：10.0.0 → 11.0.0（2025-03-15），修 CVE-2024-50615（字符编码解析越界）；
+  含 10.1.0 起 `int` → `size_t` 的内部字段变更（对象大小变化，API 不变）
+- 注：当前未接入 CMake 编译（`grep tinyxml2 --include=CMakeLists.txt` 无匹配），仅作可选依赖保留
 
 ## EPUB parsing
 
