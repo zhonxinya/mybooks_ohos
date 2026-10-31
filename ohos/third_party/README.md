@@ -5,7 +5,7 @@
 | 使用方 | 模块 | 取自本目录 |
 |---|---|---|
 | `libentry.so` | `ohos/entry/src/main/cpp/` | `cjson/`、`curl/include/`（配预编译 `libcurl.so`） |
-| `libmybooks_core.so` | `ohos/mybooks_core/src/main/cpp/` | `sqlite/`、`curl/curl-8.5.0/`、`mbedtls/`、`miniz/` |
+| `libmybooks_core.so` | `ohos/mybooks_core/src/main/cpp/` | `sqlite/`、`curl/curl-8.23.0/`、`mbedtls/`、`miniz/` |
 
 两处 CMake 均以 `${NATIVERENDER_ROOT_PATH}/../../../../third_party` 指向本目录。
 
@@ -24,11 +24,12 @@ curl -o cjson/cJSON.h https://raw.githubusercontent.com/DaveGamble/cJSON/master/
 
 ## curl headers for entry (curl license)
 
-- Version: 8.12.1（`curl/include/curl/curlver.h`）
+- Version: 8.23.0（`curl/include/curl/curlver.h`，随源码版同步）
 - Path: `curl/include/`
 - Usage: `libentry.so` 的编译期头文件，链接 `ohos/entry/libs/arm64-v8a/libcurl.so`
-- ⚠️ 既有不一致：头文件自报 8.12.1，而预编译 `.so` 自报 `libcurl/8.5.0-DEV`。
-  替换任一侧前需确认符号兼容并回归 HTTPS 请求 / 下载 / Cookie 会话。
+- ⚠️ 既有不一致：头文件自报 8.23.0，而预编译 `.so` 自报 `libcurl/8.5.0-DEV`（OpenSSL 后端）。
+  `entry` 用到的 `CURLOPT_*` 全部 ≤ 7.85（`CURLOPT_PROTOCOLS_STR`），在该 `.so` 中均存在；
+  替换预编译 `.so` 前仍需回归 HTTPS 请求 / 下载 / Cookie 会话。
 
 ## sqlite (public domain)
 
@@ -38,21 +39,30 @@ curl -o cjson/cJSON.h https://raw.githubusercontent.com/DaveGamble/cJSON/master/
 - Usage: primary persistence for download records, history, bookmarks, KV/secure store
 - 升级记录：3.46.1 → 3.54.1（2026-10-16），修 CVE-2025-6965 / CVE-2025-29087 / CVE-2025-70873
 
-## curl 8.5.0 source (MIT/curl license)
+## curl source (MIT/curl license)
 
-- Version: 8.5.0（2023-12 发布）
-- Path: `curl/curl-8.5.0/`（全量源码；`curl/curl.tar.gz` 为上游归档，构建不使用）
+- Version: 8.23.0（2026-10-14 发布，最新稳定版）
+- Path: `curl/curl-8.23.0/`（全量源码；`curl/curl.tar.gz` 为上游归档，构建不使用）
 - License: https://curl.se/docs/copyright.html
-- Build: static `libcurl` via CMake (`HTTP_ONLY`, **mbedTLS SSL backend**)
+- Build: static `libcurl` via CMake（**mbedTLS SSL backend**）
 - Usage: HTTP/HTTPS client, cookies, streaming download, SoNovel SSE
-- Note: 上游后续版本修复了多项低/中危问题（8.21.0 单版即修复 18 项）。本目录源码锁定
-  8.5.0 是受 mbedTLS 2.x 约束：curl ≥ 8.18.0 的 CMake 要求 mbedTLS ≥ 3.2.0，
-  跨大版本迁移 mbedTLS 需同步改 curl + 全部调用点，本周期不实施。8.5.0 已按上游
-  CVE-2024-2466 修复打补丁（`lib/vtls/mbedtls.c` 无条件调用 `set_hostname`）。
+- 升级记录：8.5.0 → 8.23.0（2026-10-31）。8.5.0 命中 55 条 curl 安全公告
+  （14 Medium / 41 Low），本次一并清除（含 CVE-2024-0853 OCSP 绕过、CVE-2024-2398
+  HTTP/2 push 泄漏、CVE-2025-0725 gzip 整数溢出、CVE-2026-92392 HTTP/2 上传 UAF）。
+- ⚠️ 构建层变更（升级时同步改过）：
+  1. curl ≥ 8.18.0 要求 mbedTLS ≥ 3.2.0（`CMakeLists.txt` 有 `FATAL_ERROR`），故本次与
+     mbedTLS 3.6.7 捆绑升级，二者不可再单独升。
+  2. 8.23 移除 `HTTP_ONLY` 选项，改为逐协议 `CURL_DISABLE_*`；本工程显式关掉
+     FILE/FTP/DICT/GOPHER/TELNET/TFTP/IMAP/POP3/SMTP/MQTT/RTSP/WEBSOCKETS，保持原有 HTTP(S) 协议面。
+  3. `CMake/FindMbedTLS.cmake` 由 `MBEDTLS_INCLUDE_DIRS` 改为单数 `MBEDTLS_INCLUDE_DIR`，
+     两处 CMakeLists 均已补预置，否则报 `Could NOT find MbedTLS (missing: MBEDTLS_INCLUDE_DIR)`。
+- 注：curl 的 mbedTLS 后端自 8.7 起无条件调用 `mbedtls_ssl_set_hostname()`
+  （`lib/vtls/mbedtls.c:995`，sni 为空时回退 `peer.hostname`），CVE-2024-2466 已在上游修复，
+  本地补丁随之移除。
 
 ## mbedtls (Apache-2.0)
 
-- Version: 2.28.10 LTS (self-contained; curl mbedtls backend)
+- Version: 3.6.7 LTS (self-contained; curl mbedtls backend)
 - Path: `mbedtls/`
 - License: Apache-2.0
 - Build: static `mbedtls` / `mbedx509` / `mbedcrypto`
@@ -80,11 +90,9 @@ curl -o cjson/cJSON.h https://raw.githubusercontent.com/DaveGamble/cJSON/master/
      故签发链校验必然失败（`MBEDTLS_X509_BADCERT_NOT_TRUSTED`），
      即 `sslVerify=true`（默认）下 HTTPS 不可用，用户只能通过关闭校验使用 HTTPS。
    - 修复：随包提供 CA bundle，并设置 `CURLOPT_CAINFO`（或 `CURLOPT_CAINFO_BLOB`）。
-   - ⚠️ **剩余边界（mbedTLS 2.x 固有限制）**：2.28.x 的 `x509_crt_check_san()` 只匹配
-     dNSName，**不支持 iPAddress SAN**（`MBEDTLS_X509_SAN_IP_ADDRESS` 常量存在但无匹配分支，
-     见 `library/x509_crt.c:3024`）。因此对 `https://<IP>` 且证书只带 IP SAN 的场景，
-     校验会以 `BADCERT_CN_MISMATCH` 失败（失败即拒绝，不再是静默放行）。彻底支持需
-     mbedTLS ≥ 3.x，属大版本跨越，本周期不做。
+   - ✅ **iPAddress SAN 限制已解除**：mbedTLS 3.6.7 的 `x509_crt_check_san()` 已匹配
+     `MBEDTLS_X509_SAN_IP_ADDRESS`（`library/x509_crt.c:2924`），`https://<IP>` + 仅 IP SAN
+     的证书可正常通过主体校验（2.28.x 会以 `BADCERT_CN_MISMATCH` 失败）。
 
 ## 关联：`entry` 模块的 libcurl
 
@@ -92,7 +100,7 @@ curl -o cjson/cJSON.h https://raw.githubusercontent.com/DaveGamble/cJSON/master/
 由 `libentry.so` 链接，头文件见上文 `curl/include/`）。
 
 ⚠️ 本目录虽已共用，但两套 native 模块仍**各自持有独立的 curl 与 TLS 栈**
-（`entry` 用预编译 `.so` + OpenSSL 后端；`mybooks_core` 用 8.5.0 源码静态编译 + mbedTLS 后端），
+（`entry` 用预编译 `.so` + OpenSSL 后端；`mybooks_core` 用 8.23.0 源码静态编译 + mbedTLS 3.6.7 后端），
 安全策略与版本需**分别评估**，不可只看其中一处。
 
 ## miniz (MIT)
