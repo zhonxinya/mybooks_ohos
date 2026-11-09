@@ -17,7 +17,7 @@ set -uo pipefail
 NAME="${1:-Pura70Pro}"
 TIMEOUT="${2:-900}"
 
-export HOS_CLT_DIR="${HOS_CLT_DIR:-/vol1/home/zhonxinya/workspace/harmony-sdk/command-line-tools}"
+export HOS_CLT_DIR="${HOS_CLT_DIR:-/vol3/1000/Public/Share/workspace/harmony-sdk/command-line-tools}"
 export HOME=/home/zhonxinya
 export XDG_RUNTIME_DIR="/tmp/runtime-$(id -u)"
 mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
