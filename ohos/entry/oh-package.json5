@@ -7,6 +7,9 @@
   "license": "BSD-2-Clause",
   "dependencies": {
     "mybooks_core": "file:../mybooks_core",
-    "reader": "file:../feature/reader"
-  }
+    "reader": "file:../feature/reader",
+    "@iuroc/openai": "1.0.10"
+  },
+  "devDependencies": {},
+  "dynamicDependencies": {}
 }

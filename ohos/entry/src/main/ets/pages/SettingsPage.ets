@@ -10,6 +10,7 @@ import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { AccountManager } from '../services/AccountManager';
 import { AccountRecord } from '../models/AccountModels';
 import { DownloadTaskService, DOWNLOAD_STATUS_TICK_KEY } from '../services/DownloadTaskService';
+import { AiService, AiConfig } from '../services/AiService';
 import { AppRouter } from '../utils/AppRouter';
 
 /** 折叠分组键：默认全部折叠，仅展开态渲染子项。 */
@@ -17,6 +18,7 @@ const SECTION_APPEARANCE: string = 'appearance';
 const SECTION_READING: string = 'reading';
 const SECTION_ACCOUNT: string = 'account';
 const SECTION_SERVICE: string = 'service';
+const SECTION_AI: string = 'ai';
 const SECTION_ADMIN: string = 'admin';
 const SECTION_ABOUT: string = 'about';
 
@@ -104,6 +106,11 @@ export struct SettingsPage {
   @State showSwitcher: boolean = false;
   /** 可升级的版本号（由 UpdateService 经 AppStorage 发布，空串表示无提示）。 */
   @StorageProp('update_hint_version') updateAvailableVersion: string = '';
+  /** AI 分区摘要：避免在 build 里读配置（读 Asset Store 是同步 IPC）。 */
+  @State aiReady: boolean = false;
+  @State aiProviderName: string = '';
+  @State aiModel: string = '';
+  @StorageProp('aiConfigVersion') @Watch('refreshAiSummary') aiConfigVersion: number = 0;
 
   aboutToAppear(): void {
     this.themeMode = TalebookService.prefGet(StorageKeys.THEME_MODE, 'system');
@@ -111,6 +118,7 @@ export struct SettingsPage {
     this.readerMode = TalebookService.prefGet(READER_MODE_PREF_KEY, READER_MODE_AUTO);
     this.refreshAccount();
     this.refreshBadges();
+    this.refreshAiSummary();
     this.applySectionParam();
     void NotificationService.refreshUnreadCount();
     void this.loadAdminOverview();
@@ -125,6 +133,20 @@ export struct SettingsPage {
     // 以「凭据已保存」作为判定：新账号刚切换时资料尚未拉取（或曾因服务端不可达而拿不到），
     // 若以「已缓存用户资料」为门槛，「个人中心」入口会整个消失。
     this.isLoggedIn = TalebookService.hasAuthCredentials();
+  }
+
+  /** 从 AI 设置页返回时要刷新摘要（模型可能刚被改过）。 */
+  onPageShow(): void {
+    this.refreshAccount();
+    this.refreshAiSummary();
+  }
+
+  /** 读一次 AI 配置生成摘要。放在 aboutToAppear 而非 build：读配置会走 Asset Store 同步 IPC。 */
+  private refreshAiSummary(): void {
+    const config: AiConfig = AiService.loadConfig();
+    this.aiReady = config.baseUrl.length > 0 && config.model.length > 0 && config.hasKey;
+    this.aiProviderName = AiService.presetOf(config.providerId).name;
+    this.aiModel = config.model;
   }
 
   /** 当前账号摘要：账号数与当前账号名，便于在设置页一眼看出正在用哪个账号。 */
@@ -344,6 +366,18 @@ export struct SettingsPage {
       : base;
   }
 
+  /** AI 分区摘要：已配置时显示服务商与模型，未配置时引导配置。 */
+  private aiSectionSubtitle(): string {
+    if (!this.aiReady) {
+      return '未配置 · 使用自己的模型接口';
+    }
+    return `${this.aiProviderName} · ${this.aiModel}`;
+  }
+
+  private aiConfigSubtitle(): string {
+    return this.aiReady ? '已配置，可更换服务商或模型' : '填写接口地址、模型与 API Key';
+  }
+
   build() {
     Column() {
       HarmonyTopBar({ title: '设置' });
@@ -470,6 +504,40 @@ export struct SettingsPage {
                   onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/NetworkLibraryPage' }),
                 });
               }
+            }
+            .width('100%')
+            .borderRadius($r('app.float.card_radius'))
+            .backgroundColor($r('app.color.card_background'));
+          }
+
+          SettingsSectionHeader({
+            title: 'AI 助手',
+            subtitle: this.aiSectionSubtitle(),
+            expanded: this.isExpanded(SECTION_AI),
+            onToggle: () => this.toggleSection(SECTION_AI),
+          });
+          if (this.isExpanded(SECTION_AI)) {
+            Column() {
+              SettingCell({
+                title: 'AI 对话',
+                subtitle: '问答、写作与书籍相关提问',
+                showChevron: true,
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiAssistantPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: 'AI 书单推荐',
+                subtitle: '按书架偏好生成推荐书单',
+                showChevron: true,
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiRecommendPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '模型设置',
+                subtitle: this.aiConfigSubtitle(),
+                showChevron: true,
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiSettingsPage' }),
+              });
             }
             .width('100%')
             .borderRadius($r('app.float.card_radius'))

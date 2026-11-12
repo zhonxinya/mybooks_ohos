@@ -71,6 +71,10 @@
     "pages/AdminOpdsPage",
     "pages/AdminMaintenancePage",
     "pages/UpdatePage",
+    "pages/AiSettingsPage",
+    "pages/AiAssistantPage",
+    "pages/AiBookPanelPage",
+    "pages/AiRecommendPage",
     "pages/PrivacyPolicyPage",
     "pages/UserAgreementPage",
     "pages/OpenSourceLicensesPage"
