@@ -1,5 +1,6 @@
 import { pasteboard } from '@kit.BasicServicesKit';
 import { PageScaffold, SecondaryButton, TextButton } from '../components';
+import { MarkdownText } from '../components/MarkdownText';
 import { AiService } from '../services/AiService';
 import { AiBookService, BookContext, MetaSuggestion } from '../services/AiBookService';
 import { AppRouter } from '../utils/AppRouter';
@@ -244,13 +245,8 @@ struct AiBookPanelPage {
   resultView() {
     Scroll() {
       Column({ space: 10 }) {
-        Text(this.result)
-          .fontSize(15)
-          .lineHeight(24)
-          .fontColor($r('app.color.text_primary'))
-          .width('100%')
-          .copyOption(CopyOptions.LocalDevice)
-          .textAlign(TextAlign.Start);
+        // 摘要/书评本来就是 Markdown 文本，结构化渲染比整坨 Text 可读得多
+        MarkdownText({ content: this.result });
         Row({ space: 12 }) {
           TextButton({ label: '复制', onTap: () => {
             this.copy(this.result);
