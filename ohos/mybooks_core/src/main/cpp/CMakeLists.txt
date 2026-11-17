@@ -3,9 +3,16 @@ project(mybooks_core)
 
 # 预置 FindThreads 探测结果：OHOS(musl)/Android(bionic) 的 libc 自带 pthread。
 # 不预置时 curl 的 find_package(Threads) 会在 CI runner 上探测 host glibc，
-# 把 -I/usr/include -pthread 注入 libcurl_static 编译行，host features.h
-# 击穿 musl sysroot（bits/wordsize.h not found），本地开发机则恰好不触发。
+# 把 -pthread 注入 libcurl_static 编译行，本地开发机则恰好不触发。
 set(CMAKE_HAVE_LIBC_PTHREAD ON CACHE INTERNAL "" FORCE)
+
+# curl 8.23 默认启用 pkg-config 依赖探测，它会绕过 OHOS toolchain 的
+# find-root-ONLY（直接查 host .pc）。GitHub runner 装有 libbrotli-dev/
+# libzstd-dev，其 Cflags `-I/usr/include` 会作为 CURL::brotli/zstd 的
+# INTERFACE_COMPILE_OPTIONS 注入编译行，host glibc 头击穿 musl sysroot
+# （features-time64.h → bits/wordsize.h not found）。关掉后依赖解析
+# 只会命中 NDK sysroot。
+set(CURL_USE_PKGCONFIG OFF CACHE BOOL "" FORCE)
 
 set(CMAKE_CXX_STANDARD 17)
 set(NATIVERENDER_ROOT_PATH ${CMAKE_CURRENT_SOURCE_DIR})
@@ -104,6 +111,9 @@ set(CURL_DISABLE_RTSP ON CACHE BOOL "" FORCE)
 set(CURL_DISABLE_WEBSOCKETS ON CACHE BOOL "" FORCE)
 set(ENABLE_MANUAL OFF CACHE BOOL "" FORCE)
 set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
+# curl 8.23 把 brotli/zstd 改为三态选项（默认 AUTO 探测），与 CURL_ZLIB 一样需显式关闭
+set(CURL_BROTLI OFF CACHE STRING "" FORCE)
+set(CURL_ZSTD OFF CACHE STRING "" FORCE)
 set(USE_NGHTTP2 OFF CACHE BOOL "" FORCE)
 set(USE_LIBIDN2 OFF CACHE BOOL "" FORCE)
 add_subdirectory(${THIRD_PARTY}/curl/curl-8.23.0 ${CMAKE_BINARY_DIR}/curl_build EXCLUDE_FROM_ALL)
