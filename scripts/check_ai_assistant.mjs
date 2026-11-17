@@ -552,6 +552,9 @@ try {
     toolsState.history = [];
     assert.ok((await RealAiTools.execute('reading_history', '{}')).includes('还没有阅读记录'));
     assert.ok((await RealAiTools.execute('delete_book', '{}')).includes('未知工具'));
+    assert.equal(RealAiTools.toolLabel('search_books'), '搜索书架');
+    assert.equal(RealAiTools.toolLabel('reading_history'), '查看阅读历史');
+    assert.equal(RealAiTools.toolLabel('mystery'), 'mystery');
     toolsState.notesError = '未登录';
     assert.ok((await RealAiTools.execute('book_notes', '{"book_id":12}')).includes('执行失败'));
     toolsState.notesError = '';
@@ -572,11 +575,14 @@ try {
     toolsState.search = async (q) => (q === '三体' ? [{ id: 12, title: '三体', authors: ['刘慈欣'] }] : []);
     let full = '';
     let error = '';
+    const toolLabels = [];
     RealAiService.chatStream([{ role: 'user', content: '书架上有三体吗' }], {
       onDelta: (t) => { full += t; }, onDone: () => {}, onError: (m) => { error = m; },
+      onTool: (l) => { toolLabels.push(l); },
     }, 256);
     await flush();
     assert.equal(error, '');
+    assert.deepEqual(toolLabels, ['搜索书架']);
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);

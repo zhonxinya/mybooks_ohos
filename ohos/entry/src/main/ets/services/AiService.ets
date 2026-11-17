@@ -89,6 +89,8 @@ export interface AiStreamHandlers {
   onDelta: (delta: string) => void;
   onDone: (fullText: string) => void;
   onError: (message: string) => void;
+  /** 可选：网关工具回路每次执行工具前回调一句人话（如「搜索书架」）。 */
+  onTool?: (label: string) => void;
 }
 
 export class AiService {
@@ -371,8 +373,10 @@ export class AiService {
           // 已结束的会话再 cancel 会抛，忽略
         }
       };
+      const notice: ((label: string) => void) | undefined = handlers.onTool;
       AiService.chatViaGateway(config, apiKey, messages, maxTokens, gatewaySession,
-        AiTools.definitions(), (): boolean => handle.aborted).then((content: string): void => {
+        AiTools.definitions(), (): boolean => handle.aborted,
+        notice === undefined ? null : notice).then((content: string): void => {
         if (handle.aborted) {
           return;
         }
@@ -462,7 +466,8 @@ export class AiService {
     }
     if (AiService.isOpenCodeGateway(config.baseUrl)) {
       // 结构化输出（书单 JSON 等）不需要工具，避免模型中途改去查数据
-      return AiService.chatViaGateway(config, apiKey, messages, maxTokens, rcp.createSession(), null, null);
+      return AiService.chatViaGateway(config, apiKey, messages, maxTokens, rcp.createSession(),
+        null, null, null);
     }
     const client: OpenAI = AiService.client(config.baseUrl, apiKey);
     const params: ChatCompletionCreateParamsBase = {
@@ -554,7 +559,8 @@ export class AiService {
    */
   private static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[],
     maxTokens: number, session: rcp.Session, tools: AiToolDefinition[] | null,
-    isAborted: (() => boolean) | null): Promise<string> {
+    isAborted: (() => boolean) | null,
+    onTool: ((label: string) => void) | null): Promise<string> {
     const headers: rcp.RequestHeaders = {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
@@ -611,6 +617,9 @@ export class AiService {
           gwMessages.push({ role: 'assistant', content: reply.content, tool_calls: calls });
           for (let i = 0; i < reply.calls.length; i++) {
             const c: GatewayToolCall = reply.calls[i];
+            if (onTool !== null) {
+              onTool(AiTools.toolLabel(c.name));
+            }
             const result: string = await AiTools.execute(c.name, c.arguments);
             gwMessages.push({ role: 'tool', content: result, tool_call_id: c.id });
             if (isAborted !== null && isAborted()) {

@@ -82,6 +82,23 @@ export class AiTools {
     return TOOL_DEFS;
   }
 
+  /** 给 UI 的一句人话：正在用哪个工具。 */
+  static toolLabel(name: string): string {
+    if (name === 'search_books') {
+      return '搜索书架';
+    }
+    if (name === 'book_detail') {
+      return '查询书籍详情';
+    }
+    if (name === 'book_notes') {
+      return '查找你的标注';
+    }
+    if (name === 'reading_history') {
+      return '查看阅读历史';
+    }
+    return name;
+  }
+
   /** 执行一次工具调用；永不抛出，返回给模型的文本结果。 */
   static async execute(name: string, argsJson: string): Promise<string> {
     try {

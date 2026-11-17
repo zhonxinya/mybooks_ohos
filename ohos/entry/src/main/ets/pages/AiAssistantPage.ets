@@ -35,6 +35,8 @@ struct AiAssistantPage {
   @State errorTip: string = '';
   /** 流式输出用：整段重建列表的代价高，这里只改最后一条气泡的内容。 */
   @State streamingText: string = '';
+  /** 工具回路进行中的人话提示（如「正在调用工具：搜索书架」），替代「思考中…」。 */
+  @State toolHint: string = '';
   private requestId: number = 0;
   private abort: AiAbortHandle | null = null;
   private scroller: Scroller = new Scroller();
@@ -67,6 +69,7 @@ struct AiAssistantPage {
       this.messages = this.messages.slice();
     }
     this.streamingText = '';
+    this.toolHint = '';
     this.thinking = false;
   }
 
@@ -98,6 +101,7 @@ struct AiAssistantPage {
     this.messages.push({ role: 'user', content: question, streaming: false, error: false });
     this.messages.push({ role: 'assistant', content: '', streaming: true, error: false });
     this.streamingText = '';
+    this.toolHint = '';
     this.input = '';
     this.thinking = true;
     this.scrollToEnd();
@@ -109,6 +113,11 @@ struct AiAssistantPage {
         }
         this.streamingText += delta;
         this.scrollToEnd();
+      },
+      onTool: (label: string) => {
+        if (requestId === this.requestId && this.thinking) {
+          this.toolHint = `正在调用工具：${label}…`;
+        }
       },
       onDone: (full: string) => {
         if (requestId === this.requestId && this.thinking) {
@@ -136,6 +145,7 @@ struct AiAssistantPage {
     this.messages = this.messages.slice();
     this.thinking = false;
     this.streamingText = '';
+    this.toolHint = '';
     this.abort = null;
     // 上次是错误气泡时，把这次失败的消息踢出上下文（buildContext 已过滤 error）
     if (isError) {
@@ -334,7 +344,7 @@ struct AiAssistantPage {
       if (bubble.role === 'assistant' && !bubble.error) {
         // AI 回复走轻量 Markdown 渲染；流式期间实时重解析
         if (bubble.streaming && this.streamingText.length === 0) {
-          Text('思考中…')
+          Text(this.toolHint.length > 0 ? this.toolHint : '思考中…')
             .fontSize(15)
             .fontColor($r('app.color.text_secondary'));
         } else {
