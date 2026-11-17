@@ -1,0 +1,409 @@
+#!/usr/bin/env node
+/**
+ * AI 助手离线回归（Node >= 22.6）：运行实际 ArkTS 服务和页面逻辑，不连接设备或模型。
+ * 页面仅移除 ArkUI 声明式 build 部分、将 @State 擦为普通字段；SDK / 存储 / 剪贴板以本地桩替代。
+ * 用法：node scripts/check_ai_assistant.mjs
+ */
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const ETS = join(ROOT, 'ohos/entry/src/main/ets');
+const TMP = process.env.TMPDIR || '/vol3/1000/Public/Share/.tmp';
+mkdirSync(TMP, { recursive: true });
+const dir = mkdtempSync(join(TMP, 'ai-check-'));
+const read = (path) => readFileSync(join(ETS, path), 'utf8');
+const settingsDefaults = () => ({
+  config: { providerId: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat',
+    hasKey: true, temperature: 0.7 },
+  providers: [
+    { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', vision: false },
+    { id: 'opencode', name: 'OpenCode (Go)', baseUrl: 'https://opencode.ai/inference/openai/v1', model: 'big-pickle', vision: false },
+  ],
+  keys: new Set(['deepseek']), saved: null, models: [], fetchError: '', completeReply: 'ok',
+});
+const state = {
+  ready: true, handlers: null, copied: '', cancel: null,
+  shelf: { books: [] }, search: async () => ({ body: { books: [] } }),
+  recommend: async () => [], summary: async () => '', review: async () => '', meta: async () => ({}),
+  settings: settingsDefaults(),
+};
+globalThis.__aiCheck = state;
+// 设置页保存时会记一个配置版本号，桩掉避免 save() 抛错
+globalThis.AppStorage = { setOrCreate: () => {} };
+const shim = `
+const state = globalThis.__aiCheck;
+export const AiService = {
+  isReady: () => state.ready,
+  chatStream: (_messages, handlers) => {
+    state.handlers = handlers;
+    return { aborted: false, destroy: () => state.cancel?.(handlers) };
+  },
+  loadConfig: () => state.settings.config,
+  listProviders: () => state.settings.providers.slice(),
+  presetOf: (id) => state.settings.providers.find((p) => p.id === id) ??
+    { id: 'custom', name: '自定义', baseUrl: '', model: '', vision: false },
+  hasKeyFor: (id) => state.settings.keys.has(id),
+  addCustomProvider: (name, baseUrl, model) => {
+    const preset = { id: 'custom-' + Date.now(), name: name.trim(), baseUrl: baseUrl.trim(),
+      model: model.trim(), vision: false };
+    state.settings.providers.push(preset);
+    return preset;
+  },
+  removeCustomProvider: (id) => {
+    state.settings.providers = state.settings.providers.filter((p) => p.id !== id);
+    state.settings.keys.delete(id);
+  },
+  fetchModels: async () => {
+    if (state.settings.fetchError.length > 0) { throw new Error(state.settings.fetchError); }
+    return state.settings.models.slice();
+  },
+  saveConfig: (providerId, baseUrl, model, apiKey, temperature) => {
+    state.settings.saved = { providerId, baseUrl, model, apiKey, temperature };
+    if (apiKey.length > 0) { state.settings.keys.add(providerId); }
+    state.settings.config = { providerId, baseUrl, model,
+      hasKey: state.settings.keys.has(providerId), temperature };
+  },
+  complete: async () => state.settings.completeReply,
+};
+export const AiBookService = {
+  summarize: (...args) => state.summary(...args),
+  review: (...args) => state.review(...args),
+  suggestMeta: (...args) => state.meta(...args),
+  recommend: (...args) => state.recommend(...args),
+};
+export const ShelfApi = { getShelf: async () => state.shelf };
+export const TalebookService = { searchAsync: (...args) => state.search(...args) };
+export const pasteboard = {
+  MIMETYPE_TEXT_PLAIN: 'text/plain', createData: (_type, text) => text,
+  getSystemPasteboard: () => ({ setData: (text) => { state.copied = text; return Promise.resolve(); } }),
+};
+export const AppRouter = { getParams: () => ({}) };
+export const AI_PROVIDERS = [];
+`;
+writeFileSync(join(dir, 'shim.ts'), shim);
+
+// 真实 AiService 的运行时依赖桩：内存存储 + 可编程的 SDK 假响应
+writeFileSync(join(dir, 'aiServiceDeps.ts'), `
+// Buffer.from(x).buffer 带池化填充，必须 slice 出精确字节（模拟 rcp 的紧凑 ArrayBuffer）
+const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
+export const state = { store: new Map(), models: [], rcpResponse: null, rcpError: null, lastRequest: null };
+export const util = { TextDecoder: { create: () => ({ decodeToString: (u8) => Buffer.from(u8).toString('utf8') }) } };
+export class OpenAI {
+  chat = { completions: { create: () => { throw new Error('chat not needed in check'); } } };
+  constructor(options) { state.lastOptions = options; }
+}
+export const rcp = {
+  Request: class Request {
+    constructor(url, method, headers) { this.url = url; this.method = method; this.headers = headers; }
+  },
+  createSession: () => ({
+    fetch: async (request) => {
+      state.lastRequest = request;
+      if (state.rcpError) { throw state.rcpError; }
+      return state.rcpResponse ?? { statusCode: 200, body: enc(JSON.stringify({ data: state.models })) };
+    },
+    close: () => {},
+  }),
+};
+export const TalebookService = {
+  prefGet: (key, fallback = '') => state.store.has('p:' + key) ? state.store.get('p:' + key) : fallback,
+  prefSet: (key, value) => { state.store.set('p:' + key, value); },
+  secureGet: (key) => state.store.has('s:' + key) ? state.store.get('s:' + key) : '',
+  secureSet: (key, value) => { if (value === '') { state.store.delete('s:' + key); } else { state.store.set('s:' + key, value); } },
+};
+`);
+
+/** 把真实 AiService 落进临时目录：SDK / rcp 类型转 import type，运行时依赖换成桩。 */
+function stageAiService() {
+  let source = read('services/AiService.ets');
+  for (const type of ['ChatCompletionChunk', 'ChatCompletionMessageParam', 'ChatCompletionCreateParamsBase']) {
+    source = source.replace(`import { ${type} }`, `import type { ${type} }`);
+  }
+  source = source
+    .replace(`from '@iuroc/openai'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from './TalebookService'`, `from './aiServiceDeps.ts'`);
+  writeFileSync(join(dir, 'RealAiService.ts'), source);
+}
+
+function stagePure(name, path, typeNames) {
+  let source = read(path).replace(/from '\.\.\/services\/BookModels'/g, "from './BookModels.ts'");
+  for (const type of typeNames) {
+    source = source.replace(`import { ${type} }`, `import type { ${type} }`);
+  }
+  writeFileSync(join(dir, `${name}.ts`), source);
+}
+
+function stagePage(name) {
+  let source = read(`pages/${name}.ets`);
+  source = source.substring(0, source.indexOf('\n  build() {'));
+  const shims = new Set();
+  source = source.replace(/^import \{([^}]+)\} from '([^']+)';\n/gm, (_all, clause, path) => {
+    if (path === '../utils/LibraryMatch' || path === '../services/BookModels') {
+      const names = clause.split(',').map((part) => part.trim()).filter((name) => name !== 'BookItem');
+      return `import { ${names.join(', ')} } from './${path.split('/').at(-1)}.ts';\n`;
+    }
+    for (const name of clause.split(',').map((part) => part.trim())) {
+      if (['AiService', 'AiBookService', 'ShelfApi', 'TalebookService', 'pasteboard', 'AppRouter', 'AI_PROVIDERS'].includes(name)) {
+        shims.add(name);
+      }
+    }
+    return '';
+  });
+  source = source.replace(/^@(?:Entry|Component)\n/gm, '')
+    .replace(`struct ${name}`, `export class ${name}`)
+    .replace(/@State /g, '')
+    .replace(/private scroller: Scroller = new Scroller\(\);/, 'private scroller: Object = {};')
+    .replace(/\n  private scrollToEnd\(\): void \{[\s\S]*?\n  \}/, '\n  private scrollToEnd(): void {}');
+  writeFileSync(join(dir, `${name}.ts`), `import { ${[...shims].join(', ')} } from './shim.ts';\n${source}\n}\n`);
+}
+
+const cases = [];
+const test = (name, run) => cases.push({ name, run });
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+};
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+try {
+  stagePure('BookModels', 'services/BookModels.ets', []);
+  stagePure('LibraryMatch', 'utils/LibraryMatch.ets', ['BookItem']);
+  for (const name of ['AiAssistantPage', 'AiBookPanelPage', 'AiRecommendPage', 'AiSettingsPage']) {
+    stagePage(name);
+  }
+  stageAiService();
+  const load = async (name) => import(pathToFileURL(join(dir, `${name}.ts`)).href);
+  const { AiAssistantPage } = await load('AiAssistantPage');
+  const { AiBookPanelPage } = await load('AiBookPanelPage');
+  const { AiRecommendPage } = await load('AiRecommendPage');
+  const { AiSettingsPage } = await load('AiSettingsPage');
+  const deps = await load('aiServiceDeps');
+  const { AiService: RealAiService } = await load('RealAiService');
+  const resetSettings = () => { state.settings = settingsDefaults(); };
+  const settingsPage = () => {
+    const page = new AiSettingsPage();
+    page.toast = () => {};
+    page.aboutToAppear();
+    return page;
+  };
+  const chat = () => {
+    const page = new AiAssistantPage();
+    page.toast = () => {};
+    state.ready = true;
+    state.cancel = null;
+    return page;
+  };
+
+  test('从模型设置返回时刷新三个 AI 页面的可用状态', () => {
+    for (const Page of [AiAssistantPage, AiBookPanelPage, AiRecommendPage]) {
+      const page = new Page();
+      state.ready = true;
+      page.onPageShow?.();
+      assert.equal(page.configured, true, Page.name);
+      state.ready = false;
+      page.onPageShow?.();
+      assert.equal(page.configured, false, Page.name);
+    }
+  });
+  test('复制指定气泡而非最后一条回复', async () => {
+    const page = chat();
+    page.messages = [
+      { role: 'assistant', content: '第一条', streaming: false, error: false },
+      { role: 'assistant', content: '第二条', streaming: false, error: false },
+    ];
+    if (page.copyBubble) {
+      await page.copyBubble(0);
+    } else {
+      await page.copyLast();
+    }
+    assert.equal(state.copied, '第一条');
+  });
+  test('停止生成会结束当前气泡，保留已收到文本', () => {
+    const page = chat();
+    page.send('问题');
+    state.handlers.onDelta('部分回答');
+    page.stopStreaming();
+    assert.equal(page.thinking, false);
+    assert.equal(page.messages.at(-1).streaming, false);
+    assert.equal(page.messages.at(-1).content, '部分回答');
+  });
+  test('清空后迟到的流式回调不会污染新对话', () => {
+    const page = chat();
+    page.send('旧问题');
+    const old = state.handlers;
+    page.clearChat();
+    old.onDone('旧回答');
+    assert.deepEqual(page.messages, []);
+    page.send('新问题');
+    old.onDelta('迟到片段');
+    old.onError('旧错误');
+    assert.equal(page.messages.at(-1).content, '');
+    assert.equal(page.thinking, true);
+    assert.equal(page.errorTip, '');
+  });
+  test('生成中不能切换书籍面板的结果类型', async () => {
+    const page = new AiBookPanelPage();
+    state.ready = true;
+    const response = deferred();
+    state.summary = () => response.promise;
+    const request = page.run('summary');
+    await page.run('meta');
+    assert.equal(page.activeTab, 0);
+    response.resolve('摘要');
+    await request;
+    assert.equal(page.result, '摘要');
+    assert.equal(page.loading, false);
+  });
+  test('偏好画像读取 authors 数组与逗号标签', async () => {
+    const page = new AiRecommendPage();
+    state.shelf = { books: [{ title: '书名', authors: ['作者甲', '作者乙'], tags: '科幻,悬疑' }] };
+    const profile = await page.buildProfile();
+    assert.deepEqual(profile.authors, ['作者甲', '作者乙']);
+    assert.deepEqual(profile.tags, ['科幻', '悬疑']);
+  });
+  test('推荐命中必须核对书名与作者，而非搜索结果第一本', async () => {
+    const page = new AiRecommendPage();
+    const items = [{ title: '目标书', author: '正确作者', reason: '测试' }];
+    page.items = items;
+    page.matchedIds = [-1];
+    state.search = async () => ({ body: { books: [
+      { id: 1, title: '不相关书', authors: ['正确作者'] },
+      { id: 2, title: '目标书', authors: ['另一作者'] },
+      { id: 3, title: '《目标书》', authors: ['正确作者'] },
+    ] } });
+    await page.matchAll(items, page.requestId);
+    assert.deepEqual(page.matchedIds, [3]);
+  });
+  test('重新生成后旧匹配请求不能覆盖新书单', async () => {
+    const page = new AiRecommendPage();
+    state.ready = true;
+    state.shelf = { books: [{ title: '在架书', authors: ['作者'] }] };
+    state.recommend = async () => [{ title: '旧推荐', author: '旧作者', reason: '旧' }];
+    const old = deferred();
+    state.search = (title) => title === '旧推荐' ? old.promise : Promise.resolve({ body: { books: [
+      { id: 22, title: '新推荐', authors: ['新作者'] },
+    ] } });
+    await page.generate();
+    state.recommend = async () => [{ title: '新推荐', author: '新作者', reason: '新' }];
+    await page.generate();
+    await tick();
+    assert.deepEqual(page.matchedIds, [22]);
+    old.resolve({ body: { books: [{ id: 11, title: '旧推荐', authors: ['旧作者'] }] } });
+    await tick();
+    assert.deepEqual(page.matchedIds, [22]);
+  });
+
+  test('服务：预设含 OpenCode (Go)，自定义服务商可增删且未知 id 兜底', () => {
+    deps.state.store.clear();
+    const base = RealAiService.listProviders();
+    assert.ok(base.some((p) => p.id === 'opencode' && p.baseUrl === 'https://opencode.ai/inference/openai/v1'));
+    const preset = RealAiService.addCustomProvider('我的网关', 'https://example.com/v1/chat/completions', 'qwen3');
+    assert.ok(preset.id.startsWith('custom-'));
+    assert.equal(preset.baseUrl, 'https://example.com/v1');
+    assert.equal(RealAiService.presetOf(preset.id).name, '我的网关');
+    assert.equal(RealAiService.listProviders().length, base.length + 1);
+    RealAiService.removeCustomProvider(preset.id);
+    assert.equal(RealAiService.listProviders().length, base.length);
+    assert.equal(RealAiService.presetOf('missing').id, 'custom');
+  });
+  test('服务：API Key 按服务商分存，旧单 Key 首次读取时迁移一次', () => {
+    deps.state.store.clear();
+    deps.state.store.set('s:ai_api_key', 'sk-legacy');
+    const config = RealAiService.loadConfig();
+    assert.equal(config.providerId, 'deepseek');
+    assert.equal(config.hasKey, true);
+    assert.equal(deps.state.store.get('s:ai_api_key'), undefined);
+    assert.equal(RealAiService.apiKeyFor('deepseek'), 'sk-legacy');
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/inference/openai/v1', 'big-pickle', 'sk-oc', 0.5);
+    assert.equal(RealAiService.apiKeyFor('opencode'), 'sk-oc');
+    assert.equal(RealAiService.apiKeyFor('deepseek'), 'sk-legacy');
+    const current = RealAiService.loadConfig();
+    assert.equal(current.providerId, 'opencode');
+    assert.equal(current.model, 'big-pickle');
+    assert.equal(current.hasKey, true);
+  });
+  test('服务：fetchModels 去重保序、带鉴权头，4xx 走人话文案', async () => {
+    deps.state.store.clear();
+    deps.state.models = [{ id: 'b' }, { id: 'a' }, { id: 'b' }];
+    deps.state.rcpResponse = null;
+    const ids = await RealAiService.fetchModels('opencode', 'https://opencode.ai/inference/openai/v1/', 'sk-oc');
+    assert.deepEqual(ids, ['b', 'a']);
+    assert.equal(deps.state.lastRequest.url, 'https://opencode.ai/inference/openai/v1/models');
+    assert.equal(deps.state.lastRequest.headers['Authorization'], 'Bearer sk-oc');
+    const abuf = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
+    deps.state.rcpResponse = { statusCode: 401, body: abuf('{"error":{"message":"bad key"}}') };
+    await assert.rejects(() => RealAiService.fetchModels('opencode', 'https://opencode.ai/inference/openai/v1', 'sk-bad'), /401/);
+    deps.state.rcpResponse = null;
+    await assert.rejects(() => RealAiService.fetchModels('opencode', 'https://x/v1', ''), /API Key/);
+    await assert.rejects(() => RealAiService.fetchModels('opencode', '', 'sk-oc'), /接口地址/);
+  });
+  test('设置页：添加本地服务商有校验，成功后选中为当前编辑对象', () => {
+    resetSettings();
+    const page = settingsPage();
+    page.newName = '';
+    page.newBaseUrl = 'https://gw.example.com/v1';
+    page.addProvider();
+    assert.equal(page.providers.length, 2);
+    page.newName = '我的网关';
+    page.newBaseUrl = '';
+    page.addProvider();
+    assert.equal(page.providers.length, 2);
+    page.newBaseUrl = 'https://gw.example.com/v1';
+    page.newModel = 'qwen3';
+    page.addProvider();
+    assert.equal(page.providers.length, 3);
+    assert.ok(page.isCustomSelected());
+    assert.equal(page.baseUrl, 'https://gw.example.com/v1');
+    assert.equal(page.model, 'qwen3');
+    assert.equal(page.showAddForm, false);
+  });
+  test('设置页：切换服务商时已存 Key 保持、未存 Key 不误标', () => {
+    resetSettings();
+    state.settings.keys.add('opencode');
+    const page = settingsPage();
+    page.selectProvider('opencode');
+    assert.equal(page.hasKey, true);
+    page.selectProvider('deepseek');
+    assert.equal(page.hasKey, true);
+    page.selectProvider('siliconflow');
+    assert.equal(page.hasKey, false);
+    assert.equal(page.modelOptions.length, 0);
+  });
+  test('设置页：拉取模型列表点选填入，失败以文案提示而非静默', async () => {
+    resetSettings();
+    const page = settingsPage();
+    state.settings.models = ['glm-4-flash', 'glm-4-plus'];
+    await page.fetchModelList();
+    assert.deepEqual(page.modelOptions, ['glm-4-flash', 'glm-4-plus']);
+    assert.equal(page.modelIndex, -1);
+    page.model = page.modelOptions[1];
+    state.settings.models = [];
+    state.settings.fetchError = 'API Key 无效或已过期（HTTP 401）';
+    await page.fetchModelList();
+    assert.equal(page.testOk, false);
+    assert.match(page.testResult, /401/);
+    assert.equal(page.fetchingModels, false);
+  });
+
+  let failures = 0;
+  for (const { name, run } of cases) {
+    try {
+      await run();
+      console.log(`PASS ${name}`);
+    } catch (error) {
+      failures++;
+      console.error(`FAIL ${name}\n${error.stack}`);
+    }
+  }
+  console.log(`\n${cases.length - failures}/${cases.length} 通过`);
+  process.exitCode = failures > 0 ? 1 : 0;
+} finally {
+  delete globalThis.__aiCheck;
+  rmSync(dir, { recursive: true, force: true });
+}

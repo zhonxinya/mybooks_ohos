@@ -5,7 +5,11 @@
         "name": "default",
         "compatibleSdkVersion": "5.0.5(17)",
         "runtimeOS": "HarmonyOS",
-        "buildOption": {},
+        "buildOption": {
+          "strictMode": {
+            "useNormalizedOHMUrl": true
+          }
+        },
         "targetSdkVersion": "6.1.0(23)"
       }
     ],

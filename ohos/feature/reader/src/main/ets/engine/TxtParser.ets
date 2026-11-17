@@ -9,25 +9,47 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
  * 必须能在 taskpool 子线程里跑（见 `ReaderTasks`），不能在 UI 线程同步执行。
  */
 /**
- * 章节标题行：中文小说常见写法（第X章/节/回/卷/篇 + 序章/楔子/番外 等）。
- * 限定整行长度，避免把正文里提到「第三章」的句子误判为标题。
+ * 章节标题行：中文小说常见写法（第X章/节/回/卷/部/篇/集/幕/话 + 序章/楔子/番外 等），
+ * 兼容「正文」前缀、半角/全角数字、以及 "Chapter 12" 这类外文写法。
+ *
+ * 标题行尾的句号、感叹号、括号（【第一章】、第1章（求收藏））在识别前会被去掉，
+ * 正文句子里提到「第三章 …。」则因句中仍含句末标点被排除——避免误判又不漏真标题。
  */
 const CHAPTER_PATTERN: RegExp = new RegExp(
-  '^(?:第[0-9零一二三四五六七八九十百千万两]{1,12}[章节回卷篇集幕]' +
-  '|序章|序言|序|楔子|引子|前言|后记|尾声|终章|番外)[^。！？!?]{0,40}$');
-const MAX_TITLE_LENGTH: number = 50;
+  '^(?:正文[\\s　:：\\-—]*)?(?:' +
+    '第[\\s　]*[0-9０-９零〇一二三四五六七八九十百千万两]{1,12}[\\s　]*[章节回卷部篇集幕话]' +
+    '|[卷部篇集][\\s　]*[0-9０-９零〇一二三四五六七八九十百千两]{1,6}' +
+    // 单个「序」只有带分隔符才是标题；「序列化数据」这类正文行随之排除
+    '|序(?=[\\s　:：、，,·\\-—（(【\\[])' +
+    // 关键字标题要么独占一行，要么用分隔符接副标题；「外传小道消息」是正文
+    '|(?:序章|序言|楔子|引子|前言|后记|尾声|终章|结局|番外篇|番外|外传)(?=[\\s　:：、，,·\\-—（(【\\[]|$)' +
+  ')' +
+  // 章号后紧跟「的/了/是/他…」多半是正文句子（「第三章的内容让他震惊」），不是标题
+  '(?![的了吗呢是在他她它们这那中里后时被把让就也和与为有没不])' +
+  '[^\\n]{0,60}$' +
+  // 外文标题：Chapter 12 / Chapter 1: The Boy（副标题须以大写开头，「Chapter 1 is long.」是正文）
+  '|^(?:正文[\\s　:：\\-—]*)?[Cc]hapter[\\s　]*[0-9IVXLCivxlc]{1,6}' +
+  '(?:[\\s　:：.\\-—]+[A-Z][^\\n]{0,50})?$');
+/** 只有关键字、没有副标题的独立标题行（「序：」这类结尾冒号在识别前会被去掉）。 */
+const BARE_TITLES: string[] = ['序', '序章', '序言', '楔子', '引子', '前言', '后记',
+  '尾声', '终章', '结局', '番外', '外传'];
+/** 句末标点：真标题只会出现在结尾（已被去掉），句中还有说明是正文句子。 */
+const SENTENCE_PUNCT: RegExp = new RegExp('[。！？!?]');
+const MAX_TITLE_LENGTH: number = 80;
 /** 无法识别章节时，按固定字数切节，避免整本变成一个巨大章节。 */
 const FALLBACK_CHUNK_CHARS: number = 3000;
 /** 超大文件只解析前 50MB，避免「全文 + 缓存」同时驻留导致 OOM。 */
 const MAX_PARSE_SIZE: number = 50 * 1024 * 1024;
 /** 索引缓存格式版本：切章规则变化时 +1，旧索引自动失效。 */
-const INDEX_VERSION: number = 1;
+const INDEX_VERSION: number = 2;
 
-/** 切章结果：标题 + 在解码后全文中的字符区间（左闭右开），不复制正文。 */
+/** 切章结果：标题 + 在解码后全文中的字符区间（左闭右开）+ 该章正文写入缓存的字节数。 */
 export interface TxtSectionData {
   title: string;
   start: number;
   end: number;
+  /** 按缓存写入规则（逐行去空白、丢空行、行间 '\n'）算出的字节数，切章时顺带统计。 */
+  bytes: number;
 }
 
 /** 一章在 UTF-8 缓存文件中的字节区间。正文按章再读，开书后不再保留整本字符串。 */
@@ -83,7 +105,8 @@ export class TxtParser {
       return { cachePath, chapters: [] };
     }
     if (text.indexOf('\r') >= 0) {
-      text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      // 一次替换吃掉 CRLF 与孤立 CR（原来两次 replace 要全量拷贝两遍）
+      text = text.replace(/\r\n?/g, '\n');
     }
     if (readSize < fileSize) {
       // 退到最后一个完整行，丢掉可能被截断的半行
@@ -193,16 +216,23 @@ export class TxtParser {
    * 会在取 `byteLength` 时抛 `Cannot read property byteLength of undefined` → 开书失败。
    */
   private static utf8Encode(input: string): Uint8Array {
+    const len: number = TxtParser.byteLengthOfRange(input, 0, input.length);
+    const out: Uint8Array = new Uint8Array(len);
+    TxtParser.encodeRange(input, 0, input.length, out, 0);
+    return out;
+  }
+
+  /** 统计 `[start, end)` 的 UTF-8 字节数；代理对判定必须与 `encodeRange` 完全一致。 */
+  private static byteLengthOfRange(input: string, start: number, end: number): number {
     let len: number = 0;
-    for (let i = 0; i < input.length; i++) {
+    for (let i = start; i < end; i++) {
       const c: number = input.charCodeAt(i);
       if (c < 0x80) {
         len += 1;
       } else if (c < 0x800) {
         len += 2;
-      } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < input.length) {
-        // 必须与下面的写入分支一致：落单的高代理只按 3 字节写，
-        // 若这里固定算 4 字节，尾部会多出未使用的 0x00 写进缓存
+      } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < end) {
+        // 落单的高代理只按 3 字节写；若这里固定算 4 字节，尾部会多出 0x00
         const lo: number = input.charCodeAt(i + 1);
         if (lo >= 0xDC00 && lo <= 0xDFFF) {
           len += 4;
@@ -214,9 +244,13 @@ export class TxtParser {
         len += 3;
       }
     }
-    const out: Uint8Array = new Uint8Array(len);
-    let p: number = 0;
-    for (let i = 0; i < input.length; i++) {
+    return len;
+  }
+
+  /** 把 `[start, end)` 编码写入 `out` 的 `offset` 处，返回写入后的偏移。 */
+  private static encodeRange(input: string, start: number, end: number, out: Uint8Array, offset: number): number {
+    let p: number = offset;
+    for (let i = start; i < end; i++) {
       const c: number = input.charCodeAt(i);
       if (c < 0x80) {
         out[p] = c;
@@ -225,7 +259,7 @@ export class TxtParser {
         out[p] = 0xC0 | (c >> 6);
         out[p + 1] = 0x80 | (c & 0x3F);
         p += 2;
-      } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < input.length) {
+      } else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < end) {
         const lo: number = input.charCodeAt(i + 1);
         if (lo >= 0xDC00 && lo <= 0xDFFF) {
           const cp: number = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00);
@@ -248,30 +282,40 @@ export class TxtParser {
         p += 3;
       }
     }
-    return out;
+    return p;
   }
 
-  /** 各章按出现顺序紧挨着写入，区间互不重叠，因此章与章之间不需要分隔符。 */
+  /** 与 `String.prototype.trim` 对齐的空白字符（含全角空格、BOM、零宽不换行空格）。 */
+  private static isSpace(c: number): boolean {
+    if (c <= 0x20) {
+      return true;
+    }
+    if (c < 0xA0) {
+      return false;
+    }
+    return c === 0xA0 || c === 0x1680 || (c >= 0x2000 && c <= 0x200A) ||
+      c === 0x2028 || c === 0x2029 || c === 0x202F || c === 0x205F ||
+      c === 0x3000 || c === 0xFEFF;
+  }
+
+  /**
+   * 各章按出现顺序紧挨着写入，区间互不重叠，因此章与章之间不需要分隔符。
+   *
+   * 每章字节数由切章时顺带统计（`TxtSectionData.bytes`），这里只做一遍编码：
+   * 不再为每章生成正文字符串、UTF-8 缓冲与合并副本，也不再多扫一遍全文量长度。
+   */
   private static writeCache(cachePath: string, text: string, sections: TxtSectionData[]): TxtChapterSpan[] {
-    const parts: Uint8Array[] = [];
+    let total: number = 0;
+    for (let i = 0; i < sections.length; i++) {
+      total += sections[i].bytes;
+    }
+    const merged: Uint8Array = new Uint8Array(total);
     const spans: TxtChapterSpan[] = [];
     let cursor: number = 0;
     for (let i = 0; i < sections.length; i++) {
-      const payload: string = TxtParser.sectionText(text, sections[i].start, sections[i].end);
-      const bytes: Uint8Array = TxtParser.utf8Encode(payload);
-      spans.push({
-        title: sections[i].title,
-        byteStart: cursor,
-        byteEnd: cursor + bytes.byteLength,
-      });
-      parts.push(bytes);
-      cursor += bytes.byteLength;
-    }
-    const merged: Uint8Array = new Uint8Array(cursor);
-    let offset: number = 0;
-    for (let i = 0; i < parts.length; i++) {
-      merged.set(parts[i], offset);
-      offset += parts[i].byteLength;
+      const byteStart: number = cursor;
+      cursor = TxtParser.encodeSection(text, sections[i].start, sections[i].end, merged, cursor);
+      spans.push({ title: sections[i].title, byteStart: byteStart, byteEnd: cursor });
     }
     const dir: string = BookFile.dirName(cachePath);
     if (dir.length > 0) {
@@ -281,31 +325,79 @@ export class TxtParser {
     return spans;
   }
 
-  /** 取章节区间的正文：逐行 trim、丢弃空行，用 '\n' 连接（缓存文件的段落分隔）。 */
-  private static sectionText(text: string, start: number, end: number): string {
-    const lines: string[] = [];
+  /** 行首空白结束位置（与 `isSpace` 一致）。 */
+  private static trimStart(text: string, from: number, to: number): number {
+    let s: number = from;
+    while (s < to && TxtParser.isSpace(text.charCodeAt(s))) {
+      s++;
+    }
+    return s;
+  }
+
+  /** 行尾空白之后的位置（与 `isSpace` 一致）。 */
+  private static trimEnd(text: string, from: number, to: number): number {
+    let e: number = to;
+    while (e > from && TxtParser.isSpace(text.charCodeAt(e - 1))) {
+      e--;
+    }
+    return e;
+  }
+
+  /** 把一行计入当前章节字节数（与 `encodeSection` 的行规则一致）。返回累加后的值。 */
+  private static addLineBytes(text: string, s: number, e: number, total: number, hasLine: boolean): number {
+    if (e <= s) {
+      return total;
+    }
+    return total + (hasLine ? 1 : 0) + TxtParser.byteLengthOfRange(text, s, e);
+  }
+
+  /** 把章节正文直接编码进合并缓冲，返回写入后的偏移（规则与 `sectionByteLength` 一致）。 */
+  private static encodeSection(text: string, start: number, end: number, out: Uint8Array, offset: number): number {
+    let p: number = offset;
+    let hasLine: boolean = false;
     let lineStart: number = start;
     while (lineStart < end) {
       let lineEnd: number = text.indexOf('\n', lineStart);
       if (lineEnd < 0 || lineEnd > end) {
         lineEnd = end;
       }
-      const line: string = text.substring(lineStart, lineEnd).trim();
-      if (line.length > 0) {
-        lines.push(line);
+      let s: number = lineStart;
+      let e: number = lineEnd;
+      while (s < e && TxtParser.isSpace(text.charCodeAt(s))) {
+        s++;
+      }
+      while (e > s && TxtParser.isSpace(text.charCodeAt(e - 1))) {
+        e--;
+      }
+      if (e > s) {
+        if (hasLine) {
+          out[p] = 0x0A;
+          p++;
+        }
+        p = TxtParser.encodeRange(text, s, e, out, p);
+        hasLine = true;
       }
       lineStart = lineEnd + 1;
     }
-    return lines.join('\n');
+    return p;
   }
 
-  /** 按标题行切章；识别不到标题时退化为定长切节。 */
+  /**
+   * 按标题行切章；识别不到标题时退化为定长切节。
+   *
+   * 遍历行的同时顺带统计每节正文的缓存字节数（规则与 `encodeSection` 一致），
+   * 写缓存时只差一遍编码，不用再全量扫一遍量长度。
+   */
   private static splitChapters(text: string): TxtSectionData[] {
     const titleStarts: number[] = [];
     const contentStarts: number[] = [];
     const titleTexts: string[] = [];
+    const contentBytes: number[] = [];
     const n: number = text.length;
     let hasPreTitleContent: boolean = false;
+    let preBytes: number = 0;
+    let bytes: number = 0;
+    let hasLine: boolean = false;
     let lineStart: number = 0;
     while (lineStart < n) {
       let lineEnd: number = text.indexOf('\n', lineStart);
@@ -314,16 +406,51 @@ export class TxtParser {
       }
       // 章节标题必然很短：先按原始行长度过滤，正文长行连子串都不生成
       if (lineEnd - lineStart <= MAX_TITLE_LENGTH + 16) {
-        const line: string = text.substring(lineStart, lineEnd).trim();
-        if (TxtParser.isChapterTitle(line)) {
+        // 再按首个非空白字符预筛：正文行绝大多数不以「第/序/楔/引…」开头，
+        // 这样就不用为每一行生成子串、跑正则
+        let probe: number = lineStart;
+        while (probe < lineEnd) {
+          const c: number = text.charCodeAt(probe);
+          if (!TxtParser.isSpace(c) && !TxtParser.isTitleOpenBracket(c)) {
+            break;
+          }
+          probe++;
+        }
+        const empty: boolean = probe >= lineEnd;
+        let title: string = '';
+        if (!empty && TxtParser.isTitlePrefix(text.charCodeAt(probe))) {
+          const line: string = text.substring(lineStart, lineEnd).trim();
+          if (TxtParser.isChapterTitle(line)) {
+            title = line;
+          }
+        }
+        if (title.length > 0) {
+          // 标题行本身不属于任何一章正文，字节数只结算到它为止
+          if (titleTexts.length === 0) {
+            preBytes = bytes;
+          } else {
+            contentBytes.push(bytes);
+          }
+          bytes = 0;
+          hasLine = false;
           titleStarts.push(lineStart);
           contentStarts.push(lineEnd + 1);
-          titleTexts.push(line);
-        } else if (titleTexts.length === 0 && line.length > 0) {
+          titleTexts.push(title);
+          lineStart = lineEnd + 1;
+          continue;
+        }
+        if (!empty && titleTexts.length === 0) {
+          // 以「第…」等开头但不是标题的正文行，同样算首个标题前的内容
           hasPreTitleContent = true;
         }
       } else if (titleTexts.length === 0) {
         hasPreTitleContent = true;
+      }
+      const s: number = TxtParser.trimStart(text, lineStart, lineEnd);
+      const e: number = TxtParser.trimEnd(text, s, lineEnd);
+      if (e > s) {
+        bytes = TxtParser.addLineBytes(text, s, e, bytes, hasLine);
+        hasLine = true;
       }
       lineStart = lineEnd + 1;
     }
@@ -331,33 +458,152 @@ export class TxtParser {
     if (titleTexts.length === 0 || (titleTexts.length === 1 && !hasPreTitleContent)) {
       return TxtParser.chunkByLength(text);
     }
+    contentBytes.push(bytes);
     const sections: TxtSectionData[] = [];
     // 首个标题之前若有正文，单独作为「开始」章节保留，避免丢内容
     if (hasPreTitleContent) {
-      sections.push({ title: '开始', start: 0, end: titleStarts[0] });
+      sections.push({ title: '开始', start: 0, end: titleStarts[0], bytes: preBytes });
     }
     for (let i = 0; i < titleTexts.length; i++) {
       sections.push({
         title: titleTexts[i],
         start: contentStarts[i],
         end: i + 1 < titleTexts.length ? titleStarts[i + 1] : n,
+        bytes: contentBytes[i],
       });
     }
     return sections;
+  }
+
+  /** 标题候选首字（与 `CHAPTER_PATTERN` 的各分支一一对应）。 */
+  private static isTitlePrefix(c: number): boolean {
+    switch (c) {
+      case 0x7B2C: // 第
+      case 0x5377: // 卷
+      case 0x90E8: // 部
+      case 0x7BC7: // 篇
+      case 0x96C6: // 集
+      case 0x5E8F: // 序
+      case 0x6954: // 楔
+      case 0x5F15: // 引
+      case 0x524D: // 前
+      case 0x540E: // 后
+      case 0x5C3E: // 尾
+      case 0x7EC8: // 终
+      case 0x756A: // 番
+      case 0x5916: // 外
+      case 0x6B63: // 正（正文 第1章）
+      case 0x0043: // C
+      case 0x0063: // c
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /** 标题行开头的括注符号（【第一章】、[第1章]），不是引号——避免把对话行当标题。 */
+  private static isTitleOpenBracket(c: number): boolean {
+    return c === 0x3010 || c === 0x005B || c === 0xFF08 || c === 0x0028;
+  }
+
+  /** 标题行尾可安全剥掉的标点/连字符：真标题的句末点号常被作者误加。 */
+  private static isTitleTailNoise(c: number): boolean {
+    switch (c) {
+      case 0x3002: // 。
+      case 0xFF01: // ！
+      case 0xFF1F: // ？
+      case 0x0021: // !
+      case 0x003F: // ?
+      case 0xFF0C: // ，
+      case 0x002C: // ,
+      case 0x3001: // 、
+      case 0xFF1A: // ：
+      case 0x003A: // :
+      case 0xFF1B: // ；
+      case 0x003B: // ;
+      case 0x00B7: // ·
+      case 0x2026: // …
+      case 0x2014: // —
+      case 0xFF0D: // －
+      case 0x002D: // -
+      case 0x005F: // _
+      case 0x002E: // .
+      case 0xFF0E: // ．
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /** 去掉标题行首的空白与【[（( 括注。 */
+  private static stripTitleHead(line: string): string {
+    let start: number = 0;
+    while (start < line.length) {
+      const c: number = line.charCodeAt(start);
+      if (!TxtParser.isSpace(c) && !TxtParser.isTitleOpenBracket(c)) {
+        break;
+      }
+      start++;
+    }
+    return start === 0 ? line : line.substring(start);
+  }
+
+  /**
+   * 去掉标题行尾的标点、空白与括号注释（「第一章 初见。（求收藏）」）。
+   * 只剥成对出现的括号注释，避免把正文尾巴当成标题的一部分。
+   */
+  private static stripTitleTail(line: string): string {
+    let end: number = line.length;
+    while (end > 0) {
+      const c: number = line.charCodeAt(end - 1);
+      if (TxtParser.isSpace(c) || TxtParser.isTitleTailNoise(c)) {
+        end--;
+        continue;
+      }
+      let open: number = -1;
+      if (c === 0xFF09) {
+        open = line.lastIndexOf('（', end - 1);
+      } else if (c === 0x0029) {
+        open = line.lastIndexOf('(', end - 1);
+      } else if (c === 0x3011) {
+        open = line.lastIndexOf('【', end - 1);
+      } else if (c === 0x005D) {
+        open = line.lastIndexOf('[', end - 1);
+      }
+      if (open >= 0) {
+        end = open;
+        continue;
+      }
+      break;
+    }
+    return end === line.length ? line : line.substring(0, end);
   }
 
   private static isChapterTitle(line: string): boolean {
     if (line.length === 0 || line.length > MAX_TITLE_LENGTH) {
       return false;
     }
-    return CHAPTER_PATTERN.test(line);
+    const body: string = TxtParser.stripTitleTail(TxtParser.stripTitleHead(line));
+    if (body.length === 0) {
+      return false;
+    }
+    // 句中还有句末标点说明是正文句子；标题的句末点号已在 stripTitleTail 去掉
+    if (SENTENCE_PUNCT.test(body)) {
+      return false;
+    }
+    if (BARE_TITLES.indexOf(body.replace(/\s/g, '')) >= 0) {
+      return true;
+    }
+    return CHAPTER_PATTERN.test(body);
   }
 
-  /** 无章节标题时的兜底切分（按行边界切成约 `FALLBACK_CHUNK_CHARS` 字一节）。 */
+  /** 无章节标题时的兜底切分（按行边界切成约 `FALLBACK_CHUNK_CHARS` 字一节），顺带统计字节数。 */
   private static chunkByLength(text: string): TxtSectionData[] {
     const sections: TxtSectionData[] = [];
     const n: number = text.length;
     let chunkStart: number = 0;
+    let chunkBytes: number = 0;
+    let chunkHasLine: boolean = false;
     let part: number = 1;
     let lineStart: number = 0;
     while (lineStart < n) {
@@ -365,18 +611,26 @@ export class TxtParser {
       if (lineEnd < 0) {
         lineEnd = n;
       }
+      const s: number = TxtParser.trimStart(text, lineStart, lineEnd);
+      const e: number = TxtParser.trimEnd(text, s, lineEnd);
+      if (e > s) {
+        chunkBytes = TxtParser.addLineBytes(text, s, e, chunkBytes, chunkHasLine);
+        chunkHasLine = true;
+      }
       if (lineEnd - chunkStart >= FALLBACK_CHUNK_CHARS) {
-        sections.push({ title: `第${part}节`, start: chunkStart, end: lineEnd });
+        sections.push({ title: `第${part}节`, start: chunkStart, end: lineEnd, bytes: chunkBytes });
         chunkStart = lineEnd + 1;
+        chunkBytes = 0;
+        chunkHasLine = false;
         part++;
       }
       lineStart = lineEnd + 1;
     }
     if (chunkStart < n) {
-      sections.push({ title: `第${part}节`, start: chunkStart, end: n });
+      sections.push({ title: `第${part}节`, start: chunkStart, end: n, bytes: chunkBytes });
     }
     if (sections.length === 0) {
-      sections.push({ title: '开始', start: 0, end: 0 });
+      sections.push({ title: '开始', start: 0, end: 0, bytes: 0 });
     }
     return sections;
   }

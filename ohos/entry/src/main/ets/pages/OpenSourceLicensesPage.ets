@@ -4,7 +4,7 @@ import { PageScaffold, LegalDocument, LegalSection } from '../components';
  * 开源许可页。
  *
  * 清单与 `ohos/third_party/README.md` 保持一致：native 层 vendored 的第三方库，
- * 以及 entry 模块预编译的 libcurl。运行时无第三方 SDK（无统计/广告/崩溃上报）。
+ * entry 模块预编译的 libcurl，以及 AI 接口 SDK（无统计/广告/崩溃上报）。
  */
 const LICENSE_SECTIONS: LegalSection[] = [
   {
@@ -67,6 +67,14 @@ const LICENSE_SECTIONS: LegalSection[] = [
     ]
   },
   {
+    title: '@iuroc/openai',
+    paragraphs: [
+      '版本：1.0.10　许可证：Apache-2.0',
+      '来源：https://github.com/iuroc/ElderMate/tree/main/openai',
+      '用途：向你配置的 AI 接口发起 OpenAI 兼容对话请求与流式响应，不包含统计、广告或崩溃上报。'
+    ]
+  },
+  {
     title: '构建期依赖（不随应用分发）',
     paragraphs: [
       '@ohos/hypium 1.0.6：HarmonyOS 官方单元测试框架，仅用于工程测试，不打包进应用产物。'
@@ -75,7 +83,7 @@ const LICENSE_SECTIONS: LegalSection[] = [
   {
     title: '关于第三方服务',
     paragraphs: [
-      '本应用不含任何第三方运行时 SDK，不接入统计分析、广告追踪或崩溃上报服务。应用的许可义务仅来自上表所列的静态链接第三方代码。'
+      '本应用使用上表列出的第三方组件，不接入统计分析、广告追踪或崩溃上报服务。AI 接口地址由你配置，仅在你主动发起 AI 请求时传输对话或书籍上下文。'
     ]
   }
 ];

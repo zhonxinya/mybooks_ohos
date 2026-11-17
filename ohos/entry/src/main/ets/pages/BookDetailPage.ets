@@ -1438,6 +1438,21 @@ struct BookDetailPage {
                 }
               }
             }
+            ListItem() {
+              this.menuItem($r('sys.symbol.wand_and_stars'), 'AI 书籍助手', '摘要 / 书评 / 元数据建议', () => {
+                this.closeSheet();
+                AppRouter.pushUrl(this.getUIContext(), {
+                  url: 'pages/AiBookPanelPage',
+                  params: {
+                    title: this.title,
+                    author: this.author,
+                    publisher: this.publisher,
+                    description: this.description,
+                    tags: this.tags.join(','),
+                  },
+                });
+              });
+            }
             if (ServerRegistry.supports(ServerFeature.BOOK_TAGS_EDIT)) {
               ListItem() {
                 this.menuItem($r('sys.symbol.paintbrush'), '更新标签', '', () => {
