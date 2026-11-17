@@ -182,6 +182,7 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 try {
   stagePure('BookModels', 'services/BookModels.ets', []);
   stagePure('LibraryMatch', 'utils/LibraryMatch.ets', ['BookItem']);
+  stagePure('MdParse', 'services/MdParse.ets', []);
   for (const name of ['AiAssistantPage', 'AiBookPanelPage', 'AiRecommendPage', 'AiSettingsPage']) {
     stagePage(name);
   }
@@ -193,6 +194,7 @@ try {
   const { AiSettingsPage } = await load('AiSettingsPage');
   const deps = await load('aiServiceDeps');
   const { AiService: RealAiService } = await load('RealAiService');
+  const { mdParseBlocks, mdParseInline } = await load('MdParse');
   const resetSettings = () => { state.settings = settingsDefaults(); };
   const settingsPage = () => {
     const page = new AiSettingsPage();
@@ -389,6 +391,46 @@ try {
     assert.equal(deps.state.lastRequest.headers['x-opencode-session'], 'persisted-id');
     await RealAiService.fetchModels('deepseek', 'https://api.deepseek.com/v1', 'sk-d');
     assert.equal(deps.state.lastRequest.headers['x-opencode-session'], undefined);
+  });
+  test('MdParse：标题/列表/代码块/表格/行内粗体与行内码', () => {
+    const blocks = mdParseBlocks(
+      '# 标题\n' +
+      '段落里有 **粗体** 和 `code`。\n' +
+      '- 项目一\n' +
+      '- 项目二\n' +
+      '1. 第一\n' +
+      '2. 第二\n' +
+      '```js\nconst a = 1;\n```\n' +
+      '| 书 | 作者 |\n| --- | --- |\n| 三体 | 刘慈欣 |');
+    assert.equal(blocks[0].kind, 'h');
+    assert.equal(blocks[0].level, 1);
+    assert.equal(blocks[0].segs[0][0].text, '标题');
+    const para = blocks[1];
+    assert.equal(para.kind, 'p');
+    assert.deepEqual(para.segs[0].map((s) => [s.text, s.style]),
+      [['段落里有 ', 0], ['粗体', 1], [' 和 ', 0], ['code', 2], ['。', 0]]);
+    assert.equal(blocks[2].kind, 'ul');
+    assert.equal(blocks[2].segs.length, 2);
+    assert.equal(blocks[3].kind, 'ol');
+    assert.equal(blocks[3].segs.length, 2);
+    const code = blocks[4];
+    assert.equal(code.kind, 'code');
+    assert.equal(code.raw, 'const a = 1;');
+    const table = blocks[5];
+    assert.equal(table.kind, 'table');
+    assert.deepEqual(table.rows, [['书', '作者'], ['三体', '刘慈欣']]);
+  });
+  test('MdParse：引用/分隔线/链接/斜体，代码块未闭合也兜底', () => {
+    const blocks = mdParseBlocks('> 引用行\n---\n看 [官网](https://x.com) 里的 *强调*\n```\n未闭合');
+    assert.equal(blocks[0].kind, 'quote');
+    assert.equal(blocks[0].segs[0][0].text, '引用行');
+    assert.equal(blocks[1].kind, 'hr');
+    const link = blocks[2].segs[0];
+    assert.deepEqual(link.map((s) => [s.text, s.style]),
+      [['看 ', 0], ['官网', 3], [' 里的 ', 0], ['强调', 4]]);
+    const code = blocks[3];
+    assert.equal(code.kind, 'code');
+    assert.equal(code.raw, '未闭合');
   });
   test('设置页：添加本地服务商有校验，成功后选中为当前编辑对象', () => {
     resetSettings();

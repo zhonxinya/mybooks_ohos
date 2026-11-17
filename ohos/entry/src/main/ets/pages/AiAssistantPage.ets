@@ -1,5 +1,6 @@
 import { pasteboard } from '@kit.BasicServicesKit';
 import { PageScaffold, SecondaryButton, TextButton } from '../components';
+import { MarkdownText } from '../components/MarkdownText';
 import { AiService, AiMessage, AiStreamHandlers, AiAbortHandle } from '../services/AiService';
 import { AppRouter } from '../utils/AppRouter';
 
@@ -328,13 +329,24 @@ struct AiAssistantPage {
       }
       .width('100%');
 
-      Text(bubble.streaming ? (this.streamingText.length > 0 ? this.streamingText : '思考中…') : bubble.content)
-        .fontSize(15)
-        .lineHeight(23)
-        .fontColor(bubble.error ? $r('app.color.error') : $r('app.color.text_primary'))
-        .width('100%')
-        .copyOption(CopyOptions.LocalDevice)
-        .textAlign(TextAlign.Start);
+      if (bubble.role === 'assistant' && !bubble.error) {
+        // AI 回复走轻量 Markdown 渲染；流式期间实时重解析
+        if (bubble.streaming && this.streamingText.length === 0) {
+          Text('思考中…')
+            .fontSize(15)
+            .fontColor($r('app.color.text_secondary'));
+        } else {
+          MarkdownText({ content: bubble.streaming ? this.streamingText : bubble.content });
+        }
+      } else {
+        Text(bubble.streaming ? (this.streamingText.length > 0 ? this.streamingText : '思考中…') : bubble.content)
+          .fontSize(15)
+          .lineHeight(23)
+          .fontColor(bubble.error ? $r('app.color.error') : $r('app.color.text_primary'))
+          .width('100%')
+          .copyOption(CopyOptions.LocalDevice)
+          .textAlign(TextAlign.Start);
+      }
 
       if (bubble.role === 'assistant' && !bubble.streaming && !bubble.error && bubble.content.length > 0) {
         Row({ space: 12 }) {
