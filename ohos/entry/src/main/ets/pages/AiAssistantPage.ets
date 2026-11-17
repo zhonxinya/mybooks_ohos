@@ -1,6 +1,7 @@
 import { pasteboard } from '@kit.BasicServicesKit';
 import { PageScaffold, SecondaryButton, TextButton } from '../components';
 import { MarkdownText } from '../components/MarkdownText';
+import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { AiService, AiMessage, AiStreamHandlers, AiAbortHandle } from '../services/AiService';
 import { AppRouter } from '../utils/AppRouter';
 
@@ -13,18 +14,7 @@ interface ChatBubble {
   error: boolean;
 }
 
-interface QuickAction {
-  label: string;
-  prompt: string;
-}
-
-/** 快捷指令：把常见用法固化成一次点击，省去打字。 */
-const QUICK_ACTIONS: QuickAction[] = [
-  { label: '这本书讲了什么', prompt: '请用 200 字以内概括这本书的核心内容与适合的读者。书名：《》' },
-  { label: '写一段书评', prompt: '请为这本书写一段 300 字左右的推荐书评，语气真诚、不堆砌形容词。书名：《》' },
-  { label: '推荐相似的书', prompt: '我喜欢《》这本书，请推荐 5 本气质相近的书，每本一句话说明理由。' },
-  { label: '解释这个词', prompt: '请用通俗的语言解释下面这个概念，并举一个生活中的例子：' },
-];
+/** 技能卡片/芯片点击：把现成提示词填入输入框，用户可先补书名再发送。 */
 
 const SYSTEM_PROMPT: string =
   '你是一个电子书阅读应用的助手，回答简洁、准确、中文优先。' +
@@ -165,8 +155,8 @@ struct AiAssistantPage {
     }, 60);
   }
 
-  private applyQuick(action: QuickAction): void {
-    this.input = action.prompt;
+  private applySkill(skill: AiSkill): void {
+    this.input = skill.prompt;
   }
 
   private clearChat(): void {
@@ -235,6 +225,7 @@ struct AiAssistantPage {
         this.emptyState();
       } else {
         this.chatList();
+        this.skillBar();
       }
       this.inputBar();
     }
@@ -278,26 +269,33 @@ struct AiAssistantPage {
         .fontSize(17)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'));
-      Text('可以直接提问，也可以用下面的快捷指令')
+      Text('可以直接提问，也可以用下面的技能')
         .fontSize(13)
         .fontColor($r('app.color.text_secondary'));
       Column({ space: 10 }) {
-        ForEach(QUICK_ACTIONS, (action: QuickAction) => {
+        ForEach(AI_SKILLS, (skill: AiSkill) => {
           Row() {
-            Text(action.label)
-              .fontSize(14)
-              .fontColor($r('app.color.text_primary'))
-              .layoutWeight(1);
+            Column({ space: 2 }) {
+              Text(skill.label)
+                .fontSize(14)
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('app.color.text_primary'));
+              Text(skill.hint)
+                .fontSize(12)
+                .fontColor($r('app.color.text_secondary'));
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1);
             SymbolGlyph($r('sys.symbol.chevron_right'))
               .fontSize(14)
               .fontColor([$r('app.color.text_tertiary')]);
           }
           .width('100%')
-          .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+          .padding({ left: 14, right: 14, top: 10, bottom: 10 })
           .borderRadius($r('app.float.card_radius'))
           .backgroundColor($r('app.color.card_background'))
-          .onClick(() => this.applyQuick(action));
-        }, (action: QuickAction) => action.label);
+          .onClick(() => this.applySkill(skill));
+        }, (skill: AiSkill) => skill.label);
       }
       .width('100%');
     }
@@ -364,6 +362,28 @@ struct AiAssistantPage {
     .padding(14)
     .borderRadius($r('app.float.card_radius'))
     .backgroundColor(bubble.role === 'user' ? $r('app.color.brand_primary_light') : $r('app.color.card_background'));
+  }
+
+  /** 对话进行中的技能芯片：横向滚动，点击填入输入框（不自动发送）。 */
+  @Builder
+  skillBar() {
+    Scroll() {
+      Row({ space: 8 }) {
+        ForEach(AI_SKILLS, (skill: AiSkill) => {
+          Text(skill.label)
+            .fontSize(13)
+            .fontColor($r('app.color.brand_primary'))
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            .borderRadius(14)
+            .backgroundColor($r('app.color.brand_primary_light'))
+            .onClick(() => this.applySkill(skill));
+        }, (skill: AiSkill) => skill.label);
+      }
+      .padding({ left: 12, right: 12, top: 4, bottom: 4 });
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .width('100%')
+    .align(Alignment.Start);
   }
 
   @Builder

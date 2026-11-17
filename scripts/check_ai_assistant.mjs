@@ -182,6 +182,11 @@ function stagePage(name) {
   source = source.substring(0, source.indexOf('\n  build() {'));
   const shims = new Set();
   source = source.replace(/^import \{([^}]+)\} from '([^']+)';\n/gm, (_all, clause, path) => {
+    if (path === '../services/AiSkills') {
+      const names = clause.split(',').map((part) => part.trim());
+      const values = names.filter((name) => name !== 'AiSkill');
+      return `import { ${values.join(', ')} } from './AiSkills.ts';\nimport type { AiSkill } from './AiSkills.ts';\n`;
+    }
     if (path === '../utils/LibraryMatch' || path === '../services/BookModels') {
       const names = clause.split(',').map((part) => part.trim()).filter((name) => name !== 'BookItem');
       return `import { ${names.join(', ')} } from './${path.split('/').at(-1)}.ts';\n`;
@@ -217,6 +222,7 @@ try {
   stagePure('BookModels', 'services/BookModels.ets', []);
   stagePure('LibraryMatch', 'utils/LibraryMatch.ets', ['BookItem']);
   stagePure('MdParse', 'services/MdParse.ets', []);
+  stagePure('AiSkills', 'services/AiSkills.ets', []);
   for (const name of ['AiAssistantPage', 'AiBookPanelPage', 'AiRecommendPage', 'AiSettingsPage']) {
     stagePage(name);
   }
@@ -232,6 +238,7 @@ try {
   const { AiTools: RealAiTools } = await load('RealAiTools');
   const { toolsState } = await load('aiToolsDeps');
   const { mdParseBlocks, mdParseInline } = await load('MdParse');
+  const { AI_SKILLS } = await load('AiSkills');
   const resetSettings = () => { state.settings = settingsDefaults(); };
   const settingsPage = () => {
     const page = new AiSettingsPage();
@@ -582,6 +589,21 @@ try {
     assert.equal(toolMsg.tool_call_id, 'call_1');
     assert.ok(toolMsg.content.includes('id=12 《三体》'));
     assert.equal(full, '帮你查到了《三体》，id=12。');
+  });
+
+  test('技能：四个内置技能均带工具指引，点击填入输入框', () => {
+    assert.equal(AI_SKILLS.length, 4);
+    const prompts = AI_SKILLS.map((s) => s.prompt);
+    for (const tool of ['search_books', 'book_detail', 'book_notes', 'reading_history']) {
+      assert.ok(prompts.some((p) => p.includes(tool)), `缺工具 ${tool}`);
+    }
+    for (const s of AI_SKILLS) {
+      assert.ok(s.label.length > 0 && s.hint.length > 0, s.label);
+      assert.ok(s.prompt.includes('《'), s.label);
+    }
+    const page = chat();
+    page.applySkill(AI_SKILLS[0]);
+    assert.equal(page.input, AI_SKILLS[0].prompt);
   });
 
   test('网关工具回路：超过轮数上限报错收场，最后一轮不挂 tools', async () => {
