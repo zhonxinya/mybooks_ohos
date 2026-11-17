@@ -89,7 +89,7 @@ writeFileSync(join(dir, 'shim.ts'), shim);
 writeFileSync(join(dir, 'aiServiceDeps.ts'), `
 // Buffer.from(x).buffer 带池化填充，必须 slice 出精确字节（模拟 rcp 的紧凑 ArrayBuffer）
 const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
-export const state = { store: new Map(), models: [], rcpResponse: null, rcpError: null, lastRequest: null, chatCalls: [] };
+export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [] };
 export const util = {
   TextDecoder: { create: () => ({ decodeToString: (u8) => Buffer.from(u8).toString('utf8') }) },
   generateRandomUUID: () => 'test-uuid-fixed-0001',
@@ -110,8 +110,10 @@ export const rcp = {
   createSession: () => ({
     fetch: async (request) => {
       state.lastRequest = request;
+      state.requests.push(request);
       if (state.rcpError) { throw state.rcpError; }
-      return state.rcpResponse ?? { statusCode: 200, body: enc(JSON.stringify({ data: state.models })) };
+      const queued = state.rcpResponses.length > 0 ? state.rcpResponses.shift() : null;
+      return queued ?? state.rcpResponse ?? { statusCode: 200, body: enc(JSON.stringify({ data: state.models })) };
     },
     close: () => {},
   }),
@@ -131,11 +133,40 @@ function stageAiService() {
     source = source.replace(`import { ${type} }`, `import type { ${type} }`);
   }
   source = source
+    .replace(`import { AiTools, AiToolDefinition } from './AiTools';`,
+      `import { AiTools } from './RealAiTools.ts';\nimport type { AiToolDefinition } from './RealAiTools.ts';`)
     .replace(`from '@iuroc/openai'`, `from './aiServiceDeps.ts'`)
     .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
     .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
     .replace(`from './TalebookService'`, `from './aiServiceDeps.ts'`);
   writeFileSync(join(dir, 'RealAiService.ts'), source);
+}
+
+// AiTools 的运行时依赖桩：书架/详情/笔记/历史全部可编程，不落真实服务
+writeFileSync(join(dir, 'aiToolsDeps.ts'), `
+export const toolsState = { search: null, detail: null, notes: [], notesError: '', history: [] };
+export const TalebookApi = {
+  search: async (q) => (toolsState.search ? await toolsState.search(q) : []),
+  getBookDetail: async (id) => (toolsState.detail ? await toolsState.detail(id) : null),
+};
+export const TalebookService = { getReadingHistory: () => toolsState.history.slice() };
+export const AnnotationApi = {
+  listBookAnnotations: async (_id, _scope) => {
+    if (toolsState.notesError.length > 0) { throw new Error(toolsState.notesError); }
+    return toolsState.notes.slice();
+  },
+};
+export const ANNOTATION_SCOPE_MINE = 'mine';
+export function annotationTypeLabel(type) { return type === 'highlight' ? '高亮' : type === 'note' ? '笔记' : type; }
+`);
+
+function stageAiTools() {
+  let source = read('services/AiTools.ets');
+  source = source
+    .replace(`from './TalebookApi'`, `from './aiToolsDeps.ts'`)
+    .replace(`from './AnnotationApi'`, `from './aiToolsDeps.ts'`)
+    .replace(`from './TalebookService'`, `from './aiToolsDeps.ts'`);
+  writeFileSync(join(dir, 'RealAiTools.ts'), source);
 }
 
 function stagePure(name, path, typeNames) {
@@ -178,6 +209,9 @@ const deferred = () => {
   return { promise, resolve };
 };
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+// 工具回路是多轮 await，微任务队列跑干净需要连续 tick
+const flush = async () => { for (let i = 0; i < 24; i++) await tick(); };
+const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
 
 try {
   stagePure('BookModels', 'services/BookModels.ets', []);
@@ -187,6 +221,7 @@ try {
     stagePage(name);
   }
   stageAiService();
+  stageAiTools();
   const load = async (name) => import(pathToFileURL(join(dir, `${name}.ts`)).href);
   const { AiAssistantPage } = await load('AiAssistantPage');
   const { AiBookPanelPage } = await load('AiBookPanelPage');
@@ -194,6 +229,8 @@ try {
   const { AiSettingsPage } = await load('AiSettingsPage');
   const deps = await load('aiServiceDeps');
   const { AiService: RealAiService } = await load('RealAiService');
+  const { AiTools: RealAiTools } = await load('RealAiTools');
+  const { toolsState } = await load('aiToolsDeps');
   const { mdParseBlocks, mdParseInline } = await load('MdParse');
   const resetSettings = () => { state.settings = settingsDefaults(); };
   const settingsPage = () => {
@@ -478,6 +515,90 @@ try {
     assert.equal(page.testOk, false);
     assert.match(page.testResult, /401/);
     assert.equal(page.fetchingModels, false);
+  });
+
+  test('AiTools：只读工具返回精简文本（搜索/详情/笔记/历史/未知工具/失败包装）', async () => {
+    toolsState.search = async (q) => (q === '三体' ? [{ id: 12, title: '三体', authors: ['刘慈欣', '某某'] }] : []);
+    assert.ok((await RealAiTools.execute('search_books', '{"query":"三体"}')).includes('id=12 《三体》（刘慈欣、某某）'));
+    assert.ok((await RealAiTools.execute('search_books', '{"query":"鲁滨逊"}')).includes('没有找到'));
+    assert.ok((await RealAiTools.execute('search_books', '')).includes('query'));
+    toolsState.detail = async (id) => (id === 12
+      ? { id: 12, title: '三体', authors: ['刘慈欣'], rating: 9.2, tags: ['科幻'],
+        files: [{ format: 'epub', size: 1 }, { format: 'mobi', size: 2 }],
+        comments: 'x'.repeat(600), coverUrl: '', downloadUrl: '' }
+      : null);
+    const detailText = await RealAiTools.execute('book_detail', '{"book_id":12}');
+    assert.ok(detailText.includes('《三体》（刘慈欣）') && detailText.includes('epub、mobi') && detailText.includes('…'));
+    assert.ok((await RealAiTools.execute('book_detail', '{"book_id":99}')).includes('没有找到 id=99'));
+    toolsState.notes = [];
+    assert.ok((await RealAiTools.execute('book_notes', '{"book_id":12}')).includes('还没有'));
+    toolsState.notes = [{ annotationType: 'note', chapter: '第一章 命运', quoteText: '宇宙很大', content: '铺垫好' }];
+    const notesText = await RealAiTools.execute('book_notes', '{"book_id":12}');
+    assert.ok(notesText.includes('[笔记]') && notesText.includes('宇宙很大') && notesText.includes('铺垫好'));
+    toolsState.history = [
+      { bookId: 'a', title: '活着', lastReadTime: 1000, chapterName: '第12节', progressPercent: 30.4 },
+      { bookId: 'b', title: '平凡的世界', lastReadTime: 5000, progressPercent: 8 },
+    ];
+    const historyText = await RealAiTools.execute('reading_history', '{}');
+    assert.ok(historyText.indexOf('平凡的世界') < historyText.indexOf('活着'), '按最近阅读时间倒序');
+    assert.ok(historyText.includes('进度 30%'));
+    toolsState.history = [];
+    assert.ok((await RealAiTools.execute('reading_history', '{}')).includes('还没有阅读记录'));
+    assert.ok((await RealAiTools.execute('delete_book', '{}')).includes('未知工具'));
+    toolsState.notesError = '未登录';
+    assert.ok((await RealAiTools.execute('book_notes', '{"book_id":12}')).includes('执行失败'));
+    toolsState.notesError = '';
+  });
+
+  test('网关工具回路：执行 tool_calls 回填结果，第二轮拿到最终回答', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    // 前面 fetchModels 用例写入过持久 id，这里重置为「未生成」态验证回路也走稳定会话头
+    deps.state.store.delete('p:ai_opencode_session');
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+        tool_calls: [{ id: 'call_1', type: 'function',
+          function: { name: 'search_books', arguments: '{"query":"三体"}' } }] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '帮你查到了《三体》，id=12。' } }] })) },
+    ];
+    toolsState.search = async (q) => (q === '三体' ? [{ id: 12, title: '三体', authors: ['刘慈欣'] }] : []);
+    let full = '';
+    let error = '';
+    RealAiService.chatStream([{ role: 'user', content: '书架上有三体吗' }], {
+      onDelta: (t) => { full += t; }, onDone: () => {}, onError: (m) => { error = m; },
+    }, 256);
+    await flush();
+    assert.equal(error, '');
+    assert.equal(deps.state.requests.length, 2);
+    const b1 = JSON.parse(deps.state.requests[0].content);
+    assert.equal(b1.stream, false);
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 4 && b1.tools[0].function.name === 'search_books');
+    assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
+    const b2 = JSON.parse(deps.state.requests[1].content);
+    const assistant = b2.messages.find((m) => m.role === 'assistant');
+    assert.equal(assistant.tool_calls[0].function.name, 'search_books');
+    const toolMsg = b2.messages.find((m) => m.role === 'tool');
+    assert.equal(toolMsg.tool_call_id, 'call_1');
+    assert.ok(toolMsg.content.includes('id=12 《三体》'));
+    assert.equal(full, '帮你查到了《三体》，id=12。');
+  });
+
+  test('网关工具回路：超过轮数上限报错收场，最后一轮不挂 tools', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'big-pickle', 'sk-oc', 0.5);
+    deps.state.rcpResponse = { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'reading_history', arguments: '{}' } }] } }] })) };
+    let error = '';
+    RealAiService.chatStream([{ role: 'user', content: '继续' }], {
+      onDelta: () => {}, onDone: () => {}, onError: (m) => { error = m; },
+    }, 128);
+    await flush();
+    assert.equal(deps.state.requests.length, 5);
+    assert.ok(!('tools' in JSON.parse(deps.state.requests[4].content)), '最后一轮不挂工具');
+    assert.match(error, /上限/);
+    deps.state.rcpResponse = null;
   });
 
   let failures = 0;

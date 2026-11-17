@@ -5,6 +5,7 @@ import { ChatCompletionChunk } from '@iuroc/openai/src/main/ets/openai@4.73.1/re
 import { ChatCompletionMessageParam } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { ChatCompletionCreateParamsBase } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { TalebookService } from './TalebookService';
+import { AiTools, AiToolDefinition } from './AiTools';
 
 /**
  * AI 能力统一走 **OpenAI 兼容 API 调用**（架构约束：不在应用内集成端侧小模型）；
@@ -20,6 +21,8 @@ import { TalebookService } from './TalebookService';
  * - **一套协议覆盖主流服务商**：OpenAI、DeepSeek、通义、Kimi、智谱、Ollama、LM Studio、
  *   OneAPI 等均提供 `/v1/chat/completions`，因此只实现这一种请求格式。
  * - **流式优先**：SDK 的 `onData` 逐块回调，长文本（书评/摘要）不必等整段生成完才显示。
+ * - **工具（function calling）**：只读本地工具见 `services/AiTools.ets`；仅 OpenCode 网关
+ *   通道挂载并走 tool_calls 多轮回路（SDK v1.0.10 无法在流式里累积 tool_calls，其他服务商不附加）。
  * - **不重复造轮子**：HTTP、SSE 拼包、`[DONE]` 终止、鉴权头、错误体解析都由 SDK 负责，
  *   本文件只做「配置读写 + 提示词消息转换 + 面向 UI 的回调适配」。
  */
@@ -78,6 +81,8 @@ const KEY_SESSION_ID: string = 'ai_opencode_session';
 
 const DEFAULT_TEMPERATURE: number = 0.7;
 const TIMEOUT_MS: number = 180000;
+/** 工具回路最多执行的 tool_calls 轮数；再多一轮不带 tools 逼模型收尾。 */
+const MAX_TOOL_ROUNDS: number = 4;
 
 /** 流式回调：`delta` 为本次增量文本，`done` 表示结束。 */
 export interface AiStreamHandlers {
@@ -366,7 +371,8 @@ export class AiService {
           // 已结束的会话再 cancel 会抛，忽略
         }
       };
-      AiService.chatViaGateway(config, apiKey, messages, maxTokens, gatewaySession).then((content: string): void => {
+      AiService.chatViaGateway(config, apiKey, messages, maxTokens, gatewaySession,
+        AiTools.definitions(), (): boolean => handle.aborted).then((content: string): void => {
         if (handle.aborted) {
           return;
         }
@@ -455,7 +461,8 @@ export class AiService {
       throw new Error('请先配置 AI API Key');
     }
     if (AiService.isOpenCodeGateway(config.baseUrl)) {
-      return AiService.chatViaGateway(config, apiKey, messages, maxTokens, rcp.createSession());
+      // 结构化输出（书单 JSON 等）不需要工具，避免模型中途改去查数据
+      return AiService.chatViaGateway(config, apiKey, messages, maxTokens, rcp.createSession(), null, null);
     }
     const client: OpenAI = AiService.client(config.baseUrl, apiKey);
     const params: ChatCompletionCreateParamsBase = {
@@ -540,43 +547,141 @@ export class AiService {
    * （无 headers 字段），实测透传也不会附加到请求；且当前 SDK 的 rcp 声明
    * （4.1.0(11) 精简版）没有流式事件，无法自解析 SSE。故整包返回
    * （stream:false），OpenCode 对话暂无打字机效果，其他服务商不受影响。
+   *
+   * `tools` 非空时走 **function calling 回路**：模型返回 tool_calls → 本地执行
+   * （AiTools，只读）→ 以 assistant+tool 消息回填上下文 → 再次请求，
+   * 直到模型给出文本回答或达到 MAX_TOOL_ROUNDS 轮上限。
    */
   private static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[],
-    maxTokens: number, session: rcp.Session): Promise<string> {
+    maxTokens: number, session: rcp.Session, tools: AiToolDefinition[] | null,
+    isAborted: (() => boolean) | null): Promise<string> {
     const headers: rcp.RequestHeaders = {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
       'Accept': 'application/json',
       'x-opencode-session': AiService.opencodeSessionId(),
     };
-    const body: string = JSON.stringify({
-      model: config.model,
-      messages: messages,
-      stream: false,
-      temperature: config.temperature,
-      max_tokens: maxTokens,
-    });
-    let statusCode: number = 0;
-    let text: string = '';
+    const gwMessages: GatewayMessage[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      gwMessages.push({ role: messages[i].role, content: messages[i].content });
+    }
+    const url: string = `${AiService.normalizeBaseUrl(config.baseUrl)}/chat/completions`;
     try {
-      const request: rcp.Request = new rcp.Request(
-        `${AiService.normalizeBaseUrl(config.baseUrl)}/chat/completions`, 'POST', headers, body);
-      const response: rcp.Response = await session.fetch(request);
-      statusCode = response.statusCode;
-      text = AiService.responseBodyText(response.body);
-    } catch (error) {
-      throw new Error(AiService.friendlyMessage(error instanceof Error ? error.message : String(error)));
+      for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+        if (isAborted !== null && isAborted()) {
+          return '';
+        }
+        // 最后一轮不带 tools，逼模型给最终回答而不是继续调工具
+        const attach: AiToolDefinition[] | null = round < MAX_TOOL_ROUNDS ? tools : null;
+        const payload: Record<string, Object> = {
+          'model': config.model,
+          'messages': gwMessages,
+          'stream': false,
+          'temperature': config.temperature,
+          'max_tokens': maxTokens,
+        };
+        if (attach !== null && attach.length > 0) {
+          payload['tools'] = attach;
+        }
+        const request: rcp.Request = new rcp.Request(url, 'POST', headers, JSON.stringify(payload));
+        let statusCode: number = 0;
+        let text: string = '';
+        try {
+          const response: rcp.Response = await session.fetch(request);
+          statusCode = response.statusCode;
+          text = AiService.responseBodyText(response.body);
+        } catch (error) {
+          throw new Error(AiService.friendlyMessage(error instanceof Error ? error.message : String(error)));
+        }
+        if (statusCode < 200 || statusCode >= 300) {
+          throw new Error(AiService.httpErrorText(statusCode, text));
+        }
+        const reply: GatewayReply = AiService.parseGatewayReply(text);
+        if (reply.calls !== null && reply.calls.length > 0) {
+          if (round === MAX_TOOL_ROUNDS) {
+            throw new Error(`模型连续调用工具达到上限（${MAX_TOOL_ROUNDS} 轮），请把问题说具体些再试`);
+          }
+          const calls: Record<string, Object>[] = [];
+          for (let i = 0; i < reply.calls.length; i++) {
+            const c: GatewayToolCall = reply.calls[i];
+            const fn: Record<string, Object> = { 'name': c.name, 'arguments': c.arguments };
+            const call: Record<string, Object> = { 'id': c.id, 'type': 'function', 'function': fn };
+            calls.push(call);
+          }
+          gwMessages.push({ role: 'assistant', content: reply.content, tool_calls: calls });
+          for (let i = 0; i < reply.calls.length; i++) {
+            const c: GatewayToolCall = reply.calls[i];
+            const result: string = await AiTools.execute(c.name, c.arguments);
+            gwMessages.push({ role: 'tool', content: result, tool_call_id: c.id });
+            if (isAborted !== null && isAborted()) {
+              return '';
+            }
+          }
+          continue;
+        }
+        if (reply.content.length === 0) {
+          throw new Error('AI 返回内容为空，请检查模型是否可用');
+        }
+        return reply.content;
+      }
+      return '';
     } finally {
       session.close();
     }
-    if (statusCode < 200 || statusCode >= 300) {
-      throw new Error(AiService.httpErrorText(statusCode, text));
+  }
+
+  /** 解析网关整包响应：正文 + tool_calls（不依赖 SDK 的 ChatCompletionMessage 类型）。 */
+  private static parseGatewayReply(raw: string): GatewayReply {
+    const reply: GatewayReply = { content: '', calls: null };
+    if (raw.length === 0) {
+      return reply;
     }
-    const content: string = AiService.parseContent(text);
-    if (content.length === 0) {
-      throw new Error('AI 返回内容为空，请检查模型是否可用');
+    let root: Record<string, Object>;
+    try {
+      root = JSON.parse(raw) as Record<string, Object>;
+    } catch (_error) {
+      throw new Error('AI 响应解析失败');
     }
-    return content;
+    const errorObj = root['error'] as Record<string, Object> | undefined;
+    if (errorObj !== undefined) {
+      const message = errorObj['message'];
+      if (typeof message === 'string') {
+        throw new Error(message as string);
+      }
+    }
+    const choices = root['choices'] as Object[] | undefined;
+    if (choices === undefined || choices.length === 0) {
+      return reply;
+    }
+    const first = choices[0] as Record<string, Object>;
+    const message = first['message'] as Record<string, Object> | undefined;
+    if (message === undefined) {
+      return reply;
+    }
+    const content = message['content'];
+    reply.content = typeof content === 'string' ? content as string : '';
+    const rawCalls = message['tool_calls'] as Object[] | undefined;
+    if (rawCalls === undefined || rawCalls.length === 0) {
+      return reply;
+    }
+    const calls: GatewayToolCall[] = [];
+    for (let i = 0; i < rawCalls.length; i++) {
+      const c = rawCalls[i] as Record<string, Object>;
+      const fn = c['function'] as Record<string, Object> | undefined;
+      if (fn === undefined) {
+        continue;
+      }
+      const id = c['id'];
+      const name = fn['name'];
+      const args = fn['arguments'];
+      calls.push({
+        id: typeof id === 'string' ? id as string : '',
+        name: typeof name === 'string' ? name as string : '',
+        arguments: typeof args === 'string' ? args as string : '{}',
+      });
+    }
+    reply.calls = calls.length > 0 ? calls : null;
+    return reply;
   }
 
   /** 容错用户输入：去掉末尾 `/chat/completions` 与多余斜杠，SDK 只接受 base URL。 */
@@ -694,6 +799,30 @@ export class AiService {
 export interface AiAbortHandle {
   aborted: boolean;
   destroy?: () => void;
+}
+
+/**
+ * 网关通道专用消息：只有 chatViaGateway 直连时会用到 tool_calls / tool_call_id，
+ * 字段名对齐 OpenAI 协议（回填给服务端时必须一致）。
+ */
+interface GatewayMessage {
+  role: string;
+  content?: string;
+  tool_calls?: Record<string, Object>[];
+  tool_call_id?: string;
+}
+
+/** 响应里的一条工具调用（已拍平 function 嵌套）。 */
+interface GatewayToolCall {
+  id: string;
+  name: string;
+  arguments: string;
+}
+
+/** 整包响应的解析结果。 */
+interface GatewayReply {
+  content: string;
+  calls: GatewayToolCall[] | null;
 }
 
 /** SDK 会话只用到 cancel()；单独声明避免依赖 rcp 的完整类型。 */
