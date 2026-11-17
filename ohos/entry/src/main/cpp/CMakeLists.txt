@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.5)
 project(talebook)
 
+# 与 mybooks_core 同理：预置 FindThreads 结果避免 -pthread 泄漏；
+# 关掉 curl 8.23 的 pkg-config 探测通道，避免 host .pc（如 runner 上的
+# libbrotli-dev/libzstd-dev，Cflags -I/usr/include）注入编译行击穿 musl 头。
+set(CMAKE_HAVE_LIBC_PTHREAD ON CACHE INTERNAL "" FORCE)
+set(CURL_USE_PKGCONFIG OFF CACHE BOOL "" FORCE)
+
 set(NATIVERENDER_ROOT_PATH ${CMAKE_CURRENT_SOURCE_DIR})
 # cpp -> main -> src -> entry -> ohos（与 mybooks_core 模块共用的第三方库根目录）
 set(SHARED_THIRD_PARTY ${NATIVERENDER_ROOT_PATH}/../../../../third_party)
@@ -88,6 +94,9 @@ set(CURL_DISABLE_RTSP ON CACHE BOOL "" FORCE)
 set(CURL_DISABLE_WEBSOCKETS ON CACHE BOOL "" FORCE)
     set(ENABLE_MANUAL OFF CACHE BOOL "" FORCE)
     set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
+    # curl 8.23 把 brotli/zstd 改为三态选项（默认 AUTO 探测），与 CURL_ZLIB 一样需显式关闭
+    set(CURL_BROTLI OFF CACHE STRING "" FORCE)
+    set(CURL_ZSTD OFF CACHE STRING "" FORCE)
     set(USE_NGHTTP2 OFF CACHE BOOL "" FORCE)
     set(USE_LIBIDN2 OFF CACHE BOOL "" FORCE)
     add_subdirectory(${SHARED_THIRD_PARTY}/curl/curl-8.23.0 ${CMAKE_BINARY_DIR}/curl_build EXCLUDE_FROM_ALL)
