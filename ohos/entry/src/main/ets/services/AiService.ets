@@ -1,16 +1,20 @@
 import { OpenAI } from '@iuroc/openai';
 import { util } from '@kit.ArkTS';
+import { rcp } from '@kit.RemoteCommunicationKit';
 import { ChatCompletionChunk } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { ChatCompletionMessageParam } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { ChatCompletionCreateParamsBase } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { TalebookService } from './TalebookService';
 
 /**
- * 本地大模型接入：**传输层用开源 SDK `@iuroc/openai`**，业务侧仍走本项目自己的门面。
+ * AI 能力统一走 **OpenAI 兼容 API 调用**（架构约束：不在应用内集成端侧小模型）；
+ * **传输层用开源 SDK `@iuroc/openai`**，业务侧仍走本项目自己的门面。
  *
  * 设计要点：
  * - **纯客户端配置**：API 地址 / 模型 / Key 全部由用户在本机填写，不经过本项目服务端，
  *   也不依赖服务端的 `AI_*` 配置项（那些只影响服务端自己的 AI 助手）。
+ * - **多服务商**：预设之外可在本机添加自定义 OpenAI 兼容服务商（持久化在 preferences），
+ *   API Key 按服务商分开存（`ai_api_key_<providerId>`），互不覆盖。
  * - **Key 存 Asset Store**：复用 `PasswordStore`（鸿蒙关键资产存储 / Android AES-GCM），
  *   不进明文 preferences。
  * - **一套协议覆盖主流服务商**：OpenAI、DeepSeek、通义、Kimi、智谱、Ollama、LM Studio、
@@ -38,6 +42,9 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
   { id: 'qwen', name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus', vision: false },
   { id: 'siliconflow', name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', vision: false },
   { id: 'ollama', name: 'Ollama (本地)', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b', vision: false },
+  // OpenCode 的模型网关（Console 按量 / Go 订阅共用同一端点），Key 在 opencode.ai/console 创建
+  { id: 'opencode', name: 'OpenCode (Go)', baseUrl: 'https://opencode.ai/inference/openai/v1', model: 'big-pickle',
+    vision: false },
   { id: 'custom', name: '自定义', baseUrl: '', model: '', vision: false },
 ];
 
@@ -60,7 +67,10 @@ export interface AiConfig {
 const KEY_PROVIDER: string = 'ai_provider';
 const KEY_BASE_URL: string = 'ai_base_url';
 const KEY_MODEL: string = 'ai_model';
+/** 旧版单 Key；首次读取时迁移到当前服务商后清空。 */
 const KEY_API_KEY: string = 'ai_api_key';
+const KEY_API_KEY_PREFIX: string = 'ai_api_key_';
+const KEY_CUSTOM_PROVIDERS: string = 'ai_custom_providers';
 const KEY_TEMPERATURE: string = 'ai_temperature';
 
 const DEFAULT_TEMPERATURE: number = 0.7;
@@ -76,6 +86,7 @@ export interface AiStreamHandlers {
 export class AiService {
   /** 读取当前配置（Key 只回传是否存在）。 */
   static loadConfig(): AiConfig {
+    AiService.migrateLegacyKey();
     const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
     const preset: AiProviderPreset = AiService.presetOf(providerId);
     const baseUrl: string = TalebookService.secureGet(KEY_BASE_URL);
@@ -86,15 +97,126 @@ export class AiService {
       providerId: providerId,
       baseUrl: baseUrl.length > 0 ? baseUrl : preset.baseUrl,
       model: model.length > 0 ? model : preset.model,
-      hasKey: TalebookService.secureGet(KEY_API_KEY).length > 0,
+      hasKey: TalebookService.secureGet(AiService.apiKeyKey(providerId)).length > 0,
       temperature: Number.isFinite(temperature) ? temperature : DEFAULT_TEMPERATURE,
     };
   }
 
-  static presetOf(providerId: string): AiProviderPreset {
+  /** 各服务商 Key 的存储键；自定义服务商 id 带时间戳，不与前缀冲突。 */
+  private static apiKeyKey(providerId: string): string {
+    return KEY_API_KEY_PREFIX + providerId;
+  }
+
+  /** 读取指定服务商的 API Key（未配置返回空串）。 */
+  static apiKeyFor(providerId: string): string {
+    AiService.migrateLegacyKey();
+    return TalebookService.secureGet(AiService.apiKeyKey(providerId));
+  }
+
+  static hasKeyFor(providerId: string): boolean {
+    return AiService.apiKeyFor(providerId).length > 0;
+  }
+
+  /** 旧版单 Key 一次性迁移：挪进当前所选服务商的槽位后清空。 */
+  private static migrateLegacyKey(): void {
+    const legacy: string = TalebookService.secureGet(KEY_API_KEY);
+    if (legacy.length === 0) {
+      return;
+    }
+    const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
+    TalebookService.secureSet(AiService.apiKeyKey(providerId), legacy);
+    TalebookService.secureSet(KEY_API_KEY, '');
+  }
+
+  /** 本机添加的自定义服务商列表（JSON 落 preferences，坏条目丢弃）。 */
+  static listCustomProviders(): AiProviderPreset[] {
+    const out: AiProviderPreset[] = [];
+    const raw: string = TalebookService.prefGet(KEY_CUSTOM_PROVIDERS);
+    if (raw.length === 0) {
+      return out;
+    }
+    let items: Object[];
+    try {
+      items = JSON.parse(raw) as Object[];
+    } catch (_error) {
+      return out;
+    }
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i] as Record<string, string>;
+      const id: string | undefined = it['id'];
+      const name: string | undefined = it['name'];
+      const baseUrl: string | undefined = it['baseUrl'];
+      const model: string | undefined = it['model'];
+      if (id === undefined || name === undefined || id.length === 0 || name.length === 0) {
+        continue;
+      }
+      out.push({
+        id: id,
+        name: name,
+        baseUrl: baseUrl === undefined ? '' : baseUrl,
+        model: model === undefined ? '' : model,
+        vision: false,
+      });
+    }
+    return out;
+  }
+
+  /** 全部可选服务商：预设 + 本机关加的自定义。 */
+  static listProviders(): AiProviderPreset[] {
+    const out: AiProviderPreset[] = [];
     for (let i = 0; i < AI_PROVIDERS.length; i++) {
-      if (AI_PROVIDERS[i].id === providerId) {
-        return AI_PROVIDERS[i];
+      out.push(AI_PROVIDERS[i]);
+    }
+    const custom: AiProviderPreset[] = AiService.listCustomProviders();
+    for (let i = 0; i < custom.length; i++) {
+      out.push(custom[i]);
+    }
+    return out;
+  }
+
+  /** 添加一个本地自定义服务商并返回其预设。 */
+  static addCustomProvider(name: string, baseUrl: string, model: string): AiProviderPreset {
+    const trimmedName: string = name.trim();
+    const base: string = AiService.normalizeBaseUrl(baseUrl);
+    if (trimmedName.length === 0 || base.length === 0) {
+      throw new Error('服务商名称与接口地址不能为空');
+    }
+    const preset: AiProviderPreset = {
+      id: `custom-${Date.now()}`,
+      name: trimmedName,
+      baseUrl: base,
+      model: model.trim(),
+      vision: false,
+    };
+    const list: AiProviderPreset[] = AiService.listCustomProviders();
+    list.push(preset);
+    AiService.saveCustomProviders(list);
+    return preset;
+  }
+
+  /** 删除自定义服务商，连带清掉它保存的 Key。 */
+  static removeCustomProvider(id: string): void {
+    const list: AiProviderPreset[] = AiService.listCustomProviders();
+    const kept: AiProviderPreset[] = [];
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].id === id) {
+        TalebookService.secureSet(AiService.apiKeyKey(id), '');
+      } else {
+        kept.push(list[i]);
+      }
+    }
+    AiService.saveCustomProviders(kept);
+  }
+
+  private static saveCustomProviders(list: AiProviderPreset[]): void {
+    TalebookService.prefSet(KEY_CUSTOM_PROVIDERS, JSON.stringify(list));
+  }
+
+  static presetOf(providerId: string): AiProviderPreset {
+    const providers: AiProviderPreset[] = AiService.listProviders();
+    for (let i = 0; i < providers.length; i++) {
+      if (providers[i].id === providerId) {
+        return providers[i];
       }
     }
     return AI_PROVIDERS[AI_PROVIDERS.length - 1];
@@ -108,11 +230,13 @@ export class AiService {
     TalebookService.prefSet(KEY_MODEL, model.trim());
     TalebookService.prefSet(KEY_TEMPERATURE, `${temperature}`);
     if (apiKey.length > 0) {
-      TalebookService.secureSet(KEY_API_KEY, apiKey.trim());
+      TalebookService.secureSet(AiService.apiKeyKey(providerId), apiKey.trim());
     }
   }
 
   static clearKey(): void {
+    const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
+    TalebookService.secureSet(AiService.apiKeyKey(providerId), '');
     TalebookService.secureSet(KEY_API_KEY, '');
   }
 
@@ -120,6 +244,75 @@ export class AiService {
   static isReady(): boolean {
     const config: AiConfig = AiService.loadConfig();
     return config.baseUrl.length > 0 && config.model.length > 0 && config.hasKey;
+  }
+
+  /**
+   * 拉取服务商的模型 id 列表（`GET {base}/models`，OpenAI 协议通用）。
+   * `apiKeyInput` 传空串表示用该服务商已保存的 Key——设置页可先填 Key 再拉，也可拉已存的。
+   *
+   * 不用 SDK 的 `models.list()`：其 .d.ets 声明返回 `Model[]`，运行时实际 resolve 了
+   * undefined（2026-11-17 上板实测），这里直接用 rcp 发一个带鉴权头的 GET。
+   */
+  static async fetchModels(providerId: string, baseUrl: string, apiKeyInput: string): Promise<string[]> {
+    const key: string = apiKeyInput.trim().length > 0 ? apiKeyInput.trim() : AiService.apiKeyFor(providerId);
+    const base: string = AiService.normalizeBaseUrl(baseUrl);
+    if (base.length === 0) {
+      throw new Error('请先填写接口地址');
+    }
+    if (key.length === 0) {
+      throw new Error('请先填写 API Key');
+    }
+    const headers: rcp.RequestHeaders = {
+      'Authorization': `Bearer ${key}`,
+      'Accept': 'application/json',
+    };
+    const session: rcp.Session = rcp.createSession();
+    let statusCode: number = 0;
+    let text: string = '';
+    try {
+      const request: rcp.Request = new rcp.Request(`${base}/models`, 'GET', headers);
+      const response: rcp.Response = await session.fetch(request);
+      statusCode = response.statusCode;
+      text = AiService.responseBodyText(response.body);
+    } catch (error) {
+      throw new Error(AiService.friendlyMessage(error instanceof Error ? error.message : String(error)));
+    } finally {
+      session.close();
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw new Error(AiService.httpErrorText(statusCode, text));
+    }
+    const ids: string[] = [];
+    try {
+      const root = JSON.parse(text) as Record<string, Object>;
+      const items = root['data'] as Object[] | undefined;
+      if (items !== undefined) {
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i] as Record<string, string>;
+          const id: string | undefined = it['id'];
+          if (id !== undefined && id.length > 0 && ids.indexOf(id) < 0) {
+            ids.push(id);
+          }
+        }
+      }
+    } catch (_error) {
+      throw new Error('模型列表解析失败，该服务可能不兼容 OpenAI 协议');
+    }
+    return ids;
+  }
+
+  /** rcp 的 body 可能是 string / ArrayBuffer / 已解析对象，统一转文本。 */
+  private static responseBodyText(body: string | Object | ArrayBuffer | undefined): string {
+    if (body === undefined || body === null) {
+      return '';
+    }
+    if (typeof body === 'string') {
+      return body as string;
+    }
+    if (body instanceof ArrayBuffer) {
+      return AiService.responseText(body);
+    }
+    return JSON.stringify(body);
   }
 
   /**
@@ -131,7 +324,7 @@ export class AiService {
   static chatStream(messages: AiMessage[], handlers: AiStreamHandlers, maxTokens: number = 2048): AiAbortHandle {
     const handle: AiAbortHandle = { aborted: false };
     const config: AiConfig = AiService.loadConfig();
-    const apiKey: string = TalebookService.secureGet(KEY_API_KEY);
+    const apiKey: string = AiService.apiKeyFor(config.providerId);
 
     if (config.baseUrl.length === 0 || config.model.length === 0) {
       handlers.onError('请先在「AI 助手 → 模型设置」里填写接口地址与模型');
@@ -222,7 +415,7 @@ export class AiService {
   /** 非流式的单轮问答，用于结构化结果（如推荐书单 JSON）。 */
   static async complete(messages: AiMessage[], maxTokens: number = 2048): Promise<string> {
     const config: AiConfig = AiService.loadConfig();
-    const apiKey: string = TalebookService.secureGet(KEY_API_KEY);
+    const apiKey: string = AiService.apiKeyFor(config.providerId);
     if (config.baseUrl.length === 0 || config.model.length === 0) {
       throw new Error('请先配置 AI 接口地址与模型');
     }

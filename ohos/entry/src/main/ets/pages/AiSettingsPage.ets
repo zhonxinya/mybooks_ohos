@@ -1,6 +1,15 @@
-import { PageScaffold, PrimaryButton, SecondaryButton, SectionTitle, FilterChips, FilterChipItem } from '../components';
-import { AiService, AiConfig, AiProviderPreset, AI_PROVIDERS, AiMessage } from '../services/AiService';
+import { PageScaffold, PrimaryButton, SecondaryButton, SectionTitle, FilterChips, FilterChipItem,
+  ChipButton } from '../components';
+import { AiService, AiConfig, AiProviderPreset, AiMessage } from '../services/AiService';
 import { AppRouter } from '../utils/AppRouter';
+
+/** @Builder 只有传单个对象字面量才是引用传递；标量参数不随 @State 更新，切服务商时输入框会停在旧值。 */
+interface AiFieldParams {
+  label: string;
+  value: string;
+  placeholder: string;
+  onChange: (v: string) => void;
+}
 
 /**
  * AI 模型设置：本地配置，不依赖服务端。
@@ -14,6 +23,15 @@ struct AiSettingsPage {
   @State providerId: string = 'deepseek';
   /** FilterChips 的 selected 是 @Link，必须绑可写状态，不能传函数返回值。 */
   @State providerIndex: number = 0;
+  @State providers: AiProviderPreset[] = [];
+  @State showAddForm: boolean = false;
+  @State newName: string = '';
+  @State newBaseUrl: string = '';
+  @State newModel: string = '';
+  /** 「拉取模型」返回的模型 id；空表示还没拉过。 */
+  @State modelOptions: string[] = [];
+  @State modelIndex: number = -1;
+  @State fetchingModels: boolean = false;
   @State baseUrl: string = '';
   @State model: string = '';
   @State apiKey: string = '';
@@ -24,6 +42,7 @@ struct AiSettingsPage {
   @State testOk: boolean = false;
 
   aboutToAppear(): void {
+    this.providers = AiService.listProviders();
     const config: AiConfig = AiService.loadConfig();
     this.providerId = config.providerId;
     this.providerIndex = this.indexOfProvider(config.providerId);
@@ -45,8 +64,8 @@ struct AiSettingsPage {
 
   private chips(): FilterChipItem[] {
     const items: FilterChipItem[] = [];
-    for (let i = 0; i < AI_PROVIDERS.length; i++) {
-      items.push({ label: AI_PROVIDERS[i].name, value: i });
+    for (let i = 0; i < this.providers.length; i++) {
+      items.push({ label: this.providers[i].name, value: i });
     }
     return items;
   }
@@ -58,12 +77,92 @@ struct AiSettingsPage {
     this.providerId = id;
     this.providerIndex = this.indexOfProvider(id);
     const preset: AiProviderPreset = AiService.presetOf(id);
-    // 切换服务商时地址与模型跟随预设，Key 让用户重填（各家的 Key 不通用）
+    // 切换服务商时地址与模型跟随预设；Key 各家不通用，但按服务商分开存过就不用重填
     this.baseUrl = preset.baseUrl;
     this.model = preset.model;
     this.apiKey = '';
-    this.hasKey = false;
+    this.hasKey = AiService.hasKeyFor(id);
     this.testResult = '';
+    this.modelOptions = [];
+    this.modelIndex = -1;
+  }
+
+  private isCustomSelected(): boolean {
+    return this.providerId.startsWith('custom-');
+  }
+
+  /** 添加本机自定义服务商：只登记名字/地址/默认模型，Key 走下方主表单保存。 */
+  private addProvider(): void {
+    if (this.newName.trim().length === 0) {
+      this.toast('请填写服务商名称');
+      return;
+    }
+    if (this.newBaseUrl.trim().length === 0) {
+      this.toast('请填写接口地址');
+      return;
+    }
+    try {
+      const preset: AiProviderPreset = AiService.addCustomProvider(this.newName, this.newBaseUrl, this.newModel);
+      this.providers = AiService.listProviders();
+      this.showAddForm = false;
+      this.newName = '';
+      this.newBaseUrl = '';
+      this.newModel = '';
+      this.selectProvider(preset.id);
+      this.toast(`已添加「${preset.name}」`);
+    } catch (error) {
+      this.toast(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private confirmDeleteProvider(): void {
+    const name: string = AiService.presetOf(this.providerId).name;
+    this.getUIContext().showAlertDialog({
+      title: '删除服务商',
+      message: `确定删除「${name}」吗？其保存的 API Key 会一并清除。`,
+      primaryButton: {
+        value: '删除',
+        action: () => {
+          AiService.removeCustomProvider(this.providerId);
+          this.providers = AiService.listProviders();
+          this.selectProvider('deepseek');
+          this.toast('已删除');
+        },
+      },
+      secondaryButton: { value: '取消', action: () => {} },
+    });
+  }
+
+  /** 用当前填写的地址与 Key 拉模型列表；Key 留空则回退到该服务商已保存的。 */
+  private async fetchModelList(): Promise<void> {
+    if (this.fetchingModels) {
+      return;
+    }
+    this.fetchingModels = true;
+    this.testResult = '';
+    try {
+      const ids: string[] = await AiService.fetchModels(this.providerId, this.baseUrl, this.apiKey);
+      if (ids.length === 0) {
+        this.toast('该服务未返回模型列表');
+      } else {
+        this.modelOptions = ids;
+        this.modelIndex = ids.indexOf(this.model);
+        this.toast(`获取到 ${ids.length} 个模型，点选填入`);
+      }
+    } catch (error) {
+      this.testOk = false;
+      this.testResult = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.fetchingModels = false;
+    }
+  }
+
+  private modelChips(): FilterChipItem[] {
+    const items: FilterChipItem[] = [];
+    for (let i = 0; i < this.modelOptions.length; i++) {
+      items.push({ label: this.modelOptions[i], value: i });
+    }
+    return items;
   }
 
   private save(): boolean {
@@ -116,6 +215,15 @@ struct AiSettingsPage {
     }
   }
 
+  private indexOfProvider(id: string): number {
+    for (let i = 0; i < this.providers.length; i++) {
+      if (this.providers[i].id === id) {
+        return i;
+      }
+    }
+    return 0;
+  }
+
   private toast(message: string): void {
     try {
       this.getUIContext().getPromptAction().showToast({ message: message });
@@ -147,16 +255,91 @@ struct AiSettingsPage {
           FilterChips({
             items: this.chips(),
             selected: $providerIndex,
-            onChange: (index: number) => this.selectProvider(AI_PROVIDERS[index].id),
+            scrollable: true,
+            onChange: (index: number) => this.selectProvider(this.providers[index].id),
+            trailing: () => {
+              this.addProviderChip();
+            },
           });
         }
         .scrollable(ScrollDirection.Horizontal)
         .scrollBar(BarState.Off)
         .width('100%');
 
+        if (this.isCustomSelected()) {
+          Text('删除该服务商')
+            .fontSize(12)
+            .fontColor($r('app.color.error'))
+            .onClick(() => {
+              this.confirmDeleteProvider();
+            });
+        }
+
+        if (this.showAddForm) {
+          Column({ space: 12 }) {
+            this.field({ label: '名称', value: this.newName, placeholder: '如：公司网关',
+              onChange: (v: string) => this.newName = v });
+            this.field({ label: '接口地址', value: this.newBaseUrl, placeholder: 'https://example.com/v1',
+              onChange: (v: string) => this.newBaseUrl = v });
+            this.field({ label: '默认模型', value: this.newModel, placeholder: '可留空，保存后用「拉取模型列表」选择',
+              onChange: (v: string) => this.newModel = v });
+            Row({ space: 12 }) {
+              PrimaryButton({
+                label: '添加',
+                onTap: () => {
+                  this.addProvider();
+                },
+              }).layoutWeight(1);
+              SecondaryButton({
+                label: '取消',
+                onTap: () => {
+                  this.showAddForm = false;
+                },
+              }).layoutWeight(1);
+            }
+            .width('100%');
+          }
+          .width('100%')
+          .padding($r('app.float.page_padding'))
+          .borderRadius($r('app.float.card_radius'))
+          .backgroundColor($r('app.color.card_background'));
+        }
+
         Column({ space: 12 }) {
-          this.field('接口地址', this.baseUrl, 'https://api.deepseek.com/v1', (v: string) => this.baseUrl = v);
-          this.field('模型', this.model, 'deepseek-chat', (v: string) => this.model = v);
+          this.field({ label: '接口地址', value: this.baseUrl, placeholder: 'https://api.deepseek.com/v1',
+            onChange: (v: string) => this.baseUrl = v });
+          Column({ space: 6 }) {
+            Row() {
+              Text('模型')
+                .fontSize(13)
+                .fontColor($r('app.color.text_secondary'));
+              Blank();
+              Text(this.fetchingModels ? '拉取中…' : '拉取模型列表')
+                .fontSize(13)
+                .fontColor($r('app.color.brand_primary'))
+                .onClick(() => {
+                  void this.fetchModelList();
+                });
+            }
+            .width('100%');
+            TextInput({ placeholder: 'deepseek-chat', text: this.model })
+              .height(44)
+              .onChange((v: string) => this.model = v);
+            if (this.modelOptions.length > 0) {
+              Scroll() {
+                FilterChips({
+                  items: this.modelChips(),
+                  selected: $modelIndex,
+                  scrollable: true,
+                  onChange: (index: number) => this.model = this.modelOptions[index],
+                });
+              }
+              .scrollable(ScrollDirection.Horizontal)
+              .scrollBar(BarState.Off)
+              .width('100%');
+            }
+          }
+          .width('100%');
           Column({ space: 6 }) {
             Text(this.hasKey ? 'API Key（已保存，留空则保持不变）' : 'API Key')
               .fontSize(13)
@@ -229,7 +412,11 @@ struct AiSettingsPage {
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
             .width('100%');
-          Text('• 兼容任何 OpenAI 协议服务：OpenAI、DeepSeek、Kimi、智谱、通义、硅基流动、Ollama、LM Studio、OneAPI 等。')
+          Text('• 兼容任何 OpenAI 协议服务：OpenAI、DeepSeek、Kimi、智谱、通义、硅基流动、Ollama、LM Studio、OpenCode (Go)、OneAPI 等。')
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%');
+          Text('• 用「＋ 添加」可把常用服务存成本机服务商，各自的 API Key 独立保存，来回切换不用重填。')
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
             .width('100%');
@@ -257,25 +444,28 @@ struct AiSettingsPage {
     .align(Alignment.Top);
   }
 
-  private indexOfProvider(id: string): number {
-    for (let i = 0; i < AI_PROVIDERS.length; i++) {
-      if (AI_PROVIDERS[i].id === id) {
-        return i;
-      }
-    }
-    return 0;
+  /** chips 行尾部的「＋ 添加」：展开/收起本机服务商添加表单。 */
+  @Builder
+  addProviderChip() {
+    ChipButton({
+      label: this.showAddForm ? '收起' : '＋ 添加',
+      selected: false,
+      onTap: () => {
+        this.showAddForm = !this.showAddForm;
+      },
+    });
   }
 
   @Builder
-  field(label: string, value: string, placeholder: string, onChange: (v: string) => void) {
+  field(params: AiFieldParams) {
     Column({ space: 6 }) {
-      Text(label)
+      Text(params.label)
         .fontSize(13)
         .fontColor($r('app.color.text_secondary'))
         .width('100%');
-      TextInput({ placeholder: placeholder, text: value })
+      TextInput({ placeholder: params.placeholder, text: params.value })
         .height(44)
-        .onChange((v: string) => onChange(v));
+        .onChange((v: string) => params.onChange(v));
     }
     .width('100%');
   }

@@ -15,12 +15,24 @@ const TMP = process.env.TMPDIR || '/vol3/1000/Public/Share/.tmp';
 mkdirSync(TMP, { recursive: true });
 const dir = mkdtempSync(join(TMP, 'ai-check-'));
 const read = (path) => readFileSync(join(ETS, path), 'utf8');
+const settingsDefaults = () => ({
+  config: { providerId: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat',
+    hasKey: true, temperature: 0.7 },
+  providers: [
+    { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', vision: false },
+    { id: 'opencode', name: 'OpenCode (Go)', baseUrl: 'https://opencode.ai/inference/openai/v1', model: 'big-pickle', vision: false },
+  ],
+  keys: new Set(['deepseek']), saved: null, models: [], fetchError: '', completeReply: 'ok',
+});
 const state = {
   ready: true, handlers: null, copied: '', cancel: null,
   shelf: { books: [] }, search: async () => ({ body: { books: [] } }),
   recommend: async () => [], summary: async () => '', review: async () => '', meta: async () => ({}),
+  settings: settingsDefaults(),
 };
 globalThis.__aiCheck = state;
+// 设置页保存时会记一个配置版本号，桩掉避免 save() 抛错
+globalThis.AppStorage = { setOrCreate: () => {} };
 const shim = `
 const state = globalThis.__aiCheck;
 export const AiService = {
@@ -29,6 +41,32 @@ export const AiService = {
     state.handlers = handlers;
     return { aborted: false, destroy: () => state.cancel?.(handlers) };
   },
+  loadConfig: () => state.settings.config,
+  listProviders: () => state.settings.providers.slice(),
+  presetOf: (id) => state.settings.providers.find((p) => p.id === id) ??
+    { id: 'custom', name: '自定义', baseUrl: '', model: '', vision: false },
+  hasKeyFor: (id) => state.settings.keys.has(id),
+  addCustomProvider: (name, baseUrl, model) => {
+    const preset = { id: 'custom-' + Date.now(), name: name.trim(), baseUrl: baseUrl.trim(),
+      model: model.trim(), vision: false };
+    state.settings.providers.push(preset);
+    return preset;
+  },
+  removeCustomProvider: (id) => {
+    state.settings.providers = state.settings.providers.filter((p) => p.id !== id);
+    state.settings.keys.delete(id);
+  },
+  fetchModels: async () => {
+    if (state.settings.fetchError.length > 0) { throw new Error(state.settings.fetchError); }
+    return state.settings.models.slice();
+  },
+  saveConfig: (providerId, baseUrl, model, apiKey, temperature) => {
+    state.settings.saved = { providerId, baseUrl, model, apiKey, temperature };
+    if (apiKey.length > 0) { state.settings.keys.add(providerId); }
+    state.settings.config = { providerId, baseUrl, model,
+      hasKey: state.settings.keys.has(providerId), temperature };
+  },
+  complete: async () => state.settings.completeReply,
 };
 export const AiBookService = {
   summarize: (...args) => state.summary(...args),
@@ -46,6 +84,51 @@ export const AppRouter = { getParams: () => ({}) };
 export const AI_PROVIDERS = [];
 `;
 writeFileSync(join(dir, 'shim.ts'), shim);
+
+// 真实 AiService 的运行时依赖桩：内存存储 + 可编程的 SDK 假响应
+writeFileSync(join(dir, 'aiServiceDeps.ts'), `
+// Buffer.from(x).buffer 带池化填充，必须 slice 出精确字节（模拟 rcp 的紧凑 ArrayBuffer）
+const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
+export const state = { store: new Map(), models: [], rcpResponse: null, rcpError: null, lastRequest: null };
+export const util = { TextDecoder: { create: () => ({ decodeToString: (u8) => Buffer.from(u8).toString('utf8') }) } };
+export class OpenAI {
+  chat = { completions: { create: () => { throw new Error('chat not needed in check'); } } };
+  constructor(options) { state.lastOptions = options; }
+}
+export const rcp = {
+  Request: class Request {
+    constructor(url, method, headers) { this.url = url; this.method = method; this.headers = headers; }
+  },
+  createSession: () => ({
+    fetch: async (request) => {
+      state.lastRequest = request;
+      if (state.rcpError) { throw state.rcpError; }
+      return state.rcpResponse ?? { statusCode: 200, body: enc(JSON.stringify({ data: state.models })) };
+    },
+    close: () => {},
+  }),
+};
+export const TalebookService = {
+  prefGet: (key, fallback = '') => state.store.has('p:' + key) ? state.store.get('p:' + key) : fallback,
+  prefSet: (key, value) => { state.store.set('p:' + key, value); },
+  secureGet: (key) => state.store.has('s:' + key) ? state.store.get('s:' + key) : '',
+  secureSet: (key, value) => { if (value === '') { state.store.delete('s:' + key); } else { state.store.set('s:' + key, value); } },
+};
+`);
+
+/** 把真实 AiService 落进临时目录：SDK / rcp 类型转 import type，运行时依赖换成桩。 */
+function stageAiService() {
+  let source = read('services/AiService.ets');
+  for (const type of ['ChatCompletionChunk', 'ChatCompletionMessageParam', 'ChatCompletionCreateParamsBase']) {
+    source = source.replace(`import { ${type} }`, `import type { ${type} }`);
+  }
+  source = source
+    .replace(`from '@iuroc/openai'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from './TalebookService'`, `from './aiServiceDeps.ts'`);
+  writeFileSync(join(dir, 'RealAiService.ts'), source);
+}
 
 function stagePure(name, path, typeNames) {
   let source = read(path).replace(/from '\.\.\/services\/BookModels'/g, "from './BookModels.ts'");
@@ -91,13 +174,24 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 try {
   stagePure('BookModels', 'services/BookModels.ets', []);
   stagePure('LibraryMatch', 'utils/LibraryMatch.ets', ['BookItem']);
-  for (const name of ['AiAssistantPage', 'AiBookPanelPage', 'AiRecommendPage']) {
+  for (const name of ['AiAssistantPage', 'AiBookPanelPage', 'AiRecommendPage', 'AiSettingsPage']) {
     stagePage(name);
   }
+  stageAiService();
   const load = async (name) => import(pathToFileURL(join(dir, `${name}.ts`)).href);
   const { AiAssistantPage } = await load('AiAssistantPage');
   const { AiBookPanelPage } = await load('AiBookPanelPage');
   const { AiRecommendPage } = await load('AiRecommendPage');
+  const { AiSettingsPage } = await load('AiSettingsPage');
+  const deps = await load('aiServiceDeps');
+  const { AiService: RealAiService } = await load('RealAiService');
+  const resetSettings = () => { state.settings = settingsDefaults(); };
+  const settingsPage = () => {
+    const page = new AiSettingsPage();
+    page.toast = () => {};
+    page.aboutToAppear();
+    return page;
+  };
   const chat = () => {
     const page = new AiAssistantPage();
     page.toast = () => {};
@@ -203,6 +297,98 @@ try {
     old.resolve({ body: { books: [{ id: 11, title: '旧推荐', authors: ['旧作者'] }] } });
     await tick();
     assert.deepEqual(page.matchedIds, [22]);
+  });
+
+  test('服务：预设含 OpenCode (Go)，自定义服务商可增删且未知 id 兜底', () => {
+    deps.state.store.clear();
+    const base = RealAiService.listProviders();
+    assert.ok(base.some((p) => p.id === 'opencode' && p.baseUrl === 'https://opencode.ai/inference/openai/v1'));
+    const preset = RealAiService.addCustomProvider('我的网关', 'https://example.com/v1/chat/completions', 'qwen3');
+    assert.ok(preset.id.startsWith('custom-'));
+    assert.equal(preset.baseUrl, 'https://example.com/v1');
+    assert.equal(RealAiService.presetOf(preset.id).name, '我的网关');
+    assert.equal(RealAiService.listProviders().length, base.length + 1);
+    RealAiService.removeCustomProvider(preset.id);
+    assert.equal(RealAiService.listProviders().length, base.length);
+    assert.equal(RealAiService.presetOf('missing').id, 'custom');
+  });
+  test('服务：API Key 按服务商分存，旧单 Key 首次读取时迁移一次', () => {
+    deps.state.store.clear();
+    deps.state.store.set('s:ai_api_key', 'sk-legacy');
+    const config = RealAiService.loadConfig();
+    assert.equal(config.providerId, 'deepseek');
+    assert.equal(config.hasKey, true);
+    assert.equal(deps.state.store.get('s:ai_api_key'), undefined);
+    assert.equal(RealAiService.apiKeyFor('deepseek'), 'sk-legacy');
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/inference/openai/v1', 'big-pickle', 'sk-oc', 0.5);
+    assert.equal(RealAiService.apiKeyFor('opencode'), 'sk-oc');
+    assert.equal(RealAiService.apiKeyFor('deepseek'), 'sk-legacy');
+    const current = RealAiService.loadConfig();
+    assert.equal(current.providerId, 'opencode');
+    assert.equal(current.model, 'big-pickle');
+    assert.equal(current.hasKey, true);
+  });
+  test('服务：fetchModels 去重保序、带鉴权头，4xx 走人话文案', async () => {
+    deps.state.store.clear();
+    deps.state.models = [{ id: 'b' }, { id: 'a' }, { id: 'b' }];
+    deps.state.rcpResponse = null;
+    const ids = await RealAiService.fetchModels('opencode', 'https://opencode.ai/inference/openai/v1/', 'sk-oc');
+    assert.deepEqual(ids, ['b', 'a']);
+    assert.equal(deps.state.lastRequest.url, 'https://opencode.ai/inference/openai/v1/models');
+    assert.equal(deps.state.lastRequest.headers['Authorization'], 'Bearer sk-oc');
+    const abuf = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
+    deps.state.rcpResponse = { statusCode: 401, body: abuf('{"error":{"message":"bad key"}}') };
+    await assert.rejects(() => RealAiService.fetchModels('opencode', 'https://opencode.ai/inference/openai/v1', 'sk-bad'), /401/);
+    deps.state.rcpResponse = null;
+    await assert.rejects(() => RealAiService.fetchModels('opencode', 'https://x/v1', ''), /API Key/);
+    await assert.rejects(() => RealAiService.fetchModels('opencode', '', 'sk-oc'), /接口地址/);
+  });
+  test('设置页：添加本地服务商有校验，成功后选中为当前编辑对象', () => {
+    resetSettings();
+    const page = settingsPage();
+    page.newName = '';
+    page.newBaseUrl = 'https://gw.example.com/v1';
+    page.addProvider();
+    assert.equal(page.providers.length, 2);
+    page.newName = '我的网关';
+    page.newBaseUrl = '';
+    page.addProvider();
+    assert.equal(page.providers.length, 2);
+    page.newBaseUrl = 'https://gw.example.com/v1';
+    page.newModel = 'qwen3';
+    page.addProvider();
+    assert.equal(page.providers.length, 3);
+    assert.ok(page.isCustomSelected());
+    assert.equal(page.baseUrl, 'https://gw.example.com/v1');
+    assert.equal(page.model, 'qwen3');
+    assert.equal(page.showAddForm, false);
+  });
+  test('设置页：切换服务商时已存 Key 保持、未存 Key 不误标', () => {
+    resetSettings();
+    state.settings.keys.add('opencode');
+    const page = settingsPage();
+    page.selectProvider('opencode');
+    assert.equal(page.hasKey, true);
+    page.selectProvider('deepseek');
+    assert.equal(page.hasKey, true);
+    page.selectProvider('siliconflow');
+    assert.equal(page.hasKey, false);
+    assert.equal(page.modelOptions.length, 0);
+  });
+  test('设置页：拉取模型列表点选填入，失败以文案提示而非静默', async () => {
+    resetSettings();
+    const page = settingsPage();
+    state.settings.models = ['glm-4-flash', 'glm-4-plus'];
+    await page.fetchModelList();
+    assert.deepEqual(page.modelOptions, ['glm-4-flash', 'glm-4-plus']);
+    assert.equal(page.modelIndex, -1);
+    page.model = page.modelOptions[1];
+    state.settings.models = [];
+    state.settings.fetchError = 'API Key 无效或已过期（HTTP 401）';
+    await page.fetchModelList();
+    assert.equal(page.testOk, false);
+    assert.match(page.testResult, /401/);
+    assert.equal(page.fetchingModels, false);
   });
 
   let failures = 0;
