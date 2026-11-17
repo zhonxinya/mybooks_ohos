@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.5)
 project(talebook)
 
+# 与 mybooks_core 同理：预置 FindThreads 结果，避免 curl 的 find_package(Threads)
+# 在 CI runner 上探测 host glibc，把 -I/usr/include -pthread 注入编译行击穿 musl 头。
+set(CMAKE_HAVE_LIBC_PTHREAD ON CACHE INTERNAL "" FORCE)
+
 set(NATIVERENDER_ROOT_PATH ${CMAKE_CURRENT_SOURCE_DIR})
 # cpp -> main -> src -> entry -> ohos（与 mybooks_core 模块共用的第三方库根目录）
 set(SHARED_THIRD_PARTY ${NATIVERENDER_ROOT_PATH}/../../../../third_party)

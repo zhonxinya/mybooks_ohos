@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
 project(mybooks_core)
 
+# 预置 FindThreads 探测结果：OHOS(musl)/Android(bionic) 的 libc 自带 pthread。
+# 不预置时 curl 的 find_package(Threads) 会在 CI runner 上探测 host glibc，
+# 把 -I/usr/include -pthread 注入 libcurl_static 编译行，host features.h
+# 击穿 musl sysroot（bits/wordsize.h not found），本地开发机则恰好不触发。
+set(CMAKE_HAVE_LIBC_PTHREAD ON CACHE INTERNAL "" FORCE)
+
 set(CMAKE_CXX_STANDARD 17)
 set(NATIVERENDER_ROOT_PATH ${CMAKE_CURRENT_SOURCE_DIR})
 # cpp -> main -> src -> mybooks_core -> ohos（与 entry 模块共用的第三方库根目录）
