@@ -42,8 +42,9 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
   { id: 'qwen', name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus', vision: false },
   { id: 'siliconflow', name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', vision: false },
   { id: 'ollama', name: 'Ollama (本地)', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b', vision: false },
-  // OpenCode 的模型网关（Console 按量 / Go 订阅共用同一端点），Key 在 opencode.ai/console 创建
-  { id: 'opencode', name: 'OpenCode (Go)', baseUrl: 'https://opencode.ai/inference/openai/v1', model: 'big-pickle',
+  // OpenCode Go 订阅专用网关（Console 按量走 opencode.ai/inference/openai/v1），
+  // Key 在 opencode.ai/console 创建；网关强制 x-opencode-session 请求头（见 gatewayConfiguration）
+  { id: 'opencode', name: 'OpenCode (Go)', baseUrl: 'https://opencode.ai/zen/go/v1', model: 'big-pickle',
     vision: false },
   { id: 'custom', name: '自定义', baseUrl: '', model: '', vision: false },
 ];
@@ -72,6 +73,8 @@ const KEY_API_KEY: string = 'ai_api_key';
 const KEY_API_KEY_PREFIX: string = 'ai_api_key_';
 const KEY_CUSTOM_PROVIDERS: string = 'ai_custom_providers';
 const KEY_TEMPERATURE: string = 'ai_temperature';
+/** OpenCode 网关要求的稳定会话 id（首次使用时生成并持久化）。 */
+const KEY_SESSION_ID: string = 'ai_opencode_session';
 
 const DEFAULT_TEMPERATURE: number = 0.7;
 const TIMEOUT_MS: number = 180000;
@@ -266,6 +269,10 @@ export class AiService {
       'Authorization': `Bearer ${key}`,
       'Accept': 'application/json',
     };
+    // models 端点不校验该头，但保持与 chat 通道一致（见 chatViaGateway）
+    if (AiService.isOpenCodeGateway(base)) {
+      headers['x-opencode-session'] = AiService.opencodeSessionId();
+    }
     const session: rcp.Session = rcp.createSession();
     let statusCode: number = 0;
     let text: string = '';
@@ -349,6 +356,31 @@ export class AiService {
       }
     };
 
+    if (AiService.isOpenCodeGateway(config.baseUrl)) {
+      const gatewaySession: rcp.Session = rcp.createSession();
+      handle.destroy = (): void => {
+        handle.aborted = true;
+        try {
+          gatewaySession.cancel();
+        } catch (_error) {
+          // 已结束的会话再 cancel 会抛，忽略
+        }
+      };
+      AiService.chatViaGateway(config, apiKey, messages, maxTokens, gatewaySession).then((content: string): void => {
+        if (handle.aborted) {
+          return;
+        }
+        full = content;
+        handlers.onDelta(content);
+        finish('');
+      }).catch((error: Error): void => {
+        if (!handle.aborted) {
+          finish(error.message);
+        }
+      });
+      return handle;
+    }
+
     let session: AiSessionHolder | null = null;
     try {
       const client: OpenAI = AiService.client(config.baseUrl, apiKey);
@@ -422,6 +454,9 @@ export class AiService {
     if (apiKey.length === 0) {
       throw new Error('请先配置 AI API Key');
     }
+    if (AiService.isOpenCodeGateway(config.baseUrl)) {
+      return AiService.chatViaGateway(config, apiKey, messages, maxTokens, rcp.createSession());
+    }
     const client: OpenAI = AiService.client(config.baseUrl, apiKey);
     const params: ChatCompletionCreateParamsBase = {
       model: config.model,
@@ -479,6 +514,69 @@ export class AiService {
       }
     }
     return out;
+  }
+
+  /** 稳定会话 id：首次生成后持久化（OpenCode 网关要求同一会话一致路由、复用 prompt 缓存）。 */
+  private static opencodeSessionId(): string {
+    let id: string = TalebookService.prefGet(KEY_SESSION_ID);
+    if (id.length === 0) {
+      id = util.generateRandomUUID(true);
+      TalebookService.prefSet(KEY_SESSION_ID, id);
+    }
+    return id;
+  }
+
+  /** 是否走 OpenCode 网关（opencode.ai）。 */
+  private static isOpenCodeGateway(baseUrl: string): boolean {
+    return baseUrl.indexOf('opencode.ai') >= 0;
+  }
+
+  /**
+   * OpenCode 网关对话通道：**绕过 @iuroc SDK 直连 rcp**。
+   *
+   * 原因：网关对 /chat/completions 强制 `x-opencode-session`（缺失 400
+   * MissingSessionID，2026-11-17 上板实测），而 SDK v1.0.10 没有任何自定义
+   * 请求头注入能力——声明里的 requestConfiguration 实为 rcp.Configuration
+   * （无 headers 字段），实测透传也不会附加到请求；且当前 SDK 的 rcp 声明
+   * （4.1.0(11) 精简版）没有流式事件，无法自解析 SSE。故整包返回
+   * （stream:false），OpenCode 对话暂无打字机效果，其他服务商不受影响。
+   */
+  private static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[],
+    maxTokens: number, session: rcp.Session): Promise<string> {
+    const headers: rcp.RequestHeaders = {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'x-opencode-session': AiService.opencodeSessionId(),
+    };
+    const body: string = JSON.stringify({
+      model: config.model,
+      messages: messages,
+      stream: false,
+      temperature: config.temperature,
+      max_tokens: maxTokens,
+    });
+    let statusCode: number = 0;
+    let text: string = '';
+    try {
+      const request: rcp.Request = new rcp.Request(
+        `${AiService.normalizeBaseUrl(config.baseUrl)}/chat/completions`, 'POST', headers, body);
+      const response: rcp.Response = await session.fetch(request);
+      statusCode = response.statusCode;
+      text = AiService.responseBodyText(response.body);
+    } catch (error) {
+      throw new Error(AiService.friendlyMessage(error instanceof Error ? error.message : String(error)));
+    } finally {
+      session.close();
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      throw new Error(AiService.httpErrorText(statusCode, text));
+    }
+    const content: string = AiService.parseContent(text);
+    if (content.length === 0) {
+      throw new Error('AI 返回内容为空，请检查模型是否可用');
+    }
+    return content;
   }
 
   /** 容错用户输入：去掉末尾 `/chat/completions` 与多余斜杠，SDK 只接受 base URL。 */

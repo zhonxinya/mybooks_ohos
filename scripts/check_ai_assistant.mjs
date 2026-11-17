@@ -89,15 +89,23 @@ writeFileSync(join(dir, 'shim.ts'), shim);
 writeFileSync(join(dir, 'aiServiceDeps.ts'), `
 // Buffer.from(x).buffer 带池化填充，必须 slice 出精确字节（模拟 rcp 的紧凑 ArrayBuffer）
 const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
-export const state = { store: new Map(), models: [], rcpResponse: null, rcpError: null, lastRequest: null };
-export const util = { TextDecoder: { create: () => ({ decodeToString: (u8) => Buffer.from(u8).toString('utf8') }) } };
+export const state = { store: new Map(), models: [], rcpResponse: null, rcpError: null, lastRequest: null, chatCalls: [] };
+export const util = {
+  TextDecoder: { create: () => ({ decodeToString: (u8) => Buffer.from(u8).toString('utf8') }) },
+  generateRandomUUID: () => 'test-uuid-fixed-0001',
+};
 export class OpenAI {
-  chat = { completions: { create: () => { throw new Error('chat not needed in check'); } } };
+  chat = { completions: { create: (body, options) => {
+    state.chatCalls.push({ body, options });
+    const ok = { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: 'ok' } }] })) };
+    const resp = state.chatResponse ?? ok;
+    return { session: { cancel: () => { state.chatCancelled = true; } }, response: Promise.resolve(resp) };
+  } } };
   constructor(options) { state.lastOptions = options; }
 }
 export const rcp = {
   Request: class Request {
-    constructor(url, method, headers) { this.url = url; this.method = method; this.headers = headers; }
+    constructor(url, method, headers, content) { this.url = url; this.method = method; this.headers = headers; this.content = content; }
   },
   createSession: () => ({
     fetch: async (request) => {
@@ -302,7 +310,7 @@ try {
   test('服务：预设含 OpenCode (Go)，自定义服务商可增删且未知 id 兜底', () => {
     deps.state.store.clear();
     const base = RealAiService.listProviders();
-    assert.ok(base.some((p) => p.id === 'opencode' && p.baseUrl === 'https://opencode.ai/inference/openai/v1'));
+    assert.ok(base.some((p) => p.id === 'opencode' && p.baseUrl === 'https://opencode.ai/zen/go/v1'));
     const preset = RealAiService.addCustomProvider('我的网关', 'https://example.com/v1/chat/completions', 'qwen3');
     assert.ok(preset.id.startsWith('custom-'));
     assert.equal(preset.baseUrl, 'https://example.com/v1');
@@ -342,6 +350,45 @@ try {
     deps.state.rcpResponse = null;
     await assert.rejects(() => RealAiService.fetchModels('opencode', 'https://x/v1', ''), /API Key/);
     await assert.rejects(() => RealAiService.fetchModels('opencode', '', 'sk-oc'), /接口地址/);
+  });
+  test('OpenCode 网关：chatStream/complete 绕过 SDK 直连 rcp，携带 x-opencode-session，id 持久稳定', async () => {
+    deps.state.store.clear();
+    deps.state.chatCalls.length = 0;
+    deps.state.rcpResponse = { statusCode: 200, body: (() => { const s = '{"choices":[{"message":{"content":"你好"}}]}'; const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); })() };
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'big-pickle', 'sk-oc', 0.5);
+    let got = '';
+    await new Promise((resolve, reject) => {
+      RealAiService.chatStream([{ role: 'user', content: 'hi' }], {
+        onDelta: (d) => { got += d; }, onDone: resolve, onError: reject,
+      });
+    });
+    assert.equal(got, '你好');
+    assert.equal(deps.state.lastRequest.url, 'https://opencode.ai/zen/go/v1/chat/completions');
+    assert.equal(deps.state.lastRequest.headers['x-opencode-session'], 'test-uuid-fixed-0001');
+    assert.equal(JSON.parse(deps.state.lastRequest.content).stream, false);
+    assert.equal(deps.state.store.get('p:ai_opencode_session'), 'test-uuid-fixed-0001');
+    assert.equal(deps.state.chatCalls.length, 0, 'opencode 不应走 SDK create');
+    assert.equal(await RealAiService.complete([{ role: 'user', content: 'hi' }]), '你好');
+    assert.equal(deps.state.lastRequest.headers['x-opencode-session'], 'test-uuid-fixed-0001');
+    deps.state.rcpResponse = null;
+  });
+  test('非 OpenCode 网关：chat 走 SDK 流式，不携带自定义会话头', () => {
+    deps.state.store.clear();
+    deps.state.chatCalls.length = 0;
+    RealAiService.saveConfig('deepseek', 'https://api.deepseek.com/v1', 'deepseek-chat', 'sk-d', 0.5);
+    RealAiService.chatStream([{ role: 'user', content: 'hi' }], { onDelta: () => {}, onDone: () => {}, onError: () => {} });
+    assert.equal(deps.state.chatCalls.length, 1);
+    assert.equal(deps.state.chatCalls[0].options.requestConfiguration, undefined);
+    assert.equal(deps.state.chatCalls[0].body.stream, true);
+  });
+  test('OpenCode 网关：fetchModels 携带同一会话 id，非 opencode 不带', async () => {
+    deps.state.store.clear();
+    deps.state.store.set('p:ai_opencode_session', 'persisted-id');
+    deps.state.models = [{ id: 'big-pickle' }];
+    await RealAiService.fetchModels('opencode', 'https://opencode.ai/zen/go/v1', 'sk-oc');
+    assert.equal(deps.state.lastRequest.headers['x-opencode-session'], 'persisted-id');
+    await RealAiService.fetchModels('deepseek', 'https://api.deepseek.com/v1', 'sk-d');
+    assert.equal(deps.state.lastRequest.headers['x-opencode-session'], undefined);
   });
   test('设置页：添加本地服务商有校验，成功后选中为当前编辑对象', () => {
     resetSettings();
