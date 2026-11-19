@@ -519,13 +519,6 @@ export struct SettingsPage {
           if (this.isExpanded(SECTION_AI)) {
             Column() {
               SettingCell({
-                title: 'AI 对话',
-                subtitle: '问答、写作与书籍相关提问',
-                showChevron: true,
-                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiAssistantPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-              SettingCell({
                 title: 'AI 书单推荐',
                 subtitle: '按书架偏好生成推荐书单',
                 showChevron: true,

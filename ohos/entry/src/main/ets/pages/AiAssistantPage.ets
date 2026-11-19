@@ -374,7 +374,16 @@ struct AiAssistantPage {
         .fontColor($r('app.color.text_secondary'));
       Column({ space: 10 }) {
         ForEach(AI_SKILLS, (skill: AiSkill) => {
-          Row() {
+          Row({ space: 10 }) {
+            Stack() {
+              SymbolGlyph($r('sys.symbol.wand_and_stars'))
+                .fontSize(15)
+                .fontColor([$r('app.color.brand_primary')]);
+            }
+            .width(32)
+            .height(32)
+            .borderRadius(16)
+            .backgroundColor($r('app.color.brand_primary_light'));
             Column({ space: 2 }) {
               Text(skill.label)
                 .fontSize(14)
@@ -391,9 +400,10 @@ struct AiAssistantPage {
               .fontColor([$r('app.color.text_tertiary')]);
           }
           .width('100%')
-          .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+          .padding({ left: 12, right: 14, top: 10, bottom: 10 })
           .borderRadius($r('app.float.card_radius'))
           .backgroundColor($r('app.color.card_background'))
+          .shadow({ radius: 8, type: ShadowType.COLOR, color: $r('app.color.button_shadow'), offsetX: 0, offsetY: 2 })
           .onClick(() => this.applySkill(skill));
         }, (skill: AiSkill) => skill.label);
       }
@@ -433,7 +443,17 @@ struct AiAssistantPage {
   @Builder
   bubbleView(bubble: ChatBubble, index: number) {
     Column({ space: 6 }) {
-      Row() {
+      Row({ space: 6 }) {
+        Stack() {
+          SymbolGlyph(bubble.role === 'user' ? $r('sys.symbol.person') : $r('sys.symbol.wand_and_stars'))
+            .fontSize(11)
+            .fontColor(bubble.role === 'user' ?
+              [$r('app.color.text_secondary')] : [$r('app.color.brand_primary')]);
+        }
+        .width(20)
+        .height(20)
+        .borderRadius(10)
+        .backgroundColor($r('app.color.page_background'));
         Text(bubble.role === 'user' ? '你' : 'AI')
           .fontSize(11)
           .fontColor($r('app.color.text_tertiary'));
@@ -476,29 +496,37 @@ struct AiAssistantPage {
     .alignItems(HorizontalAlign.Start)
     .padding(14)
     .borderRadius($r('app.float.card_radius'))
-    .backgroundColor(bubble.role === 'user' ? $r('app.color.brand_primary_light') : $r('app.color.card_background'));
+    .backgroundColor(bubble.role === 'user' ? $r('app.color.brand_primary_light') : $r('app.color.card_background'))
+    .shadow({ radius: 10, type: ShadowType.COLOR, color: $r('app.color.button_shadow'), offsetX: 0, offsetY: 2 });
   }
 
   /** 工具调用活动区：状态行 + 书目型结果的结构化列表。 */
   @Builder
   activityView(acts: ChatActivity[]) {
     if (acts.length > 0) {
-      Column({ space: 4 }) {
+      Column({ space: 8 }) {
         ForEach(acts, (act: ChatActivity, idx: number) => {
-          Column({ space: 4 }) {
-            Row({ space: 6 }) {
+          Column({ space: 6 }) {
+            Row({ space: 8 }) {
               if (act.state === 'doing') {
-                LoadingProgress().width(12).height(12).color($r('app.color.text_tertiary'));
+                LoadingProgress().width(16).height(16).color($r('app.color.brand_primary'));
               } else {
-                Text(act.state === 'rejected' ? '✕' : '✓')
-                  .fontSize(11)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor(act.state === 'rejected' ? $r('app.color.error') : $r('app.color.brand_primary'));
+                Stack() {
+                  SymbolGlyph(act.state === 'rejected' ? $r('sys.symbol.xmark') : $r('sys.symbol.checkmark'))
+                    .fontSize(9)
+                    .fontWeight(FontWeight.Bold)
+                    .fontColor([$r('app.color.on_brand')]);
+                }
+                .width(16)
+                .height(16)
+                .borderRadius(8)
+                .backgroundColor(act.state === 'rejected' ?
+                  $r('app.color.error') : $r('app.color.brand_primary'));
               }
               Text(act.state === 'doing' ? `正在${act.label}…` :
                 (act.state === 'rejected' ? `已拒绝：${act.label}` :
                   (act.summary.length > 0 ? `${act.label}：${act.summary}` : act.label)))
-                .fontSize(11)
+                .fontSize(12)
                 .fontColor($r('app.color.text_secondary'))
                 .layoutWeight(1)
                 .maxLines(1)
@@ -514,7 +542,10 @@ struct AiAssistantPage {
         }, (act: ChatActivity, idx: number) => `${idx}-${act.name}-${act.state}-${act.books.length}`);
       }
       .width('100%')
-      .alignItems(HorizontalAlign.Start);
+      .alignItems(HorizontalAlign.Start)
+      .padding(10)
+      .borderRadius($r('app.float.chip_radius'))
+      .backgroundColor($r('app.color.page_background'));
     }
   }
 
@@ -560,27 +591,31 @@ struct AiAssistantPage {
           .onChange((value: string) => this.input = value)
           .onSubmit(() => this.send(this.input));
 
-        if (this.thinking) {
-          Button({ type: ButtonType.Circle })
-            .width(44)
-            .height(44)
-            .backgroundColor($r('app.color.error'))
-            .onClick(() => this.stopStreaming()) {
-              SymbolGlyph($r('sys.symbol.xmark'))
-                .fontSize(20)
-                .fontColor([Color.White]);
-            }
-        } else {
-          Button({ type: ButtonType.Circle })
-            .width(44)
-            .height(44)
-            .backgroundColor(this.input.trim().length > 0 ? $r('app.color.brand_primary') : $r('app.color.divider'))
-            .onClick(() => this.send(this.input)) {
-              SymbolGlyph($r('sys.symbol.arrow_up'))
-                .fontSize(20)
-                .fontColor([Color.White]);
-            }
+        // Circle Button 带图标子节点时 width/height 不生效（实测渲染仅 20vp），改用 Stack 保证 44vp 热区
+        Stack() {
+          if (this.thinking) {
+            LoadingProgress()
+              .width(22)
+              .height(22)
+              .color(Color.White);
+          } else {
+            SymbolGlyph($r('sys.symbol.arrow_up'))
+              .fontSize(20)
+              .fontColor([Color.White]);
+          }
         }
+        .width(44)
+        .height(44)
+        .borderRadius(22)
+        .backgroundColor(this.thinking ? $r('app.color.error') :
+          (this.input.trim().length > 0 ? $r('app.color.brand_primary') : $r('app.color.divider')))
+        .onClick(() => {
+          if (this.thinking) {
+            this.stopStreaming();
+          } else {
+            this.send(this.input);
+          }
+        });
       }
       .width('100%');
     }
