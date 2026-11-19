@@ -12,11 +12,19 @@ import { util } from '@kit.ArkTS';
  *   服务端渲染，普遍带 og:description / og:image，作为通用兜底规则。
  * - 官方站 m.kujiang.com / www.ciweimao.com / www.rongshuxia.com 详情页带 og:novel:*
  *   全量结构化元标签（书名/作者/类别/状态，2026-11-20 实测），优先于松散 og 字段。
+ * - 万相书城 www.wxscs.com 详情页 og:novel 同样全量，但 Apache 按 UA 拦截：
+ *   桌面 UA 403、移动 UA 200（双指纹实测）——UA 按站点选择后现有规则即可覆盖。
+ * - 晋江 www.jjwxc.net onebook.php 无 og，带 schema.org Book 微数据
+ *   （itemprop=articleSection/author/genre/updataStatus/image/description），
+ *   gb18030 编码（charset 声明在字节 240，decodeBody 嗅探窗口内）、SSR 直出无 JS 壳。
  * - 站点规则会随对方改版失效，属已知取舍（用户确认「仍尝试硬写几个网文源」）。
  */
 
 const PAGE_UA: string =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
+// 少数站按 UA 放行（wxscs 桌面 UA 403、移动 UA 200），这类站用移动 UA 抓
+const MOBILE_UA: string =
+  'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36';
 const INTRO_MAX: number = 500;
 
 /** 详情页解析结果；ok=false 时 error 说明原因。 */
@@ -36,8 +44,9 @@ export interface NovelMeta {
 export class NovelMetaService {
   /** GET 文本响应；非 2xx 抛错（调用方转成用户可读文本）。 */
   private static async fetchText(url: string): Promise<string> {
+    const ua: string = url.indexOf('wxscs.com') >= 0 ? MOBILE_UA : PAGE_UA;
     const headers: rcp.RequestHeaders = {
-      'User-Agent': PAGE_UA,
+      'User-Agent': ua,
       'Accept-Language': 'zh-CN,zh;q=0.9',
     };
     const session: rcp.Session = rcp.createSession();
@@ -105,6 +114,8 @@ export class NovelMetaService {
       meta = NovelMetaService.parse17k(html);
     } else if (trimmed.indexOf('wtzw.com') >= 0) {
       meta = NovelMetaService.parseWtzw(html);
+    } else if (trimmed.indexOf('jjwxc.') >= 0 && trimmed.indexOf('onebook.php') >= 0) {
+      meta = NovelMetaService.parseJjwxc(html);
     } else {
       meta = NovelMetaService.parseGeneric(html);
     }
@@ -190,6 +201,45 @@ export class NovelMetaService {
       meta.cover = pic[1]; // 协议相对 //cdn.qimao.com/…，fetchDetail 统一补全
     }
     const intro = html.match(/class="pWorkInformation"[^>]*>([\s\S]{0,800}?)<\/div>/);
+    if (intro !== null) {
+      meta.intro = NovelMetaService.clean(intro[1], INTRO_MAX);
+    }
+    meta.ok = meta.title.length > 0 || meta.intro.length > 0 || meta.cover.length > 0;
+    return meta;
+  }
+
+  /** 晋江（www.jjwxc.net/onebook.php?novelid=<id>，2026-11-20 实测）：无 og，走页面内
+   *  schema.org Book 微数据锚点（itemprop）。编码 gb18030，由 decodeBody 嗅探解码；
+   *  封面 img 有畸形 `_src` 属性在前，正则用 \ssrc= 只认真实 src。类别原样保留
+   *  「原创-纯爱-幻想未来-剧情」四段串——分段语义站点自己也没说明，不猜。 */
+  static parseJjwxc(html: string): NovelMeta {
+    const meta: NovelMeta = { ok: false, error: '', title: '', author: '', category: '',
+      status: '', intro: '', cover: '', rule: '晋江' };
+    const name = html.match(/itemprop="articleSection">([^<]{1,80})</);
+    if (name !== null) {
+      meta.title = name[1].trim();
+    }
+    const author = html.match(/itemprop="author"[^>]*>([^<]{1,40})</);
+    if (author !== null) {
+      meta.author = author[1].trim();
+    }
+    const genre = html.match(/itemprop="genre">\s*([^<]{1,60}?)\s*</);
+    if (genre !== null) {
+      meta.category = genre[1].trim();
+    }
+    const rawStatus = html.match(/itemprop="updataStatus">([^<]{2,10})</);
+    const status: string = rawStatus !== null ? rawStatus[1] : '';
+    if (status.indexOf('完结') >= 0 || status.indexOf('完本') >= 0) {
+      meta.status = '已完本';
+    } else if (status.indexOf('连载') >= 0) {
+      meta.status = '连载中';
+    }
+    const pic = html.match(/itemprop="image"[\s\S]{0,600}?\ssrc="([^"]+)"/);
+    if (pic !== null) {
+      meta.cover = pic[1];
+    }
+    // 上限 8000：实测本书案 4874 字符才到闭合 div（lazy 遇 </div> 即停，clean 再截 500）
+    const intro = html.match(/itemprop="description">([\s\S]{0,8000}?)<\/div>/);
     if (intro !== null) {
       meta.intro = NovelMetaService.clean(intro[1], INTRO_MAX);
     }

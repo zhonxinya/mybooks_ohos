@@ -1490,6 +1490,73 @@ try {
     assert.ok(m.cover.startsWith('//cdn.qimao.com/')); // 协议相对，fetchDetail 里统一补全
   });
 
+  // 万相书城 fixture：2026-11-20 www.wxscs.com/book/10212 实测 meta 节选。
+  // 该站 Apache 按 UA 放行（桌面 403/移动 200），回归同时盯住 UA 特判不回退
+  const WXSCS_PAGE = `<html><head>
+<meta property="og:description" content="江湖上流传着一个传说：要自杀的人最好遇上杜云青。这虽是个传说，但却没有人怀疑，每一个曾经在江湖上混过了几年的人，都可以为你举出一大堆的例子。塞北五娘、江南七怪、南天一鹤、楼霞双仙等等，这些跺脚四海颤，名"/>
+<meta property="og:image" content="/uploads/cover/pic10212.jpg"/>
+<meta property="og:novel:category" content="玄幻奇幻"/>
+<meta property="og:novel:author" content="司马紫烟"/>
+<meta property="og:novel:book_name" content="新月剑"/>
+<meta property="og:novel:status" content="完结"/>
+</head><body></body></html>`;
+  test('NovelMeta：wxscs 桌面 UA 403 教训——UA 按站点选择，移动 UA+相对封面补全', async () => {
+    deps.state.rcpResponse = { statusCode: 200, body: enc(WXSCS_PAGE) };
+    const m = await NovelMetaService.fetchDetail('https://www.wxscs.com/book/10212/');
+    assert.ok(m.ok && m.rule === 'og:novel');
+    assert.equal(m.title, '新月剑');
+    assert.equal(m.status, '已完本'); // 「完结」归一
+    assert.equal(m.cover, 'https://www.wxscs.com/uploads/cover/pic10212.jpg');
+    assert.ok(String(deps.state.lastRequest.headers['User-Agent']).includes('Mobile'),
+      'wxscs 必须用移动 UA（桌面 UA 实测 403）');
+    deps.state.rcpResponse = { statusCode: 200, body: enc(QIDIAN_M_PAGE) };
+    await NovelMetaService.fetchDetail('https://www.qidian.com/book/1050742867/');
+    assert.ok(String(deps.state.lastRequest.headers['User-Agent']).includes('Windows NT'),
+      '其他站保持桌面 UA');
+    deps.state.rcpResponse = null;
+  });
+
+  // 晋江模板串：仿 2026-11-20 onebook.php?novelid=10035712 实测结构（schema.org itemprop），
+  // 专防两坑：畸形 `_src` 属性（真实页 img 有 _src="…" src="…" 双属性）、简介 div 超 2000 字符
+  test('NovelMeta.parseJjwxc：itemprop 锚点——防 _src 误取、长简介、状态归一、类别原样', () => {
+    const long = 'A'.repeat(2500);
+    const page = `<html><body>
+<h1 itemprop="name"><span itemprop="articleSection">测试书名</span> </h1>
+<h2>作者：<a href="#"><span style="font-size:12px" itemprop="author">测试作者</span></a></h2>
+<li><span>文章类型：</span> <span style="color:#000;float:none" itemprop="genre"> 原创-言情-近代现代-爱情 </span> </li>
+<li><span>文章进度：</span><span style="color:#000;float:none" itemprop="updataStatus">已完结</span></li>
+<div class="smallreadbody"> <img class="noveldefaultimage" itemprop="image"_src="https://BAD.example/wrong.jpg" src="https://GOOD.example/right.jpg" width="200"><div id="novelintro" itemprop="description">文案开头${long}文案结尾</div>
+</body></html>`;
+    const m = NovelMetaService.parseJjwxc(page);
+    assert.ok(m.ok && m.rule === '晋江');
+    assert.equal(m.title, '测试书名');
+    assert.equal(m.author, '测试作者');
+    assert.equal(m.category, '原创-言情-近代现代-爱情'); // 四段串原样保留
+    assert.equal(m.status, '已完本'); // 「已完结」归一
+    assert.ok(m.cover.includes('right.jpg') && !m.cover.includes('wrong.jpg'),
+      '必须取真实 src 而非畸形 _src');
+    assert.ok(m.intro.startsWith('文案开头') && m.intro.length === 501,
+      `>2000 字符简介也必须命中并截断，实际 ${m.intro.length}`);
+  });
+
+  // 晋江 gb18030 端到端：2026-11-20 onebook.php?novelid=10035712 真页关键区块节选
+  test('NovelMeta：晋江 gb18030 页 fetchDetail 端到端——编码嗅探+itemprop 全字段', async () => {
+    const JJWXC_B64 = 'PGh0bWw+PGhlYWQ+PG1ldGEgaHR0cC1lcXVpdj0iQ29udGVudC1UeXBlIiBjb250ZW50PSJ0ZXh0L2h0bWw7IGNoYXJzZXQ9Z2IxODAzMCI+PHRpdGxlPng8L3RpdGxlPjwvaGVhZD48Ym9keT4gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIDxzcGFuIGNsYXNzPSJiaWd0ZXh0Ij48aDEgaXRlbXByb3A9Im5hbWUiPjxzcGFuIGl0ZW1wcm9wPSJhcnRpY2xlU2VjdGlvbiI+uqO1usfzyfqjusn6u+7N5rzS1tbM77bau/U8L3NwYW4+IDwvaDE+PC9zcGFuPg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA8aW5wdXQgdHlwZT0iaGlkZGVuIg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgdmFsdWU9IiVCQSVBMyVCNSVCQSVDNyVGMyVDOSVGQSVBMyVCQSVDOSVGQSVCQiVFRSVDRCVFNiVCQyVEMiVENiVENiVDQyVFRiVCNiVEQSVCQiVGNSINCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIGlkPSJwdWJfcnNfbm92ZWxuYW1lIi8+DQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgPGgyPg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg1/fV36O6PGEgaHJlZj0iaHR0cDovL3d3dy5qand4Yy5uZXQvb25lYXV0aG9yLnBocD9hdXRob3JpZD03MDM5MTY3Ij48c3Bhbg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgc3R5bGU9ImZvbnQtc2l6ZToxMnB4IiBpdGVtcHJvcD0iYXV0aG9yIj7ns9LEPC9zcGFuPjwvYT4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIDxzcGFuIHN0eWxlPSJjb2xvcjojMDAwO2Zsb2F0Om5vbmUiIGl0ZW1wcm9wPSJnZW5yZSI+DQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgINSttLQttL+wri27w8/rzrTAtC2+58fpICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIDwvc3Bhbj4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIDwvbGk+DQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBzdHlsZT0iY29sb3I6IzAwMDtmbG9hdDpub25lIiBpdGVtcHJvcD0idXBkYXRhU3RhdHVzIj7BrNTYPC9zcGFuPg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgPC9saT4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIDxsaT4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgPGltZyBjbGFzcz0ibm92ZWxkZWZhdWx0aW1hZ2UiIGl0ZW1wcm9wPSJpbWFnZSJfc3JjPSJodHRwczovL2k5LXN0YXRpYy5qand4Yy5uZXQvbm92ZWxpbWFnZS5waHA/bm92ZWxpZD0xMDAzNTcxMiZjb3ZlcmlkPTE1NiZ2ZXI9ZmYzNjkwMWVhM2Y0ZmQyNmNlMTJiY2Q4MjZlMjVmNGUiIHNyYz0iaHR0cHM6Ly9pOS1zdGF0aWMuamp3eGMubmV0L25vdmVsaW1hZ2UucGhwP25vdmVsaWQ9MTAwMzU3MTImY292ZXJpZD0xNTYmdmVyPWZmMzY5MDFlYTNmNGZkMjZjZTEyYmNkODI2ZTI1ZjRlIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjI4MCIgYWxpZ249bGVmdCByZWZlcnJlcnBvbGljeT0ibm8tcmVmZXJyZXIiIHN0eWxlPSJtYXJnaW46MCAxMHB4IDAgMDsiIG9uZXJyb3I9ImxvYWREZWZhdWx0Tm92ZWxDb3Zlcih0aGlzKSI+PGRpdiBpZD0ibm92ZWxpbnRybyIgaXRlbXByb3A9ImRlc2NyaXB0aW9uIjxkaXYgaWQ9Im5vdmVsaW50cm8iIGl0ZW1wcm9wPSJkZXNjcmlwdGlvbiI+xM/B976w0ru+9dDRwLSjrL7NtcPWqtfUvLqxu9K7uPa90KG2uqO1usfzyfqht7XE0LC28dPOz7fPtc2zsPPGscHLoaO007TLus3AttDHy7XU2bz7o6y687Dryfq2vLnSv7/U2tK71/m54s26zbq1xNChtbrJz8HLoaM8YnI+yrLDtL3Qv6q+1tK71/m1uqOszu/Xysirv7+4zrChoaM8YnI+w+a21MTxsrvArcq6tcS7xLW6o6zBvcrWv9W/1bXExM/B976wttq79cant7jBy6GjPGJyPrK70NCjrLHY0Ou1w7jOxvDAtKOho6GjoTxicj7L+7jPuqOjrNbWtdijrNH4yrfAs8S3o6zSu9PQv9W+zb+qtKzMvcv318rUtLW6o6y6zdSt16HD8df2vbvS16GjPGJyPtPayse9pb2ltcSjrNCh0KG1xLW60+zSu9TZwKm9qKOsu8S12LHkwbzM76GjxMGzob+qxvDAtMHLo6y357O1vajG8MC0wcujrMTPwfe+sLK7ueLE3NfUuPjX1Nfjo6y7ucTctqjG2sil1K3XocPxtcS1usnPsNrMr8L0xam4sbL6xrejrNeswLS1xMeu16rK1r7NwvLBy7j8tuDKtdPDtcTBtr3wtcC+36GjPGJyPtfUtq+9vcuuxvejv7rDtqvO96OswvLBy6OhPGJyPjMwzOy1xNDCytbG2rn9yKWjrNPOz7fVub+qwcvL/M/VtvG1xNXmw+bEv6GjzOzU1r3T9eC2+NbBo6y8q7quoaK4387CoaKxqdPqoaLTwNK5oa2hrcO/0ru49jMwzOy2vM6qzea80rT4wLTRz77+tcS/vNHpoaM8YnI+xM/B976w08DUtsrH17yxuNfus+TX47XExMfSu8X6oaM8YnI+sam359GpwLTB2aOsxM/B976w1/jU2s7Cxa+1xMWpyeHA76Osv77XxcWvyNrI2rXEsdrCr6Os0rux38P+18W0883Iyc/Lr7PJ0rvNxbXEw6jSu7HfusjXxcjIv8m/yaGjPGJyPrCmo6zQ0rijoaM8YnI+087Pt7K7ysfDu9PQ1b22t9Sqy9ijrLWryfq77s3mvNKyu7CuuOPEx9CptPK08smxybG1xKGjPGJyPrWxyLvBy6OsyOe5+9PQxMS49rK7s6TR27XEtai40sC0tPLIxcv71ta12KOsxM/B976w0rK74brBsru/zcb4tcShraGtsNHL+9bWtb212MDvoaM8YnI+PGJyPtbY0qrLtcP3o7qxvs7Eyei2qMHpuNDAtNfUtuCyv8TBs6HO79Pv087Pt6OsyOfT0MDXzayjrMTH0ru2qMrHztLU2tbCvrSjoTxicj6hqqGqoaqhqjxicj7Qob7ns6Gjujxicj5Bo7q458PHo6zE49XitqvO97K7tO2woaOsxMTC8rXEo788YnI+QqO6srvWqrW6oaM8YnI+QaO6ztLOysTjyse008TEtvnC8rXEo6GjoTxicj5Co7rO0su1wcujobK71qq1urCho6GjoTxicj48YnI+PGJyPqGqoaqhqqGqoaqhqs/Ct73Kx9SkytWjoTxicj6htsrAvee52r78tNPQodPEwem/qsq8obc8YnI+PGJyPqGhoaHV4srH0ru49sjL0+u7w8HpubLJ+rXEysC956GjPGJyPqGhoaHCvdXV0MfS8s6q0ru33c38tPi72LzStcS+7dfTt7W72NGn0KOjrMi01OK1vcHL0rDJ+rvDwem1xM+uu/ejrLK70KHQxLX0vfjBy7vDwem1xMrAveehsLa0v9+hsaOssu6147b5xdzLwNTawO/D5qGjPGJyPqGhoaHQ0rrDzOzO3r74yMvWrsK3o6zU2rG70rDJ+rvDwem89LX0srHX08ewo6zCvdXV0Me6zcbVzai8trvDwenQodPEwenP4NP2wcuhozxicj6hoaGh1NrG1c2ovLa7w8Hp1tDSssrH1+7I9dK7tbW1xNCh08TB6b7Ny+O9+LuvwcvSsrrcyPXQoaOs0/nB6cqmw8e1q7ey09C149e3x/O2vLK7u+HRodTxxvXUvNCh08TB6aOstavU2s6ju/rWrtbQo6zWu9PQy/y21MK91dXQx8nss/bBy8rWoaM8YnI+oaGhocK91dXQx7rBsrvTzNSltdjO1cHLyc/IpaGjPGJyPqGhoaGhsNfuyPXQobXE08TB6c+1u8PB6aGx09bU9dH5o7/CvdXV0MfX1NDFxr696NfUvLq1xNW9yvXWuLvTus3Ep7nt0bXBt6Os1NnF5LrP0KHTxMHps6zHv7XE1b22t9Li1r6jrMv7w8fSu7aoxNzU2se/1d/I59TGtcS7w8HpttTVvdbQybGz9tK7zPXRqsK3wLShozxicj6hoaGhxL+x6srHyKu5+rnavvyjoTxicj48YnI+oaGhoaGqoaqhqqGqPGJyPqGhICAgsb7OxMHpuNDAtNfUoba+q8Hpsaa/ycPOobehoqG2yv3C67GmsbSht7XI0fiz6LbU1b3Tzs+3o6zI59PQwNfNrKOst8ezo9X9s6OjoTxicj6hoaGhsb7OxMTayN2w/MCoo7rG9dS8u8PB6aGiu8PB6dG1wbehosn9vLahora0v9/Mvc/VoaK7w8HpttTVvaOotaXIyy/Nxczlo6k8YnI+oaGhobG+zsTW973Ho7rH7rfowcu1q7bUu8PB6brctPO3vbXE1b22t7/xQmtpbme6zcv7sK62usOotcTE6snPttTP8zxicj4gICAgICAgysC959fux7/Lq7TytO61tSArIM31sru8+831tcS1pbTyvqK10Dxicj6hoaGhyf28tsH3oaK087OkxqqhosTauqzDyLPoo6zH67TzvNLWp7PW0KHTxMHpo6HWp7PWzrTAtLXEysC957navvzQocK9o6E8YnI+PGJyPqGqoaqhqqGqoaqhqjxicj48YnI+oba087q9uqOjurTT0KG3q7Ssv6rKvKG3PGJyPtC7wdbSu9ax0tTAtLa8vvW1w6Os19S8ur7NysfG1crA0uLS5cnPtcS1ucO5tbChozxicj6438vZuavCt8nPMTGztcGsu7fXt86yo6zGq8arvs3Iw8v7uM/Jz8HLo6zGq8arvs3Kx8v7w8e1xLO1v6jU2rWx1tCjrMarxqu+zcrHy/vU2sTHwO/Kp8ilwcvSu8fQoaM8YnI+s7W79sjDy/u1xNK7zPXNyLfby+nQ1LnH1dujrLu509DSu7j5wN+5x7TMxsbBy7fOoaOyu732v+DBt7bgxOq1xPXMyK21wLuv1/fF3dOwo6y7ucjDy/u007TLuOax8NX9s6PIy7XEyfq77qOss8nBy8rAyMvR29bQtcT1y9fTo6yx8Mu1xdzBy6OstuDX38G9sr22vNKqtPO0rcb4oaM8YnI+1NnDu9PQyMuxyMv7uPy1ucO5wcuhozxicj48YnI+tvjSsr7NysfV4tH5tcTL+6Os1Nmxu8CtyOvIq8Pxx/PJ+tPOz7e686Osu/G1w8HLsbvPtc2zx9W2qLXETHVja3kgRG9nzOy4s6GjPGJyPsuto7/O0sLwo788YnI+vLTKub71tcPPtc2ztcTF0LbPxsS+37fttMzS4s62o6zQu8HW0rLDu9PQyM66zrDst6iho8vXu7DLtbjssrLFobK7uf20883Io6zE3LDRyKvAttDHtrzArTwvZGl2PjwvYm9keT48L2h0bWw+';
+    const raw = Buffer.from(JJWXC_B64, 'base64');
+    deps.state.rcpResponse = { statusCode: 200,
+      body: raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) };
+    const m = await NovelMetaService.fetchDetail('http://www.jjwxc.net/onebook.php?novelid=10035712');
+    assert.ok(m.ok && m.rule === '晋江');
+    assert.equal(m.title, '海岛求生：生活玩家种田囤货');
+    assert.equal(m.author, '绯夷');
+    assert.equal(m.category, '原创-纯爱-幻想未来-剧情');
+    assert.equal(m.status, '连载中');
+    assert.ok(m.intro.startsWith('南流景一觉醒来') && !m.intro.includes('\uFFFD'),
+      'gb18030 解码简介须可读不乱码');
+    assert.ok(m.cover.startsWith('https://i9-static.jjwxc.net/novelimage.php'));
+    deps.state.rcpResponse = null;
+  });
+
   // 飞卢 gb2312 fixture：2026-11-20 b.faloo.com/1484744.html 实测 meta 行，GBK 字节 base64
   test('NovelMeta：charset 嗅探+GBK 解码——飞卢老站不乱码，utf-8 页不受影响', async () => {
     const FALOO_B64 = 'PGh0bWw+PGhlYWQ+PG1ldGEgaHR0cC1lcXVpdj0iQ29udGVudC1UeXBlIiBjb250ZW50PSJ0ZXh0L2h0bWw7IGNoYXJzZXQ9Z2IyMzEyIj4KPG1ldGEgcHJvcGVydHk9Im9nOnRpdGxlIiBjb250ZW50PSLFzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOzX7tDC1cK92ijC283iz8XE8tbuzOwp1NrP39TEtsFft8nCrNChy7XN+CI+CjxtZXRhIHByb3BlcnR5PSJvZzpkZXNjcmlwdGlvbiIgY29udGVudD0iob63ycKs0KHLtc34tsC80sep1LzQocu1o7rFzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOyhv8zsxLu9tcHZ1u7M7KOsv6q+1sXMtePN8r3n1b3BpsG/vLaho7TTsazXqby2o6yxrMe9vLahraGtsazQx7y2o6y649DHvLajrNDHz7W8tqOs0MfPtc3FvLajrLWlzOXT7tbmvLajrLbg1KrT7tbmvLajrM7ez9624NSq0+7W5qGtoa3O3s/eutDX06Os1rjK/cv+o6yzrNa4yv3L/qOssru/ybTvu/nK/aGtoa3V5s/WyrWjrLW9Ij4KPG1ldGEgcHJvcGVydHk9Im9nOmltYWdlIiBjb250ZW50PSJodHRwOi8vaW1nLmZhbG9vLmNvbS9Ob3ZlbC80OTh4NzA1LzEvMTU5NS8wMDE1OTU5NTcuanBnIj4KPC9oZWFkPjxib2R5PjxoMT7FzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOw8L2gxPjwvYm9keT48L2h0bWw+';
