@@ -87,9 +87,14 @@ export class AiChatStore {
   visionEnabled: boolean = false;
   contextK: number = 8;
 
+  /** 瞬时失败自动重试：退避基数（毫秒，离线回归注入缩短）与最大次数。 */
+  retryDelayMs: number = 1000;
+  private static readonly MAX_AUTO_RETRIES: number = 2;
+
   private static inst: AiChatStore | null = null;
   private requestId: number = 0;
   private abort: AiAbortHandle | null = null;
+  private retryTimer: number = -1;
   private loaded: boolean = false;
   /** 当前前台视图的回调（页面 struct 不能 implements 接口，用 token+闭包绑定）。 */
   private viewSync: (() => void) | null = null;
@@ -142,6 +147,10 @@ export class AiChatStore {
 
   stopStreaming(): void {
     this.requestId++;
+    if (this.retryTimer >= 0) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = -1;
+    }
     const handle: AiAbortHandle | null = this.abort;
     this.abort = null;
     if (handle !== null) {
@@ -355,6 +364,7 @@ export class AiChatStore {
     this.thinking = true;
     this.notify();
 
+    let attempt: number = 0;
     const handlers: AiStreamHandlers = {
       onDelta: (delta: string) => {
         if (requestId !== this.requestId || !this.thinking) {
@@ -393,9 +403,27 @@ export class AiChatStore {
         }
       },
       onError: (message: string) => {
-        if (requestId === this.requestId && this.thinking) {
-          this.finishBubble(message, true);
+        if (requestId !== this.requestId || !this.thinking) {
+          return;
         }
+        // 网络抖动/超时/限流类瞬时失败：整条请求自动重试（退避 1s/2s），不弹错误气泡；
+        // 401/404 等配置类错误重试无意义，照旧直接报错
+        if (attempt < AiChatStore.MAX_AUTO_RETRIES && AiChatStore.retryableError(message)) {
+          attempt++;
+          this.streamingText = '';
+          this.streamingReasoning = '';
+          this.liveActivities = [];
+          this.errorTip = `请求失败，自动重试 ${attempt}/${AiChatStore.MAX_AUTO_RETRIES}：${message}`;
+          this.notify();
+          this.retryTimer = setTimeout((): void => {
+            this.retryTimer = -1;
+            if (requestId === this.requestId && this.thinking) {
+              request();
+            }
+          }, this.retryDelayMs * attempt);
+          return;
+        }
+        this.finishBubble(message, true);
       },
     };
 
@@ -403,10 +431,22 @@ export class AiChatStore {
     if (requestId !== this.requestId || !this.thinking) {
       return;
     }
-    const handle: AiAbortHandle = AiService.chatStream(context, handlers, 2048);
-    if (requestId === this.requestId && this.thinking) {
-      this.abort = handle;
+    const request = (): void => {
+      const handle: AiAbortHandle = AiService.chatStream(context, handlers, 2048);
+      if (requestId === this.requestId && this.thinking) {
+        this.abort = handle;
+      }
+    };
+    request();
+  }
+
+  /** 值得自动重试的瞬时失败：连不上/超时/429 限流/5xx，以及网关裸错误里的连接类文案。 */
+  private static retryableError(text: string): boolean {
+    if (text.indexOf('无法连接') >= 0 || text.indexOf('超时') >= 0 || text.indexOf('429') >= 0) {
+      return true;
     }
+    return /AI 服务返回 5\d\d/.test(text) ||
+      /timeout|timed out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|fetch failed|socket/i.test(text);
   }
 
   finishBubble(text: string, isError: boolean): void {
@@ -425,6 +465,8 @@ export class AiChatStore {
     // 上次是错误气泡时，把这次失败的消息踢出上下文（buildContext 已过滤 error）
     if (isError) {
       this.errorTip = text;
+    } else {
+      this.errorTip = '';
     }
     this.saveHistory();
     this.notify();
@@ -486,6 +528,10 @@ export class AiChatStore {
   /** 仅离线回归用：隔离单例状态，避免用例串台。 */
   resetForTest(): void {
     this.requestId++;
+    if (this.retryTimer >= 0) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = -1;
+    }
     this.abort = null;
     this.viewToken++;
     this.viewSync = null;

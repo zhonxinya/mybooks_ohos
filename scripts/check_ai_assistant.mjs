@@ -25,7 +25,7 @@ const settingsDefaults = () => ({
   keys: new Set(['deepseek']), saved: null, models: [], fetchError: '', completeReply: 'ok',
 });
 const state = {
-  ready: true, handlers: null, copied: '', cancel: null,
+  ready: true, handlers: null, copied: '', cancel: null, streamCallCount: 0,
   shelf: { books: [] }, search: async () => ({ body: { books: [] } }),
   recommend: async () => [], summary: async () => '', review: async () => '', meta: async () => ({}),
   settings: settingsDefaults(), prefs: new Map(), lastMessages: null, lastToast: '',
@@ -40,6 +40,7 @@ export const AiService = {
   chatStream: (messages, handlers) => {
     state.handlers = handlers;
     state.lastMessages = messages;
+    state.streamCallCount++;
     return { aborted: false, destroy: () => state.cancel?.(handlers) };
   },
   loadConfig: () => state.settings.config,
@@ -537,6 +538,64 @@ try {
     assert.equal(reply.reasoning, '因为');
     const noThink = RealAiService.parseGatewayReply(JSON.stringify({ choices: [{ message: { content: 'x' } }] }));
     assert.equal(noThink.reasoning, '');
+  });
+  const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+  test('瞬时失败自动重试：超时后自动重发并成功，不弹错误气泡、不重复用户消息', async () => {
+    const page = chat();
+    const store = AiChatStore.instance();
+    store.retryDelayMs = 10;
+    await page.send('问题');
+    const h1 = state.handlers;
+    const c0 = state.streamCallCount;
+    h1.onError('AI 请求超时，请检查网络或换用更快的模型');
+    assert.equal(page.messages.at(-1).error, false, '重试等待期不得弹错误气泡');
+    await sleepMs(40);
+    assert.equal(state.streamCallCount, c0 + 1, '退避后必须重发新请求');
+    assert(page.messages.at(-1).content === '', '半截输出不得带入重试');
+    state.handlers.onDone('最终回答');
+    assert.equal(page.messages.at(-1).content, '最终回答');
+    assert.equal(store.errorTip, '', '重试成功后提示清除');
+    assert.equal(page.messages.filter((m) => m.role === 'user').length, 1, '重试不重复用户气泡');
+  });
+  test('配置类错误不重试：401 直接落错误气泡，不重发请求', async () => {
+    const page = chat();
+    AiChatStore.instance().retryDelayMs = 10;
+    await page.send('问题');
+    const h1 = state.handlers;
+    const c0 = state.streamCallCount;
+    h1.onError('API Key 无效或已过期（HTTP 401）');
+    assert.equal(page.messages.at(-1).error, true, '401 必须立即报错');
+    await sleepMs(40);
+    assert.equal(state.streamCallCount, c0, '不得自动重发');
+  });
+  test('重试耗尽：连续瞬时失败 3 次后落错误气泡（1 原始 + 2 重试）', async () => {
+    const page = chat();
+    const store = AiChatStore.instance();
+    store.retryDelayMs = 10;
+    await page.send('问题');
+    const c0 = state.streamCallCount;
+    state.handlers.onError('无法连接 AI 服务，请检查接口地址与网络');
+    await sleepMs(40);
+    assert.equal(state.streamCallCount, c0 + 1, '第 1 次重试已发出');
+    state.handlers.onError('AI 请求超时，请检查网络或换用更快的模型');
+    await sleepMs(60);
+    assert.equal(state.streamCallCount, c0 + 2, '第 2 次重试已发出');
+    assert.equal(page.messages.at(-1).error, false, '第 3 次请求进行中仍是流式气泡');
+    state.handlers.onError('AI 服务返回 503：temporarily unavailable');
+    assert.equal(page.messages.at(-1).error, true, '重试耗尽后必须报错');
+    assert(page.messages.at(-1).content.includes('503'), '错误气泡保留最后一次错误文案');
+    assert.equal(state.streamCallCount, c0 + 2, '最多 3 次请求（1 原始 + 2 重试）');
+  });
+  test('重试等待期用户停止：取消待重发请求，气泡落「已停止生成」', async () => {
+    const page = chat();
+    AiChatStore.instance().retryDelayMs = 10;
+    await page.send('问题');
+    const c0 = state.streamCallCount;
+    state.handlers.onError('AI 请求超时，请检查网络或换用更快的模型');
+    page.stopStreaming();
+    await sleepMs(40);
+    assert.equal(state.streamCallCount, c0, '停止后不得再重发');
+    assert.equal(page.messages.at(-1).content, '已停止生成');
   });
   test('写闸门：页面不在场时确认一律按拒绝', async () => {
     const page = chat();
