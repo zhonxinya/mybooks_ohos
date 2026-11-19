@@ -5,6 +5,7 @@ import { SoNovelService } from './SoNovelService';
 import { SoNovelMerge, SoNovelSearchItem } from '../utils/SoNovelMerge';
 import { DownloadTaskService } from './DownloadTaskService';
 import { BookListAddResponse, BookListApi, BookListMutationResponse } from './BookListApi';
+import { AiPersona } from './AiPersona';
 
 /** 工具结果里的一本书（供对话页做结构化列表渲染）。 */
 export interface ToolBookLine {
@@ -199,11 +200,26 @@ const TOOL_SET_COVER: AiToolDefinition = defineTool('set_cover',
     '候选须来自对同一 book_id 的最近一次 search_cover。',
   COVER_SET_PROPS, COVER_SET_REQUIRED);
 
+const MEMORY_SAVE_PROPS: Record<string, AiToolProperty> = {
+  'content': prop('string', '要记住的一句话事实，如「用户偏好刘慈欣的长篇」「用户正在读《三体》，计划两周读完」'),
+};
+const MEMORY_FORGET_PROPS: Record<string, AiToolProperty> = {
+  'index': prop('number', '要删除的记忆序号（1 起，来自系统提示中的记忆列表编号）'),
+};
+const TOOL_SAVE_MEMORY: AiToolDefinition = defineTool('save_memory',
+  '把关于用户的一条长期事实记进跨对话记忆：阅读偏好、正在读的书、明确说过的约定、身份/称呼等。' +
+    '只记值得跨对话保留的信息，一次性提问和闲聊不要记；已有相同记忆时不要重复记。',
+  MEMORY_SAVE_PROPS, ['content']);
+const TOOL_FORGET_MEMORY: AiToolDefinition = defineTool('forget_memory',
+  '按序号删除一条用户记忆（用户说「别记得/忘掉第 N 条」时用）。序号来自系统提示记忆列表的编号。',
+  MEMORY_FORGET_PROPS, ['index']);
+
 const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SEARCH_BOOKS, TOOL_BOOK_DETAIL, TOOL_BOOK_NOTES, TOOL_READING_HISTORY,
   TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS,
   TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_UPDATE_BOOK_META,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
+  TOOL_SAVE_MEMORY, TOOL_FORGET_MEMORY,
 ];
 
 export class AiTools {
@@ -217,7 +233,8 @@ export class AiTools {
    * 名字与 TOOL_DEFS 里的写工具对应；新加写工具忘记登记 = 无确认直接执行，务必同步。
    */
   private static readonly WRITE_TOOLS: string[] =
-    ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task', 'update_book_meta', 'set_cover'];
+    ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task', 'update_book_meta', 'set_cover',
+      'forget_memory'];
 
   static needsConfirm(name: string): boolean {
     return AiTools.WRITE_TOOLS.indexOf(name) >= 0;
@@ -280,6 +297,12 @@ export class AiTools {
     if (name === 'set_cover') {
       return '更换封面';
     }
+    if (name === 'save_memory') {
+      return '记住用户的事';
+    }
+    if (name === 'forget_memory') {
+      return '删除一条记忆';
+    }
     return name;
   }
 
@@ -323,6 +346,12 @@ export class AiTools {
       }
       if (name === 'add_books_to_booklist') {
         return await AiTools.addBooksToBooklist(args);
+      }
+      if (name === 'save_memory') {
+        return AiPersona.appendMemory(AiTools.argString(args, 'content'));
+      }
+      if (name === 'forget_memory') {
+        return AiPersona.removeMemory(AiTools.argNumber(args, 'index'));
       }
       return `未知工具：${name}`;
     } catch (error) {

@@ -28,7 +28,7 @@ const state = {
   ready: true, handlers: null, copied: '', cancel: null,
   shelf: { books: [] }, search: async () => ({ body: { books: [] } }),
   recommend: async () => [], summary: async () => '', review: async () => '', meta: async () => ({}),
-  settings: settingsDefaults(), prefs: new Map(), lastMessages: null,
+  settings: settingsDefaults(), prefs: new Map(), lastMessages: null, lastToast: '',
 };
 globalThis.__aiCheck = state;
 // 设置页保存时会记一个配置版本号，桩掉避免 save() 抛错
@@ -91,6 +91,7 @@ export const pasteboard = {
   getSystemPasteboard: () => ({ setData: (text) => { state.copied = text; return Promise.resolve(); } }),
 };
 export const AppRouter = { getParams: () => ({}) };
+export const promptAction = { showToast: (o) => { state.lastToast = o.message; } };
 export const AI_PROVIDERS = [];
 export const CONTEXT_LENGTH_OPTIONS = [4, 8, 32, 128, 200];
 // 对话页附图管线的 kit 桩：回归只测协议形状与状态流转，真实编码上板验证
@@ -248,9 +249,38 @@ export const ANNOTATION_SCOPE_MINE = 'mine';
 export function annotationTypeLabel(type) { return type === 'highlight' ? '高亮' : type === 'note' ? '笔记' : type; }
 `);
 
+// AiPersona 的运行时依赖桩：内存文件系统 + dataDir，灵魂/记忆不落盘
+writeFileSync(join(dir, 'personaDeps.ts'), `
+export const personaState = { files: new Map(), dir: '/stub-files' };
+export const fs = {
+  OpenMode: { READ_ONLY: 1, READ_WRITE: 2, CREATE: 4, TRUNC: 8 },
+  accessSync: (p) => personaState.files.has(p),
+  mkdirSync: () => {},
+  readTextSync: (p) => {
+    if (!personaState.files.has(p)) { throw new Error('ENOENT ' + p); }
+    return personaState.files.get(p);
+  },
+  openSync: (p) => ({ fd: p }),
+  writeSync: (fd, text) => { personaState.files.set(fd, text); },
+  closeSync: () => {},
+};
+// AiPersona 的 import 子句是 fileIo as fs，两个名字都指向同一桩对象
+export const fileIo = fs;
+export const TalebookService = { dataDir: () => personaState.dir };
+`);
+
+function stageAiPersona() {
+  let source = read('services/AiPersona.ets');
+  source = source
+    .replace(`from '@kit.CoreFileKit'`, `from './personaDeps.ts'`)
+    .replace(`from './TalebookService'`, `from './personaDeps.ts'`);
+  writeFileSync(join(dir, 'RealAiPersona.ts'), source);
+}
+
 function stageAiTools() {
   let source = read('services/AiTools.ets');
   source = source
+    .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
     .replace(`from './TalebookApi'`, `from './aiToolsDeps.ts'`)
     .replace(`from './AnnotationApi'`, `from './aiToolsDeps.ts'`)
     .replace(`from './TalebookService'`, `from './aiToolsDeps.ts'`)
@@ -280,6 +310,9 @@ function stagePage(name) {
       return `import { ${values.join(', ')} } from './RealAiTools.ts';\n` +
         "import type { ToolBookLine } from './RealAiTools.ts';\n";
     }
+    if (path === '../services/AiPersona') {
+      return `import { AiPersona } from './RealAiPersona.ts';\n`;
+    }
     if (path === '../services/AiSkills') {
       const names = clause.split(',').map((part) => part.trim());
       const values = names.filter((name) => name !== 'AiSkill');
@@ -291,7 +324,8 @@ function stagePage(name) {
     }
     for (const name of clause.split(',').map((part) => part.trim())) {
       if (['AiService', 'AiBookService', 'ShelfApi', 'TalebookService', 'pasteboard', 'AppRouter', 'AI_PROVIDERS',
-        'CONTEXT_LENGTH_OPTIONS', 'fileIo as fs', 'photoAccessHelper', 'image', 'util', 'common'].includes(name)) {
+        'CONTEXT_LENGTH_OPTIONS', 'fileIo as fs', 'photoAccessHelper', 'image', 'util', 'common',
+        'promptAction'].includes(name)) {
         shims.add(name);
       }
     }
@@ -322,16 +356,21 @@ try {
   stagePure('LibraryMatch', 'utils/LibraryMatch.ets', ['BookItem']);
   stagePure('MdParse', 'services/MdParse.ets', []);
   stagePure('AiSkills', 'services/AiSkills.ets', []);
-  for (const name of ['AiAssistantPage', 'AiBookPanelPage', 'AiRecommendPage', 'AiSettingsPage']) {
+  for (const name of ['AiAssistantPage', 'AiBookPanelPage', 'AiRecommendPage', 'AiSettingsPage',
+    'AiPersonaPage']) {
     stagePage(name);
   }
   stageAiService();
+  stageAiPersona();
   stageAiTools();
   const load = async (name) => import(pathToFileURL(join(dir, `${name}.ts`)).href);
   const { AiAssistantPage } = await load('AiAssistantPage');
   const { AiBookPanelPage } = await load('AiBookPanelPage');
   const { AiRecommendPage } = await load('AiRecommendPage');
   const { AiSettingsPage } = await load('AiSettingsPage');
+  const { AiPersonaPage } = await load('AiPersonaPage');
+  const { AiPersona, DEFAULT_SOUL } = await load('RealAiPersona');
+  const { personaState } = await load('personaDeps');
   const deps = await load('aiServiceDeps');
   const { AiService: RealAiService } = await load('RealAiService');
   const { AiTools: RealAiTools, parseToolBookLines } = await load('RealAiTools');
@@ -743,7 +782,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 12 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 14 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -1097,6 +1136,70 @@ try {
     assert.ok(!('tools' in JSON.parse(deps.state.requests[4].content)), '最后一轮不挂工具');
     assert.match(error, /上限/);
     deps.state.rcpResponse = null;
+  });
+
+  test('灵魂与记忆：SOUL.md 默认兜底，MEMORY.md 追加/去重/序号删除', () => {
+    personaState.files.clear();
+    assert.equal(AiPersona.loadSoul(), DEFAULT_SOUL);
+    AiPersona.saveSoul('你是犀利书评人');
+    assert.equal(AiPersona.loadSoul(), '你是犀利书评人');
+    assert.equal(AiPersona.resetSoul(), DEFAULT_SOUL);
+    assert.match(AiPersona.appendMemory('偏好刘慈欣'), /^已记住/);
+    assert.deepEqual(AiPersona.loadMemories(), ['偏好刘慈欣']);
+    assert.match(AiPersona.appendMemory('偏好刘慈欣'), /已经存在/);
+    assert.match(AiPersona.appendMemory('正在读\n《三体》'), /^已记住/);
+    assert.deepEqual(AiPersona.loadMemories(), ['偏好刘慈欣', '正在读 《三体》']);
+    assert.match(AiPersona.appendMemory('  '), /为空/);
+    assert.match(AiPersona.removeMemory(1), /已忘记：偏好刘慈欣/);
+    assert.deepEqual(AiPersona.loadMemories(), ['正在读 《三体》']);
+    assert.match(AiPersona.removeMemory(9), /超出范围/);
+    const prompt = AiPersona.buildPersonaPrompt();
+    assert.ok(prompt.includes('书友'));
+    assert.ok(prompt.includes('1. 正在读 《三体》'));
+  });
+
+  test('记忆工具：save_memory 直接落盘，forget_memory 登记写闸门', async () => {
+    personaState.files.clear();
+    assert.equal(RealAiTools.needsConfirm('forget_memory'), true);
+    assert.equal(RealAiTools.needsConfirm('save_memory'), false);
+    const r1 = await RealAiTools.execute('save_memory', JSON.stringify({ content: '用户偏好刘慈欣' }));
+    assert.match(r1, /已记住/);
+    assert.deepEqual(AiPersona.loadMemories(), ['用户偏好刘慈欣']);
+    const r2 = await RealAiTools.execute('forget_memory', '{"index":1}');
+    assert.match(r2, /已忘记/);
+    assert.equal(AiPersona.loadMemories().length, 0);
+  });
+
+  test('对话页：system prompt 注入灵魂与记忆', async () => {
+    personaState.files.clear();
+    AiPersona.saveSoul('你是一位温和的书友');
+    AiPersona.appendMemory('用户叫张三');
+    const page = chat();
+    page.refreshSettings();
+    page.messages = [{ role: 'user', content: '你好', streaming: false, error: false, activities: [] }];
+    const ctx = await page.buildContext();
+    assert.equal(ctx[0].role, 'system');
+    assert.ok(ctx[0].content.includes('你是一位温和的书友'));
+    assert.ok(ctx[0].content.includes('用户叫张三'));
+    personaState.files.clear();
+  });
+
+  test('灵魂管理页：灵魂保存/恢复默认，手动补记与删除记忆', () => {
+    personaState.files.clear();
+    const page = new AiPersonaPage();
+    page.aboutToAppear();
+    assert.equal(page.soul, DEFAULT_SOUL);
+    page.soul = '自定义人格';
+    page.onSaveSoul();
+    assert.equal(personaState.files.get('/stub-files/ai_soul/SOUL.md'), '自定义人格');
+    assert.equal(state.lastToast, '灵魂已保存，下次对话生效');
+    page.newMemory = '喜欢科幻';
+    page.onAddMemory();
+    assert.deepEqual(page.memories, ['喜欢科幻']);
+    page.onRemoveMemory(0);
+    assert.deepEqual(page.memories, []);
+    page.onResetSoul();
+    assert.equal(page.soul, DEFAULT_SOUL);
   });
 
   let failures = 0;
