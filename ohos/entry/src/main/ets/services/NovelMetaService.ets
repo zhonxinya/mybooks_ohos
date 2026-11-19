@@ -58,13 +58,13 @@ export class NovelMetaService {
   }
 
   /**
-   * 字节级解码：先按 utf-8 嗅探页头 charset（ASCII 字节在 GBK 里透传，前 2KB 足以覆盖
-   * meta 标签），命中 gbk/gb2312/gb18030/big5 就用对应编码全量解码（飞卢 b.faloo.com 等
-   * 老站是 gb2312，2026-11-20 实测；SDK @ohos.util.d.ts 声明 TextDecoder 支持这几种）。
+   * 字节级解码：先按 utf-8 嗅探页头 charset（ASCII 字节在 GBK 里透传；窗口必须 4KB——
+   * 飞卢实测 charset 声明在字节 2413，2KB 窗口会漏），命中 gbk/gb2312/gb18030/big5
+   * 就用对应编码全量解码（SDK @ohos.util.d.ts 声明 TextDecoder 支持这几种）。
    */
   static decodeBody(body: ArrayBuffer): string {
     const bytes: Uint8Array = new Uint8Array(body);
-    const probeBytes: Uint8Array = new Uint8Array(body.slice(0, 2048));
+    const probeBytes: Uint8Array = new Uint8Array(body.slice(0, 4096));
     const probe: string = util.TextDecoder.create('utf-8', { ignoreBOM: true })
       .decodeToString(probeBytes);
     const cs: RegExpMatchArray | null = probe.match(/charset=["']?(gbk|gb2312|gb18030|big5)/i);

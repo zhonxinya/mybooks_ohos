@@ -1434,6 +1434,12 @@ try {
     deps.state.rcpResponse = null;
     assert.ok(NovelMetaService.decodeBody(enc('<meta charset="utf-8">中文正常'))
       .includes('中文正常'), 'utf-8 页解码不受嗅探影响');
+    // 飞卢真实布局：charset 声明在字节 ~2413（2KB 窗口会漏，4KB 才够）
+    const late = Buffer.from(FALOO_B64, 'base64');
+    const pad = Buffer.concat([Buffer.from('<html><head>' + 'x'.repeat(1000)), late.slice(12)]);
+    const padBuf = pad.buffer.slice(pad.byteOffset, pad.byteOffset + pad.byteLength);
+    assert.ok(NovelMetaService.decodeBody(padBuf).includes('charset=gb2312'),
+      'charset 声明落在 2KB~4KB 窗口也必须被嗅到');
   });
 
   test('get_novel_meta：17K url 走工具输出简介/封面，读工具不过闸门，行模板带类别/状态/字数', async () => {
