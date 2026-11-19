@@ -4,6 +4,9 @@ import { rcp } from '@kit.RemoteCommunicationKit';
 import { ChatCompletionChunk } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { ChatCompletionMessageParam } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { ChatCompletionCreateParamsBase } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
+import { ChatCompletionContentPart } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
+import { ChatCompletionContentPartText } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
+import { ChatCompletionContentPartImage } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { TalebookService } from './TalebookService';
 import { AiTools, AiToolDefinition } from './AiTools';
 
@@ -56,6 +59,8 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
 export interface AiMessage {
   role: string;
   content: string;
+  /** 随消息附带的图片（data URL 列表）；非空且服务商 vision 开启时按多模态 content 数组发送。 */
+  images?: string[];
 }
 
 /** 运行时配置。 */
@@ -66,6 +71,12 @@ export interface AiConfig {
   /** 是否已保存 Key（不回传明文，只用于 UI 显示状态）。 */
   hasKey: boolean;
   temperature: number;
+  /** 是否可发图片：手动覆盖优先，未覆盖时按模型名自动检测。 */
+  vision: boolean;
+  /** vision 原始覆盖值：''=自动、'on'、'off'（设置页显示状态用）。 */
+  visionOverride: string;
+  /** 模型上下文窗口长度（K tokens），决定对话页携带历史轮数。 */
+  contextLength: number;
 }
 
 const KEY_PROVIDER: string = 'ai_provider';
@@ -78,6 +89,13 @@ const KEY_CUSTOM_PROVIDERS: string = 'ai_custom_providers';
 const KEY_TEMPERATURE: string = 'ai_temperature';
 /** OpenCode 网关要求的稳定会话 id（首次使用时生成并持久化）。 */
 const KEY_SESSION_ID: string = 'ai_opencode_session';
+/** vision 手动覆盖：'on'/'off'；空串=按模型名自动检测。 */
+const KEY_VISION: string = 'ai_vision';
+const KEY_CONTEXT: string = 'ai_context_length';
+
+/** 上下文长度档位（K tokens），设置页下拉与轮数映射共用。 */
+export const CONTEXT_LENGTH_OPTIONS: number[] = [4, 8, 32, 128, 200];
+const DEFAULT_CONTEXT_K: number = 8;
 
 const DEFAULT_TEMPERATURE: number = 0.7;
 const TIMEOUT_MS: number = 180000;
@@ -107,13 +125,43 @@ export class AiService {
     const model: string = TalebookService.prefGet(KEY_MODEL);
     const temperatureText: string = TalebookService.prefGet(KEY_TEMPERATURE);
     const temperature: number = temperatureText.length > 0 ? Number(temperatureText) : DEFAULT_TEMPERATURE;
+    const finalModel: string = model.length > 0 ? model : preset.model;
+    const visionOverride: string = TalebookService.prefGet(KEY_VISION);
+    const contextText: string = TalebookService.prefGet(KEY_CONTEXT);
+    const contextK: number = contextText.length > 0 ? Number(contextText) : DEFAULT_CONTEXT_K;
     return {
       providerId: providerId,
       baseUrl: baseUrl.length > 0 ? baseUrl : preset.baseUrl,
-      model: model.length > 0 ? model : preset.model,
+      model: finalModel,
       hasKey: TalebookService.secureGet(AiService.apiKeyKey(providerId)).length > 0,
       temperature: Number.isFinite(temperature) ? temperature : DEFAULT_TEMPERATURE,
+      vision: visionOverride === 'on' ? true :
+        visionOverride === 'off' ? false : AiService.detectVision(finalModel),
+      visionOverride: visionOverride,
+      contextLength: Number.isFinite(contextK) && contextK > 0 ? contextK : DEFAULT_CONTEXT_K,
     };
+  }
+
+  /** 按模型名猜是否支持图片：各家视觉模型命名都带特征词，猜错时用户可在设置里手动覆盖。 */
+  static detectVision(model: string): boolean {
+    return /vl|vision|4o|omni|gemini|claude|llava|qvq/i.test(model);
+  }
+
+  /** 上下文窗口（K tokens）→ 对话页携带的历史轮数（一轮=一问一答，另留 tools/图片开销）。 */
+  static contextRounds(contextK: number): number {
+    if (contextK <= 4) {
+      return 4;
+    }
+    if (contextK <= 8) {
+      return 8;
+    }
+    if (contextK <= 32) {
+      return 16;
+    }
+    if (contextK <= 128) {
+      return 30;
+    }
+    return 50;
   }
 
   /** 各服务商 Key 的存储键；自定义服务商 id 带时间戳，不与前缀冲突。 */
@@ -238,11 +286,13 @@ export class AiService {
 
   /** 保存配置。`apiKey` 传空串表示保持原值不变。 */
   static saveConfig(providerId: string, baseUrl: string, model: string, apiKey: string,
-    temperature: number): void {
+    temperature: number, visionOverride: string = '', contextLength: number = DEFAULT_CONTEXT_K): void {
     TalebookService.prefSet(KEY_PROVIDER, providerId);
     TalebookService.secureSet(KEY_BASE_URL, AiService.normalizeBaseUrl(baseUrl));
     TalebookService.prefSet(KEY_MODEL, model.trim());
     TalebookService.prefSet(KEY_TEMPERATURE, `${temperature}`);
+    TalebookService.prefSet(KEY_VISION, visionOverride);
+    TalebookService.prefSet(KEY_CONTEXT, `${contextLength}`);
     if (apiKey.length > 0) {
       TalebookService.secureSet(AiService.apiKeyKey(providerId), apiKey.trim());
     }
@@ -530,10 +580,40 @@ export class AiService {
       } else if (m.role === 'system') {
         out.push({ role: 'system', content: m.content });
       } else {
-        out.push({ role: 'user', content: m.content });
+        const images: string[] = m.images ?? [];
+        if (images.length === 0) {
+          out.push({ role: 'user', content: m.content });
+        } else {
+          const parts: ChatCompletionContentPart[] = [];
+          const textPart: ChatCompletionContentPartText = { type: 'text', text: m.content };
+          parts.push(textPart);
+          for (let j = 0; j < images.length; j++) {
+            const imageUrl: ChatCompletionContentPartImage.ImageURL = { url: images[j] };
+            const part: ChatCompletionContentPartImage = { type: 'image_url', image_url: imageUrl };
+            parts.push(part);
+          }
+          out.push({ role: 'user', content: parts });
+        }
       }
     }
     return out;
+  }
+
+  /** 网关请求体的消息正文：带图时拼 OpenAI 多模态数组，否则纯文本。 */
+  private static gatewayContent(m: AiMessage): Object {
+    const images: string[] = m.images ?? [];
+    if (images.length === 0) {
+      return m.content;
+    }
+    const parts: Record<string, Object>[] = [];
+    const textPart: Record<string, Object> = { 'type': 'text', 'text': m.content };
+    parts.push(textPart);
+    for (let j = 0; j < images.length; j++) {
+      const urlRec: Record<string, Object> = { 'url': images[j] };
+      const imgPart: Record<string, Object> = { 'type': 'image_url', 'image_url': urlRec };
+      parts.push(imgPart);
+    }
+    return parts;
   }
 
   /** 稳定会话 id：首次生成后持久化（OpenCode 网关要求同一会话一致路由、复用 prompt 缓存）。 */
@@ -579,7 +659,7 @@ export class AiService {
     };
     const gwMessages: GatewayMessage[] = [];
     for (let i = 0; i < messages.length; i++) {
-      gwMessages.push({ role: messages[i].role, content: messages[i].content });
+      gwMessages.push({ role: messages[i].role, content: AiService.gatewayContent(messages[i]) });
     }
     const url: string = `${AiService.normalizeBaseUrl(config.baseUrl)}/chat/completions`;
     try {
@@ -844,7 +924,8 @@ export interface AiAbortHandle {
  */
 interface GatewayMessage {
   role: string;
-  content?: string;
+  /** 纯文本或 OpenAI 多模态 content 数组（带图时）。 */
+  content?: Object;
   tool_calls?: Record<string, Object>[];
   tool_call_id?: string;
 }

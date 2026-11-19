@@ -1,6 +1,6 @@
 import { PageScaffold, PrimaryButton, SecondaryButton, SectionTitle, FilterChips, FilterChipItem,
   ChipButton } from '../components';
-import { AiService, AiConfig, AiProviderPreset, AiMessage } from '../services/AiService';
+import { AiService, AiConfig, AiProviderPreset, AiMessage, CONTEXT_LENGTH_OPTIONS } from '../services/AiService';
 import { AppRouter } from '../utils/AppRouter';
 
 /** @Builder 只有传单个对象字面量才是引用传递；标量参数不随 @State 更新，切服务商时输入框会停在旧值。 */
@@ -30,13 +30,15 @@ struct AiSettingsPage {
   @State newModel: string = '';
   /** 「拉取模型」返回的模型 id；空表示还没拉过。 */
   @State modelOptions: string[] = [];
-  @State modelIndex: number = -1;
   @State fetchingModels: boolean = false;
   @State baseUrl: string = '';
   @State model: string = '';
   @State apiKey: string = '';
   @State temperature: number = 0.7;
   @State hasKey: boolean = false;
+  /** vision 手动覆盖：''=按模型名自动检测。 */
+  @State visionOverride: string = '';
+  @State contextLength: number = 8;
   @State testing: boolean = false;
   @State testResult: string = '';
   @State testOk: boolean = false;
@@ -50,6 +52,8 @@ struct AiSettingsPage {
     this.model = config.model;
     this.hasKey = config.hasKey;
     this.temperature = config.temperature;
+    this.visionOverride = config.visionOverride;
+    this.contextLength = config.contextLength;
     if (!this.hasKey) {
       // 未配置过时给出预设默认值，减少填空
       const preset: AiProviderPreset = AiService.presetOf(this.providerId);
@@ -84,7 +88,6 @@ struct AiSettingsPage {
     this.hasKey = AiService.hasKeyFor(id);
     this.testResult = '';
     this.modelOptions = [];
-    this.modelIndex = -1;
   }
 
   private isCustomSelected(): boolean {
@@ -146,8 +149,7 @@ struct AiSettingsPage {
         this.toast('该服务未返回模型列表');
       } else {
         this.modelOptions = ids;
-        this.modelIndex = ids.indexOf(this.model);
-        this.toast(`获取到 ${ids.length} 个模型，点选填入`);
+        this.toast(`获取到 ${ids.length} 个模型，可从下拉选择`);
       }
     } catch (error) {
       this.testOk = false;
@@ -157,12 +159,59 @@ struct AiSettingsPage {
     }
   }
 
-  private modelChips(): FilterChipItem[] {
-    const items: FilterChipItem[] = [];
+  /** 模型下拉数据源：拉取结果优先，未拉取时至少给出当前服务商预设。 */
+  private modelSelectItems(): SelectOption[] {
+    const ids: string[] = [];
     for (let i = 0; i < this.modelOptions.length; i++) {
-      items.push({ label: this.modelOptions[i], value: i });
+      ids.push(this.modelOptions[i]);
+    }
+    const presetModel: string = AiService.presetOf(this.providerId).model;
+    if (ids.length === 0 && presetModel.length > 0 && ids.indexOf(presetModel) < 0) {
+      ids.push(presetModel);
+    }
+    if (this.model.length > 0 && ids.indexOf(this.model) < 0) {
+      ids.push(this.model);
+    }
+    const items: SelectOption[] = [];
+    for (let i = 0; i < ids.length; i++) {
+      const opt: SelectOption = { value: ids[i] };
+      items.push(opt);
     }
     return items;
+  }
+
+  private modelSelectIndex(): number {
+    const idx: number = this.modelOptions.indexOf(this.model);
+    return idx >= 0 ? idx : this.modelOptions.length;
+  }
+
+  private contextSelectItems(): SelectOption[] {
+    const items: SelectOption[] = [];
+    for (let i = 0; i < CONTEXT_LENGTH_OPTIONS.length; i++) {
+      const opt: SelectOption = { value: `${CONTEXT_LENGTH_OPTIONS[i]}K` };
+      items.push(opt);
+    }
+    return items;
+  }
+
+  private contextSelectIndex(): number {
+    for (let i = 0; i < CONTEXT_LENGTH_OPTIONS.length; i++) {
+      if (CONTEXT_LENGTH_OPTIONS[i] === this.contextLength) {
+        return i;
+      }
+    }
+    return 1;
+  }
+
+  /** 生效的 vision（手动覆盖优先，否则按模型名自动检测）。 */
+  private visionOn(): boolean {
+    if (this.visionOverride === 'on') {
+      return true;
+    }
+    if (this.visionOverride === 'off') {
+      return false;
+    }
+    return AiService.detectVision(this.model);
   }
 
   private save(): boolean {
@@ -179,7 +228,8 @@ struct AiSettingsPage {
       return false;
     }
     try {
-      AiService.saveConfig(this.providerId, this.baseUrl, this.model, this.apiKey, this.temperature);
+      AiService.saveConfig(this.providerId, this.baseUrl, this.model, this.apiKey, this.temperature,
+        this.visionOverride, this.contextLength);
       this.hasKey = true;
       this.apiKey = '';
       this.testResult = '';
@@ -325,19 +375,11 @@ struct AiSettingsPage {
             TextInput({ placeholder: 'deepseek-chat', text: this.model })
               .height(44)
               .onChange((v: string) => this.model = v);
-            if (this.modelOptions.length > 0) {
-              Scroll() {
-                FilterChips({
-                  items: this.modelChips(),
-                  selected: $modelIndex,
-                  scrollable: true,
-                  onChange: (index: number) => this.model = this.modelOptions[index],
-                });
-              }
-              .scrollable(ScrollDirection.Horizontal)
-              .scrollBar(BarState.Off)
-              .width('100%');
-            }
+            Select(this.modelSelectItems())
+              .selected(this.modelSelectIndex())
+              .value(this.model.length > 0 ? this.model : '选择模型')
+              .width('100%')
+              .onSelect((index: number, value: string) => this.model = value);
           }
           .width('100%');
           Column({ space: 6 }) {
@@ -369,6 +411,52 @@ struct AiSettingsPage {
               .fontSize(11)
               .fontColor($r('app.color.text_tertiary'))
               .width('100%');
+          }
+          .width('100%');
+
+          Column({ space: 6 }) {
+            Text('上下文长度')
+              .fontSize(13)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%');
+            Select(this.contextSelectItems())
+              .selected(this.contextSelectIndex())
+              .value(`${this.contextLength}K`)
+              .width('100%')
+              .onSelect((index: number, value: string) => {
+                this.contextLength = CONTEXT_LENGTH_OPTIONS[index];
+              });
+            Text(`对话时携带最近约 ${AiService.contextRounds(this.contextLength)} 轮历史；档位越高越费 token`)
+              .fontSize(11)
+              .fontColor($r('app.color.text_tertiary'))
+              .width('100%');
+          }
+          .width('100%');
+
+          Column({ space: 6 }) {
+            Row() {
+              Text('图片能力（发送图片给模型）')
+                .fontSize(13)
+                .fontColor($r('app.color.text_secondary'));
+              Blank();
+              Toggle({ type: ToggleType.Switch, isOn: this.visionOn() })
+                .onChange((on: boolean) => this.visionOverride = on ? 'on' : 'off');
+            }
+            .width('100%');
+            Row({ space: 8 }) {
+              Text(this.visionOverride.length === 0
+                ? `按模型名自动检测：${this.visionOn() ? '支持' : '不支持'}`
+                : `已手动${this.visionOverride === 'on' ? '开启' : '关闭'}`)
+                .fontSize(11)
+                .fontColor($r('app.color.text_tertiary'));
+              if (this.visionOverride.length > 0) {
+                Text('恢复自动')
+                  .fontSize(11)
+                  .fontColor($r('app.color.brand_primary'))
+                  .onClick(() => this.visionOverride = '');
+              }
+            }
+            .width('100%');
           }
           .width('100%');
         }
@@ -421,6 +509,10 @@ struct AiSettingsPage {
             .fontColor($r('app.color.text_secondary'))
             .width('100%');
           Text('• 接口地址填到 /v1 层即可，程序会自动补 /chat/completions。')
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%');
+          Text('• 开启图片能力后，对话页可附图发送，模型能看懂图片内容（需视觉模型，如 gpt-4o、qwen-vl、claude、gemini）。')
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
             .width('100%');

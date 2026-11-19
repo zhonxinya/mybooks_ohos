@@ -1,11 +1,16 @@
 import { pasteboard } from '@kit.BasicServicesKit';
 import { promptAction } from '@kit.ArkUI';
+import { common } from '@kit.AbilityKit';
+import { fileIo as fs } from '@kit.CoreFileKit';
+import { photoAccessHelper } from '@kit.MediaLibraryKit';
+import { image } from '@kit.ImageKit';
+import { util } from '@kit.ArkTS';
 import { PageScaffold, SecondaryButton, TextButton } from '../components';
 import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { AiTools, parseToolBookLines, ToolBookLine } from '../services/AiTools';
 import { ToolResultList } from '../components/ToolResultList';
-import { AiService, AiMessage, AiStreamHandlers, AiAbortHandle } from '../services/AiService';
+import { AiService, AiConfig, AiMessage, AiStreamHandlers, AiAbortHandle } from '../services/AiService';
 import { TalebookService } from '../services/TalebookService';
 import { AppRouter } from '../utils/AppRouter';
 
@@ -30,6 +35,8 @@ interface ChatBubble {
   error: boolean;
   /** 完成后固化的活动快照（流式期间由 liveActivities 渲染）。 */
   activities: ChatActivity[];
+  /** 用户消息附带的图片（沙箱绝对路径；发送时压缩编码为 data URL）。 */
+  images?: string[];
 }
 
 /** 技能卡片/芯片点击：把现成提示词填入输入框，用户可先补书名再发送。 */
@@ -52,7 +59,9 @@ const SYSTEM_PROMPT: string =
   '问题涉及用户的书籍或阅读情况时，先调用工具拿到真实数据再回答，绝不编造；' +
   '工具数据不足时直接说明不确定。';
 
-const MAX_HISTORY_ROUNDS: number = 10;
+/** 附图发送前的压缩长边（像素）：够模型看清，又不至于撑爆请求体。 */
+const IMAGE_MAX_EDGE: number = 1024;
+const IMAGE_JPEG_QUALITY: number = 80;
 
 /** 对话历史持久化（preferences 明文 KV，与账号列表同层）：只存已固化的气泡。 */
 const CHAT_HISTORY_KEY: string = 'ai_chat_history';
@@ -67,6 +76,10 @@ struct AiAssistantPage {
   @State thinking: boolean = false;
   @State configured: boolean = false;
   @State errorTip: string = '';
+  /** 待发送图片（沙箱路径），输入框上方预览、可删。 */
+  @State pendingImages: string[] = [];
+  @State visionEnabled: boolean = false;
+  @State contextK: number = 8;
   /** 流式输出用：整段重建列表的代价高，这里只改最后一条气泡的内容。 */
   @State streamingText: string = '';
   /** 工具回路实时活动时间线；finishBubble 时快照进气泡成为历史。 */
@@ -77,11 +90,20 @@ struct AiAssistantPage {
 
   aboutToAppear(): void {
     this.configured = AiService.isReady();
+    this.refreshSettings();
     this.loadHistory();
   }
 
   onPageShow(): void {
     this.configured = AiService.isReady();
+    this.refreshSettings();
+  }
+
+  /** 设置页可能刚改过 vision/上下文档位，回页即刷新。 */
+  private refreshSettings(): void {
+    const config: AiConfig = AiService.loadConfig();
+    this.visionEnabled = config.vision;
+    this.contextK = config.contextLength;
   }
 
   aboutToDisappear(): void {
@@ -174,12 +196,22 @@ struct AiAssistantPage {
             });
           }
         }
+        const imgsRaw: Object = m['images'];
+        const images: string[] = [];
+        if (Array.isArray(imgsRaw)) {
+          for (const p of imgsRaw as Object[]) {
+            if (typeof p === 'string' && p.length > 0) {
+              images.push(p);
+            }
+          }
+        }
         bubbles.push({
           role: m['role'],
           content: m['content'],
           streaming: false,
           error: m['error'] === true,
           activities: activities,
+          images: images,
         });
       }
       this.messages = bubbles.slice(-CHAT_HISTORY_MAX);
@@ -188,18 +220,113 @@ struct AiAssistantPage {
     }
   }
 
-  /** 把界面气泡转成协议消息，只带最近 N 轮，避免上下文无限增长。 */
-  private buildContext(): AiMessage[] {
+  /** 附图沙箱目录（历史恢复与发送都从这里读文件）。 */
+  private aiImagesDir(): string {
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const dir = `${context.filesDir}/ai_images`;
+    if (!fs.accessSync(dir)) {
+      fs.mkdirSync(dir, true);
+    }
+    return dir;
+  }
+
+  /** 相册选一张图复制进沙箱；用户取消不算错误。 */
+  private async pickImage(): Promise<void> {
+    if (this.thinking) {
+      return;
+    }
+    try {
+      const picker = new photoAccessHelper.PhotoViewPicker();
+      const options: photoAccessHelper.PhotoSelectOptions = {
+        MIMEType: photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE,
+        maxSelectNumber: 1,
+      };
+      const result = await picker.select(options);
+      if (result.photoUris.length === 0) {
+        return;
+      }
+      const dest = `${this.aiImagesDir()}/img_${Date.now()}.jpg`;
+      const srcFile = fs.openSync(result.photoUris[0], fs.OpenMode.READ_ONLY);
+      const dstFile = fs.openSync(dest, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      try {
+        fs.copyFileSync(srcFile.fd, dstFile.fd);
+      } finally {
+        fs.closeSync(srcFile);
+        fs.closeSync(dstFile);
+      }
+      this.pendingImages = this.pendingImages.concat([dest]);
+    } catch (_error) {
+      // 取消选择/复制失败：静默
+    }
+  }
+
+  /** 沙箱图片压缩成长边 1024 的 jpeg data URL；失败返回空串（该图不发送）。 */
+  private async encodeImage(path: string): Promise<string> {
+    try {
+      const stat = fs.statSync(path);
+      const buf = new ArrayBuffer(Number(stat.size));
+      const file = fs.openSync(path, fs.OpenMode.READ_ONLY);
+      try {
+        fs.readSync(file.fd, buf);
+      } finally {
+        fs.closeSync(file);
+      }
+      const source = image.createImageSource(buf);
+      let pixelMap: image.PixelMap;
+      try {
+        const info = await source.getImageInfo();
+        const scale = Math.min(1, IMAGE_MAX_EDGE / Math.max(info.size.width, info.size.height));
+        const size: image.Size = {
+          width: Math.max(1, Math.round(info.size.width * scale)),
+          height: Math.max(1, Math.round(info.size.height * scale)),
+        };
+        const opts: image.DecodingOptions = { desiredSize: size };
+        pixelMap = await source.createPixelMap(opts);
+      } finally {
+        source.release();
+      }
+      const packer = image.createImagePacker();
+      let packed: ArrayBuffer;
+      try {
+        packed = await packer.packing(pixelMap, { format: 'image/jpeg', quality: IMAGE_JPEG_QUALITY });
+      } finally {
+        packer.release();
+        pixelMap.release();
+      }
+      const b64: string = new util.Base64Helper().encodeToStringSync(new Uint8Array(packed));
+      return `data:image/jpeg;base64,${b64}`;
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  /** 把界面气泡转成协议消息，只带最近 N 轮（档位来自设置），避免上下文无限增长。 */
+  private async buildContext(): Promise<AiMessage[]> {
     const context: AiMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }];
-    const bubbles: ChatBubble[] = this.messages.filter((m: ChatBubble) => !m.error && m.content.length > 0);
-    const start: number = Math.max(0, bubbles.length - MAX_HISTORY_ROUNDS * 2);
+    const bubbles: ChatBubble[] = this.messages.filter((m: ChatBubble) =>
+      !m.error && (m.content.length > 0 || (m.images ?? []).length > 0));
+    const start: number = Math.max(0, bubbles.length - AiService.contextRounds(this.contextK) * 2);
     for (let i = start; i < bubbles.length; i++) {
-      context.push({ role: bubbles[i].role, content: bubbles[i].content });
+      const msg: AiMessage = { role: bubbles[i].role, content: bubbles[i].content };
+      const imgs: string[] = this.visionEnabled ? (bubbles[i].images ?? []) : [];
+      if (imgs.length > 0) {
+        const urls: string[] = [];
+        for (let j = 0; j < imgs.length; j++) {
+          const dataUrl: string = await this.encodeImage(imgs[j]);
+          if (dataUrl.length > 0) {
+            urls.push(dataUrl);
+          }
+        }
+        if (urls.length > 0) {
+          msg.images = urls;
+        }
+      }
+      context.push(msg);
     }
     return context;
   }
 
-  private send(text: string): void {
+  private async send(text: string): Promise<void> {
     const question: string = text.trim();
     if (question.length === 0 || this.thinking) {
       return;
@@ -213,7 +340,10 @@ struct AiAssistantPage {
     this.errorTip = '';
     const requestId: number = ++this.requestId;
 
-    this.messages.push({ role: 'user', content: question, streaming: false, error: false, activities: [] });
+    const images: string[] = this.visionEnabled ? this.pendingImages : [];
+    this.pendingImages = [];
+    this.messages.push({ role: 'user', content: question, streaming: false, error: false,
+      activities: [], images: images });
     this.messages.push({ role: 'assistant', content: '', streaming: true, error: false, activities: [] });
     this.saveHistory();
     this.streamingText = '';
@@ -270,7 +400,11 @@ struct AiAssistantPage {
       },
     };
 
-    const handle: AiAbortHandle = AiService.chatStream(this.buildContext(), handlers, 2048);
+    const context: AiMessage[] = await this.buildContext();
+    if (requestId !== this.requestId || !this.thinking) {
+      return;
+    }
+    const handle: AiAbortHandle = AiService.chatStream(context, handlers, 2048);
     if (requestId === this.requestId && this.thinking) {
       this.abort = handle;
     }
@@ -308,6 +442,12 @@ struct AiAssistantPage {
 
   private applySkill(skill: AiSkill): void {
     this.input = skill.prompt;
+  }
+
+  private removePending(index: number): void {
+    const next: string[] = this.pendingImages.slice();
+    next.splice(index, 1);
+    this.pendingImages = next;
   }
 
   /** 工具开始执行：活动区加一条 doing。整组换数组赋值，保证 @State 刷新。 */
@@ -527,7 +667,7 @@ struct AiAssistantPage {
           }
           return `bubble-${index}-assistant-s-${sig}-${this.streamingText.length}`;
         }
-        return `bubble-${index}-${bubble.role}-${bubble.streaming ? 's' : 'd'}-${bubble.activities.length}-${bubble.content.length}`;
+        return `bubble-${index}-${bubble.role}-${bubble.streaming ? 's' : 'd'}-${bubble.activities.length}-${bubble.content.length}-${(bubble.images ?? []).length}`;
       });
     }
     .layoutWeight(1)
@@ -556,6 +696,19 @@ struct AiAssistantPage {
         Blank();
       }
       .width('100%');
+
+      if (bubble.role === 'user' && (bubble.images ?? []).length > 0) {
+        Row({ space: 6 }) {
+          ForEach(bubble.images ?? [], (p: string) => {
+            Image(`file://${p}`)
+              .width(72)
+              .height(72)
+              .borderRadius(8)
+              .objectFit(ImageFit.Cover);
+          }, (p: string) => p);
+        }
+        .width('100%');
+      }
 
       if (bubble.role === 'assistant' && !bubble.error) {
         // 活动时间线：流式气泡挂实时 liveActivities，完成后的气泡挂固化的历史快照
@@ -677,7 +830,48 @@ struct AiAssistantPage {
           .width('100%')
           .padding({ left: 4, bottom: 6 });
       }
+      if (this.pendingImages.length > 0) {
+        Row({ space: 8 }) {
+          ForEach(this.pendingImages, (p: string, idx: number) => {
+            Stack({ alignContent: Alignment.TopEnd }) {
+              Image(`file://${p}`)
+                .width(56)
+                .height(56)
+                .borderRadius(8)
+                .objectFit(ImageFit.Cover);
+              Stack() {
+                SymbolGlyph($r('sys.symbol.xmark'))
+                  .fontSize(10)
+                  .fontColor([$r('app.color.on_brand')]);
+              }
+              .width(16)
+              .height(16)
+              .borderRadius(8)
+              .backgroundColor($r('app.color.error'))
+              .onClick(() => this.removePending(idx));
+            }
+            .width(56)
+            .height(56);
+          }, (p: string, idx: number) => `${idx}-${p}`);
+        }
+        .width('100%')
+        .padding({ bottom: 8 });
+      }
       Row({ space: 10 }) {
+        if (this.visionEnabled) {
+          Stack() {
+            SymbolGlyph($r('sys.symbol.picture'))
+              .fontSize(20)
+              .fontColor([$r('app.color.text_secondary')]);
+          }
+          .width(44)
+          .height(44)
+          .borderRadius(22)
+          .backgroundColor($r('app.color.page_background'))
+          .onClick(() => {
+            void this.pickImage();
+          });
+        }
         TextInput({ placeholder: this.thinking ? '生成中…' : '输入问题', text: this.input })
           .layoutWeight(1)
           .height(44)
@@ -685,7 +879,7 @@ struct AiAssistantPage {
           .backgroundColor($r('app.color.page_background'))
           .enabled(!this.thinking)
           .onChange((value: string) => this.input = value)
-          .onSubmit(() => this.send(this.input));
+          .onSubmit(() => { void this.send(this.input); });
 
         // Circle Button 带图标子节点时 width/height 不生效（实测渲染仅 20vp），改用 Stack 保证 44vp 热区
         Stack() {
@@ -709,7 +903,7 @@ struct AiAssistantPage {
           if (this.thinking) {
             this.stopStreaming();
           } else {
-            this.send(this.input);
+            void this.send(this.input);
           }
         });
       }
