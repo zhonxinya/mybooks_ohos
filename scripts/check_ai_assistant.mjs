@@ -28,7 +28,7 @@ const state = {
   ready: true, handlers: null, copied: '', cancel: null,
   shelf: { books: [] }, search: async () => ({ body: { books: [] } }),
   recommend: async () => [], summary: async () => '', review: async () => '', meta: async () => ({}),
-  settings: settingsDefaults(),
+  settings: settingsDefaults(), prefs: new Map(),
 };
 globalThis.__aiCheck = state;
 // 设置页保存时会记一个配置版本号，桩掉避免 save() 抛错
@@ -75,7 +75,11 @@ export const AiBookService = {
   recommend: (...args) => state.recommend(...args),
 };
 export const ShelfApi = { getShelf: async () => state.shelf };
-export const TalebookService = { searchAsync: (...args) => state.search(...args) };
+export const TalebookService = {
+  searchAsync: (...args) => state.search(...args),
+  prefGet: (key, def) => (state.prefs.has(key) ? state.prefs.get(key) : (def ?? '')),
+  prefSet: (key, value) => { state.prefs.set(key, value); },
+};
 export const pasteboard = {
   MIMETYPE_TEXT_PLAIN: 'text/plain', createData: (_type, text) => text,
   getSystemPasteboard: () => ({ setData: (text) => { state.copied = text; return Promise.resolve(); } }),
@@ -148,6 +152,8 @@ export const toolsState = {
   search: null, detail: null, notes: [], notesError: '', history: [],
   sonovelEnvelope: null, tasks: [], processed: 0,
   booklistCreateResult: null, booklistAddResult: null, booklistCreateCalls: [], booklistAddCalls: [],
+  bookDetailAsync: null, editCalls: [], editResult: null,
+  referBooks: null, referSearchCalls: [], applyReferCalls: [], applyReferResult: null,
 };
 // 仅作类型标注用的名字（strip-types 后仍走值 import），占位防命名导出缺失
 export const SoNovelBookPayload = undefined;
@@ -191,8 +197,27 @@ export const BookListApi = {
 export const TalebookApi = {
   search: async (q) => (toolsState.search ? await toolsState.search(q) : []),
   getBookDetail: async (id) => (toolsState.detail ? await toolsState.detail(id) : null),
+  searchRefer: async (id, opts) => {
+    toolsState.referSearchCalls.push({ id, opts });
+    return { books: toolsState.referBooks ?? [] };
+  },
+  applyRefer: async (id, entry, onlyMeta, onlyCover) => {
+    toolsState.applyReferCalls.push({ id, entry, onlyMeta, onlyCover });
+    return toolsState.applyReferResult ?? { err: 'ok' };
+  },
 };
-export const TalebookService = { getReadingHistory: () => toolsState.history.slice() };
+export const ReferBook = undefined;
+export const ReferSearchOpts = undefined;
+export const ReferSearchResponse = undefined;
+export const TalebookService = {
+  getReadingHistory: () => toolsState.history.slice(),
+  getBookDetailAsync: async (id) => (toolsState.bookDetailAsync
+    ? await toolsState.bookDetailAsync(id) : { status: 404, body: null, error: 'stub: 未设置' }),
+  editBookAsync: async (id, payload) => {
+    toolsState.editCalls.push({ id, payload });
+    return toolsState.editResult ?? { status: 200, body: { err: 'ok' }, error: '' };
+  },
+};
 export const AnnotationApi = {
   listBookAnnotations: async (_id, _scope) => {
     if (toolsState.notesError.length > 0) { throw new Error(toolsState.notesError); }
@@ -230,7 +255,9 @@ function stagePage(name) {
   const shims = new Set();
   source = source.replace(/^import \{([^}]+)\} from '([^']+)';\n/gm, (_all, clause, path) => {
     if (path === '../services/AiTools') {
-      return "import { parseToolBookLines } from './RealAiTools.ts';\n" +
+      const names = clause.split(',').map((part) => part.trim());
+      const values = names.filter((name) => name !== 'ToolBookLine');
+      return `import { ${values.join(', ')} } from './RealAiTools.ts';\n` +
         "import type { ToolBookLine } from './RealAiTools.ts';\n";
     }
     if (path === '../services/AiSkills') {
@@ -584,10 +611,13 @@ try {
     toolsState.detail = async (id) => (id === 12
       ? { id: 12, title: '三体', authors: ['刘慈欣'], rating: 9.2, tags: ['科幻'],
         files: [{ format: 'epub', size: 1 }, { format: 'mobi', size: 2 }],
-        comments: 'x'.repeat(600), coverUrl: '', downloadUrl: '' }
+        comments: 'x'.repeat(600), coverUrl: '', downloadUrl: '',
+        publisher: '重庆出版社', isbn: '9787536692930', series: '' }
       : null);
     const detailText = await RealAiTools.execute('book_detail', '{"book_id":12}');
     assert.ok(detailText.includes('《三体》（刘慈欣）') && detailText.includes('epub、mobi') && detailText.includes('…'));
+    assert.ok(detailText.includes('出版社：重庆出版社') && detailText.includes('ISBN：9787536692930'));
+    assert.ok(!detailText.includes('丛书：'));
     assert.ok((await RealAiTools.execute('book_detail', '{"book_id":99}')).includes('没有找到 id=99'));
     toolsState.notes = [];
     assert.ok((await RealAiTools.execute('book_notes', '{"book_id":12}')).includes('还没有'));
@@ -687,7 +717,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 9 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 12 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -804,6 +834,112 @@ try {
     assert.equal(appended.state, 'rejected');
     assert.equal(appended.name, 'add_sonovel_task');
     assert.equal(appended.summary, '用户拒绝了该操作');
+  });
+
+  test('search_books 结构化缓存：takeLastBooks 带封面、读后即清、下次执行防串台', async () => {
+    toolsState.search = async (q) => (q === '三体'
+      ? [{ id: 12, title: '三体', authors: ['刘慈欣'], coverUrl: '/get/cover/12.jpg' }] : []);
+    const text = await RealAiTools.execute('search_books', '{"query":"三体"}');
+    assert.ok(text.includes('- 《三体》（刘慈欣） id=12'));
+    const books = RealAiTools.takeLastBooks();
+    assert.equal(books.length, 1);
+    assert.equal(books[0].title, '《三体》');
+    assert.equal(books[0].cover, '/get/cover/12.jpg');
+    assert.equal(RealAiTools.takeLastBooks().length, 0, '读后即清');
+    await RealAiTools.execute('search_books', '{"query":"鲁滨逊"}');
+    assert.equal(RealAiTools.takeLastBooks().length, 0, '无结果时不留旧缓存');
+  });
+
+  test('update_book_meta：读-合并-写，只覆盖点名字段；空改动与失败路径', async () => {
+    toolsState.bookDetailAsync = async () => ({ status: 200, body: { book: {
+      title: '三体', authors: ['刘慈欣'], tags: ['科幻'], publisher: 'so-novel', comments: '旧简介',
+      isbn: '', series: '', languages: ['zh'], translators: [], series_index: 1, rating: null } } });
+    toolsState.editCalls.length = 0;
+    const out = await RealAiTools.execute('update_book_meta', '{"book_id":1481,"title":"三体（新版）"}');
+    assert.ok(out.includes('已更新'), out);
+    assert.ok(out.includes('「三体」→「三体（新版）」'));
+    const p = toolsState.editCalls[0].payload;
+    assert.equal(p.title, '三体（新版）');
+    assert.deepEqual(p.authors, ['刘慈欣'], '未传 authors 保持原值');
+    assert.deepEqual(p.tags, ['科幻']);
+    assert.equal(p.publisher, 'so-novel');
+    assert.equal(p.series_index, 1);
+    assert.ok(!('rating' in p), '原值 null 且未传时不发 rating');
+    // 逗号分隔多值
+    const multi = await RealAiTools.execute('update_book_meta', '{"book_id":1481,"authors":"刘慈欣, 某某","tags":"科幻, 经典"}');
+    assert.ok(multi.includes('作者 →「刘慈欣、某某」') && multi.includes('标签 →「科幻、经典」'));
+    assert.deepEqual(toolsState.editCalls[1].payload.authors, ['刘慈欣', '某某']);
+    // 全空参数：不发请求
+    const noop = await RealAiTools.execute('update_book_meta', '{"book_id":1481}');
+    assert.ok(noop.includes('没有要修改'), noop);
+    assert.equal(toolsState.editCalls.length, 2);
+    // 书不存在 / 编辑失败
+    toolsState.bookDetailAsync = async () => ({ status: 200, body: { book: {} } });
+    assert.ok((await RealAiTools.execute('update_book_meta', '{"book_id":999,"title":"x"}')).includes('没有找到'));
+    toolsState.bookDetailAsync = async () => ({ status: 200, body: { book: { title: '三体', authors: [] } } });
+    toolsState.editResult = { status: 500, body: null, error: '服务端炸了' };
+    assert.ok((await RealAiTools.execute('update_book_meta', '{"book_id":1481,"title":"x"}')).includes('更新失败'));
+    toolsState.editResult = null;
+  });
+
+  test('update_book_meta 已登记写闸门（漏登记=绕过确认，回归直接钉死）', () => {
+    assert.ok(RealAiTools.needsConfirm('update_book_meta'));
+    assert.ok(RealAiTools.needsConfirm('set_cover'), 'set_cover 漏登记=绕过确认直接改服务端封面');
+  });
+
+  test('search_cover/set_cover：候选缓存跨 execute 复用，onlyCover 应用与守卫', async () => {
+    toolsState.referBooks = [
+      { source: ' douban'.trim(), title: '三体', authors: ['刘慈欣'], publisher: '重庆出版社',
+        cover_url: 'https://img.example/sanct.jpg', provider_key: 'douban', provider_value: '100' },
+      { source: 'isbn', title: '三体（无图版）', authors: ['刘慈欣'], cover_url: '' },
+    ];
+    toolsState.referSearchCalls.length = 0;
+    toolsState.applyReferCalls.length = 0;
+    const found = await RealAiTools.execute('search_cover', '{"book_id":1481,"isbn":"9787536692930"}');
+    assert.ok(found.includes('候选1') && found.includes('https://img.example/sanct.jpg'), found);
+    assert.equal(toolsState.referSearchCalls[0].opts.isbn, '9787536692930', 'opts 透传');
+    // 成功路径：只改封面（onlyCover=true、onlyMeta=false）
+    const done = await RealAiTools.execute('set_cover', '{"book_id":1481,"index":1}');
+    assert.ok(done.includes('已将 id=1481 的封面换成候选1'), done);
+    assert.equal(toolsState.applyReferCalls[0].onlyCover, true);
+    assert.equal(toolsState.applyReferCalls[0].onlyMeta, false);
+    assert.equal(toolsState.applyReferCalls[0].entry.provider_value, '100', '候选对象原样传给服务端');
+    // 守卫：序号越界 / 候选无封面 / 未先 search 同书
+    assert.ok((await RealAiTools.execute('set_cover', '{"book_id":1481,"index":9}')).includes('超出范围'));
+    assert.ok((await RealAiTools.execute('set_cover', '{"book_id":1481,"index":2}')).includes('没有封面图片'));
+    assert.ok((await RealAiTools.execute('set_cover', '{"book_id":999,"index":1}')).includes('请先对该书调用 search_cover'));
+    // 空候选
+    toolsState.referBooks = [];
+    assert.ok((await RealAiTools.execute('search_cover', '{"book_id":1481}')).includes('没有检索到'));
+    // 服务端应用失败
+    toolsState.referBooks = [{ source: 'x', cover_url: 'u' }];
+    await RealAiTools.execute('search_cover', '{"book_id":1481}');
+    toolsState.applyReferResult = { err: 'download_failed', msg: '封面下载失败' };
+    assert.ok((await RealAiTools.execute('set_cover', '{"book_id":1481,"index":1}')).includes('封面下载失败'));
+    toolsState.applyReferResult = null;
+  });
+
+  test('对话页历史持久化：finishBubble 落盘、loadHistory 恢复、clearChat 清空', () => {
+    state.prefs.clear();
+    const page = chat();
+    page.messages.push({ role: 'user', content: '你好', streaming: false, error: false, activities: [] });
+    page.messages.push({ role: 'assistant', content: '', streaming: true, error: false, activities: [] });
+    page.finishBubble('你好，有什么可以帮你？', false);
+    const saved = JSON.parse(state.prefs.get('ai_chat_history'));
+    assert.equal(saved.length, 2);
+    assert.equal(saved[1].content, '你好，有什么可以帮你？');
+    const page2 = chat();
+    page2.loadHistory();
+    assert.equal(page2.messages.length, 2);
+    assert.equal(page2.messages[0].content, '你好');
+    assert.equal(page2.messages[1].streaming, false);
+    // 坏条目丢弃：手写一条缺 role 的记录
+    state.prefs.set('ai_chat_history', '[{"content":"x"},{"role":"user","content":"好"}]');
+    const page3 = chat();
+    page3.loadHistory();
+    assert.equal(page3.messages.length, 1);
+    page3.clearChat();
+    assert.equal(state.prefs.get('ai_chat_history'), '[]');
   });
 
   test('网关工具回路：超过轮数上限报错收场，最后一轮不挂 tools', async () => {
