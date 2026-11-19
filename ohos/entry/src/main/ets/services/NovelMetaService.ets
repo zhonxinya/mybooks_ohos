@@ -24,6 +24,11 @@ import { util } from '@kit.ArkTS';
  *   走 parseZhangyue（主区无状态字段，<title> 的「完结小说」是 SEO 固定模板不可信）。
  * - 番茄小说 fanqienovel.com 详情页是 SPA（1.6MB __INITIAL_STATE__），但同 ID 的
  *   /api/book/info?bookId= 双指纹裸通、字段全量无签名（2026-11-20 实测）——走 rewriteUrl。
+ * - legado 语料下一批镜像站审计（2026-11-20 双指纹实测）：群小说 qunxs.com/xiaoshuo_<id>.html
+ *   与一页书 yiyeshu.cc/aibooks/<id>.html 均 og:novel 全量（通用规则零改动命中；一页书
+ *   legado 规则只写了简介/封面是原作者偷懒，实际 og 齐全；qunxs 双斜杠封面 GET 200 可加载，
+ *   HEAD 会 503 属方法差异）。阅友 yueyouxs.com=Vue SPA 且 goway API 需 HMACMD5 签名——不可接。
+ *   笔趣阁系变体（biquge55.net/biquge.cc/xbiqu.com/2dingdian.net）已死域或停放（lander 壳）。
  * - so-novel 候选 6 镜像域质量审计（2026-11-20 离线实跑）：mcxs/yeudusk/shuhaige/quanben
  *   实际带 og:novel 全量（通用规则即够）；唯 mianhuaks.com 无 og:novel 且封面多为站默认图
  *   /asset/default.jpg、无类别字段——需专用规则走主区正文锚点（parseMianhua）。

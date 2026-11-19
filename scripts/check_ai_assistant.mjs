@@ -1665,6 +1665,24 @@ try {
     deps.state.rcpResponse = null;
   });
 
+  // 群小说/一页书 fixture：2026-11-20 实测节选（qunxs.com/xiaoshuo_<id>、yiyeshu.cc/aibooks/<id>，
+  // 均 og:novel 全量=通用零改动；一页书 legado 规则只写简介/封面是偷懒，og 实际齐全）
+  const QX_PAGE = `<html><head><meta property="og:type" content="novel"/><meta property="og:title" content="COD乙女：被覆面们盯上了"/><meta property="og:image" content="http://www.qunxs.com//images/14/14014/14014s.png"/><meta property="og:description" content="【覆面＋乙女＋1vn＋第二人称＋偏真实＋HE】男主:konig keegan ghost"/><meta property="og:novel:category" content="都市言情小说"/><meta property="og:novel:author" content="小桃是甜妹"/><meta property="og:novel:book_name" content="COD乙女：被覆面们盯上了"/><meta property="og:novel:status" content="连载"/></head><body></body></html>`;
+  const YE_PAGE = `<html><head><meta property="og:type" content="novel"><meta property="og:title" content="重生之宠妻手册云惘然免费阅读 - 一页书小说"><meta property="og:image" content="https://www.yiyeshu.cc/files/article/image/14/14104/14104s.jpg"><meta property="og:description" content="重生之宠妻手册小说阅读,三岁卫卯卯（含泪握拳）"><meta property="og:novel:category" content="其他类型"><meta property="og:novel:author" content="云惘然"><meta property="og:novel:book_name" content="重生之宠妻手册"><meta property="og:novel:status" content="连载"></head><body></body></html>`;
+  test('NovelMeta：群小说/一页书——legado 语料下一批镜像站 og:novel 通用零改动命中（脏 og:title 去尾、双斜杠封面保留）', async () => {
+    deps.state.rcpResponse = { statusCode: 200, body: enc(QX_PAGE) };
+    const q = await NovelMetaService.fetchDetail('http://www.qunxs.com/xiaoshuo_14014.html');
+    assert.ok(q.ok && q.rule === 'og:novel' && q.title === 'COD乙女：被覆面们盯上了'
+      && q.author === '小桃是甜妹' && q.category === '都市言情小说' && q.status === '连载中',
+      'qunxs 通用命中+双斜杠封面 url 原样');
+    assert.ok(q.cover.indexOf('qunxs.com//images/') > 0, '双斜杠封面 GET 实测 200 可加载，不改写');
+    deps.state.rcpResponse = { statusCode: 200, body: enc(YE_PAGE) };
+    const y = await NovelMetaService.fetchDetail('https://www.yiyeshu.cc/aibooks/14104.html');
+    assert.ok(y.ok && y.title === '重生之宠妻手册', '一页书脏 og:title 由 book_name 去尾');
+    assert.ok(y.author === '云惘然' && y.status === '连载中' && y.category === '其他类型');
+    deps.state.rcpResponse = null;
+  });
+
   // 云起/塔读 fixture：2026-11-20 实测（云起 read 壳无 og→detail og:novel；塔读 og 全量含脏 title/双斜杠封面）
   const YQ_DETAIL = `<html><head><meta property="og:type" content="novel"><meta property="og:novel:book_name" content="粟粟"><meta property="og:novel:author" content="荆棘之歌"><meta property="og:novel:category" content="古代言情"><meta property="og:novel:status" content="连载"><meta property="og:image" content="https://wfqqreader-1252317822.image.myqcloud.com/cover/857/59718575/s_59718575.jpg"><meta property="og:description" content="山洪冲下来一个白里透红的小娃娃。"></head><body></body></html>`;
   test('NovelMeta：云起 read→detail 重写 + 塔读式脏 og:title 由 book_name 去尾——通用 og:novel 覆盖阅文/掌阅系', async () => {
