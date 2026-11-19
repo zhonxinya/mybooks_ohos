@@ -51,11 +51,32 @@ export class NovelMetaService {
       if (body === undefined) {
         return '';
       }
-      const decoder: util.TextDecoder = util.TextDecoder.create('utf-8', { ignoreBOM: true });
-      return decoder.decodeToString(new Uint8Array(body));
+      return NovelMetaService.decodeBody(body);
     } finally {
       session.close();
     }
+  }
+
+  /**
+   * 字节级解码：先按 utf-8 嗅探页头 charset（ASCII 字节在 GBK 里透传，前 2KB 足以覆盖
+   * meta 标签），命中 gbk/gb2312/gb18030/big5 就用对应编码全量解码（飞卢 b.faloo.com 等
+   * 老站是 gb2312，2026-11-20 实测；SDK @ohos.util.d.ts 声明 TextDecoder 支持这几种）。
+   */
+  static decodeBody(body: ArrayBuffer): string {
+    const bytes: Uint8Array = new Uint8Array(body);
+    const probeBytes: Uint8Array = new Uint8Array(body.slice(0, 2048));
+    const probe: string = util.TextDecoder.create('utf-8', { ignoreBOM: true })
+      .decodeToString(probeBytes);
+    const cs: RegExpMatchArray | null = probe.match(/charset=["']?(gbk|gb2312|gb18030|big5)/i);
+    if (cs !== null) {
+      try {
+        return util.TextDecoder.create(cs[1].toLowerCase(), { ignoreBOM: true })
+          .decodeToString(bytes);
+      } catch (error) {
+        // 编码名不被支持时退回 utf-8，不让整条链路挂掉
+      }
+    }
+    return util.TextDecoder.create('utf-8', { ignoreBOM: true }).decodeToString(bytes);
   }
 
   /** 抓详情页并按站点解析；任何失败都以 ok=false + error 返回，不抛错。 */
