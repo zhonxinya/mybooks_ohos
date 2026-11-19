@@ -99,8 +99,10 @@ const DEFAULT_CONTEXT_K: number = 8;
 
 const DEFAULT_TEMPERATURE: number = 0.7;
 const TIMEOUT_MS: number = 180000;
-/** 工具回路最多执行的 tool_calls 轮数；再多一轮不带 tools 逼模型收尾。 */
-const MAX_TOOL_ROUNDS: number = 4;
+/** 工具回路最多执行的 tool_calls 轮数；再多一轮不带 tools 逼模型收尾。
+ *  上限按「长任务」定：批量场景如 4 本书×（搜+下载）=8 轮，12 轮留余量；
+ *  同时兜住模型死循环烧 token。退出对话页不打断回路（后台完成落盘），分钟级任务可行。 */
+const MAX_TOOL_ROUNDS: number = 12;
 
 /** 流式回调：`delta` 为本次增量文本，`done` 表示结束。 */
 export interface AiStreamHandlers {

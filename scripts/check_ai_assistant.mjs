@@ -912,6 +912,30 @@ try {
     assert.equal(full, '帮你查到了《三体》，id=12。');
   });
 
+  test('长任务：连续 6 轮 tool_calls 在新上限（12）内正常完成——旧上限 4 会在第 5 轮报错截断', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    const mk = (i) => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+      tool_calls: [{ id: `call_${i}`, type: 'function',
+        function: { name: 'search_books', arguments: `{"query":"三体${i}"}` } }] } }] })) });
+    deps.state.rcpResponses = [mk(1), mk(2), mk(3), mk(4), mk(5), mk(6),
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '6 本都查完了。' } }] })) }];
+    toolsState.search = async (q) => [{ id: 12, title: q, authors: ['刘慈欣'] }];
+    let error = '';
+    let full = '';
+    const toolResults = [];
+    RealAiService.chatStream([{ role: 'user', content: '把三体系列全查一遍' }], {
+      onDelta: (t) => { full += t; }, onDone: () => {}, onError: (m) => { error = m; },
+      onToolResult: (name, l, text) => { toolResults.push(text); },
+    }, 256);
+    await flush();
+    assert.equal(error, '', '6 轮工具调用不得触发上限错误');
+    assert.equal(deps.state.requests.length, 7, '6 轮回路 + 1 轮最终回答');
+    assert.equal(toolResults.length, 6);
+    assert.equal(full, '6 本都查完了。');
+  });
+
   test('写工具确认闸门：拒绝/无确认方不执行，批准才执行', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
@@ -1251,8 +1275,8 @@ try {
       onDelta: () => {}, onDone: () => {}, onError: (m) => { error = m; },
     }, 128);
     await flush();
-    assert.equal(deps.state.requests.length, 5);
-    assert.ok(!('tools' in JSON.parse(deps.state.requests[4].content)), '最后一轮不挂工具');
+    assert.equal(deps.state.requests.length, 13);
+    assert.ok(!('tools' in JSON.parse(deps.state.requests[12].content)), '最后一轮不挂工具');
     assert.match(error, /上限/);
     deps.state.rcpResponse = null;
   });
