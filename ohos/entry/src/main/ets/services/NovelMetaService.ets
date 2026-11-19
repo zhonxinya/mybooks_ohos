@@ -29,6 +29,14 @@ import { util } from '@kit.ArkTS';
  *   legado 规则只写了简介/封面是原作者偷懒，实际 og 齐全；qunxs 双斜杠封面 GET 200 可加载，
  *   HEAD 会 503 属方法差异）。阅友 yueyouxs.com=Vue SPA 且 goway API 需 HMACMD5 签名——不可接。
  *   笔趣阁系变体（biquge55.net/biquge.cc/xbiqu.com/2dingdian.net）已死域或停放（lander 壳）。
+ * - 语料消耗期第二批（2026-11-20 批量 GET 存活+枚举 meta）：书坊 sfwx.com/\d+/\d+/ 与
+ *   顶点 dingdians.com/index/<id>/ 均 og:novel 全量→通用零改动（顶点状态值「全本」已并入
+ *   完本归一，且按桌面 OS 特征拦 UA——含 Windows NT 返回「身份验证」壳，移动 UA 放行，
+ *   已并入 fetchText 按站 UA 特判；sfwx 协议相对封面由 absolutize 补全）；八零 txt80.cc
+ *   是 TXT 下载站——无 og、
+ *   description 为 SEO 拼接文、作者只在 keywords 里，元数据价值低不接。死域再添：
+ *   zaohuatu/x23us/bgwxc/qiutiandog/wxmmain/xbiquge 等；sfwx 语料写 @get JS 而实页 og 齐全
+ *   （legado 规则≠站点实况，第五次验证枚举铁律）。
  * - so-novel 候选 6 镜像域质量审计（2026-11-20 离线实跑）：mcxs/yeudusk/shuhaige/quanben
  *   实际带 og:novel 全量（通用规则即够）；唯 mianhuaks.com 无 og:novel 且封面多为站默认图
  *   /asset/default.jpg、无类别字段——需专用规则走主区正文锚点（parseMianhua）。
@@ -59,7 +67,10 @@ export interface NovelMeta {
 export class NovelMetaService {
   /** GET 文本响应；非 2xx 抛错（调用方转成用户可读文本）。 */
   private static async fetchText(url: string): Promise<string> {
-    const ua: string = url.indexOf('wxscs.com') >= 0 ? MOBILE_UA : PAGE_UA;
+    // wxscs 桌面 UA 403；顶点按桌面 OS 特征拦（完整 Windows/NT UA 返回「身份验证」JS 壳，
+    // 移动 UA 直出 og:novel 全量）——两类站同法：移动 UA 放行
+    const ua: string = url.indexOf('wxscs.com') >= 0 || url.indexOf('dingdians.com') >= 0
+      ? MOBILE_UA : PAGE_UA;
     const headers: rcp.RequestHeaders = {
       'User-Agent': ua,
       'Accept-Language': 'zh-CN,zh;q=0.9',
@@ -484,7 +495,8 @@ export class NovelMetaService {
       meta.author = NovelMetaService.pickMeta(html, 'og:novel:author');
       meta.category = NovelMetaService.pickMeta(html, 'og:novel:category');
       const rawStatus = NovelMetaService.pickMeta(html, 'og:novel:status');
-      if (rawStatus.indexOf('完结') >= 0 || rawStatus.indexOf('完本') >= 0) {
+      if (rawStatus.indexOf('完结') >= 0 || rawStatus.indexOf('完本') >= 0
+        || rawStatus.indexOf('全本') >= 0) { // 顶点 dingdians.com 状态值是「全本」
         meta.status = '已完本';
       } else if (rawStatus.indexOf('连载') >= 0) {
         meta.status = '连载中';

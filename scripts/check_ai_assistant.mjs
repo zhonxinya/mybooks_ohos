@@ -1683,6 +1683,27 @@ try {
     deps.state.rcpResponse = null;
   });
 
+  // 书坊/顶点 fixture：2026-11-20 实测节选（sfwx.com/\d+/\d+/ 与 dingdians.com/index/<id>/，
+  // 均 og:novel 全量；顶点状态值是「全本」；sfwx 封面协议相对；sfwx 语料写 @get 而实页有 og）
+  const SF_PAGE = `<html><head><meta property="og:type" content="novel" /><meta property="og:title" content="大明第一国舅最新章节" /><meta property="og:description" content="洪武二年春，一青年牵驴扶棺来到了新丰里。" /><meta property="og:image" content="//www.sfwx.com/images/10/10202/10202s.jpg" /><meta property="og:novel:category" content="历史小说" /><meta property="og:novel:author" content="黑胖的老鼠" /><meta property="og:novel:book_name" content="大明第一国舅" /><meta property="og:novel:status" content="连载" /></head><body></body></html>`;
+  const DD_PAGE = `<html><head><meta property="og:type" content="novel"><meta property="og:title" content="我真不是邪神走狗"><meta property="og:description" content="《我真不是邪神走狗》穿越者林介经营着一家书店。"><meta property="og:image" content="http://www.dingdians.com/images/104975/104975639/104975639s.jpg"><meta property="og:novel:category" content="奇幻"><meta property="og:novel:author" content="万劫火"><meta property="og:novel:book_name" content="我真不是邪神走狗"><meta property="og:novel:status" content="全本"></head><body></body></html>`;
+  test('NovelMeta：书坊/顶点——消耗期第二批 og:novel 通用命中，顶点「全本」归一已完本、协议相对封面升 https', async () => {
+    deps.state.rcpResponse = { statusCode: 200, body: enc(SF_PAGE) };
+    const s = await NovelMetaService.fetchDetail('http://www.sfwx.com/10/10202/');
+    assert.ok(s.ok && s.rule === 'og:novel' && s.title === '大明第一国舅'
+      && s.author === '黑胖的老鼠' && s.category === '历史小说' && s.status === '连载中');
+    assert.ok(/^https?:\/\/www\.sfwx\.com\/images\//.test(s.cover), '协议相对封面按页面协议补全为绝对 url');
+    deps.state.rcpResponse = { statusCode: 200, body: enc(DD_PAGE) };
+    const d = await NovelMetaService.fetchDetail('https://www.dingdians.com/index/104975639/');
+    assert.ok(d.ok && d.title === '我真不是邪神走狗' && d.status === '已完本', '「全本」→已完本');
+    assert.ok(d.author === '万劫火' && d.category === '奇幻');
+    assert.ok(String(deps.state.lastRequest.headers['User-Agent']).includes('Mobile'),
+      '顶点按桌面 OS 特征拦 UA（Windows NT 完整串返回身份验证壳），必须移动 UA');
+    assert.equal(String(deps.state.lastRequest.headers['User-Agent']).includes('Windows NT'), false,
+      '他站不受影响由上方 qidian 用例断言');
+    deps.state.rcpResponse = null;
+  });
+
   // 云起/塔读 fixture：2026-11-20 实测（云起 read 壳无 og→detail og:novel；塔读 og 全量含脏 title/双斜杠封面）
   const YQ_DETAIL = `<html><head><meta property="og:type" content="novel"><meta property="og:novel:book_name" content="粟粟"><meta property="og:novel:author" content="荆棘之歌"><meta property="og:novel:category" content="古代言情"><meta property="og:novel:status" content="连载"><meta property="og:image" content="https://wfqqreader-1252317822.image.myqcloud.com/cover/857/59718575/s_59718575.jpg"><meta property="og:description" content="山洪冲下来一个白里透红的小娃娃。"></head><body></body></html>`;
   test('NovelMeta：云起 read→detail 重写 + 塔读式脏 og:title 由 book_name 去尾——通用 og:novel 覆盖阅文/掌阅系', async () => {
