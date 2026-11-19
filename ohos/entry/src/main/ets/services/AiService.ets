@@ -90,7 +90,11 @@ export interface AiStreamHandlers {
   onDone: (fullText: string) => void;
   onError: (message: string) => void;
   /** 可选：网关工具回路每次执行工具前回调一句人话（如「搜索书架」）。 */
-  onTool?: (label: string) => void;
+  onTool?: (label: string, name: string) => void;
+  /** 工具执行完毕（含用户拒绝）：对话页据此把活动时间线从「进行中」翻到「完成/拒绝」。 */
+  onToolResult?: (name: string, label: string, text: string) => void;
+  /** 写操作工具执行前的用户确认；返回 false 拒绝，模型收到「用户拒绝了该操作」。 */
+  onConfirm?: (label: string, argsSummary: string) => Promise<boolean>;
 }
 
 export class AiService {
@@ -373,10 +377,14 @@ export class AiService {
           // 已结束的会话再 cancel 会抛，忽略
         }
       };
-      const notice: ((label: string) => void) | undefined = handlers.onTool;
+      const notice: ((label: string, name: string) => void) | undefined = handlers.onTool;
+      const ask: ((label: string, args: string) => Promise<boolean>) | undefined = handlers.onConfirm;
+      const done: ((name: string, label: string, text: string) => void) | undefined = handlers.onToolResult;
       AiService.chatViaGateway(config, apiKey, messages, maxTokens, gatewaySession,
         AiTools.definitions(), (): boolean => handle.aborted,
-        notice === undefined ? null : notice).then((content: string): void => {
+        notice === undefined ? null : notice,
+        ask === undefined ? null : ask,
+        done === undefined ? null : done).then((content: string): void => {
         if (handle.aborted) {
           return;
         }
@@ -467,7 +475,7 @@ export class AiService {
     if (AiService.isOpenCodeGateway(config.baseUrl)) {
       // 结构化输出（书单 JSON 等）不需要工具，避免模型中途改去查数据
       return AiService.chatViaGateway(config, apiKey, messages, maxTokens, rcp.createSession(),
-        null, null, null);
+        null, null, null, null, null);
     }
     const client: OpenAI = AiService.client(config.baseUrl, apiKey);
     const params: ChatCompletionCreateParamsBase = {
@@ -553,14 +561,16 @@ export class AiService {
    * （4.1.0(11) 精简版）没有流式事件，无法自解析 SSE。故整包返回
    * （stream:false），OpenCode 对话暂无打字机效果，其他服务商不受影响。
    *
-   * `tools` 非空时走 **function calling 回路**：模型返回 tool_calls → 本地执行
-   * （AiTools，只读）→ 以 assistant+tool 消息回填上下文 → 再次请求，
+   * `tools` 非空时走 **function calling 回路**：模型返回 tool_calls → （写工具先过
+   * onConfirm 确认闸门）本地执行（AiTools）→ 以 assistant+tool 消息回填上下文 → 再次请求，
    * 直到模型给出文本回答或达到 MAX_TOOL_ROUNDS 轮上限。
    */
   private static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[],
     maxTokens: number, session: rcp.Session, tools: AiToolDefinition[] | null,
     isAborted: (() => boolean) | null,
-    onTool: ((label: string) => void) | null): Promise<string> {
+    onTool: ((label: string, name: string) => void) | null,
+    onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null,
+    onResult: ((name: string, label: string, text: string) => void) | null): Promise<string> {
     const headers: rcp.RequestHeaders = {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
@@ -617,11 +627,29 @@ export class AiService {
           gwMessages.push({ role: 'assistant', content: reply.content, tool_calls: calls });
           for (let i = 0; i < reply.calls.length; i++) {
             const c: GatewayToolCall = reply.calls[i];
+            const label: string = AiTools.toolLabel(c.name);
+            if (AiTools.needsConfirm(c.name)) {
+              // 写工具先过用户确认闸门；没人能确认（onConfirm 缺省）就一律拒绝
+              let approved: boolean = false;
+              if (onConfirm !== null) {
+                approved = await onConfirm(label, c.arguments);
+              }
+              if (!approved) {
+                gwMessages.push({ role: 'tool', content: '用户拒绝了该操作', tool_call_id: c.id });
+                if (onResult !== null) {
+                  onResult(c.name, label, '用户拒绝了该操作');
+                }
+                continue;
+              }
+            }
             if (onTool !== null) {
-              onTool(AiTools.toolLabel(c.name));
+              onTool(label, c.name);
             }
             const result: string = await AiTools.execute(c.name, c.arguments);
             gwMessages.push({ role: 'tool', content: result, tool_call_id: c.id });
+            if (onResult !== null) {
+              onResult(c.name, label, result);
+            }
             if (isAborted !== null && isAborted()) {
               return '';
             }

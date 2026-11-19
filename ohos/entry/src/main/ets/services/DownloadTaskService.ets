@@ -1,10 +1,11 @@
 import { util } from '@kit.ArkTS';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import {
-  DownloadTask, DownloadTaskKind, DownloadTaskStatus, SoNovelBookPayload,
+  DownloadRecord, DownloadTask, DownloadTaskKind, DownloadTaskStatus, SoNovelBookPayload,
   TalebookDownloadPayload, TalebookService,
 } from './TalebookService';
 import { SoNovelDownloadProgress, SoNovelService } from './SoNovelService';
+import { AccountManager } from './AccountManager';
 import { AccountStore } from './AccountStore';
 import { ACCOUNT_LEGACY_ID, isLegacyAccount } from '../models/AccountModels';
 import { ErrorFormat } from '../utils/ErrorFormat';
@@ -372,6 +373,8 @@ export class DownloadTaskService {
         await SoNovelService.fetchBookWithProgress(task.payload, (progress: SoNovelDownloadProgress) => {
           DownloadTaskService.updateProgress(taskId, progress);
         }, DownloadTaskService.useSseProgress());
+        // 服务器只做转换，成品留在 downloads 目录；与 talebook 链路对齐，拉回本地书架才算下载完成
+        await DownloadTaskService.pullSonovelToLocal(task);
       }
       succeeded = true;
       DownloadTaskService.markCompleted(taskId);
@@ -503,6 +506,84 @@ export class DownloadTaskService {
       DownloadTaskService.markCompleted(taskId);
     } else {
       DownloadTaskService.markFailed(taskId, tasks[index].error.length > 0 ? tasks[index].error : '下载异常结束');
+    }
+  }
+
+  /**
+   * 把 so-novel 服务器成品拉进本地书架目录并登记下载记录（书架即可点开阅读）。
+   * 成品命名规则 `书名(作者).<ext>`（EpubMergeHandler 输出）；精确名匹配不到时
+   * 退化为「书名前缀 + 同扩展名」中 timestamp 最新的一份。
+   * 失败抛错 → 任务标记失败，重试走整条链路（服务器生成很快命中缓存）。
+   */
+  private static async pullSonovelToLocal(task: DownloadTask): Promise<void> {
+    const payload = task.payload;
+    if (payload === undefined) {
+      throw new Error('缺少 SoNovel 下载参数');
+    }
+    const format = (payload.format ?? 'epub').toLowerCase();
+    const expected = `${payload.bookName}(${payload.author}).${format}`;
+    const books = await SoNovelService.listLocalBooks();
+    let matched = '';
+    let latest = -1;
+    for (let i = 0; i < books.length; i++) {
+      const name = books[i].name;
+      if (name === expected) {
+        matched = name;
+        break;
+      }
+      if (name.startsWith(`${payload.bookName}(`) && name.endsWith(`.${format}`) &&
+        books[i].timestamp > latest) {
+        latest = books[i].timestamp;
+        matched = name;
+      }
+    }
+    if (matched.length === 0) {
+      throw new Error('服务器上未找到生成的成品文件');
+    }
+    const bytes = await SoNovelService.fetchLocalBookBytes(matched);
+    const booksDir = AccountManager.booksDir(TalebookService.dataDir());
+    try {
+      if (!fs.accessSync(booksDir)) {
+        fs.mkdirSync(booksDir, true);
+      }
+    } catch (_error) {
+      fs.mkdirSync(booksDir, true);
+    }
+    const destPath = `${booksDir}/${matched}`;
+    DownloadTaskService.writeBytes(destPath, bytes);
+    const record: DownloadRecord = {
+      bookId: task.bookId,
+      title: payload.bookName,
+      author: payload.author,
+      coverUrl: '',
+      filePath: destPath,
+      format: format.toUpperCase(),
+      downloadTime: Date.now(),
+    };
+    TalebookService.upsertDownloadRecord(record);
+    const tasks = DownloadTaskService.getTasks();
+    const index = tasks.findIndex((item: DownloadTask) => item.id === task.id);
+    if (index >= 0) {
+      tasks[index].filePath = destPath;
+      DownloadTaskService.saveTasks(tasks, false);
+    }
+  }
+
+  /** 整包写文件；writeSync 可能只写一部分，按返回值续写（同 ApkUpdater 模式）。 */
+  private static writeBytes(destPath: string, bytes: ArrayBuffer): void {
+    const file = fs.openSync(destPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+    try {
+      let offset = 0;
+      while (offset < bytes.byteLength) {
+        const view: ArrayBuffer = offset === 0 ? bytes : bytes.slice(offset);
+        const written: number = fs.writeSync(file.fd, view);
+        if (written <= 0) {
+          throw new Error('写入文件失败');
+        }
+        offset += written;
+      }
+    } finally {
+      fs.closeSync(file);
     }
   }
 

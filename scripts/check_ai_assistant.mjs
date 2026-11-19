@@ -144,7 +144,50 @@ function stageAiService() {
 
 // AiTools 的运行时依赖桩：书架/详情/笔记/历史全部可编程，不落真实服务
 writeFileSync(join(dir, 'aiToolsDeps.ts'), `
-export const toolsState = { search: null, detail: null, notes: [], notesError: '', history: [] };
+export const toolsState = {
+  search: null, detail: null, notes: [], notesError: '', history: [],
+  sonovelEnvelope: null, tasks: [], processed: 0,
+  booklistCreateResult: null, booklistAddResult: null, booklistCreateCalls: [], booklistAddCalls: [],
+};
+// 仅作类型标注用的名字（strip-types 后仍走值 import），占位防命名导出缺失
+export const SoNovelBookPayload = undefined;
+export const DownloadTask = undefined;
+export const SoNovelSearchItem = undefined;
+export const BookListAddResponse = undefined;
+export const BookListMutationResponse = undefined;
+export const SoNovelService = {
+  search: async (_q) => toolsState.sonovelEnvelope ?? { status: 0, body: null, error: '未配置 SoNovel 服务地址' },
+};
+export const SoNovelMerge = {
+  fromRecord: (raw) => ({
+    sourceId: Number(raw['sourceId'] ?? 0), sourceName: String(raw['sourceName'] ?? ''),
+    url: String(raw['url'] ?? ''), bookName: String(raw['bookName'] ?? ''), author: String(raw['author'] ?? ''),
+    category: '', latestChapter: String(raw['latestChapter'] ?? ''), lastUpdateTime: '', status: String(raw['status'] ?? ''),
+  }),
+};
+export const DownloadTaskService = {
+  getTasks: () => toolsState.tasks.slice(),
+  enqueue: (payload) => {
+    const task = { id: 't' + (toolsState.tasks.length + 1), kind: 'sonovel', title: payload.bookName,
+      author: payload.author, sourceName: payload.sourceName, status: 'pending', error: '', filePath: '',
+      format: (payload.format ?? 'epub').toUpperCase(), bookId: 'sonovel_stub', progress: 0, message: '等待中',
+      createdAt: 0, updatedAt: 0, payload };
+    toolsState.tasks.push(task);
+    return task;
+  },
+  processQueue: () => { toolsState.processed += 1; },
+  statusLabel: (s) => ({ pending: '等待中', downloading: '下载中', completed: '已完成', failed: '失败' }[s] ?? s),
+};
+export const BookListApi = {
+  createBooklist: async (name, description, color, isPublic) => {
+    toolsState.booklistCreateCalls.push({ name, description, color, isPublic });
+    return toolsState.booklistCreateResult ?? { err: 'ok', booklist: { id: 77 } };
+  },
+  addBooks: async (id, ids) => {
+    toolsState.booklistAddCalls.push({ id, ids });
+    return toolsState.booklistAddResult ?? { err: 'ok', added: ids.length, book_count: ids.length };
+  },
+};
 export const TalebookApi = {
   search: async (q) => (toolsState.search ? await toolsState.search(q) : []),
   getBookDetail: async (id) => (toolsState.detail ? await toolsState.detail(id) : null),
@@ -165,7 +208,11 @@ function stageAiTools() {
   source = source
     .replace(`from './TalebookApi'`, `from './aiToolsDeps.ts'`)
     .replace(`from './AnnotationApi'`, `from './aiToolsDeps.ts'`)
-    .replace(`from './TalebookService'`, `from './aiToolsDeps.ts'`);
+    .replace(`from './TalebookService'`, `from './aiToolsDeps.ts'`)
+    .replace(`from './SoNovelService'`, `from './aiToolsDeps.ts'`)
+    .replace(`from '../utils/SoNovelMerge'`, `from './aiToolsDeps.ts'`)
+    .replace(`from './DownloadTaskService'`, `from './aiToolsDeps.ts'`)
+    .replace(`from './BookListApi'`, `from './aiToolsDeps.ts'`);
   writeFileSync(join(dir, 'RealAiTools.ts'), source);
 }
 
@@ -182,6 +229,10 @@ function stagePage(name) {
   source = source.substring(0, source.indexOf('\n  build() {'));
   const shims = new Set();
   source = source.replace(/^import \{([^}]+)\} from '([^']+)';\n/gm, (_all, clause, path) => {
+    if (path === '../services/AiTools') {
+      return "import { parseToolBookLines } from './RealAiTools.ts';\n" +
+        "import type { ToolBookLine } from './RealAiTools.ts';\n";
+    }
     if (path === '../services/AiSkills') {
       const names = clause.split(',').map((part) => part.trim());
       const values = names.filter((name) => name !== 'AiSkill');
@@ -235,7 +286,7 @@ try {
   const { AiSettingsPage } = await load('AiSettingsPage');
   const deps = await load('aiServiceDeps');
   const { AiService: RealAiService } = await load('RealAiService');
-  const { AiTools: RealAiTools } = await load('RealAiTools');
+  const { AiTools: RealAiTools, parseToolBookLines } = await load('RealAiTools');
   const { toolsState } = await load('aiToolsDeps');
   const { mdParseBlocks, mdParseInline } = await load('MdParse');
   const { AI_SKILLS } = await load('AiSkills');
@@ -249,6 +300,7 @@ try {
   const chat = () => {
     const page = new AiAssistantPage();
     page.toast = () => {};
+    page.scrollToEnd = () => {};
     state.ready = true;
     state.cancel = null;
     return page;
@@ -526,7 +578,7 @@ try {
 
   test('AiTools：只读工具返回精简文本（搜索/详情/笔记/历史/未知工具/失败包装）', async () => {
     toolsState.search = async (q) => (q === '三体' ? [{ id: 12, title: '三体', authors: ['刘慈欣', '某某'] }] : []);
-    assert.ok((await RealAiTools.execute('search_books', '{"query":"三体"}')).includes('id=12 《三体》（刘慈欣、某某）'));
+    assert.ok((await RealAiTools.execute('search_books', '{"query":"三体"}')).includes('- 《三体》（刘慈欣、某某） id=12'));
     assert.ok((await RealAiTools.execute('search_books', '{"query":"鲁滨逊"}')).includes('没有找到'));
     assert.ok((await RealAiTools.execute('search_books', '')).includes('query'));
     toolsState.detail = async (id) => (id === 12
@@ -560,6 +612,50 @@ try {
     toolsState.notesError = '';
   });
 
+  test('AiTools：so-novel 与书单工具（搜源/入队去重/任务列表/建单加书/确认登记）', async () => {
+    toolsState.sonovelEnvelope = { status: 200, error: '', body: { code: 200, message: '', data: [
+      { sourceId: 3, sourceName: '某书源', url: 'http://x/book/1/', bookName: '夜的命名术',
+        author: '会说话的肘子', latestChapter: '第1200章 尾声', status: '已完结' },
+    ] } };
+    const s = await RealAiTools.execute('search_sonovel', '{"query":"夜的命名术"}');
+    assert.ok(s.includes('《夜的命名术》') && s.includes('书源：某书源(id=3)') &&
+      s.includes('url：http://x/book/1/') && s.includes('add_sonovel_task'));
+    toolsState.tasks = [];
+    toolsState.processed = 0;
+    const t = await RealAiTools.execute('add_sonovel_task',
+      '{"book_name":"夜的命名术","url":"http://x/book/1/","author":"会说话的肘子","source_id":3,"source_name":"某书源"}');
+    assert.ok(t.includes('已加入下载任务') && t.includes('格式 epub'));
+    assert.equal(toolsState.tasks.length, 1);
+    assert.equal(toolsState.processed, 1);
+    const dup = await RealAiTools.execute('add_sonovel_task', '{"book_name":"夜的命名术","url":"http://x/book/1/"}');
+    assert.ok(dup.includes('已在下载队列中'));
+    assert.equal(toolsState.tasks.length, 1);
+    toolsState.tasks[0].status = 'downloading';
+    toolsState.tasks[0].progress = 42;
+    toolsState.tasks[0].message = '章节进度 42/100';
+    const l = await RealAiTools.execute('list_download_tasks', '{}');
+    assert.ok(l.includes('[下载中] 《夜的命名术》') && l.includes('42%'));
+    const c = await RealAiTools.execute('create_booklist', '{"name":"赛博朋克","description":"d"}');
+    assert.ok(c.includes('已创建书单「赛博朋克」（id=77）'));
+    assert.deepEqual(toolsState.booklistCreateCalls[0],
+      { name: '赛博朋克', description: 'd', color: '#1890ff', isPublic: true });
+    toolsState.booklistCreateResult = { err: 'unauthorized', msg: '请先登录' };
+    assert.ok((await RealAiTools.execute('create_booklist', '{"name":"x"}')).includes('创建书单失败：请先登录'));
+    toolsState.booklistCreateResult = null;
+    const a = await RealAiTools.execute('add_books_to_booklist', '{"booklist_id":77,"book_ids":"12, 44 ,abc"}');
+    assert.deepEqual(toolsState.booklistAddCalls[0], { id: 77, ids: [12, 44] });
+    assert.ok(a.includes('已把 2 本书加入书单') && a.includes('现有 2 本'));
+    assert.ok((await RealAiTools.execute('add_books_to_booklist', '{"booklist_id":0,"book_ids":""}')).includes('必填'));
+    assert.equal(RealAiTools.needsConfirm('create_booklist'), true);
+    assert.equal(RealAiTools.needsConfirm('add_sonovel_task'), true);
+    assert.equal(RealAiTools.needsConfirm('search_books'), false);
+    assert.equal(RealAiTools.needsConfirm('search_sonovel'), false);
+    toolsState.sonovelEnvelope = null;
+    toolsState.tasks = [];
+    toolsState.booklistCreateCalls.length = 0;
+    toolsState.booklistAddCalls.length = 0;
+  });
+
   test('网关工具回路：执行 tool_calls 回填结果，第二轮拿到最终回答', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
@@ -576,40 +672,138 @@ try {
     let full = '';
     let error = '';
     const toolLabels = [];
+    const toolResults = [];
     RealAiService.chatStream([{ role: 'user', content: '书架上有三体吗' }], {
       onDelta: (t) => { full += t; }, onDone: () => {}, onError: (m) => { error = m; },
-      onTool: (l) => { toolLabels.push(l); },
+      onTool: (l, name) => { toolLabels.push([name, l]); },
+      onToolResult: (name, l, text) => { toolResults.push([name, text]); },
     }, 256);
     await flush();
     assert.equal(error, '');
-    assert.deepEqual(toolLabels, ['搜索书架']);
+    assert.deepEqual(toolLabels, [['search_books', '搜索书架']]);
+    assert.equal(toolResults.length, 1);
+    assert.equal(toolResults[0][0], 'search_books');
+    assert.ok(toolResults[0][1].includes('- 《三体》（刘慈欣） id=12'));
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 4 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 9 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
     assert.equal(assistant.tool_calls[0].function.name, 'search_books');
     const toolMsg = b2.messages.find((m) => m.role === 'tool');
     assert.equal(toolMsg.tool_call_id, 'call_1');
-    assert.ok(toolMsg.content.includes('id=12 《三体》'));
+    assert.ok(toolMsg.content.includes('- 《三体》（刘慈欣） id=12'));
     assert.equal(full, '帮你查到了《三体》，id=12。');
   });
 
-  test('技能：四个内置技能均带工具指引，点击填入输入框', () => {
-    assert.equal(AI_SKILLS.length, 4);
+  test('写工具确认闸门：拒绝/无确认方不执行，批准才执行', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+        tool_calls: [{ id: 'w1', type: 'function',
+          function: { name: 'create_booklist', arguments: '{"name":"科幻入门"}' } }] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+        tool_calls: [{ id: 'w2', type: 'function',
+          function: { name: 'add_sonovel_task', arguments: '{}' } }] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '好' } }] })) },
+    ];
+    const asked = [];
+    const confirm = (label, args) => {
+      asked.push([label, args]);
+      return Promise.resolve(label === '创建书单'); // 第一笔允许、第二笔拒绝
+    };
+    RealAiService.chatStream([{ role: 'user', content: '建个书单' }], {
+      onDelta: () => {}, onDone: () => {}, onError: () => {}, onConfirm: confirm,
+    }, 128);
+    await flush();
+    assert.deepEqual(asked, [['创建书单', '{"name":"科幻入门"}'], ['添加 so-novel 下载任务', '{}']]);
+    // 第一笔被批准 → 真实执行：桩记下参数并返回新书单 id
+    const b2 = JSON.parse(deps.state.requests[1].content);
+    assert.match(b2.messages.find((m) => m.role === 'tool').content, /已创建书单「科幻入门」（id=77）/);
+    assert.deepEqual(toolsState.booklistCreateCalls,
+      [{ name: '科幻入门', description: '', color: '#1890ff', isPublic: true }]);
+    toolsState.booklistCreateCalls.length = 0;
+    // 第二笔被拒绝 → 不执行，直接回填拒绝文案（历史里有两条 tool 消息，看末条）
+    const b3 = JSON.parse(deps.state.requests[2].content);
+    const toolMsgs = b3.messages.filter((m) => m.role === 'tool');
+    assert.equal(toolMsgs.length, 2);
+    assert.equal(toolMsgs[1].content, '用户拒绝了该操作');
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+        tool_calls: [{ id: 'w3', type: 'function',
+          function: { name: 'create_booklist', arguments: '{}' } }] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '算了' } }] })) },
+    ];
+    RealAiService.chatStream([{ role: 'user', content: '建个书单' }], {
+      onDelta: () => {}, onDone: () => {}, onError: () => {},
+    }, 128);
+    await flush();
+    const bNoAsk = JSON.parse(deps.state.requests[1].content);
+    assert.equal(bNoAsk.messages.find((m) => m.role === 'tool').content, '用户拒绝了该操作');
+  });
+
+  test('技能：六个内置技能均带工具指引，点击填入输入框', () => {
+    assert.equal(AI_SKILLS.length, 6);
     const prompts = AI_SKILLS.map((s) => s.prompt);
-    for (const tool of ['search_books', 'book_detail', 'book_notes', 'reading_history']) {
+    for (const tool of ['search_books', 'book_detail', 'book_notes', 'reading_history',
+      'search_sonovel', 'add_sonovel_task', 'list_download_tasks', 'create_booklist', 'add_books_to_booklist']) {
       assert.ok(prompts.some((p) => p.includes(tool)), `缺工具 ${tool}`);
     }
     for (const s of AI_SKILLS) {
       assert.ok(s.label.length > 0 && s.hint.length > 0, s.label);
-      assert.ok(s.prompt.includes('《'), s.label);
+      assert.ok(s.prompt.includes('《') || s.prompt.includes('「'), s.label);
     }
     const page = chat();
     page.applySkill(AI_SKILLS[0]);
     assert.equal(page.input, AI_SKILLS[0].prompt);
+  });
+
+  test('parseToolBookLines：解析三类列表行（纯书名行/带状态前缀），跳非条目行', () => {
+    const books = parseToolBookLines(
+      '书架上找到 2 本：\n- 《三体》（刘慈欣） id=12\n- [下载中] 《夜名》（肘子） 进度 42%\n' +
+        '说明：《三体》是系列\n普通文本行');
+    assert.equal(books.length, 2);
+    assert.equal(books[0].title, '《三体》');
+    assert.equal(books[0].subtitle, '（刘慈欣） id=12');
+    assert.equal(books[1].title, '《夜名》');
+    assert.ok(books[1].subtitle.startsWith('[下载中]'));
+  });
+
+  test('对话页活动时间线：doing→done/rejected 翻转，书目结果转结构化条目', () => {
+    const page = chat();
+    page.beginActivity('search_books', '搜索书架');
+    assert.equal(page.liveActivities.length, 1);
+    assert.equal(page.liveActivities[0].state, 'doing');
+    page.endActivity('search_books', '搜索书架', '书架上找到 2 本：\n- 《三体》（刘慈欣） id=12\n- 《三体全集》（刘慈欣） id=444');
+    assert.equal(page.liveActivities[0].state, 'done');
+    assert.equal(page.liveActivities[0].books.length, 2);
+    assert.equal(page.liveActivities[0].books[0].title, '《三体》');
+    assert.equal(page.liveActivities[0].summary, '');
+    page.beginActivity('create_booklist', '创建书单');
+    page.endActivity('create_booklist', '创建书单', '用户拒绝了该操作');
+    const lastAct = page.liveActivities[1];
+    assert.equal(lastAct.state, 'rejected');
+    assert.equal(lastAct.books.length, 0);
+    assert.equal(lastAct.summary, '用户拒绝了该操作');
+    // 同名多条 doing：只翻最后一条
+    page.beginActivity('search_sonovel', '搜索网络小说书源');
+    page.beginActivity('search_sonovel', '搜索网络小说书源');
+    page.endActivity('search_sonovel', '搜索网络小说书源', '各书源没有相关小说');
+    assert.equal(page.liveActivities[2].state, 'doing');
+    assert.equal(page.liveActivities[3].state, 'done');
+    assert.equal(page.liveActivities[3].summary, '各书源没有相关小说');
+    // 闸门拒绝的工具不走 beginActivity：endActivity 须补记 ✕ 行（上板发现：拒绝不可见）
+    page.endActivity('add_sonovel_task', '添加 so-novel 下载任务', '用户拒绝了该操作');
+    const appended = page.liveActivities[4];
+    assert.equal(appended.state, 'rejected');
+    assert.equal(appended.name, 'add_sonovel_task');
+    assert.equal(appended.summary, '用户拒绝了该操作');
   });
 
   test('网关工具回路：超过轮数上限报错收场，最后一轮不挂 tools', async () => {
