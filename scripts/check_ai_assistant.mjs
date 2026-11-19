@@ -17,7 +17,7 @@ const dir = mkdtempSync(join(TMP, 'ai-check-'));
 const read = (path) => readFileSync(join(ETS, path), 'utf8');
 const settingsDefaults = () => ({
   config: { providerId: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat',
-    hasKey: true, temperature: 0.7 },
+    hasKey: true, temperature: 0.7, vision: false, visionOverride: '', contextLength: 8 },
   providers: [
     { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', vision: false },
     { id: 'opencode', name: 'OpenCode (Go)', baseUrl: 'https://opencode.ai/inference/openai/v1', model: 'big-pickle', vision: false },
@@ -28,7 +28,7 @@ const state = {
   ready: true, handlers: null, copied: '', cancel: null,
   shelf: { books: [] }, search: async () => ({ body: { books: [] } }),
   recommend: async () => [], summary: async () => '', review: async () => '', meta: async () => ({}),
-  settings: settingsDefaults(), prefs: new Map(),
+  settings: settingsDefaults(), prefs: new Map(), lastMessages: null,
 };
 globalThis.__aiCheck = state;
 // 设置页保存时会记一个配置版本号，桩掉避免 save() 抛错
@@ -37,8 +37,9 @@ const shim = `
 const state = globalThis.__aiCheck;
 export const AiService = {
   isReady: () => state.ready,
-  chatStream: (_messages, handlers) => {
+  chatStream: (messages, handlers) => {
     state.handlers = handlers;
+    state.lastMessages = messages;
     return { aborted: false, destroy: () => state.cancel?.(handlers) };
   },
   loadConfig: () => state.settings.config,
@@ -60,12 +61,17 @@ export const AiService = {
     if (state.settings.fetchError.length > 0) { throw new Error(state.settings.fetchError); }
     return state.settings.models.slice();
   },
-  saveConfig: (providerId, baseUrl, model, apiKey, temperature) => {
-    state.settings.saved = { providerId, baseUrl, model, apiKey, temperature };
+  saveConfig: (providerId, baseUrl, model, apiKey, temperature, visionOverride, contextLength) => {
+    state.settings.saved = { providerId, baseUrl, model, apiKey, temperature, visionOverride, contextLength };
     if (apiKey.length > 0) { state.settings.keys.add(providerId); }
     state.settings.config = { providerId, baseUrl, model,
-      hasKey: state.settings.keys.has(providerId), temperature };
+      hasKey: state.settings.keys.has(providerId), temperature,
+      visionOverride, contextLength,
+      vision: visionOverride === 'on' ? true : visionOverride === 'off' ? false :
+        /vl|vision|4o|omni|gemini|claude|llava|qvq/i.test(model) };
   },
+  detectVision: (model) => /vl|vision|4o|omni|gemini|claude|llava|qvq/i.test(model),
+  contextRounds: (k) => (k <= 4 ? 4 : k <= 8 ? 8 : k <= 32 ? 16 : k <= 128 ? 30 : 50),
   complete: async () => state.settings.completeReply,
 };
 export const AiBookService = {
@@ -86,6 +92,19 @@ export const pasteboard = {
 };
 export const AppRouter = { getParams: () => ({}) };
 export const AI_PROVIDERS = [];
+export const CONTEXT_LENGTH_OPTIONS = [4, 8, 32, 128, 200];
+// 对话页附图管线的 kit 桩：回归只测协议形状与状态流转，真实编码上板验证
+export const common = {};
+export const fileIo = {
+  accessSync: () => true, mkdirSync: () => {}, statSync: () => ({ size: 0 }),
+  openSync: () => ({ fd: 0 }), closeSync: () => {}, readSync: () => {}, copyFileSync: () => {},
+};
+export const photoAccessHelper = {
+  PhotoViewPicker: class { async select() { return { photoUris: [] }; } },
+  PhotoViewMIMETypes: { IMAGE_TYPE: 'image/*' },
+};
+export const image = { createImageSource: () => null, createImagePacker: () => null };
+export const util = { Base64Helper: class { encodeToStringSync() { return ''; } } };
 `;
 writeFileSync(join(dir, 'shim.ts'), shim);
 
@@ -133,7 +152,8 @@ export const TalebookService = {
 /** 把真实 AiService 落进临时目录：SDK / rcp 类型转 import type，运行时依赖换成桩。 */
 function stageAiService() {
   let source = read('services/AiService.ets');
-  for (const type of ['ChatCompletionChunk', 'ChatCompletionMessageParam', 'ChatCompletionCreateParamsBase']) {
+  for (const type of ['ChatCompletionChunk', 'ChatCompletionMessageParam', 'ChatCompletionCreateParamsBase',
+    'ChatCompletionContentPart', 'ChatCompletionContentPartText', 'ChatCompletionContentPartImage']) {
     source = source.replace(`import { ${type} }`, `import type { ${type} }`);
   }
   source = source
@@ -270,7 +290,8 @@ function stagePage(name) {
       return `import { ${names.join(', ')} } from './${path.split('/').at(-1)}.ts';\n`;
     }
     for (const name of clause.split(',').map((part) => part.trim())) {
-      if (['AiService', 'AiBookService', 'ShelfApi', 'TalebookService', 'pasteboard', 'AppRouter', 'AI_PROVIDERS'].includes(name)) {
+      if (['AiService', 'AiBookService', 'ShelfApi', 'TalebookService', 'pasteboard', 'AppRouter', 'AI_PROVIDERS',
+        'CONTEXT_LENGTH_OPTIONS', 'fileIo as fs', 'photoAccessHelper', 'image', 'util', 'common'].includes(name)) {
         shims.add(name);
       }
     }
@@ -357,23 +378,24 @@ try {
     }
     assert.equal(state.copied, '第一条');
   });
-  test('停止生成会结束当前气泡，保留已收到文本', () => {
+  test('停止生成会结束当前气泡，保留已收到文本', async () => {
     const page = chat();
-    page.send('问题');
+    await page.send('问题');
     state.handlers.onDelta('部分回答');
     page.stopStreaming();
     assert.equal(page.thinking, false);
     assert.equal(page.messages.at(-1).streaming, false);
     assert.equal(page.messages.at(-1).content, '部分回答');
   });
-  test('清空后迟到的流式回调不会污染新对话', () => {
+  test('清空后迟到的流式回调不会污染新对话', async () => {
     const page = chat();
-    page.send('旧问题');
+    await page.send('旧问题');
     const old = state.handlers;
     page.clearChat();
     old.onDone('旧回答');
     assert.deepEqual(page.messages, []);
-    page.send('新问题');
+    await page.send('新问题');
+    const fresh = state.handlers;
     old.onDelta('迟到片段');
     old.onError('旧错误');
     assert.equal(page.messages.at(-1).content, '');
@@ -593,8 +615,12 @@ try {
     state.settings.models = ['glm-4-flash', 'glm-4-plus'];
     await page.fetchModelList();
     assert.deepEqual(page.modelOptions, ['glm-4-flash', 'glm-4-plus']);
-    assert.equal(page.modelIndex, -1);
+    // Select 数据源须覆盖全部拉取结果；当前模型不在列表时索引落在末尾（不越界即可）
+    const items = page.modelSelectItems();
+    assert.ok(items.length >= 2 && items.every((o) => typeof o.value === 'string'));
+    assert.ok(items.some((o) => o.value === 'glm-4-plus'));
     page.model = page.modelOptions[1];
+    assert.equal(page.modelSelectIndex(), 1);
     state.settings.models = [];
     state.settings.fetchError = 'API Key 无效或已过期（HTTP 401）';
     await page.fetchModelList();
@@ -917,6 +943,120 @@ try {
     toolsState.applyReferResult = { err: 'download_failed', msg: '封面下载失败' };
     assert.ok((await RealAiTools.execute('set_cover', '{"book_id":1481,"index":1}')).includes('封面下载失败'));
     toolsState.applyReferResult = null;
+  });
+
+  test('服务：vision 自动检测/手动覆盖与上下文档位持久化、轮数映射', () => {
+    deps.state.store.clear();
+    RealAiService.saveConfig('openai', 'https://api.openai.com/v1', 'gpt-4o-mini', 'sk-o', 0.7);
+    assert.equal(RealAiService.loadConfig().vision, true, 'gpt-4o 自动识别为支持图片');
+    RealAiService.saveConfig('moonshot', 'https://api.moonshot.cn/v1', 'moonshot-v1-8k', 'sk-m', 0.7);
+    assert.equal(RealAiService.loadConfig().vision, false, 'moonshot-v1-8k 不该被误判');
+    RealAiService.saveConfig('moonshot', 'https://api.moonshot.cn/v1', 'moonshot-v1-8k', '', 0.7, 'on', 32);
+    assert.equal(RealAiService.loadConfig().vision, true, '手动覆盖优先于自动检测');
+    assert.equal(RealAiService.loadConfig().contextLength, 32);
+    RealAiService.saveConfig('moonshot', 'https://api.moonshot.cn/v1', 'moonshot-v1-8k', '', 0.7, '', 8);
+    assert.equal(RealAiService.loadConfig().visionOverride, '', '恢复自动');
+    assert.deepEqual([4, 8, 32, 128, 200].map((k) => RealAiService.contextRounds(k)), [4, 8, 16, 30, 50]);
+    assert.equal(RealAiService.detectVision('qwen2.5-vl-72b'), true);
+    assert.equal(RealAiService.detectVision('glm-4-flash'), false);
+  });
+
+  test('多模态：带图消息两条通道都序列化为 OpenAI content 数组', async () => {
+    const msg = { role: 'user', content: '这是什么', images: ['data:image/jpeg;base64,QUJD'] };
+    const rcpJson = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
+    deps.state.store.clear();
+    deps.state.chatCalls.length = 0;
+    // 网关通道（rcp 直连）
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'big-pickle', 'sk-oc', 0.5);
+    deps.state.rcpResponse = { statusCode: 200, body: rcpJson('{"choices":[{"message":{"content":"ok"}}]}') };
+    await new Promise((resolve, reject) => {
+      RealAiService.chatStream([msg], { onDelta: () => {}, onDone: resolve, onError: reject });
+    });
+    const gwBody = JSON.parse(deps.state.lastRequest.content);
+    const gwContent = gwBody.messages.find((m) => m.role === 'user').content;
+    assert.ok(Array.isArray(gwContent), '网关带图必须发 content 数组');
+    assert.equal(gwContent[0].type, 'text');
+    assert.equal(gwContent[1].type, 'image_url');
+    assert.equal(gwContent[1].image_url.url, 'data:image/jpeg;base64,QUJD');
+    deps.state.rcpResponse = null;
+    // SDK 通道
+    RealAiService.saveConfig('deepseek', 'https://api.deepseek.com/v1', 'deepseek-chat', 'sk-d', 0.5);
+    RealAiService.chatStream([msg], { onDelta: () => {}, onDone: () => {}, onError: () => {} });
+    const sdkContent = deps.state.chatCalls[0].body.messages.find((m) => m.role === 'user').content;
+    assert.ok(Array.isArray(sdkContent) && sdkContent[1].image_url.url === 'data:image/jpeg;base64,QUJD',
+      'SDK 通道同样要多模态数组');
+    // 无图消息保持纯字符串 content（老服务商兼容性）
+    deps.state.chatCalls.length = 0;
+    RealAiService.chatStream([{ role: 'user', content: '纯文本' }],
+      { onDelta: () => {}, onDone: () => {}, onError: () => {} });
+    assert.equal(deps.state.chatCalls[0].body.messages[0].content, '纯文本');
+  });
+
+  test('对话页：附图发送、vision 关闭不带图、历史上图路径恢复、档位裁剪轮数', async () => {
+    state.prefs.clear();
+    state.lastMessages = null;
+    state.settings.config.vision = true;
+    const page = chat();
+    page.refreshSettings();
+    page.encodeImage = async (p) => `data:image/jpeg;base64#${p}`;
+    page.pendingImages = ['/f/a.jpg'];
+    await page.send('看图');
+    assert.deepEqual(page.messages[0].images, ['/f/a.jpg']);
+    assert.equal(page.pendingImages.length, 0, '发送即清待发图');
+    const sent = state.lastMessages.find((m) => m.role === 'user' && m.content === '看图');
+    assert.deepEqual(sent.images, ['data:image/jpeg;base64#/f/a.jpg'], '发送时编码为 data URL');
+    // 历史恢复图片路径（不存 data URL，避免 preferences 膨胀）
+    const raw = state.prefs.get('ai_chat_history');
+    assert.ok(raw.includes('/f/a.jpg') && !raw.includes('base64'), '历史只存沙箱路径');
+    const page2 = chat();
+    page2.loadHistory();
+    assert.deepEqual(page2.messages[0].images, ['/f/a.jpg']);
+    // vision 关闭：待发图被丢弃、消息不带图
+    state.settings.config.vision = false;
+    state.prefs.clear();
+    const off = chat();
+    off.refreshSettings();
+    off.pendingImages = ['/f/b.jpg'];
+    await off.send('关闭后发送');
+    assert.deepEqual(off.messages[0].images, []);
+    // 档位裁剪：4K=4 轮 → system + 最近 8 条气泡
+    state.settings.config.contextLength = 4;
+    state.prefs.clear();
+    const trim = chat();
+    trim.refreshSettings();
+    for (let i = 0; i < 12; i++) {
+      trim.messages.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `c${i}`,
+        streaming: false, error: false, activities: [] });
+    }
+    const ctx = await trim.buildContext();
+    assert.equal(ctx.length, 1 + 8, '4K 档只带最近 4 轮（8 条气泡）');
+    assert.equal(ctx.at(-1).content, 'c11');
+    assert.equal(ctx[1].content, 'c4', '更早的轮次被裁掉');
+    state.settings.config.contextLength = 8;
+  });
+
+  test('设置页：上下文档位与 vision 覆盖随保存落盘', () => {
+    resetSettings();
+    const page = settingsPage();
+    page.contextLength = 32;
+    page.visionOverride = 'on';
+    page.baseUrl = 'https://x/v1';
+    page.model = 'glm-4v';
+    page.apiKey = 'sk-x';
+    assert.ok(page.save());
+    assert.equal(state.settings.saved.contextLength, 32);
+    assert.equal(state.settings.saved.visionOverride, 'on');
+    // visionOn 优先级：手动 > 模型名自动检测
+    page.visionOverride = '';
+    page.model = 'deepseek-chat';
+    assert.equal(page.visionOn(), false);
+    page.model = 'qwen-vl-max';
+    assert.equal(page.visionOn(), true);
+    page.visionOverride = 'off';
+    assert.equal(page.visionOn(), false, '手动关闭压过自动检测');
+    assert.ok(page.contextSelectItems().length === 5);
+    page.contextLength = 128;
+    assert.equal(page.contextSelectIndex(), 3);
   });
 
   test('对话页历史持久化：finishBubble 落盘、loadHistory 恢复、clearChat 清空', () => {
