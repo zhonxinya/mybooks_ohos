@@ -107,6 +107,8 @@ export interface AiStreamHandlers {
   onDelta: (delta: string) => void;
   onDone: (fullText: string) => void;
   onError: (message: string) => void;
+  /** 可选：推理模型（qwen/deepseek 等）的思考过程增量，OpenAI 兼容字段 reasoning_content。 */
+  onReasoning?: (delta: string) => void;
   /** 可选：网关工具回路每次执行工具前回调一句人话（如「搜索书架」）。 */
   onTool?: (label: string, name: string) => void;
   /** 工具执行完毕（含用户拒绝）：对话页据此把活动时间线从「进行中」翻到「完成/拒绝」。 */
@@ -430,11 +432,13 @@ export class AiService {
       const notice: ((label: string, name: string) => void) | undefined = handlers.onTool;
       const ask: ((label: string, args: string) => Promise<boolean>) | undefined = handlers.onConfirm;
       const done: ((name: string, label: string, text: string) => void) | undefined = handlers.onToolResult;
+      const think: ((text: string) => void) | undefined = handlers.onReasoning;
       AiService.chatViaGateway(config, apiKey, messages, maxTokens, gatewaySession,
         AiTools.definitions(), (): boolean => handle.aborted,
         notice === undefined ? null : notice,
         ask === undefined ? null : ask,
-        done === undefined ? null : done).then((content: string): void => {
+        done === undefined ? null : done,
+        think === undefined ? null : think).then((content: string): void => {
         if (handle.aborted) {
           return;
         }
@@ -465,6 +469,7 @@ export class AiService {
             return;
           }
           let piece: string = '';
+          let think: string = '';
           for (let i = 0; i < chunks.length; i++) {
             const choices = chunks[i].choices;
             if (choices !== undefined && choices.length > 0) {
@@ -472,7 +477,16 @@ export class AiService {
               if (delta !== undefined && delta !== null) {
                 piece += delta;
               }
+              // SDK 类型没声明 reasoning_content，但运行时是 JSON 透传，按 Record 取
+              const deltaObj: Record<string, Object> = choices[0].delta as Object as Record<string, Object>;
+              const reasoning = deltaObj['reasoning_content'];
+              if (typeof reasoning === 'string') {
+                think += reasoning;
+              }
             }
+          }
+          if (think.length > 0 && handlers.onReasoning !== undefined) {
+            handlers.onReasoning(think);
           }
           if (piece.length > 0) {
             full += piece;
@@ -525,7 +539,7 @@ export class AiService {
     if (AiService.isOpenCodeGateway(config.baseUrl)) {
       // 结构化输出（书单 JSON 等）不需要工具，避免模型中途改去查数据
       return AiService.chatViaGateway(config, apiKey, messages, maxTokens, rcp.createSession(),
-        null, null, null, null, null);
+        null, null, null, null, null, null);
     }
     const client: OpenAI = AiService.client(config.baseUrl, apiKey);
     const params: ChatCompletionCreateParamsBase = {
@@ -650,7 +664,8 @@ export class AiService {
     isAborted: (() => boolean) | null,
     onTool: ((label: string, name: string) => void) | null,
     onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null,
-    onResult: ((name: string, label: string, text: string) => void) | null): Promise<string> {
+    onResult: ((name: string, label: string, text: string) => void) | null,
+    onReasoning: ((text: string) => void) | null): Promise<string> {
     const headers: rcp.RequestHeaders = {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
@@ -693,6 +708,10 @@ export class AiService {
           throw new Error(AiService.httpErrorText(statusCode, text));
         }
         const reply: GatewayReply = AiService.parseGatewayReply(text);
+        if (reply.reasoning.length > 0 && onReasoning !== null) {
+          // 整包模式：本轮思考过程一次性给出（工具回路多轮则逐轮累积）
+          onReasoning(reply.reasoning);
+        }
         if (reply.calls !== null && reply.calls.length > 0) {
           if (round === MAX_TOOL_ROUNDS) {
             throw new Error(`模型连续调用工具达到上限（${MAX_TOOL_ROUNDS} 轮），请把问题说具体些再试`);
@@ -749,7 +768,7 @@ export class AiService {
 
   /** 解析网关整包响应：正文 + tool_calls（不依赖 SDK 的 ChatCompletionMessage 类型）。 */
   private static parseGatewayReply(raw: string): GatewayReply {
-    const reply: GatewayReply = { content: '', calls: null };
+    const reply: GatewayReply = { content: '', calls: null, reasoning: '' };
     if (raw.length === 0) {
       return reply;
     }
@@ -777,6 +796,8 @@ export class AiService {
     }
     const content = message['content'];
     reply.content = typeof content === 'string' ? content as string : '';
+    const reasoning = message['reasoning_content'];
+    reply.reasoning = typeof reasoning === 'string' ? reasoning as string : '';
     const rawCalls = message['tool_calls'] as Object[] | undefined;
     if (rawCalls === undefined || rawCalls.length === 0) {
       return reply;
@@ -941,6 +962,8 @@ interface GatewayToolCall {
 interface GatewayReply {
   content: string;
   calls: GatewayToolCall[] | null;
+  /** 推理模型的思考过程（OpenAI 兼容字段 reasoning_content，整包模式一次给全）。 */
+  reasoning: string;
 }
 
 /** SDK 会话只用到 cancel()；单独声明避免依赖 rcp 的完整类型。 */

@@ -489,6 +489,39 @@ try {
     assert.equal(page2.messages.at(-1).content, '前半后半');
     assert.equal(page2.thinking, false);
   });
+  test('思考过程：onReasoning 累积、finishBubble 固化并随历史持久化', async () => {
+    const page = chat();
+    const store = AiChatStore.instance();
+    await page.send('问题');
+    const handlers = state.handlers;
+    handlers.onReasoning('让我想想。');
+    handlers.onReasoning('先给结论。');
+    assert.equal(store.streamingReasoning, '让我想想。先给结论。');
+    handlers.onDelta('正文');
+    handlers.onDone('正文');
+    assert.equal(page.messages.at(-1).reasoning, '让我想想。先给结论。', '固化进气泡');
+    assert.equal(store.streamingReasoning, '', '固化后重置');
+    const saved = JSON.parse(state.prefs.get('ai_chat_history'));
+    assert.equal(saved.at(-1).reasoning, '让我想想。先给结论。', '随历史落盘');
+    const page2 = reappear();
+    page2.store.loadHistory();
+    assert.equal(page2.messages.at(-1).reasoning, '让我想想。先给结论。', '历史恢复');
+  });
+  test('思考过程：停止生成也固化已有思考', async () => {
+    const page = chat();
+    await page.send('问题');
+    state.handlers.onReasoning('半截思考');
+    page.stopStreaming();
+    assert.equal(page.messages.at(-1).reasoning, '半截思考');
+  });
+  test('网关整包：parseGatewayReply 解析 reasoning_content', () => {
+    const raw = JSON.stringify({ choices: [{ message: { role: 'assistant', content: '答', reasoning_content: '因为' } }] });
+    const reply = RealAiService.parseGatewayReply(raw);
+    assert.equal(reply.content, '答');
+    assert.equal(reply.reasoning, '因为');
+    const noThink = RealAiService.parseGatewayReply(JSON.stringify({ choices: [{ message: { content: 'x' } }] }));
+    assert.equal(noThink.reasoning, '');
+  });
   test('写闸门：页面不在场时确认一律按拒绝', async () => {
     const page = chat();
     await page.send('建个书单');

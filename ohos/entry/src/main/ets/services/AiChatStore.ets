@@ -29,6 +29,8 @@ export interface ChatBubble {
   activities: ChatActivity[];
   /** 用户消息附带的图片（沙箱绝对路径；发送时压缩编码为 data URL）。 */
   images?: string[];
+  /** 推理模型的思考过程（reasoning_content）；完成固化后随历史持久化。 */
+  reasoning?: string;
 }
 
 /** 写操作闸门确认弹窗；需要 UIContext，只有页面在场时可用。 */
@@ -77,6 +79,8 @@ export class AiChatStore {
   streamingText: string = '';
   /** 工具回路实时活动时间线；finishBubble 时快照进气泡成为历史。 */
   liveActivities: ChatActivity[] = [];
+  /** 流式中的思考过程增量；finishBubble/stopStreaming 时固化进气泡。 */
+  streamingReasoning: string = '';
   thinking: boolean = false;
   errorTip: string = '';
   configured: boolean = false;
@@ -150,10 +154,12 @@ export class AiChatStore {
       last.content = this.streamingText.length > 0 ? this.streamingText : '已停止生成';
       last.error = this.streamingText.length === 0;
       last.activities = this.liveActivities;
+      last.reasoning = this.streamingReasoning;
       this.messages = this.messages.slice();
       this.saveHistory();
     }
     this.streamingText = '';
+    this.streamingReasoning = '';
     this.liveActivities = [];
     this.thinking = false;
     this.notify();
@@ -232,6 +238,7 @@ export class AiChatStore {
             }
           }
         }
+        const reasoningRaw: Object = m['reasoning'];
         bubbles.push({
           role: m['role'],
           content: m['content'],
@@ -239,6 +246,7 @@ export class AiChatStore {
           error: m['error'] === true,
           activities: activities,
           images: images,
+          reasoning: typeof reasoningRaw === 'string' ? reasoningRaw : '',
         });
       }
       this.messages = bubbles.slice(-CHAT_HISTORY_MAX);
@@ -342,6 +350,7 @@ export class AiChatStore {
     this.messages.push({ role: 'assistant', content: '', streaming: true, error: false, activities: [] });
     this.saveHistory();
     this.streamingText = '';
+    this.streamingReasoning = '';
     this.liveActivities = [];
     this.thinking = true;
     this.notify();
@@ -352,6 +361,13 @@ export class AiChatStore {
           return;
         }
         this.streamingText += delta;
+        this.notify();
+      },
+      onReasoning: (delta: string) => {
+        if (requestId !== this.requestId || !this.thinking) {
+          return;
+        }
+        this.streamingReasoning += delta;
         this.notify();
       },
       onTool: (label: string, name: string) => {
@@ -399,9 +415,11 @@ export class AiChatStore {
     last.error = isError;
     last.content = isError ? (text.length > 0 ? text : '请求失败') : text;
     last.activities = this.liveActivities;
+    last.reasoning = this.streamingReasoning;
     this.messages = this.messages.slice();
     this.thinking = false;
     this.streamingText = '';
+    this.streamingReasoning = '';
     this.liveActivities = [];
     this.abort = null;
     // 上次是错误气泡时，把这次失败的消息踢出上下文（buildContext 已过滤 error）
@@ -474,6 +492,7 @@ export class AiChatStore {
     this.confirmUi = null;
     this.messages = [];
     this.streamingText = '';
+    this.streamingReasoning = '';
     this.liveActivities = [];
     this.thinking = false;
     this.errorTip = '';
