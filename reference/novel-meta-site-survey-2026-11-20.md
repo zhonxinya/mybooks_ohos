@@ -20,8 +20,8 @@
 | www.rongshuxia.com 榕树下 | 200/200 | ✅ 182KB | og:novel 全量+ogdesc+og:image(bookcover.yuewen.com)+作品类别 cn-label，UTF-8 | #1412 同规则覆盖 |
 | b.faloo.com 飞卢 | 200/200 | ✅ 162KB | ogdesc/og:image 有但 **GBK 乱码**（charset=gbk） | #1414：需字符集解码路线 |
 | www.wtzw.com 梧桐中文 | 200/200 | ✅ 118KB | 无 og；语料选择器实测 author=class.sName、cover=class.w_pic(协议相对 //cdn.qimao.com)、intro=class.pWorkInformation 全部命中 | 次批，专用规则 |
-| www.wxscs.com 万象书城吧 | 首页 200 有 og:novel 模板 | ❌ 详情页 403 | 首页过、详情页拦 | 观察（或需 Cookie） |
-| www.jjwxc.net 晋江 | 双指纹体量差异大(12KB vs 69KB) | ⚠️ novelid=10 死链 1.4KB | 老 SSR PHP 站 | 观察：活样本+编码需再验 |
+| www.wxscs.com 万相书城 | 首页 200 | ✅ 详情页**移动 UA 200/桌面 UA 403**（双指纹），og:novel 全量 | Apache 按 UA 放行；wxsc8 移动域已易主不可用 | **已接入**（#1417，UA 特判） |
+| www.jjwxc.net 晋江 | 首页 200 直出活 novelid | ✅ onebook.php 双指纹 200，gb18030+schema.org Book 微数据（无 og） | 活样本+编码已复验；img 有畸形 _src 属性 | **已接入**（#1417，parseJjwxc） |
 | www.zongheng.com 纵横 | 200/200 | ⚠️ 58KB 无 og | 疑似部分 JS 壳 | 观察：需专用规则调研 |
 | m.suixkan.com / sma.yueyouxs.com / www.bixiange.top | 首页 200 | ❓ 首页抓不到详情链接形态 | 链接在 JS 数据里 | 弃（性价比低） |
 
