@@ -116,6 +116,8 @@ export class NovelMetaService {
       meta = NovelMetaService.parseWtzw(html);
     } else if (trimmed.indexOf('jjwxc.') >= 0 && trimmed.indexOf('onebook.php') >= 0) {
       meta = NovelMetaService.parseJjwxc(html);
+    } else if (trimmed.indexOf('ujxsw.org') >= 0) {
+      meta = NovelMetaService.parseUjxsw(html);
     } else {
       meta = NovelMetaService.parseGeneric(html);
     }
@@ -243,6 +245,34 @@ export class NovelMetaService {
     if (intro !== null) {
       meta.intro = NovelMetaService.clean(intro[1], INTRO_MAX);
     }
+    meta.ok = meta.title.length > 0 || meta.intro.length > 0 || meta.cover.length > 0;
+    return meta;
+  }
+
+  /** 悠久书城（www.ujxsw.org/book/<id>/，2026-11-20 实测）：so-novel 候选 6 域里唯一
+   *  未覆盖的。无 og/itemprop，锚点全在正文：书名/作者在 bookright 的 d_title h1>em
+   *  （**顶层 <h1> 是站名「悠久小说网」，不可 h1 兜底**——同梧桐坑），类别在 id="count"
+   *  「分 类：」span，封面 id="bookimg"，简介走 meta description；页面无状态字段——留空不猜。 */
+  static parseUjxsw(html: string): NovelMeta {
+    const meta: NovelMeta = { ok: false, error: '', title: '', author: '', category: '',
+      status: '', intro: '', cover: '', rule: '悠久书城' };
+    const tit = html.match(/class="d_title"[\s\S]{0,120}?<h1>([^<]{1,60})<em>/);
+    if (tit !== null) {
+      meta.title = tit[1].trim();
+    }
+    const au = html.match(/<em>作者：<a[^>]*>([^<]{1,40})<\/a>/);
+    if (au !== null) {
+      meta.author = au[1].trim();
+    }
+    const cat = html.match(/分 类：<span class="pd_r">([^<]{1,30})</);
+    if (cat !== null) {
+      meta.category = cat[1].trim();
+    }
+    const pic = html.match(/id="bookimg"[\s\S]{0,300}?src="([^"]+)"/);
+    if (pic !== null) {
+      meta.cover = pic[1];
+    }
+    meta.intro = NovelMetaService.clean(NovelMetaService.pickMeta(html, 'description'), INTRO_MAX);
     meta.ok = meta.title.length > 0 || meta.intro.length > 0 || meta.cover.length > 0;
     return meta;
   }

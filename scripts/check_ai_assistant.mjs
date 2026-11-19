@@ -1557,6 +1557,19 @@ try {
     deps.state.rcpResponse = null;
   });
 
+  // 悠久书城 fixture：2026-11-20 www.ujxsw.org/book/90293 实测节选（无 og，正文锚点）
+  const UJXSW_PAGE = `<html><head><meta name="description" content="剑仙最新章节由网友提供，是作者兵围城下创作的小说，悠久小说网免费提供剑仙在线全文阅读,剑仙TXT电子书全集免费下载。" /></head><body><h1>悠久小说网</h1><div id="bookinfo"><div class="bookleft"><div id="bookimg">                    <a href="/read/90293/" target="_blank" class="img">                    <img alt="剑仙" title="剑仙" src="http://www.ujxsw.org/files/article/image/90/90293/90293s.jpg" width="152" height="195" />                    <div class="no</div></div><div class="bookright"><div class="d_title">                	<h1>剑仙<em>作者：<a href="/author/%B1%F8%CE%A7%B3%C7%CF%C2" target="_blank">兵围城下</a></em></h1><div id="count"> 分 类：<span class="pd_r">仙侠修真</span> 点 击：<span class="pd_r" id="Hits">0</span> </div></body></html>`;
+  test('NovelMeta：悠久书城——书名取 d_title 内 h1（顶层 h1 是站名）、无状态留空不猜', () => {
+    const m = NovelMetaService.parseUjxsw(UJXSW_PAGE);
+    assert.ok(m.ok && m.rule === '悠久书城');
+    assert.equal(m.title, '剑仙'); // 顶层 <h1> 是「悠久小说网」站名，不得误取
+    assert.equal(m.author, '兵围城下');
+    assert.equal(m.category, '仙侠修真');
+    assert.equal(m.status, ''); // 页面无状态字段——留空不猜
+    assert.equal(m.cover, 'http://www.ujxsw.org/files/article/image/90/90293/90293s.jpg');
+    assert.ok(m.intro.startsWith('剑仙最新章节由网友提供'));
+  });
+
   // 飞卢 gb2312 fixture：2026-11-20 b.faloo.com/1484744.html 实测 meta 行，GBK 字节 base64
   test('NovelMeta：charset 嗅探+GBK 解码——飞卢老站不乱码，utf-8 页不受影响', async () => {
     const FALOO_B64 = 'PGh0bWw+PGhlYWQ+PG1ldGEgaHR0cC1lcXVpdj0iQ29udGVudC1UeXBlIiBjb250ZW50PSJ0ZXh0L2h0bWw7IGNoYXJzZXQ9Z2IyMzEyIj4KPG1ldGEgcHJvcGVydHk9Im9nOnRpdGxlIiBjb250ZW50PSLFzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOzX7tDC1cK92ijC283iz8XE8tbuzOwp1NrP39TEtsFft8nCrNChy7XN+CI+CjxtZXRhIHByb3BlcnR5PSJvZzpkZXNjcmlwdGlvbiIgY29udGVudD0iob63ycKs0KHLtc34tsC80sep1LzQocu1o7rFzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOyhv8zsxLu9tcHZ1u7M7KOsv6q+1sXMtePN8r3n1b3BpsG/vLaho7TTsazXqby2o6yxrMe9vLahraGtsazQx7y2o6y649DHvLajrNDHz7W8tqOs0MfPtc3FvLajrLWlzOXT7tbmvLajrLbg1KrT7tbmvLajrM7ez9624NSq0+7W5qGtoa3O3s/eutDX06Os1rjK/cv+o6yzrNa4yv3L/qOssru/ybTvu/nK/aGtoa3V5s/WyrWjrLW9Ij4KPG1ldGEgcHJvcGVydHk9Im9nOmltYWdlIiBjb250ZW50PSJodHRwOi8vaW1nLmZhbG9vLmNvbS9Ob3ZlbC80OTh4NzA1LzEvMTU5NS8wMDE1OTU5NTcuanBnIj4KPC9oZWFkPjxib2R5PjxoMT7FzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOw8L2gxPjwvYm9keT48L2h0bWw+';
