@@ -29,6 +29,8 @@ struct AiAssistantPage {
   @State streamingText: string = '';
   /** 工具回路实时活动时间线；finishBubble 时快照进气泡成为历史。 */
   @State liveActivities: ChatActivity[] = [];
+  /** 流式中的思考过程（store.streamingReasoning 镜像）。 */
+  @State streamingReasoning: string = '';
   /** 会话状态机在全局单例里：退出页面不中断流式回复，后台照常完成并落盘。 */
   private store: AiChatStore = AiChatStore.instance();
   /** attachView 凭据：disappear 只解绑自己这一份视图。 */
@@ -74,6 +76,7 @@ struct AiAssistantPage {
   private syncFromStore(): void {
     this.messages = this.store.messages.slice();
     this.streamingText = this.store.streamingText;
+    this.streamingReasoning = this.store.streamingReasoning;
     this.liveActivities = this.store.liveActivities.slice();
     this.thinking = this.store.thinking;
     this.errorTip = this.store.errorTip;
@@ -328,9 +331,9 @@ struct AiAssistantPage {
           for (let i = 0; i < this.liveActivities.length; i++) {
             sig += this.liveActivities[i].state;
           }
-          return `bubble-${index}-assistant-s-${sig}-${this.streamingText.length}`;
+          return `bubble-${index}-assistant-s-${sig}-${this.streamingText.length}-${this.streamingReasoning.length}`;
         }
-        return `bubble-${index}-${bubble.role}-${bubble.streaming ? 's' : 'd'}-${bubble.activities.length}-${bubble.content.length}-${(bubble.images ?? []).length}`;
+        return `bubble-${index}-${bubble.role}-${bubble.streaming ? 's' : 'd'}-${bubble.activities.length}-${bubble.content.length}-${(bubble.images ?? []).length}-${(bubble.reasoning ?? '').length}`;
       });
     }
     .layoutWeight(1)
@@ -374,6 +377,12 @@ struct AiAssistantPage {
       }
 
       if (bubble.role === 'assistant' && !bubble.error) {
+        // 思考过程：流式挂 store 镜像实时显示，固化后挂气泡自身字段默认折叠
+        if (bubble.streaming) {
+          ReasoningBlock({ reasoning: this.streamingReasoning, live: true });
+        } else if ((bubble.reasoning ?? '').length > 0) {
+          ReasoningBlock({ reasoning: bubble.reasoning ?? '', live: false });
+        }
         // 活动时间线：流式气泡挂实时 liveActivities，完成后的气泡挂固化的历史快照
         this.activityView(bubble.streaming ? this.liveActivities : bubble.activities);
         if (bubble.streaming) {
@@ -575,5 +584,44 @@ struct AiAssistantPage {
     .width('100%')
     .padding({ left: 12, right: 12, top: 8, bottom: 12 })
     .backgroundColor($r('app.color.card_background'));
+  }
+}
+
+/** 思考过程块：流式（live）默认展开实时滚动，历史气泡默认折叠，点标题行切换。 */
+@Component
+struct ReasoningBlock {
+  reasoning: string = '';
+  live: boolean = false;
+  @State expanded: boolean = false;
+
+  aboutToAppear(): void {
+    this.expanded = this.live;
+  }
+
+  build() {
+    if (this.reasoning.length > 0) {
+      Column({ space: 4 }) {
+        Row({ space: 4 }) {
+          SymbolGlyph(this.expanded ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
+            .fontSize(12)
+            .fontColor([$r('app.color.text_tertiary')]);
+          Text(this.live ? '正在思考' : '思考过程')
+            .fontSize(12)
+            .fontColor($r('app.color.text_tertiary'));
+        }
+        .onClick(() => {
+          this.expanded = !this.expanded;
+        });
+        if (this.expanded) {
+          Text(this.reasoning)
+            .fontSize(13)
+            .lineHeight(20)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%');
+        }
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start);
+    }
   }
 }
