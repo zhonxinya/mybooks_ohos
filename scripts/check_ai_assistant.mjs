@@ -269,6 +269,22 @@ export const fileIo = fs;
 export const TalebookService = { dataDir: () => personaState.dir };
 `);
 
+/** AiChatStore 真实入检：单例状态机是回归重点，AiService/TalebookService 走 shim 桩。 */
+function stageChatStore() {
+  let source = read('services/AiChatStore.ets');
+  source = source
+    .replace(`import { AiTools, parseToolBookLines, ToolBookLine } from './AiTools';`,
+      `import { AiTools, parseToolBookLines } from './RealAiTools.ts';\nimport type { ToolBookLine } from './RealAiTools.ts';`)
+    .replace(`import { AiService, AiConfig, AiMessage, AiStreamHandlers, AiAbortHandle } from './AiService';`,
+      `import { AiService } from './shim.ts';`)
+    .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
+    .replace(`from './TalebookService'`, `from './shim.ts'`)
+    .replace(`from '@kit.CoreFileKit'`, `from './shim.ts'`)
+    .replace(`from '@kit.ImageKit'`, `from './shim.ts'`)
+    .replace(`from '@kit.ArkTS'`, `from './shim.ts'`);
+  writeFileSync(join(dir, 'RealAiChatStore.ts'), source);
+}
+
 function stageAiPersona() {
   let source = read('services/AiPersona.ets');
   source = source
@@ -325,6 +341,10 @@ function stagePage(name) {
     if (path === '../services/AiPersona') {
       return `import { AiPersona } from './RealAiPersona.ts';\n`;
     }
+    if (path === '../services/AiChatStore') {
+      return "import { AiChatStore } from './RealAiChatStore.ts';\n" +
+        "import type { ChatActivity, ChatBubble } from './RealAiChatStore.ts';\n";
+    }
     if (path === '../services/AiSkills') {
       const names = clause.split(',').map((part) => part.trim());
       const values = names.filter((name) => name !== 'AiSkill');
@@ -374,6 +394,7 @@ try {
   }
   stageAiService();
   stageAiPersona();
+  stageChatStore();
   stageMetaSearch();
   stageAiTools();
   const load = async (name) => import(pathToFileURL(join(dir, `${name}.ts`)).href);
@@ -383,6 +404,7 @@ try {
   const { AiSettingsPage } = await load('AiSettingsPage');
   const { AiPersonaPage } = await load('AiPersonaPage');
   const { AiPersona, DEFAULT_SOUL } = await load('RealAiPersona');
+  const { AiChatStore } = await load('RealAiChatStore');
   const { personaState } = await load('personaDeps');
   const { MetaSearchService } = await load('RealMetaSearch');
   const deps = await load('aiServiceDeps');
@@ -399,11 +421,21 @@ try {
     return page;
   };
   const chat = () => {
+    AiChatStore.instance().resetForTest();
     const page = new AiAssistantPage();
     page.toast = () => {};
     page.scrollToEnd = () => {};
     state.ready = true;
     state.cancel = null;
+    page.aboutToAppear();
+    return page;
+  };
+  // 重进页面（不重置 store，模拟真实路由返回）：手动装配即可
+  const reappear = () => {
+    const page = new AiAssistantPage();
+    page.toast = () => {};
+    page.scrollToEnd = () => {};
+    page.aboutToAppear();
     return page;
   };
 
@@ -439,6 +471,30 @@ try {
     assert.equal(page.thinking, false);
     assert.equal(page.messages.at(-1).streaming, false);
     assert.equal(page.messages.at(-1).content, '部分回答');
+  });
+  test('退出对话页不中断流式：后台完成落盘，重进页面即见完整回复', async () => {
+    const page = chat();
+    await page.send('问题');
+    const handlers = state.handlers;
+    handlers.onDelta('前半');
+    page.aboutToDisappear();           // 曾经的 bug 触发点：切页即 abort
+    const store = AiChatStore.instance();
+    assert.equal(store.thinking, true, '退出页面后必须仍在生成');
+    handlers.onDelta('后半');
+    handlers.onDone('前半后半');
+    assert.equal(store.thinking, false);
+    const saved = JSON.parse(state.prefs.get('ai_chat_history'));
+    assert.equal(saved.at(-1).content, '前半后半', '后台完成后照常落盘');
+    const page2 = reappear();
+    assert.equal(page2.messages.at(-1).content, '前半后半');
+    assert.equal(page2.thinking, false);
+  });
+  test('写闸门：页面不在场时确认一律按拒绝', async () => {
+    const page = chat();
+    await page.send('建个书单');
+    page.aboutToDisappear();
+    const ok = await state.handlers.onConfirm('创建书单', '{}');
+    assert.equal(ok, false, '无视图在场不得执行写操作');
   });
   test('清空后迟到的流式回调不会污染新对话', async () => {
     const page = chat();
@@ -886,29 +942,29 @@ try {
 
   test('对话页活动时间线：doing→done/rejected 翻转，书目结果转结构化条目', () => {
     const page = chat();
-    page.beginActivity('search_books', '搜索书架');
+    page.store.beginActivity('search_books', '搜索书架');
     assert.equal(page.liveActivities.length, 1);
     assert.equal(page.liveActivities[0].state, 'doing');
-    page.endActivity('search_books', '搜索书架', '书架上找到 2 本：\n- 《三体》（刘慈欣） id=12\n- 《三体全集》（刘慈欣） id=444');
+    page.store.endActivity('search_books', '搜索书架', '书架上找到 2 本：\n- 《三体》（刘慈欣） id=12\n- 《三体全集》（刘慈欣） id=444');
     assert.equal(page.liveActivities[0].state, 'done');
     assert.equal(page.liveActivities[0].books.length, 2);
     assert.equal(page.liveActivities[0].books[0].title, '《三体》');
     assert.equal(page.liveActivities[0].summary, '');
-    page.beginActivity('create_booklist', '创建书单');
-    page.endActivity('create_booklist', '创建书单', '用户拒绝了该操作');
+    page.store.beginActivity('create_booklist', '创建书单');
+    page.store.endActivity('create_booklist', '创建书单', '用户拒绝了该操作');
     const lastAct = page.liveActivities[1];
     assert.equal(lastAct.state, 'rejected');
     assert.equal(lastAct.books.length, 0);
     assert.equal(lastAct.summary, '用户拒绝了该操作');
     // 同名多条 doing：只翻最后一条
-    page.beginActivity('search_sonovel', '搜索网络小说书源');
-    page.beginActivity('search_sonovel', '搜索网络小说书源');
-    page.endActivity('search_sonovel', '搜索网络小说书源', '各书源没有相关小说');
+    page.store.beginActivity('search_sonovel', '搜索网络小说书源');
+    page.store.beginActivity('search_sonovel', '搜索网络小说书源');
+    page.store.endActivity('search_sonovel', '搜索网络小说书源', '各书源没有相关小说');
     assert.equal(page.liveActivities[2].state, 'doing');
     assert.equal(page.liveActivities[3].state, 'done');
     assert.equal(page.liveActivities[3].summary, '各书源没有相关小说');
     // 闸门拒绝的工具不走 beginActivity：endActivity 须补记 ✕ 行（上板发现：拒绝不可见）
-    page.endActivity('add_sonovel_task', '添加 so-novel 下载任务', '用户拒绝了该操作');
+    page.store.endActivity('add_sonovel_task', '添加 so-novel 下载任务', '用户拒绝了该操作');
     const appended = page.liveActivities[4];
     assert.equal(appended.state, 'rejected');
     assert.equal(appended.name, 'add_sonovel_task');
@@ -1050,8 +1106,8 @@ try {
     state.lastMessages = null;
     state.settings.config.vision = true;
     const page = chat();
-    page.refreshSettings();
-    page.encodeImage = async (p) => `data:image/jpeg;base64#${p}`;
+    page.onPageShow();
+    page.store.encodeImage = async (p) => `data:image/jpeg;base64#${p}`;
     page.pendingImages = ['/f/a.jpg'];
     await page.send('看图');
     assert.deepEqual(page.messages[0].images, ['/f/a.jpg']);
@@ -1061,14 +1117,14 @@ try {
     // 历史恢复图片路径（不存 data URL，避免 preferences 膨胀）
     const raw = state.prefs.get('ai_chat_history');
     assert.ok(raw.includes('/f/a.jpg') && !raw.includes('base64'), '历史只存沙箱路径');
-    const page2 = chat();
-    page2.loadHistory();
+    const page2 = reappear();
+    page2.store.loadHistory();
     assert.deepEqual(page2.messages[0].images, ['/f/a.jpg']);
     // vision 关闭：待发图被丢弃、消息不带图
     state.settings.config.vision = false;
     state.prefs.clear();
     const off = chat();
-    off.refreshSettings();
+    off.onPageShow();
     off.pendingImages = ['/f/b.jpg'];
     await off.send('关闭后发送');
     assert.deepEqual(off.messages[0].images, []);
@@ -1076,12 +1132,12 @@ try {
     state.settings.config.contextLength = 4;
     state.prefs.clear();
     const trim = chat();
-    trim.refreshSettings();
+    trim.onPageShow();
     for (let i = 0; i < 12; i++) {
-      trim.messages.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `c${i}`,
+      trim.store.messages.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `c${i}`,
         streaming: false, error: false, activities: [] });
     }
-    const ctx = await trim.buildContext();
+    const ctx = await trim.store.buildContext();
     assert.equal(ctx.length, 1 + 8, '4K 档只带最近 4 轮（8 条气泡）');
     assert.equal(ctx.at(-1).content, 'c11');
     assert.equal(ctx[1].content, 'c4', '更早的轮次被裁掉');
@@ -1115,21 +1171,21 @@ try {
   test('对话页历史持久化：finishBubble 落盘、loadHistory 恢复、clearChat 清空', () => {
     state.prefs.clear();
     const page = chat();
-    page.messages.push({ role: 'user', content: '你好', streaming: false, error: false, activities: [] });
-    page.messages.push({ role: 'assistant', content: '', streaming: true, error: false, activities: [] });
-    page.finishBubble('你好，有什么可以帮你？', false);
+    page.store.messages.push({ role: 'user', content: '你好', streaming: false, error: false, activities: [] });
+    page.store.messages.push({ role: 'assistant', content: '', streaming: true, error: false, activities: [] });
+    page.store.finishBubble('你好，有什么可以帮你？', false);
     const saved = JSON.parse(state.prefs.get('ai_chat_history'));
     assert.equal(saved.length, 2);
     assert.equal(saved[1].content, '你好，有什么可以帮你？');
-    const page2 = chat();
-    page2.loadHistory();
+    const page2 = reappear();
+    page2.store.loadHistory();
     assert.equal(page2.messages.length, 2);
     assert.equal(page2.messages[0].content, '你好');
     assert.equal(page2.messages[1].streaming, false);
-    // 坏条目丢弃：手写一条缺 role 的记录
-    state.prefs.set('ai_chat_history', '[{"content":"x"},{"role":"user","content":"好"}]');
+    // 坏条目丢弃：手写一条缺 role 的记录（必须在 chat() 重置落盘之后再覆盖）
     const page3 = chat();
-    page3.loadHistory();
+    state.prefs.set('ai_chat_history', '[{"content":"x"},{"role":"user","content":"好"}]');
+    page3.store.loadHistory();
     assert.equal(page3.messages.length, 1);
     page3.clearChat();
     assert.equal(state.prefs.get('ai_chat_history'), '[]');
@@ -1189,9 +1245,9 @@ try {
     AiPersona.saveSoul('你是一位温和的书友');
     AiPersona.appendMemory('用户叫张三');
     const page = chat();
-    page.refreshSettings();
-    page.messages = [{ role: 'user', content: '你好', streaming: false, error: false, activities: [] }];
-    const ctx = await page.buildContext();
+    page.onPageShow();
+    page.store.messages = [{ role: 'user', content: '你好', streaming: false, error: false, activities: [] }];
+    const ctx = await page.store.buildContext();
     assert.equal(ctx[0].role, 'system');
     assert.ok(ctx[0].content.includes('你是一位温和的书友'));
     assert.ok(ctx[0].content.includes('用户叫张三'));
