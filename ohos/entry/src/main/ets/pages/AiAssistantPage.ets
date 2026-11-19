@@ -47,7 +47,8 @@ const SYSTEM_PROMPT: string =
   '只读工具查询真实数据：search_books（搜书架）、book_detail（书籍详情，需 id）、' +
   'book_notes（该书标注，需 id）、reading_history（最近阅读记录）、' +
   'search_sonovel（搜网络小说书源）、list_download_tasks（查下载任务）、' +
-  'search_cover（按 ISBN/书名检索封面候选，需 id）。' +
+  'search_cover（按 ISBN/书名检索封面候选，需 id）、' +
+  'search_meta（多站元数据：豆瓣直连检索与评分/出版社/ISBN 详情、传 book_id 拿服务端多源候选、网文源更新状态）。' +
   '写操作工具：create_booklist（建书单）、add_books_to_booklist（书单加书，id 来自 search_books）、' +
   'add_sonovel_task（加入下载队列，参数来自 search_sonovel）、' +
   'update_book_meta（改书籍元数据：书名/作者/标签/出版社/ISBN/丛书/简介/评分，只传要改的字段）、' +

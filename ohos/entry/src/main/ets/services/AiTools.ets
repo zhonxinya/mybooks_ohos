@@ -6,6 +6,7 @@ import { SoNovelMerge, SoNovelSearchItem } from '../utils/SoNovelMerge';
 import { DownloadTaskService } from './DownloadTaskService';
 import { BookListAddResponse, BookListApi, BookListMutationResponse } from './BookListApi';
 import { AiPersona } from './AiPersona';
+import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';
 
 /** 工具结果里的一本书（供对话页做结构化列表渲染）。 */
 export interface ToolBookLine {
@@ -214,12 +215,24 @@ const TOOL_FORGET_MEMORY: AiToolDefinition = defineTool('forget_memory',
   '按序号删除一条用户记忆（用户说「别记得/忘掉第 N 条」时用）。序号来自系统提示记忆列表的编号。',
   MEMORY_FORGET_PROPS, ['index']);
 
+const META_SEARCH_PROPS: Record<string, AiToolProperty> = {
+  'query': prop('string', '书名或「书名 作者」关键词；也用于网文源检索'),
+  'isbn': prop('string', 'ISBN（10/13 位），比书名更准'),
+  'subject_id': prop('string', '豆瓣条目 id（来自本工具 suggest 结果），返回评分/出版社/ISBN/页数/简介'),
+  'book_id': prop('number', '本地书籍 id；给出时同时拉服务端多源候选（豆瓣/百度/亚马逊/新华，可用于 set_cover）'),
+};
+const TOOL_SEARCH_META: AiToolDefinition = defineTool('search_meta',
+  '多站元数据搜索：豆瓣直连检索（书名/ISBN→subject_id+封面）、豆瓣条目详情（评分/出版社/ISBN/出版年/页数/简介）、' +
+    '服务端 refer 多源候选（传 book_id）、网文源含更新状态（传 query）。' +
+    '补元数据（update_book_meta）或核对书目信息前先用它查真实数据。',
+  META_SEARCH_PROPS, []);
+
 const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SEARCH_BOOKS, TOOL_BOOK_DETAIL, TOOL_BOOK_NOTES, TOOL_READING_HISTORY,
   TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS,
   TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_UPDATE_BOOK_META,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
-  TOOL_SAVE_MEMORY, TOOL_FORGET_MEMORY,
+  TOOL_SAVE_MEMORY, TOOL_FORGET_MEMORY, TOOL_SEARCH_META,
 ];
 
 export class AiTools {
@@ -297,6 +310,9 @@ export class AiTools {
     if (name === 'set_cover') {
       return '更换封面';
     }
+    if (name === 'search_meta') {
+      return '检索元数据站点';
+    }
     if (name === 'save_memory') {
       return '记住用户的事';
     }
@@ -346,6 +362,9 @@ export class AiTools {
       }
       if (name === 'add_books_to_booklist') {
         return await AiTools.addBooksToBooklist(args);
+      }
+      if (name === 'search_meta') {
+        return await AiTools.searchMeta(args);
       }
       if (name === 'save_memory') {
         return AiPersona.appendMemory(AiTools.argString(args, 'content'));
@@ -472,6 +491,100 @@ export class AiTools {
         `出版社：${b.publisher ?? '未知'}　来源：${b.source}　封面：${b.cover_url ?? ''}`);
     }
     return `找到 ${rsp.books.length} 条候选（换封面用 set_cover 传 index）：\n${lines.join('\n')}`;
+  }
+
+  /**
+   * 多通道元数据搜索聚合：豆瓣直连（suggest/detail）、服务端 refer（book_id）、
+   * 网文源（query，复用 searchSoNovel）。各通道独立降级，单站失败不影响其余。
+   */
+  private static async searchMeta(args: Record<string, Object>): Promise<string> {
+    const query: string = AiTools.argString(args, 'query').trim();
+    const isbn: string = AiTools.argString(args, 'isbn').trim();
+    const subjectId: string = AiTools.argString(args, 'subject_id').trim();
+    const bookId: number = AiTools.argNumber(args, 'book_id');
+    // 详情模式：只要豆瓣 subject 详情，一次把评分/出版社/ISBN 给全
+    if (subjectId.length > 0) {
+      const d: DoubanDetail = await MetaSearchService.detail(subjectId);
+      if (!d.ok) {
+        return `豆瓣详情获取失败：${d.error}`;
+      }
+      const fields: string[] = [`《${d.title}》${d.author.length > 0 ? `（${d.author}）` : ''}`];
+      if (d.rating.length > 0) {
+        fields.push(`豆瓣评分：${d.rating}`);
+      }
+      if (d.publisher.length > 0) {
+        fields.push(`出版社：${d.publisher}`);
+      }
+      if (d.publishYear.length > 0) {
+        fields.push(`出版时间：${d.publishYear}`);
+      }
+      if (d.isbn.length > 0) {
+        fields.push(`ISBN：${d.isbn}`);
+      }
+      if (d.pages.length > 0) {
+        fields.push(`页数：${d.pages}`);
+      }
+      if (d.binding.length > 0) {
+        fields.push(`装帧：${d.binding}`);
+      }
+      if (d.price.length > 0) {
+        fields.push(`定价：${d.price}`);
+      }
+      let out: string = `豆瓣详情：\n${fields.join('\n')}`;
+      if (d.intro.length > 0) {
+        out += `\n简介：\n${d.intro}`;
+      }
+      return out;
+    }
+    const sections: string[] = [];
+    if (bookId > 0) {
+      const opts: ReferSearchOpts = {};
+      if (query.length > 0) {
+        opts.title = query;
+      }
+      if (isbn.length > 0) {
+        opts.isbn = isbn;
+      }
+      const rsp: ReferSearchResponse = await TalebookApi.searchRefer(bookId, opts);
+      // 候选同时缓存给 set_cover 复用（与 search_cover 同一约定）
+      AiTools.lastCoverCandidates = rsp.books;
+      AiTools.lastCoverBookId = bookId;
+      const lines: string[] = [];
+      for (let i = 0; i < rsp.books.length && i < 12; i++) {
+        const b: ReferBook = rsp.books[i];
+        const authors: string[] = b.authors ?? [];
+        lines.push(`- 候选${i + 1}：《${b.title ?? ''}》（${authors.join('、')}）` +
+          `出版社：${b.publisher ?? '未知'}　ISBN：${b.isbn ?? ''}　来源：${b.source}　封面：${b.cover_url ?? ''}`);
+      }
+      sections.push(lines.length > 0
+        ? `服务端多源候选（id=${bookId}，换封面可直接 set_cover 传 index）：\n${lines.join('\n')}`
+        : `服务端多源没有 id=${bookId} 的候选。`);
+    }
+    const kw: string = isbn.length > 0 ? isbn : query;
+    if (kw.length > 0) {
+      try {
+        const hits: DoubanHit[] = await MetaSearchService.suggest(kw);
+        if (hits.length > 0) {
+          const lines: string[] = [];
+          for (let i = 0; i < hits.length; i++) {
+            const h: DoubanHit = hits[i];
+            lines.push(`- 《${h.title}》（${h.author}）${h.year}　subject_id=${h.subjectId}　封面：${h.cover}`);
+          }
+          sections.push(`豆瓣检索「${kw}」（要评分/出版社就用 subject_id 再查）：\n${lines.join('\n')}`);
+        } else {
+          sections.push(`豆瓣没有「${kw}」的匹配。`);
+        }
+      } catch (error) {
+        sections.push(`豆瓣检索失败：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (query.length > 0) {
+      sections.push(await AiTools.searchSoNovel(query));
+    }
+    if (sections.length === 0) {
+      return '请至少提供 query（书名）/ isbn / subject_id / book_id 之一。';
+    }
+    return sections.join('\n\n');
   }
 
   private static async setCover(args: Record<string, Object>): Promise<string> {
