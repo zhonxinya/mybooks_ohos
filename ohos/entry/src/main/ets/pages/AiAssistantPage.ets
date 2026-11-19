@@ -231,6 +231,7 @@ struct AiAssistantPage {
     const summary: string = books.length > 0 || firstLine.length === 0 ? '' :
       (firstLine.length > 48 ? `${firstLine.substring(0, 48)}…` : firstLine);
     const acts: ChatActivity[] = this.liveActivities.slice();
+    let flipped: boolean = false;
     for (let i = acts.length - 1; i >= 0; i--) {
       if (acts[i].name === name && acts[i].state === 'doing') {
         acts[i] = {
@@ -240,8 +241,19 @@ struct AiAssistantPage {
           books: books,
           summary: summary,
         };
+        flipped = true;
         break;
       }
+    }
+    if (!flipped) {
+      // 闸门拒绝的工具不会走 onTool（没有 doing 条目可翻），这里补记 ✕ 行，保证拒绝可见
+      acts.push({
+        name: name,
+        label: label,
+        state: text === '用户拒绝了该操作' ? 'rejected' : 'done',
+        books: books,
+        summary: summary,
+      });
     }
     this.liveActivities = acts;
     this.scrollToEnd();

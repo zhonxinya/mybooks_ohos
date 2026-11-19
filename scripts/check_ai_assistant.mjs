@@ -798,6 +798,12 @@ try {
     assert.equal(page.liveActivities[2].state, 'doing');
     assert.equal(page.liveActivities[3].state, 'done');
     assert.equal(page.liveActivities[3].summary, '各书源没有相关小说');
+    // 闸门拒绝的工具不走 beginActivity：endActivity 须补记 ✕ 行（上板发现：拒绝不可见）
+    page.endActivity('add_sonovel_task', '添加 so-novel 下载任务', '用户拒绝了该操作');
+    const appended = page.liveActivities[4];
+    assert.equal(appended.state, 'rejected');
+    assert.equal(appended.name, 'add_sonovel_task');
+    assert.equal(appended.summary, '用户拒绝了该操作');
   });
 
   test('网关工具回路：超过轮数上限报错收场，最后一轮不挂 tools', async () => {
