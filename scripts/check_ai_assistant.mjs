@@ -115,7 +115,8 @@ writeFileSync(join(dir, 'aiServiceDeps.ts'), `
 const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
 export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [] };
 export const util = {
-  TextDecoder: { create: () => ({ decodeToString: (u8) => Buffer.from(u8).toString('utf8') }) },
+  // 透传 encoding（gbk/gb2312 走 Node 内置 TextDecoder），utf-8 用法不受影响
+  TextDecoder: { create: (encoding) => ({ decodeToString: (u8) => new TextDecoder(encoding ?? 'utf-8').decode(u8) }) },
   generateRandomUUID: () => 'test-uuid-fixed-0001',
 };
 export class OpenAI {
@@ -189,7 +190,9 @@ export const SoNovelMerge = {
   fromRecord: (raw) => ({
     sourceId: Number(raw['sourceId'] ?? 0), sourceName: String(raw['sourceName'] ?? ''),
     url: String(raw['url'] ?? ''), bookName: String(raw['bookName'] ?? ''), author: String(raw['author'] ?? ''),
-    category: '', latestChapter: String(raw['latestChapter'] ?? ''), lastUpdateTime: '', status: String(raw['status'] ?? ''),
+    category: String(raw['category'] ?? ''), latestChapter: String(raw['latestChapter'] ?? ''),
+    lastUpdateTime: String(raw['lastUpdateTime'] ?? ''), status: String(raw['status'] ?? ''),
+    wordCount: String(raw['wordCount'] ?? ''),
   }),
 };
 export const DownloadTaskService = {
@@ -302,12 +305,23 @@ function stageMetaSearch() {
   writeFileSync(join(dir, 'RealMetaSearch.ts'), source);
 }
 
+/** NovelMetaService 真实入检：同样复用 rcp 桩。 */
+function stageNovelMeta() {
+  let source = read('services/NovelMetaService.ets');
+  source = source
+    .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`);
+  writeFileSync(join(dir, 'RealNovelMeta.ts'), source);
+}
+
 function stageAiTools() {
   let source = read('services/AiTools.ets');
   source = source
     // 类型注解用的 DoubanDetail/DoubanHit 被 strip-types 擦除，只需值导入 MetaSearchService
     .replace(`import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';`,
       `import { MetaSearchService } from './RealMetaSearch.ts';`)
+    .replace(`import { NovelMeta, NovelMetaService } from './NovelMetaService';`,
+      `import { NovelMetaService } from './RealNovelMeta.ts';`)
     .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
     .replace(`from './TalebookApi'`, `from './aiToolsDeps.ts'`)
     .replace(`from './AnnotationApi'`, `from './aiToolsDeps.ts'`)
@@ -396,6 +410,7 @@ try {
   stageAiPersona();
   stageChatStore();
   stageMetaSearch();
+  stageNovelMeta();
   stageAiTools();
   const load = async (name) => import(pathToFileURL(join(dir, `${name}.ts`)).href);
   const { AiAssistantPage } = await load('AiAssistantPage');
@@ -407,6 +422,7 @@ try {
   const { AiChatStore } = await load('RealAiChatStore');
   const { personaState } = await load('personaDeps');
   const { MetaSearchService } = await load('RealMetaSearch');
+  const { NovelMetaService } = await load('RealNovelMeta');
   const deps = await load('aiServiceDeps');
   const { AiService: RealAiService } = await load('RealAiService');
   const { AiTools: RealAiTools, parseToolBookLines } = await load('RealAiTools');
@@ -885,7 +901,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 15 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 16 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -1323,6 +1339,432 @@ try {
     const blocked = await MetaSearchService.detail('2567698');
     assert.ok(!blocked.ok && blocked.error.includes('403'));
     deps.state.rcpResponse = null;
+  });
+
+  // 17K 详情页样本节选（2026-11-19 www.17k.com/book/1018082.html 实测锚点）
+  const K17_PAGE = `<html><head>
+<title>武逆焚天_疯橘子_武逆焚天最新章节_在线阅读-17K小说网</title>
+<meta property="og:image" content="https://cdn.static.17k.com/book/189x272/82/80/1018082.jpg-189x272?v=0" />
+<meta property="og:description" content="  神奇的大陆，因神兽而支离破碎！！&lt;br&gt;  各方势力追寻多年的重宝出世……">
+<script>window.$__BOOK = { type: 'book', bookId: 1018082, bookName: '武逆焚天',
+  authorName: '疯橘子', authorId: 37093114, chapterId: 0, chapterName: '', vip: 1 }</script>
+</head><body>
+<div class="Header"><a href="/all/book/2_0_0_0_2_0_0_0_1.html">完本小说</a></div>
+<div class="Info Sign"><h1><a href="/list/1018082.html">武逆焚天</a></h1>
+<div class="label"><a title="连载小说" href="#"><span class="green">连载小说</span></a></div>
+<table><tr><th>授权级别：</th><td><span class="red">签约作品</span></td>
+<th>作品类别：</th><td><a href="/all/book/2_21_8______1.html">东方玄幻</a></td></tr></table>
+</body></html>`;
+  test('NovelMeta：17K 详情页解析全字段（导航「完本小说」不得误判状态）', () => {
+    const m = NovelMetaService.parse17k(K17_PAGE);
+    assert.ok(m.ok);
+    assert.equal(m.title, '武逆焚天');
+    assert.equal(m.author, '疯橘子');
+    assert.equal(m.status, '连载中'); // 顶部导航也有「完本小说」，必须限定 .label 块
+    assert.equal(m.category, '东方玄幻');
+    assert.ok(m.cover.startsWith('https://cdn.static.17k.com/'));
+    assert.ok(m.intro.includes('神奇的大陆') && m.intro.includes('重宝出世') && !m.intro.includes('&lt;'));
+  });
+
+  test('NovelMeta：通用 og 规则、相对封面补全、WAF 挑战页识别、非 http url', async () => {
+    const gen = `<html><head><meta property="og:image" content="/files/article/image/2/2402/2402s.jpg">
+<meta property="og:description" content="蒸汽与机械的浪潮中，谁能触及非凡？"></head>
+<body><h1>诡秘之主</h1></body></html>`;
+    deps.state.rcpResponse = { statusCode: 200, body: enc(gen) };
+    const m = await NovelMetaService.fetchDetail('http://www.mcxs.info/book/2402/');
+    assert.ok(m.ok && m.rule === '通用og');
+    assert.equal(m.cover, 'http://www.mcxs.info/files/article/image/2/2402/2402s.jpg');
+    assert.ok(m.intro.includes('蒸汽与机械'));
+    // WAF 挑战页 → 明确报「换书源」，不能报解析失败
+    deps.state.rcpResponse = { statusCode: 200, body: enc("<script>var arg1='AB';reload('acw_sc__v2')</script>") };
+    const waf = await NovelMetaService.fetchDetail('https://search.17k.com/search.xhtml?c.q=x');
+    assert.ok(!waf.ok && waf.error.includes('WAF'));
+    deps.state.rcpResponse = null;
+    const bad = await NovelMetaService.fetchDetail('javascript:alert(1)');
+    assert.ok(!bad.ok && bad.error.includes('http'));
+  });
+
+  // og:novel 结构化样本（2026-11-20 实测 m.kujiang.com/book/91737、ciweimao.com/book/100506842）
+  const KUJIANG_PAGE = `<html><head>
+<meta property="og:title" content="灯下黑"/>
+<meta property="og:description" content="       贺录对祝卿安说：“离开我，我倒要看看谁敢跟你同甘。”<br />
+  单韩苼对祝卿安说：“别怕，你的窟窿我想填也不是一天两天。”">
+<meta property="og:image" content="https://bs.kjcdn.com/i/pubwmrs/6o/8w/o2u1o.jpg"/>
+<meta property="og:novel:author" content="鱼不语"/>
+<meta property="og:novel:book_name" content="灯下黑"/>
+<meta property="og:novel:status" content="完结"/>
+<meta property="og:novel:latest_chapter_name" content="第三十六章  不再灯下黑"/>
+</head><body></body></html>`;
+  const CIWEIMAO_PAGE = `<html><head>
+<meta property="og:title" content="型月模拟，雅典娜的头号走狗最新章节(幻想成为正义的伙伴),型月模拟，雅典娜的头号走狗无弹窗全文阅读-欢乐书客"/>
+<meta property="og:description" content="穿越型月13年，间桐悠只想做两件事：
+1，保护好弟弟妹妹。
+2，弄死间桐脏砚。">
+<meta property="og:image" content="https://e1.kuangxiangit.com/uploads/allimg/c261016/16-10-26135300-10127.jpg"/>
+<meta property="og:novel:category" content="科幻无限"/>
+<meta property="og:novel:author" content="幻想成为正义的伙伴"/>
+<meta property="og:novel:book_name" content="型月模拟，雅典娜的头号走狗"/>
+</head><body></body></html>`;
+  test('NovelMeta：og:novel 结构化规则——书名去站名尾巴、状态归一、缺字段不崩', () => {
+    const k = NovelMetaService.parseGeneric(KUJIANG_PAGE);
+    assert.ok(k.ok && k.rule === 'og:novel');
+    assert.equal(k.title, '灯下黑');
+    assert.equal(k.author, '鱼不语');
+    assert.equal(k.status, '已完本'); // 「完结」归一
+    assert.ok(k.cover.startsWith('https://bs.kjcdn.com/'));
+    assert.ok(k.intro.includes('贺录对祝卿安') && k.intro.includes('单韩苼')); // <br/> 转换行不断句
+    const c = NovelMetaService.parseGeneric(CIWEIMAO_PAGE);
+    assert.ok(c.ok && c.rule === 'og:novel');
+    assert.equal(c.title, '型月模拟，雅典娜的头号走狗'); // og:title 带「无弹窗全文阅读-欢乐书客」尾巴，弃用
+    assert.equal(c.category, '科幻无限');
+    assert.equal(c.status, ''); // 该站无 status 字段，不得瞎猜
+  });
+
+  // 纵横 fixture：2026-11-20 www.zongheng.com/book/1435440.html 实测（Nuxt SSR，name= 写法，
+  // 且 og:description 值被站点模板二次包壳成 content=&quot;…&quot;）
+  const ZONGHENG_PAGE = `<html><head>
+<meta data-n-head="ssr" name="og:title" content="齐天">
+<meta data-n-head="ssr" name="og:description" content="content=&quot;纵横小说网提供作者(日落红尘)的经典小说《齐天》，《齐天》最新章节全文阅读服务，本站更新及时，无弹窗广告，欢迎光临(m.zongheng.com)观看小说：【大长篇爆火玄幻】【最强帝族崛起】齐麟家祖祠内，供奉着十尊古老的先祖灵牌。&quot;">
+<meta data-n-head="ssr" property="og:image" content="//static.zongheng.com/upload/cover/43/10/431084171eca1f70f6c7809392ad72a51793265377769.jpeg">
+<meta data-n-head="ssr" name="og:novel:book_name" content="齐天">
+<meta data-n-head="ssr" name="og:novel:category" content="玄幻奇幻">
+<meta data-n-head="ssr" name="og:novel:author" content="日落红尘">
+<meta data-n-head="ssr" name="og:novel:status" content="连载中">
+</head><body></body></html>`;
+  test('NovelMeta：纵横 name= 写法命中 og:novel + 站点脏 description 脱壳', () => {
+    const m = NovelMetaService.parseGeneric(ZONGHENG_PAGE);
+    assert.ok(m.ok && m.rule === 'og:novel');
+    assert.equal(m.title, '齐天');
+    assert.equal(m.author, '日落红尘');
+    assert.equal(m.category, '玄幻奇幻');
+    assert.equal(m.status, '连载中');
+    assert.ok(m.intro.startsWith('纵横小说网提供'), 'content=&quot; 包壳必须剥掉');
+    assert.ok(m.intro.includes('齐麟家祖祠内') && !m.intro.endsWith('&quot;') && !m.intro.endsWith('"'));
+  });
+
+  // 起点移动版 fixture：2026-11-20 m.qidian.com/book/1050742867 实测（www 桌面端是 202 probe.js 风控）
+  const QIDIAN_M_PAGE = `<html><head>
+<meta property="og:title" content="美利坚：超凡入圣" />
+<meta property="og:image" content="//bookcover.yuewen.com/qdbimg/349573/1050742867/180" />
+<meta property="og:description" content="谢邀：人在白头鹰，标准炎黄纯血贵族。本想当好人，奈何超凡复苏，且自身灵根残破。故只能在这混乱渐起的动荡时代，杀出一条长生之路！【多女主】【超凡复苏】【半无敌】" />
+<meta property="og:novel:category" content="异术超能" />
+<meta property="og:novel:author" content="白魔星" />
+<meta property="og:novel:book_name" content="美利坚：超凡入圣" />
+<meta property="og:novel:status" content="连载" />
+</head><body></body></html>`;
+  test('起点：www 风控 url 重写到 m.qidian 后 og:novel 命中，协议相对封面补全', async () => {
+    assert.equal(NovelMetaService.rewriteUrl('https://www.qidian.com/book/1050742867'),
+      'https://m.qidian.com/book/1050742867/');
+    assert.equal(NovelMetaService.rewriteUrl('https://book.qidian.com/info/1050742867/'),
+      'https://m.qidian.com/book/1050742867/');
+    assert.equal(NovelMetaService.rewriteUrl('https://www.ujxsw.org/book/90293/'),
+      'http://www.ujxsw.org/book/90293/'); // ujxsw https 端口不通（curl 000），手贴 https 降到 http
+    assert.equal(NovelMetaService.rewriteUrl('https://www.wtzw.com/book/224292.html'),
+      'https://www.wtzw.com/book/224292.html');
+    deps.state.rcpResponse = { statusCode: 200, body: enc(QIDIAN_M_PAGE) };
+    const m = await NovelMetaService.fetchDetail('https://www.qidian.com/book/1050742867/');
+    assert.ok(m.ok && m.rule === 'og:novel');
+    assert.equal(m.title, '美利坚：超凡入圣');
+    assert.equal(m.author, '白魔星');
+    assert.equal(m.category, '异术超能');
+    assert.equal(m.status, '连载中'); // 「连载」归一
+    assert.equal(m.cover, 'https://bookcover.yuewen.com/qdbimg/349573/1050742867/180');
+    assert.ok(m.intro.includes('超凡复苏'));
+    deps.state.rcpResponse = null;
+  });
+
+  // 梧桐中文 fixture：2026-11-20 www.wtzw.com/book/224292.html 实测节选（无 og，类名锚点）
+  const WTZW_PAGE = `<html><head><title>我的少年班全本小说-卿殇小说-无广告阅读(免费下载)-七猫中文网</title></head><body>
+<h1>免费小说就在梧桐中文网（七猫中文网）</h1>
+<li class="li_tit"><h1><a href="/chapter/224292-1176288.html" target="_blank">我的少年班</a><i class="tag">已完结</i></h1></li>
+<div class="w_name"><span class="sName">卿殇</span></div>
+<div class="w_pic"><img src="//cdn.qimao.com/bookimg/zww/upload/readerCover/75/224292.jpg?time=1638349502"></div>
+<div class="pWorkInformation">空军青少年航空学校四期学员自述励志航空~追求卓越！这是属于我们的时代，属于我们的现在。</div>
+</body></html>`;
+  test('NovelMeta：梧桐中文类名锚点——书名取 li_tit 内 a（顶层 h1 是站名）、状态归一、类别缺不猜', () => {
+    const m = NovelMetaService.parseWtzw(WTZW_PAGE);
+    assert.ok(m.ok && m.rule === '梧桐中文');
+    assert.equal(m.title, '我的少年班'); // 顶层 <h1> 是「免费小说就在梧桐中文网」，不得误取
+    assert.equal(m.author, '卿殇');
+    assert.equal(m.status, '已完本'); // 「已完结」归一
+    assert.equal(m.category, '');
+    assert.ok(m.intro.includes('空军青少年航空学校'));
+    assert.ok(m.cover.startsWith('//cdn.qimao.com/')); // 协议相对，fetchDetail 里统一补全
+  });
+
+  // 万相书城 fixture：2026-11-20 www.wxscs.com/book/10212 实测 meta 节选。
+  // 该站 Apache 按 UA 放行（桌面 403/移动 200），回归同时盯住 UA 特判不回退
+  const WXSCS_PAGE = `<html><head>
+<meta property="og:description" content="江湖上流传着一个传说：要自杀的人最好遇上杜云青。这虽是个传说，但却没有人怀疑，每一个曾经在江湖上混过了几年的人，都可以为你举出一大堆的例子。塞北五娘、江南七怪、南天一鹤、楼霞双仙等等，这些跺脚四海颤，名"/>
+<meta property="og:image" content="/uploads/cover/pic10212.jpg"/>
+<meta property="og:novel:category" content="玄幻奇幻"/>
+<meta property="og:novel:author" content="司马紫烟"/>
+<meta property="og:novel:book_name" content="新月剑"/>
+<meta property="og:novel:status" content="完结"/>
+</head><body></body></html>`;
+  test('NovelMeta：wxscs 桌面 UA 403 教训——UA 按站点选择，移动 UA+相对封面补全', async () => {
+    deps.state.rcpResponse = { statusCode: 200, body: enc(WXSCS_PAGE) };
+    const m = await NovelMetaService.fetchDetail('https://www.wxscs.com/book/10212/');
+    assert.ok(m.ok && m.rule === 'og:novel');
+    assert.equal(m.title, '新月剑');
+    assert.equal(m.status, '已完本'); // 「完结」归一
+    assert.equal(m.cover, 'https://www.wxscs.com/uploads/cover/pic10212.jpg');
+    assert.ok(String(deps.state.lastRequest.headers['User-Agent']).includes('Mobile'),
+      'wxscs 必须用移动 UA（桌面 UA 实测 403）');
+    deps.state.rcpResponse = { statusCode: 200, body: enc(QIDIAN_M_PAGE) };
+    await NovelMetaService.fetchDetail('https://www.qidian.com/book/1050742867/');
+    assert.ok(String(deps.state.lastRequest.headers['User-Agent']).includes('Windows NT'),
+      '其他站保持桌面 UA');
+    deps.state.rcpResponse = null;
+  });
+
+  // 晋江模板串：仿 2026-11-20 onebook.php?novelid=10035712 实测结构（schema.org itemprop），
+  // 专防两坑：畸形 `_src` 属性（真实页 img 有 _src="…" src="…" 双属性）、简介 div 超 2000 字符
+  test('NovelMeta.parseJjwxc：itemprop 锚点——防 _src 误取、长简介、状态归一、类别原样', () => {
+    const long = 'A'.repeat(2500);
+    const page = `<html><body>
+<h1 itemprop="name"><span itemprop="articleSection">测试书名</span> </h1>
+<h2>作者：<a href="#"><span style="font-size:12px" itemprop="author">测试作者</span></a></h2>
+<li><span>文章类型：</span> <span style="color:#000;float:none" itemprop="genre"> 原创-言情-近代现代-爱情 </span> </li>
+<li><span>文章进度：</span><span style="color:#000;float:none" itemprop="updataStatus">已完结</span></li>
+<div class="smallreadbody"> <img class="noveldefaultimage" itemprop="image"_src="https://BAD.example/wrong.jpg" src="https://GOOD.example/right.jpg" width="200"><div id="novelintro" itemprop="description">文案开头${long}文案结尾</div>
+</body></html>`;
+    const m = NovelMetaService.parseJjwxc(page);
+    assert.ok(m.ok && m.rule === '晋江');
+    assert.equal(m.title, '测试书名');
+    assert.equal(m.author, '测试作者');
+    assert.equal(m.category, '原创-言情-近代现代-爱情'); // 四段串原样保留
+    assert.equal(m.status, '已完本'); // 「已完结」归一
+    assert.ok(m.cover.includes('right.jpg') && !m.cover.includes('wrong.jpg'),
+      '必须取真实 src 而非畸形 _src');
+    assert.ok(m.intro.startsWith('文案开头') && m.intro.length === 501,
+      `>2000 字符简介也必须命中并截断，实际 ${m.intro.length}`);
+  });
+
+  // 晋江 gb18030 端到端：2026-11-20 onebook.php?novelid=10035712 真页关键区块节选
+  test('NovelMeta：晋江 gb18030 页 fetchDetail 端到端——编码嗅探+itemprop 全字段', async () => {
+    const JJWXC_B64 = 'PGh0bWw+PGhlYWQ+PG1ldGEgaHR0cC1lcXVpdj0iQ29udGVudC1UeXBlIiBjb250ZW50PSJ0ZXh0L2h0bWw7IGNoYXJzZXQ9Z2IxODAzMCI+PHRpdGxlPng8L3RpdGxlPjwvaGVhZD48Ym9keT4gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIDxzcGFuIGNsYXNzPSJiaWd0ZXh0Ij48aDEgaXRlbXByb3A9Im5hbWUiPjxzcGFuIGl0ZW1wcm9wPSJhcnRpY2xlU2VjdGlvbiI+uqO1usfzyfqjusn6u+7N5rzS1tbM77bau/U8L3NwYW4+IDwvaDE+PC9zcGFuPg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA8aW5wdXQgdHlwZT0iaGlkZGVuIg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgdmFsdWU9IiVCQSVBMyVCNSVCQSVDNyVGMyVDOSVGQSVBMyVCQSVDOSVGQSVCQiVFRSVDRCVFNiVCQyVEMiVENiVENiVDQyVFRiVCNiVEQSVCQiVGNSINCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIGlkPSJwdWJfcnNfbm92ZWxuYW1lIi8+DQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgPGgyPg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg1/fV36O6PGEgaHJlZj0iaHR0cDovL3d3dy5qand4Yy5uZXQvb25lYXV0aG9yLnBocD9hdXRob3JpZD03MDM5MTY3Ij48c3Bhbg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgc3R5bGU9ImZvbnQtc2l6ZToxMnB4IiBpdGVtcHJvcD0iYXV0aG9yIj7ns9LEPC9zcGFuPjwvYT4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIDxzcGFuIHN0eWxlPSJjb2xvcjojMDAwO2Zsb2F0Om5vbmUiIGl0ZW1wcm9wPSJnZW5yZSI+DQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgINSttLQttL+wri27w8/rzrTAtC2+58fpICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIDwvc3Bhbj4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIDwvbGk+DQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBzdHlsZT0iY29sb3I6IzAwMDtmbG9hdDpub25lIiBpdGVtcHJvcD0idXBkYXRhU3RhdHVzIj7BrNTYPC9zcGFuPg0KICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgPC9saT4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIDxsaT4NCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgPGltZyBjbGFzcz0ibm92ZWxkZWZhdWx0aW1hZ2UiIGl0ZW1wcm9wPSJpbWFnZSJfc3JjPSJodHRwczovL2k5LXN0YXRpYy5qand4Yy5uZXQvbm92ZWxpbWFnZS5waHA/bm92ZWxpZD0xMDAzNTcxMiZjb3ZlcmlkPTE1NiZ2ZXI9ZmYzNjkwMWVhM2Y0ZmQyNmNlMTJiY2Q4MjZlMjVmNGUiIHNyYz0iaHR0cHM6Ly9pOS1zdGF0aWMuamp3eGMubmV0L25vdmVsaW1hZ2UucGhwP25vdmVsaWQ9MTAwMzU3MTImY292ZXJpZD0xNTYmdmVyPWZmMzY5MDFlYTNmNGZkMjZjZTEyYmNkODI2ZTI1ZjRlIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjI4MCIgYWxpZ249bGVmdCByZWZlcnJlcnBvbGljeT0ibm8tcmVmZXJyZXIiIHN0eWxlPSJtYXJnaW46MCAxMHB4IDAgMDsiIG9uZXJyb3I9ImxvYWREZWZhdWx0Tm92ZWxDb3Zlcih0aGlzKSI+PGRpdiBpZD0ibm92ZWxpbnRybyIgaXRlbXByb3A9ImRlc2NyaXB0aW9uIjxkaXYgaWQ9Im5vdmVsaW50cm8iIGl0ZW1wcm9wPSJkZXNjcmlwdGlvbiI+xM/B976w0ru+9dDRwLSjrL7NtcPWqtfUvLqxu9K7uPa90KG2uqO1usfzyfqht7XE0LC28dPOz7fPtc2zsPPGscHLoaO007TLus3AttDHy7XU2bz7o6y687Dryfq2vLnSv7/U2tK71/m54s26zbq1xNChtbrJz8HLoaM8YnI+yrLDtL3Qv6q+1tK71/m1uqOszu/Xysirv7+4zrChoaM8YnI+w+a21MTxsrvArcq6tcS7xLW6o6zBvcrWv9W/1bXExM/B976wttq79cant7jBy6GjPGJyPrK70NCjrLHY0Ou1w7jOxvDAtKOho6GjoTxicj7L+7jPuqOjrNbWtdijrNH4yrfAs8S3o6zSu9PQv9W+zb+qtKzMvcv318rUtLW6o6y6zdSt16HD8df2vbvS16GjPGJyPtPayse9pb2ltcSjrNCh0KG1xLW60+zSu9TZwKm9qKOsu8S12LHkwbzM76GjxMGzob+qxvDAtMHLo6y357O1vajG8MC0wcujrMTPwfe+sLK7ueLE3NfUuPjX1Nfjo6y7ucTctqjG2sil1K3XocPxtcS1usnPsNrMr8L0xam4sbL6xrejrNeswLS1xMeu16rK1r7NwvLBy7j8tuDKtdPDtcTBtr3wtcC+36GjPGJyPtfUtq+9vcuuxvejv7rDtqvO96OswvLBy6OhPGJyPjMwzOy1xNDCytbG2rn9yKWjrNPOz7fVub+qwcvL/M/VtvG1xNXmw+bEv6GjzOzU1r3T9eC2+NbBo6y8q7quoaK4387CoaKxqdPqoaLTwNK5oa2hrcO/0ru49jMwzOy2vM6qzea80rT4wLTRz77+tcS/vNHpoaM8YnI+xM/B976w08DUtsrH17yxuNfus+TX47XExMfSu8X6oaM8YnI+sam359GpwLTB2aOsxM/B976w1/jU2s7Cxa+1xMWpyeHA76Osv77XxcWvyNrI2rXEsdrCr6Os0rux38P+18W0883Iyc/Lr7PJ0rvNxbXEw6jSu7HfusjXxcjIv8m/yaGjPGJyPrCmo6zQ0rijoaM8YnI+087Pt7K7ysfDu9PQ1b22t9Sqy9ijrLWryfq77s3mvNKyu7CuuOPEx9CptPK08smxybG1xKGjPGJyPrWxyLvBy6OsyOe5+9PQxMS49rK7s6TR27XEtai40sC0tPLIxcv71ta12KOsxM/B976w0rK74brBsru/zcb4tcShraGtsNHL+9bWtb212MDvoaM8YnI+PGJyPtbY0qrLtcP3o7qxvs7Eyei2qMHpuNDAtNfUtuCyv8TBs6HO79Pv087Pt6OsyOfT0MDXzayjrMTH0ru2qMrHztLU2tbCvrSjoTxicj6hqqGqoaqhqjxicj7Qob7ns6Gjujxicj5Bo7q458PHo6zE49XitqvO97K7tO2woaOsxMTC8rXEo788YnI+QqO6srvWqrW6oaM8YnI+QaO6ztLOysTjyse008TEtvnC8rXEo6GjoTxicj5Co7rO0su1wcujobK71qq1urCho6GjoTxicj48YnI+PGJyPqGqoaqhqqGqoaqhqs/Ct73Kx9SkytWjoTxicj6htsrAvee52r78tNPQodPEwem/qsq8obc8YnI+PGJyPqGhoaHV4srH0ru49sjL0+u7w8HpubLJ+rXEysC956GjPGJyPqGhoaHCvdXV0MfS8s6q0ru33c38tPi72LzStcS+7dfTt7W72NGn0KOjrMi01OK1vcHL0rDJ+rvDwem1xM+uu/ejrLK70KHQxLX0vfjBy7vDwem1xMrAveehsLa0v9+hsaOssu6147b5xdzLwNTawO/D5qGjPGJyPqGhoaHQ0rrDzOzO3r74yMvWrsK3o6zU2rG70rDJ+rvDwem89LX0srHX08ewo6zCvdXV0Me6zcbVzai8trvDwenQodPEwenP4NP2wcuhozxicj6hoaGh1NrG1c2ovLa7w8Hp1tDSssrH1+7I9dK7tbW1xNCh08TB6b7Ny+O9+LuvwcvSsrrcyPXQoaOs0/nB6cqmw8e1q7ey09C149e3x/O2vLK7u+HRodTxxvXUvNCh08TB6aOstavU2s6ju/rWrtbQo6zWu9PQy/y21MK91dXQx8nss/bBy8rWoaM8YnI+oaGhocK91dXQx7rBsrvTzNSltdjO1cHLyc/IpaGjPGJyPqGhoaGhsNfuyPXQobXE08TB6c+1u8PB6aGx09bU9dH5o7/CvdXV0MfX1NDFxr696NfUvLq1xNW9yvXWuLvTus3Ep7nt0bXBt6Os1NnF5LrP0KHTxMHps6zHv7XE1b22t9Li1r6jrMv7w8fSu7aoxNzU2se/1d/I59TGtcS7w8HpttTVvdbQybGz9tK7zPXRqsK3wLShozxicj6hoaGhxL+x6srHyKu5+rnavvyjoTxicj48YnI+oaGhoaGqoaqhqqGqPGJyPqGhICAgsb7OxMHpuNDAtNfUoba+q8Hpsaa/ycPOobehoqG2yv3C67GmsbSht7XI0fiz6LbU1b3Tzs+3o6zI59PQwNfNrKOst8ezo9X9s6OjoTxicj6hoaGhsb7OxMTayN2w/MCoo7rG9dS8u8PB6aGiu8PB6dG1wbehosn9vLahora0v9/Mvc/VoaK7w8HpttTVvaOotaXIyy/Nxczlo6k8YnI+oaGhobG+zsTW973Ho7rH7rfowcu1q7bUu8PB6brctPO3vbXE1b22t7/xQmtpbme6zcv7sK62usOotcTE6snPttTP8zxicj4gICAgICAgysC959fux7/Lq7TytO61tSArIM31sru8+831tcS1pbTyvqK10Dxicj6hoaGhyf28tsH3oaK087OkxqqhosTauqzDyLPoo6zH67TzvNLWp7PW0KHTxMHpo6HWp7PWzrTAtLXEysC957navvzQocK9o6E8YnI+PGJyPqGqoaqhqqGqoaqhqjxicj48YnI+oba087q9uqOjurTT0KG3q7Ssv6rKvKG3PGJyPtC7wdbSu9ax0tTAtLa8vvW1w6Os19S8ur7NysfG1crA0uLS5cnPtcS1ucO5tbChozxicj6438vZuavCt8nPMTGztcGsu7fXt86yo6zGq8arvs3Iw8v7uM/Jz8HLo6zGq8arvs3Kx8v7w8e1xLO1v6jU2rWx1tCjrMarxqu+zcrHy/vU2sTHwO/Kp8ilwcvSu8fQoaM8YnI+s7W79sjDy/u1xNK7zPXNyLfby+nQ1LnH1dujrLu509DSu7j5wN+5x7TMxsbBy7fOoaOyu732v+DBt7bgxOq1xPXMyK21wLuv1/fF3dOwo6y7ucjDy/u007TLuOax8NX9s6PIy7XEyfq77qOss8nBy8rAyMvR29bQtcT1y9fTo6yx8Mu1xdzBy6OstuDX38G9sr22vNKqtPO0rcb4oaM8YnI+1NnDu9PQyMuxyMv7uPy1ucO5wcuhozxicj48YnI+tvjSsr7NysfV4tH5tcTL+6Os1Nmxu8CtyOvIq8Pxx/PJ+tPOz7e686Osu/G1w8HLsbvPtc2zx9W2qLXETHVja3kgRG9nzOy4s6GjPGJyPsuto7/O0sLwo788YnI+vLTKub71tcPPtc2ztcTF0LbPxsS+37fttMzS4s62o6zQu8HW0rLDu9PQyM66zrDst6iho8vXu7DLtbjssrLFobK7uf20883Io6zE3LDRyKvAttDHtrzArTwvZGl2PjwvYm9keT48L2h0bWw+';
+    const raw = Buffer.from(JJWXC_B64, 'base64');
+    deps.state.rcpResponse = { statusCode: 200,
+      body: raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) };
+    const m = await NovelMetaService.fetchDetail('http://www.jjwxc.net/onebook.php?novelid=10035712');
+    assert.ok(m.ok && m.rule === '晋江');
+    assert.equal(m.title, '海岛求生：生活玩家种田囤货');
+    assert.equal(m.author, '绯夷');
+    assert.equal(m.category, '原创-纯爱-幻想未来-剧情');
+    assert.equal(m.status, '连载中');
+    assert.ok(m.intro.startsWith('南流景一觉醒来') && !m.intro.includes('\uFFFD'),
+      'gb18030 解码简介须可读不乱码');
+    assert.ok(m.cover.startsWith('https://i9-static.jjwxc.net/novelimage.php'));
+    deps.state.rcpResponse = null;
+  });
+
+  // 悠久书城 fixture：2026-11-20 www.ujxsw.org/book/90293 实测节选（无 og，正文锚点）
+  const UJXSW_PAGE = `<html><head><meta name="description" content="剑仙最新章节由网友提供，是作者兵围城下创作的小说，悠久小说网免费提供剑仙在线全文阅读,剑仙TXT电子书全集免费下载。" /></head><body><h1>悠久小说网</h1><div id="bookinfo"><div class="bookleft"><div id="bookimg">                    <a href="/read/90293/" target="_blank" class="img">                    <img alt="剑仙" title="剑仙" src="http://www.ujxsw.org/files/article/image/90/90293/90293s.jpg" width="152" height="195" />                    <div class="no</div></div><div class="bookright"><div class="d_title">                	<h1>剑仙<em>作者：<a href="/author/%B1%F8%CE%A7%B3%C7%CF%C2" target="_blank">兵围城下</a></em></h1><div id="count"> 分 类：<span class="pd_r">仙侠修真</span> 点 击：<span class="pd_r" id="Hits">0</span> </div></body></html>`;
+  test('NovelMeta：悠久书城——书名取 d_title 内 h1（顶层 h1 是站名）、无状态留空不猜', () => {
+    const m = NovelMetaService.parseUjxsw(UJXSW_PAGE);
+    assert.ok(m.ok && m.rule === '悠久书城');
+    assert.equal(m.title, '剑仙'); // 顶层 <h1> 是「悠久小说网」站名，不得误取
+    assert.equal(m.author, '兵围城下');
+    assert.equal(m.category, '仙侠修真');
+    assert.equal(m.status, ''); // 页面无状态字段——留空不猜
+    assert.equal(m.cover, 'http://www.ujxsw.org/files/article/image/90/90293/90293s.jpg');
+    assert.ok(m.intro.startsWith('剑仙最新章节由网友提供'));
+  });
+
+  // 棉花书吧 fixture：2026-11-20 www.mianhuaks.com/book/94801+15091 实测节选（无 og:novel，主区锚点）
+  const MH_PAGE = `<html><head><meta name="description" content="快来棉花看书体验俺打的去埃及创作的《渣受重生》，无删减版本，最新章节更新，让你一站式畅享所有精彩！" /></head><body><a href="/tags.html" class="text-sm text-gray-700 hover:text-blue-600">分类</a><main class="bg-white max-w-screen-xl mx-auto p-2 space-y-3"><section class="bg-white p-3 rounded-lg shadow shadow hover:shadow-md flex items-start"><img src="/asset/default.jpg" alt="渣受重生" class="max-w-[90px] mr-4"><div><h1 class="text-2xl font-semibold text-gray-800 mb-2">渣受重生</h1><p class="text-sm text-gray-500">作者：<a href="/profile/62500/" class="hover:text-blue-600">俺打的去埃及</a></p><p class="text-xs text-gray-500 mt-1">更新时间：2026-07-06 19:22:20</p><p class="text-xs text-gray-500 mt-1">状态：连载</p></div></section><section class="p-3 rounded-lg shadow hover:shadow-md"><h2 class="text-xl font-semibold text-gray-800 mb-2">简介</h2><div id="desc" class="text-sm text-gray-600 max-h-40 overflow-y-auto text-justify "><p></p><p>谁说只有男人能重生，左拥右抱好不逍遥．女人照样可以，混娱乐卖<img src='/asset/fonts/45.png'>行，天下大事照样参与！</p></div></section><section class="p-3"><img src="/thumb/94/94801.jpg" alt="别书" class="max-w-[90px]"></section></body></html>`;
+  test('NovelMeta：棉花书吧——主区锚点+状态归一；默认图/无类别留空，推荐区封面不误取', async () => {
+    const m = NovelMetaService.parseMianhua(MH_PAGE);
+    assert.ok(m.ok && m.rule === '棉花书吧');
+    assert.equal(m.title, '渣受重生');
+    assert.equal(m.author, '俺打的去埃及');
+    assert.equal(m.status, '连载中');
+    assert.equal(NovelMetaService.parseMianhua(MH_PAGE.replace('状态：连载', '状态：完结')).status,
+      '已完本', '完结→已完本归一');
+    assert.equal(m.category, ''); // 页面无类别字段，导航「分类」是 /tags.html 链接——留空不猜
+    assert.equal(m.cover, ''); // 主区封面是站默认图 /asset/default.jpg，不算封面；推荐区 /thumb/ 不误取
+    assert.ok(m.intro.includes('混娱乐卖') && m.intro.includes('行，') &&
+      !m.intro.includes('45.png'), '防盗图 img 须剥除且前后文连贯');
+    deps.state.rcpResponse = { statusCode: 200, body: enc(MH_PAGE) };
+    const d = await NovelMetaService.fetchDetail('https://www.mianhuaks.com/book/94801/');
+    assert.ok(d.rule === '棉花书吧' && d.title === '渣受重生', 'fetchDetail 分派命中');
+    deps.state.rcpResponse = null;
+  });
+
+  // 番茄 fixture：2026-11-20 /api/book/info?bookId=7064405896540982309 真实响应（categoryV2 截首元素）
+  const FQ_INFO_B64 = 'eyJjb2RlIjogMCwgIm1lc3NhZ2UiOiAic3VjY2VzcyIsICJkYXRhIjogeyJib29rTmFtZSI6ICLmrabnoo7mmJ/msrMiLCAiYXV0aG9yTmFtZSI6ICLlppblpJwiLCAiY3JlYXRpb25TdGF0dXMiOiAiMCIsICJjYXRlZ29yeVYyIjogIlt7XCJPYmplY3RJZFwiOiAyNTgsIFwiRGltXCI6IDEwLCBcIk5hbWVcIjogXCLkvKDnu5/njoTlubtcIiwgXCJFeHRlcm5hbERlc2NcIjogXCLlhaXlnZHnjoTlubvnmoTnu4/lhbjlsI/or7RcIiwgXCJHZW5kZXJcIjogMSwgXCJTdGF0dXNcIjogMSwgXCJBcHBJZFwiOiAxOTY3LCBcIkV4dHJhXCI6IFwie1xcXCJmb3JfcHVibGljYXRpb25cXFwiOjAsXFxcImljb25cXFwiOlxcXCJodHRwOi8vcDMtbm92ZWwuYnl0ZWltZy5jb20vbm92ZWwtc3RhdGljLzUzYjVlZGE0ODdjZGM5NzQzNzU1NDQ5NmM1NmY0ODFmfnRwbHYtbm9vcC5pbWFnZVxcXCJ9XCIsIFwiSW5FeHBlcmltZW50XCI6IGZhbHNlLCBcIk1haW5DYXRlZ29yeVwiOiB0cnVlLCBcIkNyZWF0ZVRpbWVcIjogMTYxMDAwMTA0Nn1dIiwgImFic3RyYWN0IjogIuaWsOS5puOAiuivm+WkqeWIgOOAi+W3suWPkeW4g++8ge+8ge+8gVxu56We5piO5Zyo5pif56m65L+v556w77yM5oG26a2U5Zyo5Zyw54ux5ZKG5ZOu44CCXG7ov5nmmK/kuIDkuKrkuIfml4/kuonpm4TvvIznpZ7prZTkubHoiJ7nmoTlpYflubvkuJbnlYzjgIJcbuS4gOS4quWvkumXqOWwkeW5tOaMgeWIgOiAjOihjO+8jOmAhua1geiAjOS4iu+8jOS7luimgeaIkOS4uui/meS4quS4lueVjOeahOeOi++8gVxu44CQ5pys5Lmm5pS557yW5Yqo55S744CK5q2m56KO5pif5rKz44CL5q2j5Zyo54Ot5pig44CRIiwgInRodW1iVXJsIjogImh0dHBzOi8vcDMtbm92ZWwtc2lnbi5ieXRlaW1nLmNvbS9ub3ZlbC1waWMvcDJvYTg4YjRmMGY5YjcwMmIzYzBlYjk0YzViYmQyMDY0Nzl+dHBsdi1yZXNpemU6MjI1OjMwMC5pbWFnZT9sazNzPTE5MWMxZWNjJngtZXhwaXJlcz0xNzk1MjA4ODI3Jngtc2lnbmF0dXJlPVMwVVNCSXBMaEZJd1NTam5YbyUyQnczVWRwanFrJTNEIn19Cg==';
+  test('NovelMeta：番茄——rewriteUrl 走 info API 端到端，creationStatus 0/1 归一，categoryV2 首元素', async () => {
+    assert.equal(NovelMetaService.rewriteUrl('https://fanqienovel.com/page/7064405896540982309'),
+      'https://fanqienovel.com/api/book/info?bookId=7064405896540982309');
+    const body = Buffer.from(FQ_INFO_B64, 'base64').toString('utf-8');
+    const m = NovelMetaService.parseFanqie(body);
+    assert.ok(m.ok && m.rule === '番茄小说');
+    assert.equal(m.title, '武碎星河');
+    assert.equal(m.author, '妖夜');
+    assert.equal(m.category, '传统玄幻'); // categoryV2 首元素（Dim=10 主分类）
+    assert.equal(m.status, '已完本'); // creationStatus "0"=完结（终章真页交叉验证）
+    assert.ok(m.cover.startsWith('https://p3-novel-sign.byteimg.com/novel-pic/'));
+    assert.ok(m.intro.includes('寒门少年持刀') && m.intro.length <= 500);
+    assert.equal(NovelMetaService.parseFanqie(body.replace('"creationStatus": "0"',
+      '"creationStatus": "1"')).status, '连载中');
+    assert.equal(NovelMetaService.parseFanqie('not json').error.includes('不是 JSON'), true);
+    const err = NovelMetaService.parseFanqie('{"code":-1,"message":"没有bookId"}');
+    assert.ok(!err.ok && err.error.includes('没有bookId'));
+    deps.state.rcpResponse = { statusCode: 200, body: enc(body) };
+    const d = await NovelMetaService.fetchDetail('https://fanqienovel.com/page/7064405896540982309');
+    assert.ok(d.ok && d.rule === '番茄小说' && d.title === '武碎星河', '详情页 url 重写后端到端命中');
+    deps.state.rcpResponse = null;
+  });
+
+  // 潇湘 fixture：2026-11-20 www.xxsy.net/book/37389130704030609 实测节选（Vue SSR 无 og）
+  const XXSY_PAGE = `<html><head><title>《星际？不慌，我有万界位面！》小说在线阅读_全文免费完结无删减 – 潇湘书院</title></head><body><dl class="bookprofile"><dt><div class="book-cover" style="width:210px;"><img src="//bookcover.yuewen.com/qdbimg/349573/c_37389130704030609/180" alt="星际？不慌，我有万界位面！" class="object-cover"></div></dt><dd><div class="title"><a href="javascript:;" class="read-by-phone"><i class="iconfont"></i>手机阅读</a><h1 style="font-size:23px;">星际？不慌，我有万界位面！</h1><span>文 / 挣脱蛛网的蝴蝶</span></div><p class="sub-cols"><span>会员作品</span><span>连载中</span><span>类别：科幻空间</span><span>发布：2026-11-07</span></p></dd></dl><div id="book_intro" class="book-profile" style="white-space:pre-line;">唐砚秋穿越星际，手握重宝，能够穿越位面。 一切的悲伤已经过去。</div></body></html>`;
+  test('NovelMeta：潇湘书院——title 块内 h1 书名（前有手机阅读链接）、文/作者、sub-cols 跳会员标签、协议相对封面', async () => {
+    const m = NovelMetaService.parseXxsy(XXSY_PAGE);
+    assert.ok(m.ok && m.rule === '潇湘书院');
+    assert.equal(m.title, '星际？不慌，我有万界位面！');
+    assert.equal(m.author, '挣脱蛛网的蝴蝶');
+    assert.equal(m.status, '连载中'); // sub-cols 首 span 是「会员作品」，状态取 连载|完结
+    assert.equal(m.category, '科幻空间');
+    assert.equal(m.cover, '//bookcover.yuewen.com/qdbimg/349573/c_37389130704030609/180');
+    assert.ok(m.intro.startsWith('唐砚秋穿越星际'));
+    deps.state.rcpResponse = { statusCode: 200, body: enc(XXSY_PAGE) };
+    const d = await NovelMetaService.fetchDetail('https://www.xxsy.net/book/37389130704030609');
+    assert.ok(d.rule === '潇湘书院' && d.cover.startsWith('https://bookcover.yuewen.com'),
+      '分派命中+协议相对封面升 https');
+    deps.state.rcpResponse = null;
+  });
+
+  // 掌阅 fixture：2026-11-20 m.zhangyue.com/detail/10161848 实测节选（无 og，SSR 正文；
+  // 含「同类好书」推荐区 li 与 goCategory JS 绑定串两个干扰源）
+  const ZY_PAGE = `<html><head><title>《雪落红炉[精品]》最新章节_第三十章 此生相许_似水无痕著_完结小说_都市免费小说_掌阅小说网</title><meta name="description" content="衣香鬓影，十里洋场。"></head><body><div class="cover"><div class="bookview"><div class="side"><img class="bookcover" data-js="book" src="https://bookbk.img.zhangyue01.com/idc_1/m_1,w_200,h_266/9f6a600f/group6/M00/20/F4/CmQUN1X1h8aEJMP9AAAAAJoALRc898462364.jpg?v=47ZDQw9E" alt="雪落红炉"></div><dl class="main"><dt class="ellipsis2">雪落红炉</dt>
+<dd><span class="stars white"><span class="cur r9"></span></span> <span class="yellow">9.0</span> | <span class="f10">593人评分</span></dd>
+<dd class="ellipsis">
+<span class="">春芒文化</span> |
+<span class="it red">似水无痕</span></dd>
+<dd class="lastline"><span>15.3万字 </dd>
+<dd class="tagbtn"><span data-js="goCategory" data-id="74" data-url="https://m.zhangyue.com/category/68/74">古代言情</span><span class="dec_triangle"></span></dd>
+</dl></div></div><div class="brief_intro" data-js="brief_intro"><p data-js="brief_intro_txt">内容简介：衣香鬓影，十里洋场。在那个动荡的年代，因为父母之间的约定，她嫁入豪门。</p><div class="triangle_c">...<span class="dec_triangle"></span></div></div><div class="guess"><ul>
+<li><a data-js="goRecommendBook" data-id="11282628" data-name="鬼医嫡女之毒妃倾城" href="https://m.zhangyue.com/detail/11282628"><div class="c flex"><div class="book_cover"><img src="https://bookbk.img.zhangyue01.com/idc_1/m_1,w_200,h_266/51100c86/group6/M00/41/EF/CmRaIVjdCxqEaj3GAAAAAA7gt5I355205448.jpg?v=BWWIvM2c" alt="鬼医嫡女之毒妃倾城"></div><dl class="book_info flex_item"><dt class="flex"><div class="flex_item ellipsis">鬼医嫡女之毒妃倾城</div>
+<div class="score">9.5分</div>
+</dt><dd class="author ellipsis">Echo涂涂</dd><dd class="content ellipsis2">想她戎马一生，剑下斩过多少宵小。</dd><dd><span class="tag">古代言情</span> <span class="tag">已完结</span></dd></dl></div></a></li> </ul></div><script>$("span[data-js=goCategory]").on("click", function(e){dataPointUrl({'page_type':'detail'});});</script></body></html>`;
+  test('NovelMeta：掌阅——bookview 块限定主区（推荐区同名 tag/他书信息不干扰），title SEO 模板不当状态', () => {
+    const m = NovelMetaService.parseZhangyue(ZY_PAGE);
+    assert.ok(m.ok && m.rule === '掌阅小说网');
+    assert.equal(m.title, '雪落红炉'); // 不取推荐区《鬼医嫡女》与带[精品]的 keywords
+    assert.equal(m.author, '似水无痕'); // 同行前置「春芒文化」是出版方
+    assert.equal(m.category, '古代言情');
+    assert.equal(m.status, ''); // <title> 的「完结小说」是 SEO 固定模板，主区无状态字段
+    assert.ok(m.intro.startsWith('衣香鬓影'), '剥「内容简介：」前缀');
+    assert.ok(m.cover.startsWith('https://bookbk.img.zhangyue01.com'));
+  });
+  test('NovelMeta：掌阅端到端分派 m.zhangyue.com/detail', async () => {
+    deps.state.rcpResponse = { statusCode: 200, body: enc(ZY_PAGE) };
+    const d = await NovelMetaService.fetchDetail('https://m.zhangyue.com/detail/10161848');
+    assert.ok(d.ok && d.rule === '掌阅小说网' && d.title === '雪落红炉');
+    deps.state.rcpResponse = null;
+  });
+
+  // 群小说/一页书 fixture：2026-11-20 实测节选（qunxs.com/xiaoshuo_<id>、yiyeshu.cc/aibooks/<id>，
+  // 均 og:novel 全量=通用零改动；一页书 legado 规则只写简介/封面是偷懒，og 实际齐全）
+  const QX_PAGE = `<html><head><meta property="og:type" content="novel"/><meta property="og:title" content="COD乙女：被覆面们盯上了"/><meta property="og:image" content="http://www.qunxs.com//images/14/14014/14014s.png"/><meta property="og:description" content="【覆面＋乙女＋1vn＋第二人称＋偏真实＋HE】男主:konig keegan ghost"/><meta property="og:novel:category" content="都市言情小说"/><meta property="og:novel:author" content="小桃是甜妹"/><meta property="og:novel:book_name" content="COD乙女：被覆面们盯上了"/><meta property="og:novel:status" content="连载"/></head><body></body></html>`;
+  const YE_PAGE = `<html><head><meta property="og:type" content="novel"><meta property="og:title" content="重生之宠妻手册云惘然免费阅读 - 一页书小说"><meta property="og:image" content="https://www.yiyeshu.cc/files/article/image/14/14104/14104s.jpg"><meta property="og:description" content="重生之宠妻手册小说阅读,三岁卫卯卯（含泪握拳）"><meta property="og:novel:category" content="其他类型"><meta property="og:novel:author" content="云惘然"><meta property="og:novel:book_name" content="重生之宠妻手册"><meta property="og:novel:status" content="连载"></head><body></body></html>`;
+  test('NovelMeta：群小说/一页书——legado 语料下一批镜像站 og:novel 通用零改动命中（脏 og:title 去尾、双斜杠封面保留）', async () => {
+    deps.state.rcpResponse = { statusCode: 200, body: enc(QX_PAGE) };
+    const q = await NovelMetaService.fetchDetail('http://www.qunxs.com/xiaoshuo_14014.html');
+    assert.ok(q.ok && q.rule === 'og:novel' && q.title === 'COD乙女：被覆面们盯上了'
+      && q.author === '小桃是甜妹' && q.category === '都市言情小说' && q.status === '连载中',
+      'qunxs 通用命中+双斜杠封面 url 原样');
+    assert.ok(q.cover.indexOf('qunxs.com//images/') > 0, '双斜杠封面 GET 实测 200 可加载，不改写');
+    deps.state.rcpResponse = { statusCode: 200, body: enc(YE_PAGE) };
+    const y = await NovelMetaService.fetchDetail('https://www.yiyeshu.cc/aibooks/14104.html');
+    assert.ok(y.ok && y.title === '重生之宠妻手册', '一页书脏 og:title 由 book_name 去尾');
+    assert.ok(y.author === '云惘然' && y.status === '连载中' && y.category === '其他类型');
+    deps.state.rcpResponse = null;
+  });
+
+  // 书坊/顶点 fixture：2026-11-20 实测节选（sfwx.com/\d+/\d+/ 与 dingdians.com/index/<id>/，
+  // 均 og:novel 全量；顶点状态值是「全本」；sfwx 封面协议相对；sfwx 语料写 @get 而实页有 og）
+  const SF_PAGE = `<html><head><meta property="og:type" content="novel" /><meta property="og:title" content="大明第一国舅最新章节" /><meta property="og:description" content="洪武二年春，一青年牵驴扶棺来到了新丰里。" /><meta property="og:image" content="//www.sfwx.com/images/10/10202/10202s.jpg" /><meta property="og:novel:category" content="历史小说" /><meta property="og:novel:author" content="黑胖的老鼠" /><meta property="og:novel:book_name" content="大明第一国舅" /><meta property="og:novel:status" content="连载" /></head><body></body></html>`;
+  const DD_PAGE = `<html><head><meta property="og:type" content="novel"><meta property="og:title" content="我真不是邪神走狗"><meta property="og:description" content="《我真不是邪神走狗》穿越者林介经营着一家书店。"><meta property="og:image" content="http://www.dingdians.com/images/104975/104975639/104975639s.jpg"><meta property="og:novel:category" content="奇幻"><meta property="og:novel:author" content="万劫火"><meta property="og:novel:book_name" content="我真不是邪神走狗"><meta property="og:novel:status" content="全本"></head><body></body></html>`;
+  test('NovelMeta：书坊/顶点——消耗期第二批 og:novel 通用命中，顶点「全本」归一已完本、协议相对封面升 https', async () => {
+    deps.state.rcpResponse = { statusCode: 200, body: enc(SF_PAGE) };
+    const s = await NovelMetaService.fetchDetail('http://www.sfwx.com/10/10202/');
+    assert.ok(s.ok && s.rule === 'og:novel' && s.title === '大明第一国舅'
+      && s.author === '黑胖的老鼠' && s.category === '历史小说' && s.status === '连载中');
+    assert.ok(/^https?:\/\/www\.sfwx\.com\/images\//.test(s.cover), '协议相对封面按页面协议补全为绝对 url');
+    deps.state.rcpResponse = { statusCode: 200, body: enc(DD_PAGE) };
+    const d = await NovelMetaService.fetchDetail('https://www.dingdians.com/index/104975639/');
+    assert.ok(d.ok && d.title === '我真不是邪神走狗' && d.status === '已完本', '「全本」→已完本');
+    assert.ok(d.author === '万劫火' && d.category === '奇幻');
+    assert.ok(String(deps.state.lastRequest.headers['User-Agent']).includes('Mobile'),
+      '顶点按桌面 OS 特征拦 UA（Windows NT 完整串返回身份验证壳），必须移动 UA');
+    assert.equal(String(deps.state.lastRequest.headers['User-Agent']).includes('Windows NT'), false,
+      '他站不受影响由上方 qidian 用例断言');
+    deps.state.rcpResponse = null;
+  });
+
+  // 云起/塔读 fixture：2026-11-20 实测（云起 read 壳无 og→detail og:novel；塔读 og 全量含脏 title/双斜杠封面）
+  const YQ_DETAIL = `<html><head><meta property="og:type" content="novel"><meta property="og:novel:book_name" content="粟粟"><meta property="og:novel:author" content="荆棘之歌"><meta property="og:novel:category" content="古代言情"><meta property="og:novel:status" content="连载"><meta property="og:image" content="https://wfqqreader-1252317822.image.myqcloud.com/cover/857/59718575/s_59718575.jpg"><meta property="og:description" content="山洪冲下来一个白里透红的小娃娃。"></head><body></body></html>`;
+  test('NovelMeta：云起 read→detail 重写 + 塔读式脏 og:title 由 book_name 去尾——通用 og:novel 覆盖阅文/掌阅系', async () => {
+    assert.equal(NovelMetaService.rewriteUrl('https://yunqi.qq.com/read/59718575/'),
+      'https://yunqi.qq.com/detail/59718575');
+    assert.equal(NovelMetaService.rewriteUrl('https://www.xxsy.net/book/37389130704030609'),
+      'https://www.xxsy.net/book/37389130704030609'); // 他站不受影响
+    deps.state.rcpResponse = { statusCode: 200, body: enc(YQ_DETAIL) };
+    const d = await NovelMetaService.fetchDetail('https://yunqi.qq.com/read/59718575/');
+    assert.ok(d.ok && d.rule === 'og:novel' && d.title === '粟粟' && d.status === '连载中'
+      && d.category === '古代言情');
+    deps.state.rcpResponse = null;
+    const td = NovelMetaService.parseGeneric(`<html><head><meta property="og:title" content="仕途风云小说_阿诸_仕途风云最新章节_仕途风云无弹窗免费阅读_塔读免费小说,塔读"><meta property="og:novel:book_name" content="仕途风云"><meta property="og:novel:author" content="阿诸"><meta property="og:novel:category" content="现代都市"><meta property="og:novel:status" content="连载"><meta property="og:image" content="https://media3.tadu.com//2023/05/18/19/02/353ff3f10ca8409095452f668244e5a5.jpg"><meta property="og:description" content="简介：省督查室副主任荆涛。"></head><body></body></html>`);
+    assert.ok(td.rule === 'og:novel' && td.title === '仕途风云' && td.status === '连载中');
+  });
+
+  // 飞卢 gb2312 fixture：2026-11-20 b.faloo.com/1484744.html 实测 meta 行，GBK 字节 base64
+  test('NovelMeta：charset 嗅探+GBK 解码——飞卢老站不乱码，utf-8 页不受影响', async () => {
+    const FALOO_B64 = 'PGh0bWw+PGhlYWQ+PG1ldGEgaHR0cC1lcXVpdj0iQ29udGVudC1UeXBlIiBjb250ZW50PSJ0ZXh0L2h0bWw7IGNoYXJzZXQ9Z2IyMzEyIj4KPG1ldGEgcHJvcGVydHk9Im9nOnRpdGxlIiBjb250ZW50PSLFzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOzX7tDC1cK92ijC283iz8XE8tbuzOwp1NrP39TEtsFft8nCrNChy7XN+CI+CjxtZXRhIHByb3BlcnR5PSJvZzpkZXNjcmlwdGlvbiIgY29udGVudD0iob63ycKs0KHLtc34tsC80sep1LzQocu1o7rFzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOyhv8zsxLu9tcHZ1u7M7KOsv6q+1sXMtePN8r3n1b3BpsG/vLaho7TTsazXqby2o6yxrMe9vLahraGtsazQx7y2o6y649DHvLajrNDHz7W8tqOs0MfPtc3FvLajrLWlzOXT7tbmvLajrLbg1KrT7tbmvLajrM7ez9624NSq0+7W5qGtoa3O3s/eutDX06Os1rjK/cv+o6yzrNa4yv3L/qOssru/ybTvu/nK/aGtoa3V5s/WyrWjrLW9Ij4KPG1ldGEgcHJvcGVydHk9Im9nOmltYWdlIiBjb250ZW50PSJodHRwOi8vaW1nLmZhbG9vLmNvbS9Ob3ZlbC80OTh4NzA1LzEvMTU5NS8wMDE1OTU5NTcuanBnIj4KPC9oZWFkPjxib2R5PjxoMT7FzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOw8L2gxPjwvYm9keT48L2h0bWw+';
+    const raw = Buffer.from(FALOO_B64, 'base64');
+    deps.state.rcpResponse = { statusCode: 200,
+      body: raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) };
+    const m = await NovelMetaService.fetchDetail('https://b.faloo.com/1484744.html');
+    assert.ok(m.ok && m.rule === '通用og');
+    assert.ok(m.intro.includes('飞卢小说网独家签约小说') && m.intro.includes('无限多元宇宙') &&
+      !m.intro.includes('\uFFFD'), 'GBK 简介须可读不乱码');
+    assert.equal(m.cover, 'http://img.faloo.com/Novel/498x705/1/1595/001595957.jpg');
+    deps.state.rcpResponse = null;
+    assert.ok(NovelMetaService.decodeBody(enc('<meta charset="utf-8">中文正常'))
+      .includes('中文正常'), 'utf-8 页解码不受嗅探影响');
+    // 飞卢真实布局：charset 声明在字节 ~2413（2KB 窗口会漏，4KB 才够）
+    const late = Buffer.from(FALOO_B64, 'base64');
+    const pad = Buffer.concat([Buffer.from('<html><head>' + 'x'.repeat(1000)), late.slice(12)]);
+    const padBuf = pad.buffer.slice(pad.byteOffset, pad.byteOffset + pad.byteLength);
+    assert.ok(NovelMetaService.decodeBody(padBuf).includes('charset=gb2312'),
+      'charset 声明落在 2KB~4KB 窗口也必须被嗅到');
+  });
+
+  test('get_novel_meta：17K url 走工具输出简介/封面，读工具不过闸门，行模板带类别/状态/字数', async () => {
+    deps.state.rcpResponse = { statusCode: 200, body: enc(K17_PAGE) };
+    const s = await RealAiTools.execute('get_novel_meta', '{"url":"https://www.17k.com/book/1018082.html"}');
+    assert.ok(s.includes('书名：武逆焚天') && s.includes('作者：疯橘子') &&
+      s.includes('类别：东方玄幻') && s.includes('状态：连载中') &&
+      s.includes('简介：') && s.includes('神奇的大陆'));
+    assert.equal(RealAiTools.needsConfirm('get_novel_meta'), false);
+    const empty = await RealAiTools.execute('get_novel_meta', '{}');
+    assert.ok(empty.includes('url 必填'));
+    deps.state.rcpResponse = { statusCode: 200, body: enc(KUJIANG_PAGE) };
+    const kj = await RealAiTools.execute('get_novel_meta', '{"url":"https://m.kujiang.com/book/91737"}');
+    assert.ok(kj.includes('规则：og:novel') && kj.includes('书名：灯下黑') && kj.includes('状态：已完本'));
+    deps.state.rcpResponse = null;
+    // search_sonovel 行模板增强：JSON 里已有的类别/状态/字数要上屏，并提示 get_novel_meta
+    toolsState.sonovelEnvelope = { status: 200, error: '', body: { code: 200, message: '', data: [
+      { sourceId: 4, sourceName: '全本小说网', url: 'http://www.quanben.io/n/gmzz/list.html',
+        bookName: '诡秘之主', author: '爱潜水的乌贼', category: '玄幻', status: '已完结',
+        wordCount: '956万字', latestChapter: '12月1日新番外' },
+    ] } };
+    const row = await RealAiTools.execute('search_sonovel', '{"query":"诡秘之主"}');
+    assert.ok(row.includes('类别：玄幻') && row.includes('已完结') && row.includes('字数：956万字') &&
+      row.includes('get_novel_meta'));
+    toolsState.sonovelEnvelope = null;
   });
 
   test('search_meta：query/book_id 三通道聚合、subject_id 详情模式、读工具不过闸门', async () => {

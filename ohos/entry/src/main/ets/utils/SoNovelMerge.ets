@@ -10,6 +10,8 @@ export interface SoNovelSearchItem {
   latestChapter: string;
   lastUpdateTime: string;
   status: string;
+  /** 书源站报的总字数，字符串原样透传（如「503万字」），可能为空。 */
+  wordCount: string;
 }
 
 export interface MergedSoNovelResult {
@@ -58,6 +60,7 @@ export class SoNovelMerge {
       latestChapter: String(raw['latestChapter'] ?? ''),
       lastUpdateTime: String(raw['lastUpdateTime'] ?? ''),
       status: String(raw['status'] ?? ''),
+      wordCount: String(raw['wordCount'] ?? ''),
     };
   }
 

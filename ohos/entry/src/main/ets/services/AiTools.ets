@@ -7,6 +7,7 @@ import { DownloadTaskService } from './DownloadTaskService';
 import { BookListAddResponse, BookListApi, BookListMutationResponse } from './BookListApi';
 import { AiPersona } from './AiPersona';
 import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';
+import { NovelMeta, NovelMetaService } from './NovelMetaService';
 
 /** 工具结果里的一本书（供对话页做结构化列表渲染）。 */
 export interface ToolBookLine {
@@ -144,8 +145,9 @@ const BOOKLIST_ADD_REQUIRED: string[] = ['booklist_id', 'book_ids'];
 const SONOVEL_TASK_REQUIRED: string[] = ['book_name', 'url'];
 
 const TOOL_SEARCH_SONOVEL: AiToolDefinition = defineTool('search_sonovel',
-  '在 so-novel 书源站聚合搜索网络小说，返回最多 8 条 {书名, 作者, 书源, url, 最新章节}。' +
-    '用户想下载书架上没有的网络小说时使用；url 是后续 add_sonovel_task 的必需参数。',
+  '在 so-novel 书源站聚合搜索网络小说，返回最多 8 条 {书名, 作者, 书源, 类别, 状态, 字数, url, 最新章节}。' +
+    '用户想下载书架上没有的网络小说时使用；url 是后续 add_sonovel_task 的必需参数，' +
+    '也是 get_novel_meta 取简介/封面的入参。',
   QUERY_PROPS, ['query']);
 const TOOL_ADD_SONOVEL_TASK: AiToolDefinition = defineTool('add_sonovel_task',
   '把一本 so-novel 网络小说加入下载任务队列（参数来自 search_sonovel 的返回）。' +
@@ -223,16 +225,28 @@ const META_SEARCH_PROPS: Record<string, AiToolProperty> = {
 };
 const TOOL_SEARCH_META: AiToolDefinition = defineTool('search_meta',
   '多站元数据搜索：豆瓣直连检索（书名/ISBN→subject_id+封面）、豆瓣条目详情（评分/出版社/ISBN/出版年/页数/简介）、' +
-    '服务端 refer 多源候选（传 book_id）、网文源含更新状态（传 query）。' +
+    '服务端 refer 多源候选（传 book_id）、网文源含类别/状态/字数（传 query）。' +
+    '豆瓣查不到的网文：用网文通道的 url 再调 get_novel_meta 补简介/封面。' +
     '补元数据（update_book_meta）或核对书目信息前先用它查真实数据。',
   META_SEARCH_PROPS, []);
 
+const NOVEL_META_PROPS: Record<string, AiToolProperty> = {
+  'url': prop('string', '书源站详情页 url（来自 search_sonovel / search_meta 的网文通道）'),
+};
+const TOOL_GET_NOVEL_META: AiToolDefinition = defineTool('get_novel_meta',
+  '抓书源站详情页补全网络小说元数据：简介、封面、类别、连载状态（url 来自 search_sonovel 结果）。' +
+    '豆瓣查不到的网文就靠它；对 17K小说网详情页解析最全。失败时换另一条书源候选的 url 重试。',
+  NOVEL_META_PROPS, ['url']);
+
+// 顺序有坑：OpenCode 网关实测会丢 tools 数组最后一项（2026-11-20 板上取证：模型枚举
+// 恰缺末位 get_novel_meta，报「最后一个工具是 search_meta」）。末位放最低频工具，
+// 新增工具一律插在中间，别放最后。
 const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SEARCH_BOOKS, TOOL_BOOK_DETAIL, TOOL_BOOK_NOTES, TOOL_READING_HISTORY,
   TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS,
   TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_UPDATE_BOOK_META,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
-  TOOL_SAVE_MEMORY, TOOL_FORGET_MEMORY, TOOL_SEARCH_META,
+  TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_FORGET_MEMORY,
 ];
 
 export class AiTools {
@@ -313,6 +327,9 @@ export class AiTools {
     if (name === 'search_meta') {
       return '检索元数据站点';
     }
+    if (name === 'get_novel_meta') {
+      return '抓书源站详情页';
+    }
     if (name === 'save_memory') {
       return '记住用户的事';
     }
@@ -365,6 +382,9 @@ export class AiTools {
       }
       if (name === 'search_meta') {
         return await AiTools.searchMeta(args);
+      }
+      if (name === 'get_novel_meta') {
+        return await AiTools.getNovelMeta(args);
       }
       if (name === 'save_memory') {
         return AiPersona.appendMemory(AiTools.argString(args, 'content'));
@@ -587,6 +607,42 @@ export class AiTools {
     return sections.join('\n\n');
   }
 
+  /**
+   * 网文元数据补全：抓书源站详情页解析简介/封面（so-novel 聚合搜索不提供这两样的补丁通道）。
+   */
+  private static async getNovelMeta(args: Record<string, Object>): Promise<string> {
+    const url: string = AiTools.argString(args, 'url').trim();
+    if (url.length === 0) {
+      return '参数 url 必填（search_sonovel 结果里的书源站详情页地址）。';
+    }
+    const meta: NovelMeta = await NovelMetaService.fetchDetail(url);
+    if (!meta.ok) {
+      return `网文元数据获取失败：${meta.error}\nurl：${url}`;
+    }
+    const head: string[] = [];
+    if (meta.title.length > 0) {
+      head.push(`书名：${meta.title}`);
+    }
+    if (meta.author.length > 0) {
+      head.push(`作者：${meta.author}`);
+    }
+    if (meta.category.length > 0) {
+      head.push(`类别：${meta.category}`);
+    }
+    if (meta.status.length > 0) {
+      head.push(`状态：${meta.status}`);
+    }
+    let out: string = `网文元数据（规则：${meta.rule}，来源 ${url}）：\n${head.join('　')}`;
+    if (meta.cover.length > 0) {
+      out += `\n封面：${meta.cover}`;
+    }
+    if (meta.intro.length > 0) {
+      out += `\n简介：\n${meta.intro}`;
+    }
+    out += '\n要把简介写进书架用 update_book_meta 的 comment 字段。';
+    return out;
+  }
+
   private static async setCover(args: Record<string, Object>): Promise<string> {
     const bookId: number = AiTools.argNumber(args, 'book_id');
     if (bookId <= 0) {
@@ -745,13 +801,23 @@ export class AiTools {
       const item: SoNovelSearchItem = SoNovelMerge.fromRecord(data[i] as Record<string, Object>);
       let line: string = `- 《${item.bookName}》（${item.author.length > 0 ? item.author : '佚名'}）` +
         ` 书源：${item.sourceName}(id=${item.sourceId})`;
+      if (item.category.length > 0) {
+        line += `，类别：${item.category}`;
+      }
+      if (item.status.length > 0) {
+        line += `，${item.status}`;
+      }
+      if (item.wordCount.length > 0) {
+        line += `，字数：${item.wordCount}`;
+      }
       if (item.latestChapter.length > 0) {
         line += `，最新章节：${AiTools.clip(item.latestChapter, 30)}`;
       }
       line += `，url：${item.url}`;
       lines.push(line);
     }
-    return `书源站找到 ${cap} 条，要下载需调 add_sonovel_task（带上 url 与书源信息）：\n${lines.join('\n')}`;
+    return `书源站找到 ${cap} 条，要下载需调 add_sonovel_task（带上 url 与书源信息）；` +
+      `要简介/封面拿该 url 调 get_novel_meta：\n${lines.join('\n')}`;
   }
 
   private static addSonovelTask(args: Record<string, Object>): string {
