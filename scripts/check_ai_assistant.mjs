@@ -1592,6 +1592,31 @@ try {
     deps.state.rcpResponse = null;
   });
 
+  // 番茄 fixture：2026-11-20 /api/book/info?bookId=7064405896540982309 真实响应（categoryV2 截首元素）
+  const FQ_INFO_B64 = 'eyJjb2RlIjogMCwgIm1lc3NhZ2UiOiAic3VjY2VzcyIsICJkYXRhIjogeyJib29rTmFtZSI6ICLmrabnoo7mmJ/msrMiLCAiYXV0aG9yTmFtZSI6ICLlppblpJwiLCAiY3JlYXRpb25TdGF0dXMiOiAiMCIsICJjYXRlZ29yeVYyIjogIlt7XCJPYmplY3RJZFwiOiAyNTgsIFwiRGltXCI6IDEwLCBcIk5hbWVcIjogXCLkvKDnu5/njoTlubtcIiwgXCJFeHRlcm5hbERlc2NcIjogXCLlhaXlnZHnjoTlubvnmoTnu4/lhbjlsI/or7RcIiwgXCJHZW5kZXJcIjogMSwgXCJTdGF0dXNcIjogMSwgXCJBcHBJZFwiOiAxOTY3LCBcIkV4dHJhXCI6IFwie1xcXCJmb3JfcHVibGljYXRpb25cXFwiOjAsXFxcImljb25cXFwiOlxcXCJodHRwOi8vcDMtbm92ZWwuYnl0ZWltZy5jb20vbm92ZWwtc3RhdGljLzUzYjVlZGE0ODdjZGM5NzQzNzU1NDQ5NmM1NmY0ODFmfnRwbHYtbm9vcC5pbWFnZVxcXCJ9XCIsIFwiSW5FeHBlcmltZW50XCI6IGZhbHNlLCBcIk1haW5DYXRlZ29yeVwiOiB0cnVlLCBcIkNyZWF0ZVRpbWVcIjogMTYxMDAwMTA0Nn1dIiwgImFic3RyYWN0IjogIuaWsOS5puOAiuivm+WkqeWIgOOAi+W3suWPkeW4g++8ge+8ge+8gVxu56We5piO5Zyo5pif56m65L+v556w77yM5oG26a2U5Zyo5Zyw54ux5ZKG5ZOu44CCXG7ov5nmmK/kuIDkuKrkuIfml4/kuonpm4TvvIznpZ7prZTkubHoiJ7nmoTlpYflubvkuJbnlYzjgIJcbuS4gOS4quWvkumXqOWwkeW5tOaMgeWIgOiAjOihjO+8jOmAhua1geiAjOS4iu+8jOS7luimgeaIkOS4uui/meS4quS4lueVjOeahOeOi++8gVxu44CQ5pys5Lmm5pS557yW5Yqo55S744CK5q2m56KO5pif5rKz44CL5q2j5Zyo54Ot5pig44CRIiwgInRodW1iVXJsIjogImh0dHBzOi8vcDMtbm92ZWwtc2lnbi5ieXRlaW1nLmNvbS9ub3ZlbC1waWMvcDJvYTg4YjRmMGY5YjcwMmIzYzBlYjk0YzViYmQyMDY0Nzl+dHBsdi1yZXNpemU6MjI1OjMwMC5pbWFnZT9sazNzPTE5MWMxZWNjJngtZXhwaXJlcz0xNzk1MjA4ODI3Jngtc2lnbmF0dXJlPVMwVVNCSXBMaEZJd1NTam5YbyUyQnczVWRwanFrJTNEIn19Cg==';
+  test('NovelMeta：番茄——rewriteUrl 走 info API 端到端，creationStatus 0/1 归一，categoryV2 首元素', async () => {
+    assert.equal(NovelMetaService.rewriteUrl('https://fanqienovel.com/page/7064405896540982309'),
+      'https://fanqienovel.com/api/book/info?bookId=7064405896540982309');
+    const body = Buffer.from(FQ_INFO_B64, 'base64').toString('utf-8');
+    const m = NovelMetaService.parseFanqie(body);
+    assert.ok(m.ok && m.rule === '番茄小说');
+    assert.equal(m.title, '武碎星河');
+    assert.equal(m.author, '妖夜');
+    assert.equal(m.category, '传统玄幻'); // categoryV2 首元素（Dim=10 主分类）
+    assert.equal(m.status, '已完本'); // creationStatus "0"=完结（终章真页交叉验证）
+    assert.ok(m.cover.startsWith('https://p3-novel-sign.byteimg.com/novel-pic/'));
+    assert.ok(m.intro.includes('寒门少年持刀') && m.intro.length <= 500);
+    assert.equal(NovelMetaService.parseFanqie(body.replace('"creationStatus": "0"',
+      '"creationStatus": "1"')).status, '连载中');
+    assert.equal(NovelMetaService.parseFanqie('not json').error.includes('不是 JSON'), true);
+    const err = NovelMetaService.parseFanqie('{"code":-1,"message":"没有bookId"}');
+    assert.ok(!err.ok && err.error.includes('没有bookId'));
+    deps.state.rcpResponse = { statusCode: 200, body: enc(body) };
+    const d = await NovelMetaService.fetchDetail('https://fanqienovel.com/page/7064405896540982309');
+    assert.ok(d.ok && d.rule === '番茄小说' && d.title === '武碎星河', '详情页 url 重写后端到端命中');
+    deps.state.rcpResponse = null;
+  });
+
   // 飞卢 gb2312 fixture：2026-11-20 b.faloo.com/1484744.html 实测 meta 行，GBK 字节 base64
   test('NovelMeta：charset 嗅探+GBK 解码——飞卢老站不乱码，utf-8 页不受影响', async () => {
     const FALOO_B64 = 'PGh0bWw+PGhlYWQ+PG1ldGEgaHR0cC1lcXVpdj0iQ29udGVudC1UeXBlIiBjb250ZW50PSJ0ZXh0L2h0bWw7IGNoYXJzZXQ9Z2IyMzEyIj4KPG1ldGEgcHJvcGVydHk9Im9nOnRpdGxlIiBjb250ZW50PSLFzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOzX7tDC1cK92ijC283iz8XE8tbuzOwp1NrP39TEtsFft8nCrNChy7XN+CI+CjxtZXRhIHByb3BlcnR5PSJvZzpkZXNjcmlwdGlvbiIgY29udGVudD0iob63ycKs0KHLtc34tsC80sep1LzQocu1o7rFzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOyhv8zsxLu9tcHZ1u7M7KOsv6q+1sXMtePN8r3n1b3BpsG/vLaho7TTsazXqby2o6yxrMe9vLahraGtsazQx7y2o6y649DHvLajrNDHz7W8tqOs0MfPtc3FvLajrLWlzOXT7tbmvLajrLbg1KrT7tbmvLajrM7ez9624NSq0+7W5qGtoa3O3s/eutDX06Os1rjK/cv+o6yzrNa4yv3L/qOssru/ybTvu/nK/aGtoa3V5s/WyrWjrLW9Ij4KPG1ldGEgcHJvcGVydHk9Im9nOmltYWdlIiBjb250ZW50PSJodHRwOi8vaW1nLmZhbG9vLmNvbS9Ob3ZlbC80OTh4NzA1LzEvMTU5NS8wMDE1OTU5NTcuanBnIj4KPC9oZWFkPjxib2R5PjxoMT7FzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOw8L2gxPjwvYm9keT48L2h0bWw+';

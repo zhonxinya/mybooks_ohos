@@ -17,6 +17,8 @@ import { util } from '@kit.ArkTS';
  * - 晋江 www.jjwxc.net onebook.php 无 og，带 schema.org Book 微数据
  *   （itemprop=articleSection/author/genre/updataStatus/image/description），
  *   gb18030 编码（charset 声明在字节 240，decodeBody 嗅探窗口内）、SSR 直出无 JS 壳。
+ * - 番茄小说 fanqienovel.com 详情页是 SPA（1.6MB __INITIAL_STATE__），但同 ID 的
+ *   /api/book/info?bookId= 双指纹裸通、字段全量无签名（2026-11-20 实测）——走 rewriteUrl。
  * - so-novel 候选 6 镜像域质量审计（2026-11-20 离线实跑）：mcxs/yeudusk/shuhaige/quanben
  *   实际带 og:novel 全量（通用规则即够）；唯 mianhuaks.com 无 og:novel 且封面多为站默认图
  *   /asset/default.jpg、无类别字段——需专用规则走主区正文锚点（parseMianhua）。
@@ -123,6 +125,8 @@ export class NovelMetaService {
       meta = NovelMetaService.parseUjxsw(html);
     } else if (trimmed.indexOf('mianhuaks.com') >= 0) {
       meta = NovelMetaService.parseMianhua(html);
+    } else if (trimmed.indexOf('fanqienovel.com') >= 0) {
+      meta = NovelMetaService.parseFanqie(html);
     } else {
       meta = NovelMetaService.parseGeneric(html);
     }
@@ -179,7 +183,13 @@ export class NovelMetaService {
       return `https://m.qidian.com/book/${qidian[1]}/`;
     }
     // 悠久小说网 https 端口不通（2026-11-20 实测 curl 000），手贴 https 时降到 http
-    return url.replace(/^https:\/\/(\S*ujxsw\.org)/, 'http://$1');
+    const ujxsw = url.replace(/^https:\/\/(\S*ujxsw\.org)/, 'http://$1');
+    // 番茄详情页是 SPA（1.6MB __INITIAL_STATE__），同 ID 的 info API 双指纹裸通、字段全量
+    const fanqie = ujxsw.match(/^https?:\/\/fanqienovel\.com\/page\/(\d{15,20})\/?$/);
+    if (fanqie !== null) {
+      return `https://fanqienovel.com/api/book/info?bookId=${fanqie[1]}`;
+    }
+    return ujxsw;
   }
 
   /**
@@ -314,6 +324,54 @@ export class NovelMetaService {
       meta.intro = NovelMetaService.clean(intro[1], INTRO_MAX);
     }
     meta.ok = meta.title.length > 0 || meta.intro.length > 0 || meta.author.length > 0;
+    return meta;
+  }
+
+  /** 番茄小说（fanqienovel.com，2026-11-20 实测）：详情页是 SPA，rewriteUrl 已把
+   *  /page/<id> 重写为 /api/book/info?bookId=<id>（双指纹裸通、无签名），入参是其 JSON。
+   *  creationStatus 语义经真页交叉验证：0=完结、1=连载；categoryV2 是 JSON 字符串，
+   *  首元素恒为主分类（Dim=10，4 本实测）；封面 thumbUrl 为带签名 CDN url（约 30 天过期）。 */
+  static parseFanqie(body: string): NovelMeta {
+    const meta: NovelMeta = { ok: false, error: '', title: '', author: '', category: '',
+      status: '', intro: '', cover: '', rule: '番茄小说' };
+    let root: Record<string, Object>;
+    try {
+      root = JSON.parse(body) as Record<string, Object>;
+    } catch (error) {
+      meta.error = '番茄接口返回不是 JSON（站点改版或风控）';
+      return meta;
+    }
+    if (String(root['code']) !== '0') {
+      meta.error = `番茄接口错误：${String(root['message'] ?? '未知')}`;
+      return meta;
+    }
+    const book = root['data'] as Record<string, string> | undefined;
+    if (book === undefined) {
+      meta.error = '番茄接口无 data 字段';
+      return meta;
+    }
+    meta.title = book['bookName'] ?? '';
+    meta.author = book['authorName'] ?? '';
+    const cs: string = String(book['creationStatus'] ?? '');
+    if (cs === '0') {
+      meta.status = '已完本';
+    } else if (cs === '1') {
+      meta.status = '连载中';
+    }
+    try {
+      const cats = JSON.parse(book['categoryV2'] ?? '[]') as Record<string, string>[];
+      if (cats.length > 0) {
+        meta.category = cats[0]['Name'] ?? '';
+      }
+    } catch (error) {
+      // categoryV2 结构变化时类别留空，不连带丢其余字段
+    }
+    meta.intro = NovelMetaService.clean(book['abstract'] ?? '', INTRO_MAX);
+    meta.cover = book['thumbUrl'] ?? '';
+    meta.ok = meta.title.length > 0 || meta.intro.length > 0;
+    if (!meta.ok && meta.error.length === 0) {
+      meta.error = '番茄接口返回缺少书名/简介';
+    }
     return meta;
   }
 
