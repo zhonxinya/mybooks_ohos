@@ -30,9 +30,9 @@ export struct ToolResultList {
         }
         .alignItems(HorizontalAlign.Start)
         .width('100%')
-        .padding({ left: 8, top: 4, bottom: 4 })
-        .borderRadius(6)
-        .backgroundColor($r('app.color.page_background'));
+        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+        .borderRadius($r('app.float.chip_radius'))
+        .backgroundColor($r('app.color.card_background'));
       }, (item: ToolBookLine, idx: number) => `${idx}-${item.title}`)
     }
     .width('100%')
