@@ -229,6 +229,10 @@ function stagePage(name) {
   source = source.substring(0, source.indexOf('\n  build() {'));
   const shims = new Set();
   source = source.replace(/^import \{([^}]+)\} from '([^']+)';\n/gm, (_all, clause, path) => {
+    if (path === '../services/AiTools') {
+      return "import { parseToolBookLines } from './RealAiTools.ts';\n" +
+        "import type { ToolBookLine } from './RealAiTools.ts';\n";
+    }
     if (path === '../services/AiSkills') {
       const names = clause.split(',').map((part) => part.trim());
       const values = names.filter((name) => name !== 'AiSkill');
@@ -282,7 +286,7 @@ try {
   const { AiSettingsPage } = await load('AiSettingsPage');
   const deps = await load('aiServiceDeps');
   const { AiService: RealAiService } = await load('RealAiService');
-  const { AiTools: RealAiTools } = await load('RealAiTools');
+  const { AiTools: RealAiTools, parseToolBookLines } = await load('RealAiTools');
   const { toolsState } = await load('aiToolsDeps');
   const { mdParseBlocks, mdParseInline } = await load('MdParse');
   const { AI_SKILLS } = await load('AiSkills');
@@ -296,6 +300,7 @@ try {
   const chat = () => {
     const page = new AiAssistantPage();
     page.toast = () => {};
+    page.scrollToEnd = () => {};
     state.ready = true;
     state.cancel = null;
     return page;
@@ -573,7 +578,7 @@ try {
 
   test('AiTools：只读工具返回精简文本（搜索/详情/笔记/历史/未知工具/失败包装）', async () => {
     toolsState.search = async (q) => (q === '三体' ? [{ id: 12, title: '三体', authors: ['刘慈欣', '某某'] }] : []);
-    assert.ok((await RealAiTools.execute('search_books', '{"query":"三体"}')).includes('id=12 《三体》（刘慈欣、某某）'));
+    assert.ok((await RealAiTools.execute('search_books', '{"query":"三体"}')).includes('- 《三体》（刘慈欣、某某） id=12'));
     assert.ok((await RealAiTools.execute('search_books', '{"query":"鲁滨逊"}')).includes('没有找到'));
     assert.ok((await RealAiTools.execute('search_books', '')).includes('query'));
     toolsState.detail = async (id) => (id === 12
@@ -667,13 +672,18 @@ try {
     let full = '';
     let error = '';
     const toolLabels = [];
+    const toolResults = [];
     RealAiService.chatStream([{ role: 'user', content: '书架上有三体吗' }], {
       onDelta: (t) => { full += t; }, onDone: () => {}, onError: (m) => { error = m; },
-      onTool: (l) => { toolLabels.push(l); },
+      onTool: (l, name) => { toolLabels.push([name, l]); },
+      onToolResult: (name, l, text) => { toolResults.push([name, text]); },
     }, 256);
     await flush();
     assert.equal(error, '');
-    assert.deepEqual(toolLabels, ['搜索书架']);
+    assert.deepEqual(toolLabels, [['search_books', '搜索书架']]);
+    assert.equal(toolResults.length, 1);
+    assert.equal(toolResults[0][0], 'search_books');
+    assert.ok(toolResults[0][1].includes('- 《三体》（刘慈欣） id=12'));
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
@@ -684,7 +694,7 @@ try {
     assert.equal(assistant.tool_calls[0].function.name, 'search_books');
     const toolMsg = b2.messages.find((m) => m.role === 'tool');
     assert.equal(toolMsg.tool_call_id, 'call_1');
-    assert.ok(toolMsg.content.includes('id=12 《三体》'));
+    assert.ok(toolMsg.content.includes('- 《三体》（刘慈欣） id=12'));
     assert.equal(full, '帮你查到了《三体》，id=12。');
   });
 
@@ -752,6 +762,42 @@ try {
     const page = chat();
     page.applySkill(AI_SKILLS[0]);
     assert.equal(page.input, AI_SKILLS[0].prompt);
+  });
+
+  test('parseToolBookLines：解析三类列表行（纯书名行/带状态前缀），跳非条目行', () => {
+    const books = parseToolBookLines(
+      '书架上找到 2 本：\n- 《三体》（刘慈欣） id=12\n- [下载中] 《夜名》（肘子） 进度 42%\n' +
+        '说明：《三体》是系列\n普通文本行');
+    assert.equal(books.length, 2);
+    assert.equal(books[0].title, '《三体》');
+    assert.equal(books[0].subtitle, '（刘慈欣） id=12');
+    assert.equal(books[1].title, '《夜名》');
+    assert.ok(books[1].subtitle.startsWith('[下载中]'));
+  });
+
+  test('对话页活动时间线：doing→done/rejected 翻转，书目结果转结构化条目', () => {
+    const page = chat();
+    page.beginActivity('search_books', '搜索书架');
+    assert.equal(page.liveActivities.length, 1);
+    assert.equal(page.liveActivities[0].state, 'doing');
+    page.endActivity('search_books', '搜索书架', '书架上找到 2 本：\n- 《三体》（刘慈欣） id=12\n- 《三体全集》（刘慈欣） id=444');
+    assert.equal(page.liveActivities[0].state, 'done');
+    assert.equal(page.liveActivities[0].books.length, 2);
+    assert.equal(page.liveActivities[0].books[0].title, '《三体》');
+    assert.equal(page.liveActivities[0].summary, '');
+    page.beginActivity('create_booklist', '创建书单');
+    page.endActivity('create_booklist', '创建书单', '用户拒绝了该操作');
+    const lastAct = page.liveActivities[1];
+    assert.equal(lastAct.state, 'rejected');
+    assert.equal(lastAct.books.length, 0);
+    assert.equal(lastAct.summary, '用户拒绝了该操作');
+    // 同名多条 doing：只翻最后一条
+    page.beginActivity('search_sonovel', '搜索网络小说书源');
+    page.beginActivity('search_sonovel', '搜索网络小说书源');
+    page.endActivity('search_sonovel', '搜索网络小说书源', '各书源没有相关小说');
+    assert.equal(page.liveActivities[2].state, 'doing');
+    assert.equal(page.liveActivities[3].state, 'done');
+    assert.equal(page.liveActivities[3].summary, '各书源没有相关小说');
   });
 
   test('网关工具回路：超过轮数上限报错收场，最后一轮不挂 tools', async () => {

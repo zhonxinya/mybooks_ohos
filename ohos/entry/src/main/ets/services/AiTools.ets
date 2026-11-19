@@ -6,6 +6,40 @@ import { SoNovelMerge, SoNovelSearchItem } from '../utils/SoNovelMerge';
 import { DownloadTaskService } from './DownloadTaskService';
 import { BookListAddResponse, BookListApi, BookListMutationResponse } from './BookListApi';
 
+/** 工具结果里的一本书（供对话页做结构化列表渲染）。 */
+export interface ToolBookLine {
+  title: string;
+  subtitle: string;
+}
+
+/**
+ * 把列表类工具输出（`- [前缀] 《书名》 附加信息` 行模板）解析成结构化条目。
+ * 约定即格式：search_books / search_sonovel / list_download_tasks 的行模板改了要同步这里。
+ */
+export function parseToolBookLines(text: string): ToolBookLine[] {
+  const lines: string[] = text.split('\n');
+  const books: ToolBookLine[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line: string = lines[i].trim();
+    if (!line.startsWith('- ')) {
+      continue;
+    }
+    const body: string = line.substring(2);
+    const open: number = body.indexOf('《');
+    const close: number = body.indexOf('》');
+    if (open < 0 || close <= open) {
+      continue;
+    }
+    const prefix: string = body.substring(0, open).trim();
+    const suffix: string = body.substring(close + 1).trim();
+    books.push({
+      title: body.substring(open, close + 1),
+      subtitle: prefix.length > 0 ? `${prefix} ${suffix}` : suffix,
+    });
+  }
+  return books;
+}
+
 /**
  * AI 助手的本地工具集（OpenAI function calling 协议）。
  *
@@ -224,7 +258,7 @@ export class AiTools {
     }
     const lines: string[] = [];
     for (const b of books) {
-      lines.push(`id=${b.id} 《${b.title}》（${b.authors.join('、')}）`);
+      lines.push(`- 《${b.title}》（${b.authors.join('、')}） id=${b.id}`);
     }
     return `找到 ${books.length} 本：\n${lines.join('\n')}`;
   }

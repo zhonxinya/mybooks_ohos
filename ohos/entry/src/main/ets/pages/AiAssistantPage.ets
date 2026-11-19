@@ -3,8 +3,22 @@ import { promptAction } from '@kit.ArkUI';
 import { PageScaffold, SecondaryButton, TextButton } from '../components';
 import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
+import { parseToolBookLines, ToolBookLine } from '../services/AiTools';
+import { ToolResultList } from '../components/ToolResultList';
 import { AiService, AiMessage, AiStreamHandlers, AiAbortHandle } from '../services/AiService';
 import { AppRouter } from '../utils/AppRouter';
+
+/** 工具调用活动：回路里每次工具执行产生一条，流式期间实时翻转状态。 */
+interface ChatActivity {
+  name: string;
+  label: string;
+  /** doing 执行中 / done 完成 / rejected 用户拒绝 */
+  state: string;
+  /** 书目型结果的结构化条目（书架/小说源/下载任务） */
+  books: ToolBookLine[];
+  /** 非书目型结果的一行摘要 */
+  summary: string;
+}
 
 /** 界面上的消息：与协议层 AiMessage 分开，因为要额外带状态。 */
 interface ChatBubble {
@@ -13,6 +27,8 @@ interface ChatBubble {
   /** 是否正在流式输出（末尾光标用）。 */
   streaming: boolean;
   error: boolean;
+  /** 完成后固化的活动快照（流式期间由 liveActivities 渲染）。 */
+  activities: ChatActivity[];
 }
 
 /** 技能卡片/芯片点击：把现成提示词填入输入框，用户可先补书名再发送。 */
@@ -42,8 +58,8 @@ struct AiAssistantPage {
   @State errorTip: string = '';
   /** 流式输出用：整段重建列表的代价高，这里只改最后一条气泡的内容。 */
   @State streamingText: string = '';
-  /** 工具回路进行中的人话提示（如「正在调用工具：搜索书架」），替代「思考中…」。 */
-  @State toolHint: string = '';
+  /** 工具回路实时活动时间线；finishBubble 时快照进气泡成为历史。 */
+  @State liveActivities: ChatActivity[] = [];
   private requestId: number = 0;
   private abort: AiAbortHandle | null = null;
   private scroller: Scroller = new Scroller();
@@ -73,10 +89,11 @@ struct AiAssistantPage {
       last.streaming = false;
       last.content = this.streamingText.length > 0 ? this.streamingText : '已停止生成';
       last.error = this.streamingText.length === 0;
+      last.activities = this.liveActivities;
       this.messages = this.messages.slice();
     }
     this.streamingText = '';
-    this.toolHint = '';
+    this.liveActivities = [];
     this.thinking = false;
   }
 
@@ -105,10 +122,10 @@ struct AiAssistantPage {
     this.errorTip = '';
     const requestId: number = ++this.requestId;
 
-    this.messages.push({ role: 'user', content: question, streaming: false, error: false });
-    this.messages.push({ role: 'assistant', content: '', streaming: true, error: false });
+    this.messages.push({ role: 'user', content: question, streaming: false, error: false, activities: [] });
+    this.messages.push({ role: 'assistant', content: '', streaming: true, error: false, activities: [] });
     this.streamingText = '';
-    this.toolHint = '';
+    this.liveActivities = [];
     this.input = '';
     this.thinking = true;
     this.scrollToEnd();
@@ -121,9 +138,14 @@ struct AiAssistantPage {
         this.streamingText += delta;
         this.scrollToEnd();
       },
-      onTool: (label: string) => {
+      onTool: (label: string, name: string) => {
         if (requestId === this.requestId && this.thinking) {
-          this.toolHint = `正在调用工具：${label}…`;
+          this.beginActivity(name, label);
+        }
+      },
+      onToolResult: (name: string, label: string, text: string) => {
+        if (requestId === this.requestId && this.thinking) {
+          this.endActivity(name, label, text);
         }
       },
       onConfirm: (label: string, args: string): Promise<boolean> => {
@@ -167,10 +189,11 @@ struct AiAssistantPage {
     last.streaming = false;
     last.error = isError;
     last.content = isError ? (text.length > 0 ? text : '请求失败') : text;
+    last.activities = this.liveActivities;
     this.messages = this.messages.slice();
     this.thinking = false;
     this.streamingText = '';
-    this.toolHint = '';
+    this.liveActivities = [];
     this.abort = null;
     // 上次是错误气泡时，把这次失败的消息踢出上下文（buildContext 已过滤 error）
     if (isError) {
@@ -192,6 +215,36 @@ struct AiAssistantPage {
 
   private applySkill(skill: AiSkill): void {
     this.input = skill.prompt;
+  }
+
+  /** 工具开始执行：活动区加一条 doing。整组换数组赋值，保证 @State 刷新。 */
+  private beginActivity(name: string, label: string): void {
+    const act: ChatActivity = { name: name, label: label, state: 'doing', books: [], summary: '' };
+    this.liveActivities = this.liveActivities.concat([act]);
+    this.scrollToEnd();
+  }
+
+  /** 工具执行完：把最后一条同名 doing 翻成 done/rejected，书目结果转结构化条目。 */
+  private endActivity(name: string, label: string, text: string): void {
+    const books: ToolBookLine[] = parseToolBookLines(text);
+    const firstLine: string = text.length > 0 ? text.split('\n')[0] : '';
+    const summary: string = books.length > 0 || firstLine.length === 0 ? '' :
+      (firstLine.length > 48 ? `${firstLine.substring(0, 48)}…` : firstLine);
+    const acts: ChatActivity[] = this.liveActivities.slice();
+    for (let i = acts.length - 1; i >= 0; i--) {
+      if (acts[i].name === name && acts[i].state === 'doing') {
+        acts[i] = {
+          name: name,
+          label: label,
+          state: text === '用户拒绝了该操作' ? 'rejected' : 'done',
+          books: books,
+          summary: summary,
+        };
+        break;
+      }
+    }
+    this.liveActivities = acts;
+    this.scrollToEnd();
   }
 
   private clearChat(): void {
@@ -367,13 +420,18 @@ struct AiAssistantPage {
       .width('100%');
 
       if (bubble.role === 'assistant' && !bubble.error) {
-        // AI 回复走轻量 Markdown 渲染；流式期间实时重解析
-        if (bubble.streaming && this.streamingText.length === 0) {
-          Text(this.toolHint.length > 0 ? this.toolHint : '思考中…')
-            .fontSize(15)
-            .fontColor($r('app.color.text_secondary'));
+        // 活动时间线：流式气泡挂实时 liveActivities，完成后的气泡挂固化的历史快照
+        this.activityView(bubble.streaming ? this.liveActivities : bubble.activities);
+        if (bubble.streaming) {
+          if (this.streamingText.length > 0) {
+            MarkdownText({ content: this.streamingText });
+          } else if (this.liveActivities.length === 0) {
+            Text('思考中…')
+              .fontSize(15)
+              .fontColor($r('app.color.text_secondary'));
+          }
         } else {
-          MarkdownText({ content: bubble.streaming ? this.streamingText : bubble.content });
+          MarkdownText({ content: bubble.content });
         }
       } else {
         Text(bubble.streaming ? (this.streamingText.length > 0 ? this.streamingText : '思考中…') : bubble.content)
@@ -397,6 +455,45 @@ struct AiAssistantPage {
     .padding(14)
     .borderRadius($r('app.float.card_radius'))
     .backgroundColor(bubble.role === 'user' ? $r('app.color.brand_primary_light') : $r('app.color.card_background'));
+  }
+
+  /** 工具调用活动区：状态行 + 书目型结果的结构化列表。 */
+  @Builder
+  activityView(acts: ChatActivity[]) {
+    if (acts.length > 0) {
+      Column({ space: 4 }) {
+        ForEach(acts, (act: ChatActivity, idx: number) => {
+          Column({ space: 4 }) {
+            Row({ space: 6 }) {
+              if (act.state === 'doing') {
+                LoadingProgress().width(12).height(12).color($r('app.color.text_tertiary'));
+              } else {
+                Text(act.state === 'rejected' ? '✕' : '✓')
+                  .fontSize(11)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(act.state === 'rejected' ? $r('app.color.error') : $r('app.color.brand_primary'));
+              }
+              Text(act.state === 'doing' ? `正在${act.label}…` :
+                (act.state === 'rejected' ? `已拒绝：${act.label}` :
+                  (act.summary.length > 0 ? `${act.label}：${act.summary}` : act.label)))
+                .fontSize(11)
+                .fontColor($r('app.color.text_secondary'))
+                .layoutWeight(1)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
+            }
+            .width('100%');
+            if (act.books.length > 0) {
+              ToolResultList({ items: act.books });
+            }
+          }
+          .alignItems(HorizontalAlign.Start)
+          .width('100%');
+        }, (act: ChatActivity, idx: number) => `${idx}-${act.name}-${act.state}-${act.books.length}`);
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start);
+    }
   }
 
   /** 对话进行中的技能芯片：横向滚动，点击填入输入框（不自动发送）。 */
