@@ -69,11 +69,13 @@ reasonix.toml
 .devin/
 .kilo/
 .kilocode/
+.workbuddy/
 AGENTS.md
 
 # 第三方项目引用仅作本地参考，不随仓库发布
 docs/mybooks/
 docs/talebook/
+docs/so-novel/
 docs/202*-*.md
 .github/skills/
 .dsh-verify/
@@ -96,3 +98,15 @@ ohos/APPScope
 .signing/
 # 鸿蒙本地签名材料（含应用/ profile 私钥与已签 HAP；CI 出包不签名）
 .hapsign/
+
+# 本机构建/验证用的第三方源码压缩包（mbedtls 等，随时可重新下载）
+mbedtls-*.tar.*
+
+# DevEco 生成的工程模板标记文件
+ohos/.projectInfo
+
+# 本地会话/验证产物：上板截图、进度笔记、卷回收站，不入库
+.verify-shots/
+docs/automation/
+docs/screenshots/
+.Trash-0/
