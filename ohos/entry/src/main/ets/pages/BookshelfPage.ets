@@ -646,7 +646,10 @@ export struct BookshelfPage {
   @Builder
   toolbarRow() {
     Row({ space: 8 }) {
-      Blank().layoutWeight(1);      this.iconToolButton($r('sys.symbol.magnifyingglass'), () => {
+      Blank().layoutWeight(1);      this.iconToolButton($r('sys.symbol.wand_and_stars'), () => {
+        AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiAssistantPage' });
+      });
+      this.iconToolButton($r('sys.symbol.magnifyingglass'), () => {
         AppRouter.pushUrl(this.getUIContext(), { url: 'pages/TalebookBookSearchPage' });
       });
       if (this.sonovelConfigured) {
