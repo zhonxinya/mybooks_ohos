@@ -152,6 +152,7 @@ export const toolsState = {
   search: null, detail: null, notes: [], notesError: '', history: [],
   sonovelEnvelope: null, tasks: [], processed: 0,
   booklistCreateResult: null, booklistAddResult: null, booklistCreateCalls: [], booklistAddCalls: [],
+  bookDetailAsync: null, editCalls: [], editResult: null,
 };
 // 仅作类型标注用的名字（strip-types 后仍走值 import），占位防命名导出缺失
 export const SoNovelBookPayload = undefined;
@@ -196,7 +197,15 @@ export const TalebookApi = {
   search: async (q) => (toolsState.search ? await toolsState.search(q) : []),
   getBookDetail: async (id) => (toolsState.detail ? await toolsState.detail(id) : null),
 };
-export const TalebookService = { getReadingHistory: () => toolsState.history.slice() };
+export const TalebookService = {
+  getReadingHistory: () => toolsState.history.slice(),
+  getBookDetailAsync: async (id) => (toolsState.bookDetailAsync
+    ? await toolsState.bookDetailAsync(id) : { status: 404, body: null, error: 'stub: 未设置' }),
+  editBookAsync: async (id, payload) => {
+    toolsState.editCalls.push({ id, payload });
+    return toolsState.editResult ?? { status: 200, body: { err: 'ok' }, error: '' };
+  },
+};
 export const AnnotationApi = {
   listBookAnnotations: async (_id, _scope) => {
     if (toolsState.notesError.length > 0) { throw new Error(toolsState.notesError); }
@@ -693,7 +702,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 9 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 10 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -824,6 +833,42 @@ try {
     assert.equal(RealAiTools.takeLastBooks().length, 0, '读后即清');
     await RealAiTools.execute('search_books', '{"query":"鲁滨逊"}');
     assert.equal(RealAiTools.takeLastBooks().length, 0, '无结果时不留旧缓存');
+  });
+
+  test('update_book_meta：读-合并-写，只覆盖点名字段；空改动与失败路径', async () => {
+    toolsState.bookDetailAsync = async () => ({ status: 200, body: { book: {
+      title: '三体', authors: ['刘慈欣'], tags: ['科幻'], publisher: 'so-novel', comments: '旧简介',
+      isbn: '', series: '', languages: ['zh'], translators: [], series_index: 1, rating: null } } });
+    toolsState.editCalls.length = 0;
+    const out = await RealAiTools.execute('update_book_meta', '{"book_id":1481,"title":"三体（新版）"}');
+    assert.ok(out.includes('已更新'), out);
+    assert.ok(out.includes('「三体」→「三体（新版）」'));
+    const p = toolsState.editCalls[0].payload;
+    assert.equal(p.title, '三体（新版）');
+    assert.deepEqual(p.authors, ['刘慈欣'], '未传 authors 保持原值');
+    assert.deepEqual(p.tags, ['科幻']);
+    assert.equal(p.publisher, 'so-novel');
+    assert.equal(p.series_index, 1);
+    assert.ok(!('rating' in p), '原值 null 且未传时不发 rating');
+    // 逗号分隔多值
+    const multi = await RealAiTools.execute('update_book_meta', '{"book_id":1481,"authors":"刘慈欣, 某某","tags":"科幻, 经典"}');
+    assert.ok(multi.includes('作者 →「刘慈欣、某某」') && multi.includes('标签 →「科幻、经典」'));
+    assert.deepEqual(toolsState.editCalls[1].payload.authors, ['刘慈欣', '某某']);
+    // 全空参数：不发请求
+    const noop = await RealAiTools.execute('update_book_meta', '{"book_id":1481}');
+    assert.ok(noop.includes('没有要修改'), noop);
+    assert.equal(toolsState.editCalls.length, 2);
+    // 书不存在 / 编辑失败
+    toolsState.bookDetailAsync = async () => ({ status: 200, body: { book: {} } });
+    assert.ok((await RealAiTools.execute('update_book_meta', '{"book_id":999,"title":"x"}')).includes('没有找到'));
+    toolsState.bookDetailAsync = async () => ({ status: 200, body: { book: { title: '三体', authors: [] } } });
+    toolsState.editResult = { status: 500, body: null, error: '服务端炸了' };
+    assert.ok((await RealAiTools.execute('update_book_meta', '{"book_id":1481,"title":"x"}')).includes('更新失败'));
+    toolsState.editResult = null;
+  });
+
+  test('update_book_meta 已登记写闸门（漏登记=绕过确认，回归直接钉死）', () => {
+    assert.ok(RealAiTools.needsConfirm('update_book_meta'));
   });
 
   test('对话页历史持久化：finishBubble 落盘、loadHistory 恢复、clearChat 清空', () => {

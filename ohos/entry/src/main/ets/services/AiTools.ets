@@ -159,10 +159,28 @@ const TOOL_ADD_BOOKS_TO_BOOKLIST: AiToolDefinition = defineTool('add_books_to_bo
   '把若干本书（书籍 id 来自 search_books）加入指定书单。',
   BOOKLIST_ADD_PROPS, BOOKLIST_ADD_REQUIRED);
 
+const BOOK_META_PROPS: Record<string, AiToolProperty> = {
+  'book_id': BOOK_ID_PROP,
+  'title': prop('string', '新书名；留空不改'),
+  'authors': prop('string', '作者，多个用逗号分隔；留空不改'),
+  'tags': prop('string', '标签，逗号分隔；留空不改'),
+  'publisher': prop('string', '出版社；留空不改'),
+  'isbn': prop('string', 'ISBN；留空不改'),
+  'series': prop('string', '丛书名；留空不改'),
+  'comment': prop('string', '书籍简介全文；留空不改'),
+  'rating': prop('number', '评分 0-10；0 表示不改'),
+};
+const BOOK_META_REQUIRED: string[] = ['book_id'];
+
+const TOOL_UPDATE_BOOK_META: AiToolDefinition = defineTool('update_book_meta',
+  '更新服务器上某本书的元数据（书籍 id 来自 search_books）。只传要修改的字段，未传字段保持原值。' +
+    '改前先 book_detail 核对现值并向用户复述目标改动。暂不支持更换封面图片。',
+  BOOK_META_PROPS, BOOK_META_REQUIRED);
+
 const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SEARCH_BOOKS, TOOL_BOOK_DETAIL, TOOL_BOOK_NOTES, TOOL_READING_HISTORY,
   TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS,
-  TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST,
+  TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_UPDATE_BOOK_META,
 ];
 
 export class AiTools {
@@ -176,7 +194,7 @@ export class AiTools {
    * 名字与 TOOL_DEFS 里的写工具对应；新加写工具忘记登记 = 无确认直接执行，务必同步。
    */
   private static readonly WRITE_TOOLS: string[] =
-    ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task'];
+    ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task', 'update_book_meta'];
 
   static needsConfirm(name: string): boolean {
     return AiTools.WRITE_TOOLS.indexOf(name) >= 0;
@@ -223,6 +241,9 @@ export class AiTools {
     if (name === 'add_sonovel_task') {
       return '添加 so-novel 下载任务';
     }
+    if (name === 'update_book_meta') {
+      return '更新书籍元数据';
+    }
     return name;
   }
 
@@ -249,6 +270,9 @@ export class AiTools {
       if (name === 'add_sonovel_task') {
         return AiTools.addSonovelTask(args);
       }
+      if (name === 'update_book_meta') {
+        return await AiTools.updateBookMeta(args);
+      }
       if (name === 'list_download_tasks') {
         return AiTools.listDownloadTasks();
       }
@@ -262,6 +286,90 @@ export class AiTools {
     } catch (error) {
       return `工具 ${name} 执行失败：${error instanceof Error ? error.message : `${error}`}`;
     }
+  }
+
+  /**
+   * 更新书籍元数据。服务端 /api/book/:id/edit 是全量表单提交（BookEditPage 同款 payload），
+   * 因此先读现值、只覆盖用户点名要改的字段，再整体提交，避免未传字段被清空。
+   */
+  private static async updateBookMeta(args: Record<string, Object>): Promise<string> {
+    const bookId: number = AiTools.argNumber(args, 'book_id');
+    if (bookId <= 0) {
+      return '参数 book_id 需要是正整数（可先用 search_books 查到 id）。';
+    }
+    const envelope = await TalebookService.getBookDetailAsync(bookId);
+    const body: Record<string, Object> = envelope.body ?? {};
+    const book: Record<string, Object> = (body['book'] as Record<string, Object> | undefined) ?? body;
+    const oldTitle: string = String(book['title'] ?? '');
+    if (oldTitle.length === 0) {
+      return `没有找到 id=${bookId} 的书。`;
+    }
+    const oldAuthors: string[] = Array.isArray(book['authors']) ? (book['authors'] as string[]) : [];
+    const oldTags: string[] = Array.isArray(book['tags']) ? (book['tags'] as string[]) : [];
+    const changes: string[] = [];
+    const newTitle: string = AiTools.argString(args, 'title').length > 0
+      ? AiTools.argString(args, 'title').trim() : oldTitle;
+    if (newTitle !== oldTitle) {
+      changes.push(`书名「${oldTitle}」→「${newTitle}」`);
+    }
+    let authors: string[] = oldAuthors;
+    if (AiTools.argString(args, 'authors').length > 0) {
+      authors = AiTools.argString(args, 'authors').split(',').map((s: string) => s.trim()).filter((s: string) => s.length > 0);
+      changes.push(`作者 →「${authors.join('、')}」`);
+    }
+    let tags: string[] = oldTags;
+    if (AiTools.argString(args, 'tags').length > 0) {
+      tags = AiTools.argString(args, 'tags').split(',').map((s: string) => s.trim()).filter((s: string) => s.length > 0);
+      changes.push(`标签 →「${tags.join('、')}」`);
+    }
+    const publisher: string = AiTools.argString(args, 'publisher').length > 0
+      ? AiTools.argString(args, 'publisher').trim() : String(book['publisher'] ?? '');
+    if (publisher !== String(book['publisher'] ?? '')) {
+      changes.push(`出版社 →「${publisher}」`);
+    }
+    const isbn: string = AiTools.argString(args, 'isbn').length > 0
+      ? AiTools.argString(args, 'isbn').trim() : String(book['isbn'] ?? '');
+    if (isbn !== String(book['isbn'] ?? '')) {
+      changes.push(`ISBN →「${isbn}」`);
+    }
+    const series: string = AiTools.argString(args, 'series').length > 0
+      ? AiTools.argString(args, 'series').trim() : String(book['series'] ?? '');
+    if (series !== String(book['series'] ?? '')) {
+      changes.push(`丛书 →「${series}」`);
+    }
+    const comments: string = AiTools.argString(args, 'comment').length > 0
+      ? AiTools.argString(args, 'comment') : String(book['comments'] ?? '');
+    if (comments !== String(book['comments'] ?? '')) {
+      changes.push('简介已更新');
+    }
+    const rating: number = AiTools.argNumber(args, 'rating');
+    if (changes.length === 0 && rating <= 0) {
+      return '没有要修改的字段（所有参数都留空了）。';
+    }
+    const payload: Record<string, Object> = {
+      'title': newTitle,
+      'authors': authors,
+      'publisher': publisher,
+      'comments': comments,
+      'tags': tags,
+      'isbn': isbn,
+      'series': series,
+      'languages': Array.isArray(book['languages']) ? (book['languages'] as string[]) : [],
+      'translators': Array.isArray(book['translators']) ? (book['translators'] as string[]) : [],
+    };
+    const oldSeriesIndex: Object = book['series_index'];
+    if (oldSeriesIndex !== undefined && oldSeriesIndex !== null) {
+      payload['series_index'] = Number(oldSeriesIndex);
+    }
+    if (rating > 0) {
+      payload['rating'] = Math.min(10, Math.round(rating));
+      changes.push(`评分 →${payload['rating']}`);
+    }
+    const rsp = await TalebookService.editBookAsync(bookId, payload);
+    if (rsp.status < 200 || rsp.status >= 300) {
+      return `更新失败（${rsp.error.length > 0 ? rsp.error : `HTTP ${rsp.status}`}）。`;
+    }
+    return `已更新《${newTitle}》：${changes.join('；')}`;
   }
 
   private static async searchBooks(query: string): Promise<string> {
