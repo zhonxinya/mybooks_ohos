@@ -277,9 +277,21 @@ function stageAiPersona() {
   writeFileSync(join(dir, 'RealAiPersona.ts'), source);
 }
 
+/** MetaSearchService 真实入检：rcp/util 复用 aiServiceDeps 桩（state.rcpResponse 可编程）。 */
+function stageMetaSearch() {
+  let source = read('services/MetaSearchService.ets');
+  source = source
+    .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`);
+  writeFileSync(join(dir, 'RealMetaSearch.ts'), source);
+}
+
 function stageAiTools() {
   let source = read('services/AiTools.ets');
   source = source
+    // 类型注解用的 DoubanDetail/DoubanHit 被 strip-types 擦除，只需值导入 MetaSearchService
+    .replace(`import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';`,
+      `import { MetaSearchService } from './RealMetaSearch.ts';`)
     .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
     .replace(`from './TalebookApi'`, `from './aiToolsDeps.ts'`)
     .replace(`from './AnnotationApi'`, `from './aiToolsDeps.ts'`)
@@ -362,6 +374,7 @@ try {
   }
   stageAiService();
   stageAiPersona();
+  stageMetaSearch();
   stageAiTools();
   const load = async (name) => import(pathToFileURL(join(dir, `${name}.ts`)).href);
   const { AiAssistantPage } = await load('AiAssistantPage');
@@ -371,6 +384,7 @@ try {
   const { AiPersonaPage } = await load('AiPersonaPage');
   const { AiPersona, DEFAULT_SOUL } = await load('RealAiPersona');
   const { personaState } = await load('personaDeps');
+  const { MetaSearchService } = await load('RealMetaSearch');
   const deps = await load('aiServiceDeps');
   const { AiService: RealAiService } = await load('RealAiService');
   const { AiTools: RealAiTools, parseToolBookLines } = await load('RealAiTools');
@@ -782,7 +796,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 14 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 15 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -1182,6 +1196,72 @@ try {
     assert.ok(ctx[0].content.includes('你是一位温和的书友'));
     assert.ok(ctx[0].content.includes('用户叫张三'));
     personaState.files.clear();
+  });
+
+  const DOUBAN_PAGE = '<html><head></head><body><h1><span property="v:itemreviewed">三体</span></h1>' +
+    '<strong class="ll rating_num" property="v:average"> 8.9 </strong>' +
+    '<div id="info"><ul class="authors"><li>作者: <a>刘慈欣</a></li></ul>' +
+    '<span>出版社:</span> 重庆出版社<br/><span>出版时间:</span> 2008-1<br/>' +
+    '<span>ISBN:</span> 9787536692930<br/><span>页数:</span> 302<br/>' +
+    '<span>装帧:</span> 平装<br/><span>定价:</span> 23.00<br/></div>' +
+    '<div class="intro">文革期间军方探寻外星文明的红岸工程启动，叶文洁按下发射键改变了人类命运，' +
+    '而三体世界的舰队已经在路上，人类的末日进入倒计时。</div></body></html>';
+
+  test('MetaSearch：豆瓣 suggest 过滤非图书条目，subject 详情页解析评分/出版社/ISBN', async () => {
+    deps.state.rcpResponse = { statusCode: 200, body: enc(JSON.stringify([
+      { title: '三体', url: 'https://book.douban.com/subject/2567698/', pic: 'https://img/x.jpg',
+        author_name: '刘慈欣', year: '2008', type: 'b', id: '2567698' },
+      { title: '三体', type: 't', id: '999', author_name: '', year: '', pic: '', url: '' },
+    ])) };
+    const hits = await MetaSearchService.suggest('三体');
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].subjectId, '2567698');
+    assert.equal(hits[0].author, '刘慈欣');
+    deps.state.rcpResponse = { statusCode: 200, body: enc(DOUBAN_PAGE) };
+    const d = await MetaSearchService.detail('2567698');
+    assert.ok(d.ok);
+    assert.equal(d.title, '三体');
+    assert.equal(d.rating, '8.9');
+    assert.equal(d.publisher, '重庆出版社');
+    assert.equal(d.isbn, '9787536692930');
+    assert.equal(d.pages, '302');
+    assert.equal(d.author, '刘慈欣');
+    assert.ok(d.intro.includes('红岸工程'));
+    // 非数字 id 与 HTTP 错误都走 ok=false 分支
+    const bad = await MetaSearchService.detail('abc');
+    assert.ok(!bad.ok);
+    deps.state.rcpResponse = { statusCode: 403, body: enc('') };
+    const blocked = await MetaSearchService.detail('2567698');
+    assert.ok(!blocked.ok && blocked.error.includes('403'));
+    deps.state.rcpResponse = null;
+  });
+
+  test('search_meta：query/book_id 三通道聚合、subject_id 详情模式、读工具不过闸门', async () => {
+    deps.state.rcpResponse = { statusCode: 200, body: enc(JSON.stringify([
+      { title: '三体', author_name: '刘慈欣', year: '2008', type: 'b', id: '2567698',
+        pic: 'https://img/x.jpg', url: 'https://book.douban.com/subject/2567698/' },
+    ])) };
+    toolsState.referBooks = [{ title: '三体全集', authors: ['刘慈欣'], publisher: '科幻世界',
+      isbn: '9787536692930', source: '豆瓣', cover_url: 'https://img/cover.jpg' }];
+    toolsState.sonovelEnvelope = { status: 200, error: '', body: { data: [
+      { bookName: '三体', author: '刘慈欣', sourceName: '全本小说网', sourceId: 7,
+        url: 'http://www.quanben.io/n/santi/', latestChapter: '第二百六十三章 尾声' },
+    ] } };
+    const out = await RealAiTools.execute('search_meta', JSON.stringify({ query: '三体', book_id: 1481 }));
+    assert.ok(out.includes('subject_id=2567698'));
+    assert.ok(out.includes('服务端多源候选'));
+    assert.ok(out.includes('书源：全本小说网(id=7)'));
+    assert.equal(RealAiTools.needsConfirm('search_meta'), false);
+    // subject_id 详情模式（不触发 refer/sonovel）
+    deps.state.rcpResponse = { statusCode: 200, body: enc(DOUBAN_PAGE) };
+    const d2 = await RealAiTools.execute('search_meta', '{"subject_id":"2567698"}');
+    assert.ok(d2.includes('豆瓣评分：8.9'));
+    assert.ok(d2.includes('ISBN：9787536692930'));
+    assert.ok(!d2.includes('服务端多源候选'));
+    // 空参数引导
+    const d3 = await RealAiTools.execute('search_meta', '{}');
+    assert.ok(d3.includes('至少提供'));
+    deps.state.rcpResponse = null;
   });
 
   test('灵魂管理页：灵魂保存/恢复默认，手动补记与删除记忆', () => {
