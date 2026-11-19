@@ -587,24 +587,6 @@ export struct SettingsPage {
                 showChevron: true,
                 onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/MetaBookListPage' }),
               });
-              if (ServerRegistry.supports(ServerFeature.ADMIN_BATCH_ADD)) {
-                Divider().color($r('app.color.divider')).strokeWidth(0.5);
-                SettingCell({
-                  title: '批量添加实体书',
-                  subtitle: 'CSV 导入实体书并轮询进度',
-                  showChevron: true,
-                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminBatchAddPage' }),
-                });
-              }
-              if (ServerRegistry.supports(ServerFeature.ADMIN_AUDIO_IMPORT)) {
-                Divider().color($r('app.color.divider')).strokeWidth(0.5);
-                SettingCell({
-                  title: '有声书导入',
-                  subtitle: '扫描音频目录入库、测试音频服务',
-                  showChevron: true,
-                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminAudioImportPage' }),
-                });
-              }
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
                 title: '管理员书籍',
