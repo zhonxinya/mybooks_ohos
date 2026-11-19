@@ -1442,6 +1442,25 @@ try {
     assert.ok(m.intro.includes('齐麟家祖祠内') && !m.intro.endsWith('&quot;') && !m.intro.endsWith('"'));
   });
 
+  // 梧桐中文 fixture：2026-11-20 www.wtzw.com/book/224292.html 实测节选（无 og，类名锚点）
+  const WTZW_PAGE = `<html><head><title>我的少年班全本小说-卿殇小说-无广告阅读(免费下载)-七猫中文网</title></head><body>
+<h1>免费小说就在梧桐中文网（七猫中文网）</h1>
+<li class="li_tit"><h1><a href="/chapter/224292-1176288.html" target="_blank">我的少年班</a><i class="tag">已完结</i></h1></li>
+<div class="w_name"><span class="sName">卿殇</span></div>
+<div class="w_pic"><img src="//cdn.qimao.com/bookimg/zww/upload/readerCover/75/224292.jpg?time=1638349502"></div>
+<div class="pWorkInformation">空军青少年航空学校四期学员自述励志航空~追求卓越！这是属于我们的时代，属于我们的现在。</div>
+</body></html>`;
+  test('NovelMeta：梧桐中文类名锚点——书名取 li_tit 内 a（顶层 h1 是站名）、状态归一、类别缺不猜', () => {
+    const m = NovelMetaService.parseWtzw(WTZW_PAGE);
+    assert.ok(m.ok && m.rule === '梧桐中文');
+    assert.equal(m.title, '我的少年班'); // 顶层 <h1> 是「免费小说就在梧桐中文网」，不得误取
+    assert.equal(m.author, '卿殇');
+    assert.equal(m.status, '已完本'); // 「已完结」归一
+    assert.equal(m.category, '');
+    assert.ok(m.intro.includes('空军青少年航空学校'));
+    assert.ok(m.cover.startsWith('//cdn.qimao.com/')); // 协议相对，fetchDetail 里统一补全
+  });
+
   // 飞卢 gb2312 fixture：2026-11-20 b.faloo.com/1484744.html 实测 meta 行，GBK 字节 base64
   test('NovelMeta：charset 嗅探+GBK 解码——飞卢老站不乱码，utf-8 页不受影响', async () => {
     const FALOO_B64 = 'PGh0bWw+PGhlYWQ+PG1ldGEgaHR0cC1lcXVpdj0iQ29udGVudC1UeXBlIiBjb250ZW50PSJ0ZXh0L2h0bWw7IGNoYXJzZXQ9Z2IyMzEyIj4KPG1ldGEgcHJvcGVydHk9Im9nOnRpdGxlIiBjb250ZW50PSLFzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOzX7tDC1cK92ijC283iz8XE8tbuzOwp1NrP39TEtsFft8nCrNChy7XN+CI+CjxtZXRhIHByb3BlcnR5PSJvZzpkZXNjcmlwdGlvbiIgY29udGVudD0iob63ycKs0KHLtc34tsC80sep1LzQocu1o7rFzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOyhv8zsxLu9tcHZ1u7M7KOsv6q+1sXMtePN8r3n1b3BpsG/vLaho7TTsazXqby2o6yxrMe9vLahraGtsazQx7y2o6y649DHvLajrNDHz7W8tqOs0MfPtc3FvLajrLWlzOXT7tbmvLajrLbg1KrT7tbmvLajrM7ez9624NSq0+7W5qGtoa3O3s/eutDX06Os1rjK/cv+o6yzrNa4yv3L/qOssru/ybTvu/nK/aGtoa3V5s/WyrWjrLW9Ij4KPG1ldGEgcHJvcGVydHk9Im9nOmltYWdlIiBjb250ZW50PSJodHRwOi8vaW1nLmZhbG9vLmNvbS9Ob3ZlbC80OTh4NzA1LzEvMTU5NS8wMDE1OTU5NTcuanBnIj4KPC9oZWFkPjxib2R5PjxoMT7FzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOw8L2gxPjwvYm9keT48L2h0bWw+';

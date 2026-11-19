@@ -100,9 +100,14 @@ export class NovelMetaService {
       empty.error = '该书源站有 WAF JS 挑战，客户端无法直接抓取，换一条书源候选';
       return empty;
     }
-    const meta: NovelMeta = trimmed.indexOf('17k.com') >= 0
-      ? NovelMetaService.parse17k(html)
-      : NovelMetaService.parseGeneric(html);
+    let meta: NovelMeta;
+    if (trimmed.indexOf('17k.com') >= 0) {
+      meta = NovelMetaService.parse17k(html);
+    } else if (trimmed.indexOf('wtzw.com') >= 0) {
+      meta = NovelMetaService.parseWtzw(html);
+    } else {
+      meta = NovelMetaService.parseGeneric(html);
+    }
     // 镜像站 og:image 常见相对路径（/files/…），按页面地址补全成可加载的绝对 url
     if (meta.cover.length > 0) {
       meta.cover = NovelMetaService.absolutize(meta.cover, trimmed);
@@ -140,6 +145,40 @@ export class NovelMetaService {
     const catMatch = html.match(/作品类别[：:]\s*<\/th>\s*<td[^>]*>\s*(?:<a[^>]*>)?([^<\s][^<>]{1,19})/);
     if (catMatch !== null) {
       meta.category = catMatch[1].trim();
+    }
+    meta.ok = meta.title.length > 0 || meta.intro.length > 0 || meta.cover.length > 0;
+    return meta;
+  }
+
+  /**
+   * 梧桐中文（www.wtzw.com/book/<id>.html，七猫系，2026-11-20 实测）：无 og 标签，
+   * 锚点来自 legado 语料选择器转正则。书名在 li_tit 的 h1>a（顶层 <h1> 是站名宣传语，
+   * 不可用 h1 兜底），状态是同块 <i class="tag">，类别页面上没有——留空不猜。
+   */
+  static parseWtzw(html: string): NovelMeta {
+    const meta: NovelMeta = { ok: false, error: '', title: '', author: '', category: '',
+      status: '', intro: '', cover: '', rule: '梧桐中文' };
+    const tit = html.match(/class="li_tit"[\s\S]{0,200}?<a[^>]*>([^<]{1,60})<\/a>(?:\s*<i[^>]*>([^<]{2,10})<\/i>)?/);
+    if (tit !== null) {
+      meta.title = tit[1].trim();
+      const rawStatus: string = tit[2] ?? '';
+      if (rawStatus.indexOf('完结') >= 0 || rawStatus.indexOf('完本') >= 0) {
+        meta.status = '已完本';
+      } else if (rawStatus.indexOf('连载') >= 0) {
+        meta.status = '连载中';
+      }
+    }
+    const au = html.match(/class="sName"[^>]*>([^<]{1,30})/);
+    if (au !== null) {
+      meta.author = au[1].trim();
+    }
+    const pic = html.match(/class="w_pic"[\s\S]{0,150}?src="([^"]+)"/);
+    if (pic !== null) {
+      meta.cover = pic[1]; // 协议相对 //cdn.qimao.com/…，fetchDetail 统一补全
+    }
+    const intro = html.match(/class="pWorkInformation"[^>]*>([\s\S]{0,800}?)<\/div>/);
+    if (intro !== null) {
+      meta.intro = NovelMetaService.clean(intro[1], INTRO_MAX);
     }
     meta.ok = meta.title.length > 0 || meta.intro.length > 0 || meta.cover.length > 0;
     return meta;
