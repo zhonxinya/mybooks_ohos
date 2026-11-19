@@ -538,6 +538,32 @@ try {
     const noThink = RealAiService.parseGatewayReply(JSON.stringify({ choices: [{ message: { content: 'x' } }] }));
     assert.equal(noThink.reasoning, '');
   });
+  test('上下文占用指示：只算携带历史、剔错误气泡、按档位截断、图片不计量', async () => {
+    chat();
+    const store = AiChatStore.instance();
+    const bubble = (role, content, extra = {}) =>
+      ({ role, content, streaming: false, error: false, activities: [], ...extra });
+    store.contextK = 8;
+    assert.equal(store.contextUsageK(), 0, '空会话不占用');
+    // 一轮 102 字符：102*0.8=81.6→82 tokens，82/102.4=0.8→0.1k
+    store.messages = [bubble('user', '问题'), bubble('assistant', '答'.repeat(100))];
+    assert.equal(store.contextUsageK(), 0.1);
+    // 错误气泡与空气泡不进上下文，也不计入指示
+    store.messages.push(bubble('assistant', '失败噪声'.repeat(100), { error: true }), bubble('user', ''));
+    assert.equal(store.contextUsageK(), 0.1, 'error/空气泡不参与');
+    // 带图空气泡被携带（影响真实上下文条数）但 content 长度 0 → 不抬高指示
+    store.messages.push(bubble('user', '', { images: ['/tmp/x.png'] }));
+    assert.equal(store.contextUsageK(), 0.1, '图片不计入估算占用');
+    // 档位 4→4 轮=8 条：10 条各 50 字符只带后 8 条，400*0.8=320→3.125→0.3k
+    store.contextK = 4;
+    store.messages = [];
+    for (let i = 0; i < 10; i++) {
+      store.messages.push(bubble(i % 2 === 0 ? 'user' : 'assistant', '字'.repeat(50)));
+    }
+    assert.equal(store.contextUsageK(), 0.3, '截断只计携带部分');
+    const ctx = await store.buildContext();
+    assert.equal(ctx.length, 1 + 8, '与 buildContext 同一选取（system+8）');
+  });
   test('写闸门：页面不在场时确认一律按拒绝', async () => {
     const page = chat();
     await page.send('建个书单');

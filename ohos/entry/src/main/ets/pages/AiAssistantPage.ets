@@ -25,6 +25,8 @@ struct AiAssistantPage {
   @State pendingImages: string[] = [];
   @State visionEnabled: boolean = false;
   @State contextK: number = 8;
+  /** 下次请求的历史占用（K tokens，估算），随 store 同步刷新。 */
+  @State contextUsedK: number = 0;
   /** 流式输出用：整段重建列表的代价高，这里只改最后一条气泡的内容。 */
   @State streamingText: string = '';
   /** 工具回路实时活动时间线；finishBubble 时快照进气泡成为历史。 */
@@ -83,6 +85,7 @@ struct AiAssistantPage {
     this.configured = this.store.configured;
     this.visionEnabled = this.store.visionEnabled;
     this.contextK = this.store.contextK;
+    this.contextUsedK = this.store.contextUsageK();
     this.scrollToEnd();
   }
 
@@ -528,6 +531,15 @@ struct AiAssistantPage {
         }
         .width('100%')
         .padding({ bottom: 8 });
+      }
+      // 上下文占用指示：仅对话中显示；估算的历史携带量对照设置档位（system/图片开销不计）
+      if (this.messages.length > 0) {
+        Text(`上下文 ≈${this.contextUsedK.toFixed(1)}k / ${this.contextK}k`)
+          .fontSize(10)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+          .textAlign(TextAlign.End)
+          .padding({ right: 12, bottom: 2 });
       }
       Row({ space: 10 }) {
         if (this.visionEnabled) {

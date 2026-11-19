@@ -296,15 +296,32 @@ export class AiChatStore {
     }
   }
 
+  /** 下次请求实际携带的气泡（与 buildContext 同一选取：剔错误/空气泡 + 按档位轮数截断）。 */
+  private carriedBubbles(): ChatBubble[] {
+    const bubbles: ChatBubble[] = this.messages.filter((m: ChatBubble) =>
+      !m.error && (m.content.length > 0 || (m.images ?? []).length > 0));
+    const start: number = Math.max(0, bubbles.length - AiService.contextRounds(this.contextK) * 2);
+    return bubbles.slice(start);
+  }
+
+  /** 输入框上下文占用指示（K tokens，估算）：1 token≈1.25 字符（中文为主偏保守），
+   *  不含 system/图片编码开销——语义是「历史携带量」，供用户对照设置档位。 */
+  contextUsageK(): number {
+    const carried: ChatBubble[] = this.carriedBubbles();
+    let chars: number = 0;
+    for (let i = 0; i < carried.length; i++) {
+      chars += carried[i].content.length;
+    }
+    return Math.round(chars * 0.8 / 102.4) / 10;
+  }
+
   /** 把界面气泡转成协议消息，只带最近 N 轮（档位来自设置），避免上下文无限增长。 */
   async buildContext(): Promise<AiMessage[]> {
     const persona: string = AiPersona.buildPersonaPrompt();
     const systemText: string = persona.length > 0 ? `${SYSTEM_PROMPT}\n\n${persona}` : SYSTEM_PROMPT;
     const context: AiMessage[] = [{ role: 'system', content: systemText }];
-    const bubbles: ChatBubble[] = this.messages.filter((m: ChatBubble) =>
-      !m.error && (m.content.length > 0 || (m.images ?? []).length > 0));
-    const start: number = Math.max(0, bubbles.length - AiService.contextRounds(this.contextK) * 2);
-    for (let i = start; i < bubbles.length; i++) {
+    const bubbles: ChatBubble[] = this.carriedBubbles();
+    for (let i = 0; i < bubbles.length; i++) {
       const msg: AiMessage = { role: bubbles[i].role, content: bubbles[i].content };
       const imgs: string[] = this.visionEnabled ? (bubbles[i].images ?? []) : [];
       if (imgs.length > 0) {
