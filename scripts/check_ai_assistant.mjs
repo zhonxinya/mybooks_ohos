@@ -153,6 +153,7 @@ export const toolsState = {
   sonovelEnvelope: null, tasks: [], processed: 0,
   booklistCreateResult: null, booklistAddResult: null, booklistCreateCalls: [], booklistAddCalls: [],
   bookDetailAsync: null, editCalls: [], editResult: null,
+  referBooks: null, referSearchCalls: [], applyReferCalls: [], applyReferResult: null,
 };
 // 仅作类型标注用的名字（strip-types 后仍走值 import），占位防命名导出缺失
 export const SoNovelBookPayload = undefined;
@@ -196,7 +197,18 @@ export const BookListApi = {
 export const TalebookApi = {
   search: async (q) => (toolsState.search ? await toolsState.search(q) : []),
   getBookDetail: async (id) => (toolsState.detail ? await toolsState.detail(id) : null),
+  searchRefer: async (id, opts) => {
+    toolsState.referSearchCalls.push({ id, opts });
+    return { books: toolsState.referBooks ?? [] };
+  },
+  applyRefer: async (id, entry, onlyMeta, onlyCover) => {
+    toolsState.applyReferCalls.push({ id, entry, onlyMeta, onlyCover });
+    return toolsState.applyReferResult ?? { err: 'ok' };
+  },
 };
+export const ReferBook = undefined;
+export const ReferSearchOpts = undefined;
+export const ReferSearchResponse = undefined;
 export const TalebookService = {
   getReadingHistory: () => toolsState.history.slice(),
   getBookDetailAsync: async (id) => (toolsState.bookDetailAsync
@@ -705,7 +717,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 10 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 12 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -872,6 +884,39 @@ try {
 
   test('update_book_meta 已登记写闸门（漏登记=绕过确认，回归直接钉死）', () => {
     assert.ok(RealAiTools.needsConfirm('update_book_meta'));
+    assert.ok(RealAiTools.needsConfirm('set_cover'), 'set_cover 漏登记=绕过确认直接改服务端封面');
+  });
+
+  test('search_cover/set_cover：候选缓存跨 execute 复用，onlyCover 应用与守卫', async () => {
+    toolsState.referBooks = [
+      { source: ' douban'.trim(), title: '三体', authors: ['刘慈欣'], publisher: '重庆出版社',
+        cover_url: 'https://img.example/sanct.jpg', provider_key: 'douban', provider_value: '100' },
+      { source: 'isbn', title: '三体（无图版）', authors: ['刘慈欣'], cover_url: '' },
+    ];
+    toolsState.referSearchCalls.length = 0;
+    toolsState.applyReferCalls.length = 0;
+    const found = await RealAiTools.execute('search_cover', '{"book_id":1481,"isbn":"9787536692930"}');
+    assert.ok(found.includes('候选1') && found.includes('https://img.example/sanct.jpg'), found);
+    assert.equal(toolsState.referSearchCalls[0].opts.isbn, '9787536692930', 'opts 透传');
+    // 成功路径：只改封面（onlyCover=true、onlyMeta=false）
+    const done = await RealAiTools.execute('set_cover', '{"book_id":1481,"index":1}');
+    assert.ok(done.includes('已将 id=1481 的封面换成候选1'), done);
+    assert.equal(toolsState.applyReferCalls[0].onlyCover, true);
+    assert.equal(toolsState.applyReferCalls[0].onlyMeta, false);
+    assert.equal(toolsState.applyReferCalls[0].entry.provider_value, '100', '候选对象原样传给服务端');
+    // 守卫：序号越界 / 候选无封面 / 未先 search 同书
+    assert.ok((await RealAiTools.execute('set_cover', '{"book_id":1481,"index":9}')).includes('超出范围'));
+    assert.ok((await RealAiTools.execute('set_cover', '{"book_id":1481,"index":2}')).includes('没有封面图片'));
+    assert.ok((await RealAiTools.execute('set_cover', '{"book_id":999,"index":1}')).includes('请先对该书调用 search_cover'));
+    // 空候选
+    toolsState.referBooks = [];
+    assert.ok((await RealAiTools.execute('search_cover', '{"book_id":1481}')).includes('没有检索到'));
+    // 服务端应用失败
+    toolsState.referBooks = [{ source: 'x', cover_url: 'u' }];
+    await RealAiTools.execute('search_cover', '{"book_id":1481}');
+    toolsState.applyReferResult = { err: 'download_failed', msg: '封面下载失败' };
+    assert.ok((await RealAiTools.execute('set_cover', '{"book_id":1481,"index":1}')).includes('封面下载失败'));
+    toolsState.applyReferResult = null;
   });
 
   test('对话页历史持久化：finishBubble 落盘、loadHistory 恢复、clearChat 清空', () => {

@@ -1,4 +1,4 @@
-import { TalebookApi } from './TalebookApi';
+import { ReferBook, ReferSearchOpts, ReferSearchResponse, TalebookApi } from './TalebookApi';
 import { AnnotationApi, annotationTypeLabel, ANNOTATION_SCOPE_MINE } from './AnnotationApi';
 import { SoNovelBookPayload, DownloadTask, TalebookService } from './TalebookService';
 import { SoNovelService } from './SoNovelService';
@@ -109,7 +109,7 @@ const TOOL_SEARCH_BOOKS: AiToolDefinition = defineTool('search_books',
   '在用户的在线书架（MyBooks/Talebook 服务器）中按关键词搜书，返回最多 8 条 {id, 书名, 作者}。' +
     '用户问“书架上有没有/想找某本书”时使用。', QUERY_PROPS, ['query']);
 const TOOL_BOOK_DETAIL: AiToolDefinition = defineTool('book_detail',
-  '按书籍 id（先由 search_books 得到）返回该书的作者、评分、标签、可下载格式与截断后的简介。',
+  '按书籍 id（先由 search_books 得到）返回该书的作者、评分、标签、出版社/ISBN/丛书、可下载格式与截断后的简介。',
   BOOK_ID_PROPS, ['book_id']);
 const TOOL_BOOK_NOTES: AiToolDefinition = defineTool('book_notes',
   '按书籍 id 返回当前用户在该书下的私有标注（高亮/笔记/书签），最多 20 条。', BOOK_ID_PROPS, ['book_id']);
@@ -174,13 +174,36 @@ const BOOK_META_REQUIRED: string[] = ['book_id'];
 
 const TOOL_UPDATE_BOOK_META: AiToolDefinition = defineTool('update_book_meta',
   '更新服务器上某本书的元数据（书籍 id 来自 search_books）。只传要修改的字段，未传字段保持原值。' +
-    '改前先 book_detail 核对现值并向用户复述目标改动。暂不支持更换封面图片。',
+    '改前先 book_detail 核对现值并向用户复述目标改动。更换封面图片用 search_cover + set_cover。',
   BOOK_META_PROPS, BOOK_META_REQUIRED);
+
+const COVER_SEARCH_PROPS: Record<string, AiToolProperty> = {
+  'book_id': BOOK_ID_PROP,
+  'title': prop('string', '检索书名；留空用该书现书名'),
+  'isbn': prop('string', 'ISBN；有则优先，命中更准'),
+  'publisher': prop('string', '出版社，可留空'),
+};
+const COVER_SET_PROPS: Record<string, AiToolProperty> = {
+  'book_id': BOOK_ID_PROP,
+  'index': prop('number', '选第几条候选（1 起，来自 search_cover 返回）'),
+};
+const COVER_SEARCH_REQUIRED: string[] = ['book_id'];
+const COVER_SET_REQUIRED: string[] = ['book_id', 'index'];
+
+const TOOL_SEARCH_COVER: AiToolDefinition = defineTool('search_cover',
+  '在互联网元数据源中按 ISBN/书名检索某本书的候选条目，返回每条的书名/作者/出版社/来源/封面图 url。' +
+    '更换封面（set_cover）前必须先对同一本书调用本工具。',
+  COVER_SEARCH_PROPS, COVER_SEARCH_REQUIRED);
+const TOOL_SET_COVER: AiToolDefinition = defineTool('set_cover',
+  '把某本书的封面图片换成 search_cover 返回的第 index 条候选（只改封面，其余元数据不动）。' +
+    '候选须来自对同一 book_id 的最近一次 search_cover。',
+  COVER_SET_PROPS, COVER_SET_REQUIRED);
 
 const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SEARCH_BOOKS, TOOL_BOOK_DETAIL, TOOL_BOOK_NOTES, TOOL_READING_HISTORY,
   TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS,
   TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_UPDATE_BOOK_META,
+  TOOL_SEARCH_COVER, TOOL_SET_COVER,
 ];
 
 export class AiTools {
@@ -194,7 +217,7 @@ export class AiTools {
    * 名字与 TOOL_DEFS 里的写工具对应；新加写工具忘记登记 = 无确认直接执行，务必同步。
    */
   private static readonly WRITE_TOOLS: string[] =
-    ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task', 'update_book_meta'];
+    ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task', 'update_book_meta', 'set_cover'];
 
   static needsConfirm(name: string): boolean {
     return AiTools.WRITE_TOOLS.indexOf(name) >= 0;
@@ -211,6 +234,13 @@ export class AiTools {
     AiTools.lastBooks = [];
     return books;
   }
+
+  /**
+   * search_cover 的候选缓存：set_cover 在同一次对话回路里跨 execute 调用读取，
+   * 故不在 execute 入口清空，改由 lastCoverBookId 与 book_id 匹配来防串台。
+   */
+  private static lastCoverCandidates: ReferBook[] = [];
+  private static lastCoverBookId: number = 0;
 
   /** 给 UI 的一句人话：正在用哪个工具。 */
   static toolLabel(name: string): string {
@@ -244,6 +274,12 @@ export class AiTools {
     if (name === 'update_book_meta') {
       return '更新书籍元数据';
     }
+    if (name === 'search_cover') {
+      return '检索封面候选';
+    }
+    if (name === 'set_cover') {
+      return '更换封面';
+    }
     return name;
   }
 
@@ -272,6 +308,12 @@ export class AiTools {
       }
       if (name === 'update_book_meta') {
         return await AiTools.updateBookMeta(args);
+      }
+      if (name === 'search_cover') {
+        return await AiTools.searchCover(args);
+      }
+      if (name === 'set_cover') {
+        return await AiTools.setCover(args);
       }
       if (name === 'list_download_tasks') {
         return AiTools.listDownloadTasks();
@@ -370,6 +412,60 @@ export class AiTools {
       return `更新失败（${rsp.error.length > 0 ? rsp.error : `HTTP ${rsp.status}`}）。`;
     }
     return `已更新《${newTitle}》：${changes.join('；')}`;
+  }
+
+  private static async searchCover(args: Record<string, Object>): Promise<string> {
+    const bookId: number = AiTools.argNumber(args, 'book_id');
+    if (bookId <= 0) {
+      return '参数 book_id 需要是正整数（可先用 search_books 查到 id）。';
+    }
+    const opts: ReferSearchOpts = {};
+    if (AiTools.argString(args, 'title').length > 0) {
+      opts.title = AiTools.argString(args, 'title').trim();
+    }
+    if (AiTools.argString(args, 'isbn').length > 0) {
+      opts.isbn = AiTools.argString(args, 'isbn').trim();
+    }
+    if (AiTools.argString(args, 'publisher').length > 0) {
+      opts.publisher = AiTools.argString(args, 'publisher').trim();
+    }
+    const rsp: ReferSearchResponse = await TalebookApi.searchRefer(bookId, opts);
+    if (rsp.books.length === 0) {
+      return '互联网上没有检索到该书的元数据候选。可尝试补充更准确的 ISBN 再查。';
+    }
+    AiTools.lastCoverCandidates = rsp.books;
+    AiTools.lastCoverBookId = bookId;
+    const lines: string[] = [];
+    for (let i = 0; i < rsp.books.length; i++) {
+      const b: ReferBook = rsp.books[i];
+      const authors: string[] = b.authors ?? [];
+      lines.push(`- 候选${i + 1}：《${b.title ?? ''}》（${authors.join('、')}）` +
+        `出版社：${b.publisher ?? '未知'}　来源：${b.source}　封面：${b.cover_url ?? ''}`);
+    }
+    return `找到 ${rsp.books.length} 条候选（换封面用 set_cover 传 index）：\n${lines.join('\n')}`;
+  }
+
+  private static async setCover(args: Record<string, Object>): Promise<string> {
+    const bookId: number = AiTools.argNumber(args, 'book_id');
+    if (bookId <= 0) {
+      return '参数 book_id 需要是正整数（可先用 search_books 查到 id）。';
+    }
+    if (AiTools.lastCoverBookId !== bookId || AiTools.lastCoverCandidates.length === 0) {
+      return `id=${bookId} 没有可引用的封面候选，请先对该书调用 search_cover。`;
+    }
+    const index: number = AiTools.argNumber(args, 'index');
+    if (index < 1 || index > AiTools.lastCoverCandidates.length) {
+      return `候选序号 ${index} 超出范围（当前有效 1-${AiTools.lastCoverCandidates.length}）。`;
+    }
+    const entry: ReferBook = AiTools.lastCoverCandidates[index - 1];
+    if ((entry.cover_url ?? '').length === 0) {
+      return `候选${index}没有封面图片 url，请换一条候选。`;
+    }
+    const rsp = await TalebookApi.applyRefer(bookId, entry, false, true);
+    if (rsp.err !== undefined && rsp.err !== 'ok') {
+      return `换封面失败：${(rsp.msg ?? '').length > 0 ? rsp.msg : rsp.err}`;
+    }
+    return `已将 id=${bookId} 的封面换成候选${index}（来源 ${entry.source}），其余元数据未动。`;
   }
 
   private static async searchBooks(query: string): Promise<string> {
