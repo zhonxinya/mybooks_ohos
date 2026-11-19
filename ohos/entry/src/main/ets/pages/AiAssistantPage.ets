@@ -1,5 +1,7 @@
 import { pasteboard } from '@kit.BasicServicesKit';
 import { PageScaffold, SecondaryButton, TextButton } from '../components';
+import { MarkdownText } from '../components/MarkdownText';
+import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { AiService, AiMessage, AiStreamHandlers, AiAbortHandle } from '../services/AiService';
 import { AppRouter } from '../utils/AppRouter';
 
@@ -12,21 +14,14 @@ interface ChatBubble {
   error: boolean;
 }
 
-interface QuickAction {
-  label: string;
-  prompt: string;
-}
-
-/** 快捷指令：把常见用法固化成一次点击，省去打字。 */
-const QUICK_ACTIONS: QuickAction[] = [
-  { label: '这本书讲了什么', prompt: '请用 200 字以内概括这本书的核心内容与适合的读者。书名：《》' },
-  { label: '写一段书评', prompt: '请为这本书写一段 300 字左右的推荐书评，语气真诚、不堆砌形容词。书名：《》' },
-  { label: '推荐相似的书', prompt: '我喜欢《》这本书，请推荐 5 本气质相近的书，每本一句话说明理由。' },
-  { label: '解释这个词', prompt: '请用通俗的语言解释下面这个概念，并举一个生活中的例子：' },
-];
+/** 技能卡片/芯片点击：把现成提示词填入输入框，用户可先补书名再发送。 */
 
 const SYSTEM_PROMPT: string =
-  '你是一个电子书阅读应用的助手，回答简洁、准确、中文优先。涉及书籍信息时，若不确定请直接说明不确定，不要编造。';
+  '你是一个电子书阅读应用的助手，回答简洁、准确、中文优先。' +
+  '你可以调用只读工具查询用户的真实数据：search_books（搜书架）、book_detail（书籍详情，需 id）、' +
+  'book_notes（该书标注，需 id）、reading_history（最近阅读记录）。' +
+  '问题涉及用户的书籍或阅读情况时，先调用工具拿到真实数据再回答，绝不编造；' +
+  '工具数据不足时直接说明不确定。';
 
 const MAX_HISTORY_ROUNDS: number = 10;
 
@@ -40,6 +35,8 @@ struct AiAssistantPage {
   @State errorTip: string = '';
   /** 流式输出用：整段重建列表的代价高，这里只改最后一条气泡的内容。 */
   @State streamingText: string = '';
+  /** 工具回路进行中的人话提示（如「正在调用工具：搜索书架」），替代「思考中…」。 */
+  @State toolHint: string = '';
   private requestId: number = 0;
   private abort: AiAbortHandle | null = null;
   private scroller: Scroller = new Scroller();
@@ -72,6 +69,7 @@ struct AiAssistantPage {
       this.messages = this.messages.slice();
     }
     this.streamingText = '';
+    this.toolHint = '';
     this.thinking = false;
   }
 
@@ -103,6 +101,7 @@ struct AiAssistantPage {
     this.messages.push({ role: 'user', content: question, streaming: false, error: false });
     this.messages.push({ role: 'assistant', content: '', streaming: true, error: false });
     this.streamingText = '';
+    this.toolHint = '';
     this.input = '';
     this.thinking = true;
     this.scrollToEnd();
@@ -114,6 +113,11 @@ struct AiAssistantPage {
         }
         this.streamingText += delta;
         this.scrollToEnd();
+      },
+      onTool: (label: string) => {
+        if (requestId === this.requestId && this.thinking) {
+          this.toolHint = `正在调用工具：${label}…`;
+        }
       },
       onDone: (full: string) => {
         if (requestId === this.requestId && this.thinking) {
@@ -141,6 +145,7 @@ struct AiAssistantPage {
     this.messages = this.messages.slice();
     this.thinking = false;
     this.streamingText = '';
+    this.toolHint = '';
     this.abort = null;
     // 上次是错误气泡时，把这次失败的消息踢出上下文（buildContext 已过滤 error）
     if (isError) {
@@ -160,8 +165,8 @@ struct AiAssistantPage {
     }, 60);
   }
 
-  private applyQuick(action: QuickAction): void {
-    this.input = action.prompt;
+  private applySkill(skill: AiSkill): void {
+    this.input = skill.prompt;
   }
 
   private clearChat(): void {
@@ -230,6 +235,7 @@ struct AiAssistantPage {
         this.emptyState();
       } else {
         this.chatList();
+        this.skillBar();
       }
       this.inputBar();
     }
@@ -273,26 +279,33 @@ struct AiAssistantPage {
         .fontSize(17)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'));
-      Text('可以直接提问，也可以用下面的快捷指令')
+      Text('可以直接提问，也可以用下面的技能')
         .fontSize(13)
         .fontColor($r('app.color.text_secondary'));
       Column({ space: 10 }) {
-        ForEach(QUICK_ACTIONS, (action: QuickAction) => {
+        ForEach(AI_SKILLS, (skill: AiSkill) => {
           Row() {
-            Text(action.label)
-              .fontSize(14)
-              .fontColor($r('app.color.text_primary'))
-              .layoutWeight(1);
+            Column({ space: 2 }) {
+              Text(skill.label)
+                .fontSize(14)
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('app.color.text_primary'));
+              Text(skill.hint)
+                .fontSize(12)
+                .fontColor($r('app.color.text_secondary'));
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1);
             SymbolGlyph($r('sys.symbol.chevron_right'))
               .fontSize(14)
               .fontColor([$r('app.color.text_tertiary')]);
           }
           .width('100%')
-          .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+          .padding({ left: 14, right: 14, top: 10, bottom: 10 })
           .borderRadius($r('app.float.card_radius'))
           .backgroundColor($r('app.color.card_background'))
-          .onClick(() => this.applyQuick(action));
-        }, (action: QuickAction) => action.label);
+          .onClick(() => this.applySkill(skill));
+        }, (skill: AiSkill) => skill.label);
       }
       .width('100%');
     }
@@ -328,13 +341,24 @@ struct AiAssistantPage {
       }
       .width('100%');
 
-      Text(bubble.streaming ? (this.streamingText.length > 0 ? this.streamingText : '思考中…') : bubble.content)
-        .fontSize(15)
-        .lineHeight(23)
-        .fontColor(bubble.error ? $r('app.color.error') : $r('app.color.text_primary'))
-        .width('100%')
-        .copyOption(CopyOptions.LocalDevice)
-        .textAlign(TextAlign.Start);
+      if (bubble.role === 'assistant' && !bubble.error) {
+        // AI 回复走轻量 Markdown 渲染；流式期间实时重解析
+        if (bubble.streaming && this.streamingText.length === 0) {
+          Text(this.toolHint.length > 0 ? this.toolHint : '思考中…')
+            .fontSize(15)
+            .fontColor($r('app.color.text_secondary'));
+        } else {
+          MarkdownText({ content: bubble.streaming ? this.streamingText : bubble.content });
+        }
+      } else {
+        Text(bubble.streaming ? (this.streamingText.length > 0 ? this.streamingText : '思考中…') : bubble.content)
+          .fontSize(15)
+          .lineHeight(23)
+          .fontColor(bubble.error ? $r('app.color.error') : $r('app.color.text_primary'))
+          .width('100%')
+          .copyOption(CopyOptions.LocalDevice)
+          .textAlign(TextAlign.Start);
+      }
 
       if (bubble.role === 'assistant' && !bubble.streaming && !bubble.error && bubble.content.length > 0) {
         Row({ space: 12 }) {
@@ -348,6 +372,28 @@ struct AiAssistantPage {
     .padding(14)
     .borderRadius($r('app.float.card_radius'))
     .backgroundColor(bubble.role === 'user' ? $r('app.color.brand_primary_light') : $r('app.color.card_background'));
+  }
+
+  /** 对话进行中的技能芯片：横向滚动，点击填入输入框（不自动发送）。 */
+  @Builder
+  skillBar() {
+    Scroll() {
+      Row({ space: 8 }) {
+        ForEach(AI_SKILLS, (skill: AiSkill) => {
+          Text(skill.label)
+            .fontSize(13)
+            .fontColor($r('app.color.brand_primary'))
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            .borderRadius(14)
+            .backgroundColor($r('app.color.brand_primary_light'))
+            .onClick(() => this.applySkill(skill));
+        }, (skill: AiSkill) => skill.label);
+      }
+      .padding({ left: 12, right: 12, top: 4, bottom: 4 });
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .width('100%')
+    .align(Alignment.Start);
   }
 
   @Builder
