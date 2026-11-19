@@ -400,7 +400,17 @@ struct AiAssistantPage {
         ListItem() {
           this.bubbleView(bubble, index);
         }
-      }, (bubble: ChatBubble, index: number) => `bubble-${index}-${bubble.role}`);
+      }, (bubble: ChatBubble, index: number) => {
+        // key 必须覆盖所有影响该气泡渲染的状态：@State 换数组后 key 不变则 ListItem 被复用、UI 不刷新
+        if (bubble.role === 'assistant' && bubble.streaming) {
+          let sig: string = '';
+          for (let i = 0; i < this.liveActivities.length; i++) {
+            sig += this.liveActivities[i].state;
+          }
+          return `bubble-${index}-assistant-s-${sig}-${this.streamingText.length}`;
+        }
+        return `bubble-${index}-${bubble.role}-${bubble.streaming ? 's' : 'd'}-${bubble.activities.length}-${bubble.content.length}`;
+      });
     }
     .layoutWeight(1)
     .width('100%')
