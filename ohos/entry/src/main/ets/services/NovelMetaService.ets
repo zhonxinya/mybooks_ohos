@@ -20,7 +20,8 @@ import { util } from '@kit.ArkTS';
  * - 阅文系/掌阅系手贴场景（2026-11-20 双指纹实测）：书旗 t.shuqi.com/book/<id>.html、
  *   塔读 tadu.com/book/<id>/、云起 yunqi.qq.com/detail/<id> 均 og:novel 全量（通用规则即中）；
  *   云起站内导航的 /read/<id>/ 是阅读壳无 og → rewriteUrl 到 detail；潇湘 xxsy.net 无 og，
- *   Vue SSR 正文锚点走 parseXxsy。
+ *   Vue SSR 正文锚点走 parseXxsy；掌阅 m.zhangyue.com/detail/<id> 无 og，SSR 正文锚点
+ *   走 parseZhangyue（主区无状态字段，<title> 的「完结小说」是 SEO 固定模板不可信）。
  * - 番茄小说 fanqienovel.com 详情页是 SPA（1.6MB __INITIAL_STATE__），但同 ID 的
  *   /api/book/info?bookId= 双指纹裸通、字段全量无签名（2026-11-20 实测）——走 rewriteUrl。
  * - so-novel 候选 6 镜像域质量审计（2026-11-20 离线实跑）：mcxs/yeudusk/shuhaige/quanben
@@ -133,6 +134,8 @@ export class NovelMetaService {
       meta = NovelMetaService.parseFanqie(html);
     } else if (trimmed.indexOf('xxsy.net') >= 0) {
       meta = NovelMetaService.parseXxsy(html);
+    } else if (trimmed.indexOf('m.zhangyue.com/detail') >= 0) {
+      meta = NovelMetaService.parseZhangyue(html);
     } else {
       meta = NovelMetaService.parseGeneric(html);
     }
@@ -420,6 +423,43 @@ export class NovelMetaService {
     const intro = html.match(/id="book_intro"[^>]*>([\s\S]{0,4000}?)<\/div>/);
     if (intro !== null) {
       meta.intro = NovelMetaService.clean(intro[1], INTRO_MAX);
+    }
+    meta.ok = meta.title.length > 0 || meta.intro.length > 0;
+    return meta;
+  }
+
+  /** 掌阅小说网（m.zhangyue.com/detail/<id>，2026-11-20 实测）：无 og，SSR 正文。
+   *  主信息限定在 class="bookview" 块（推荐区「同类好书/作者其他书籍」也有
+   *  「连载中/已完结」tag 与其他书同名信息，全站匹配必误取）；书名 dt.ellipsis2、
+   *  作者 span.it red（同行前置的是出版方）、类别 data-js="goCategory"（该串还出现
+   *  在 JS 绑定代码里，限定块内即唯一）。封面 img.bookcover 为绝对 https CDN，
+   *  简介 brief_intro_txt 带「内容简介：」前缀需剥。主区无状态字段——留空不猜
+   *  （<title> 的「完结小说_都市免费小说」是 SEO 固定模板，与真实类别/状态无关）。 */
+  static parseZhangyue(html: string): NovelMeta {
+    const meta: NovelMeta = { ok: false, error: '', title: '', author: '', category: '',
+      status: '', intro: '', cover: '', rule: '掌阅小说网' };
+    const block = html.match(/class="bookview"[\s\S]{0,1200}?<\/dl>/);
+    if (block !== null) {
+      const tit = block[0].match(/<dt class="ellipsis2">([^<]{1,60})<\/dt>/);
+      if (tit !== null) {
+        meta.title = tit[1].trim();
+      }
+      const au = block[0].match(/class="it red">([^<]{1,40})<\/span>/);
+      if (au !== null) {
+        meta.author = au[1].trim();
+      }
+      const cat = block[0].match(/data-js="goCategory"[^>]*>([^<]{1,30})<\/span>/);
+      if (cat !== null) {
+        meta.category = cat[1].trim();
+      }
+    }
+    const pic = html.match(/class="bookcover"[^>]*src="([^"]+)"/);
+    if (pic !== null) {
+      meta.cover = pic[1]; // bookbk.img.zhangyue01.com 绝对 https
+    }
+    const intro = html.match(/data-js="brief_intro_txt"[^>]*>([\s\S]{0,4000}?)<\/p>/);
+    if (intro !== null) {
+      meta.intro = NovelMetaService.clean(intro[1].replace(/^内容简介：/, ''), INTRO_MAX);
     }
     meta.ok = meta.title.length > 0 || meta.intro.length > 0;
     return meta;

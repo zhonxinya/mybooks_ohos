@@ -1635,6 +1635,36 @@ try {
     deps.state.rcpResponse = null;
   });
 
+  // 掌阅 fixture：2026-11-20 m.zhangyue.com/detail/10161848 实测节选（无 og，SSR 正文；
+  // 含「同类好书」推荐区 li 与 goCategory JS 绑定串两个干扰源）
+  const ZY_PAGE = `<html><head><title>《雪落红炉[精品]》最新章节_第三十章 此生相许_似水无痕著_完结小说_都市免费小说_掌阅小说网</title><meta name="description" content="衣香鬓影，十里洋场。"></head><body><div class="cover"><div class="bookview"><div class="side"><img class="bookcover" data-js="book" src="https://bookbk.img.zhangyue01.com/idc_1/m_1,w_200,h_266/9f6a600f/group6/M00/20/F4/CmQUN1X1h8aEJMP9AAAAAJoALRc898462364.jpg?v=47ZDQw9E" alt="雪落红炉"></div><dl class="main"><dt class="ellipsis2">雪落红炉</dt>
+<dd><span class="stars white"><span class="cur r9"></span></span> <span class="yellow">9.0</span> | <span class="f10">593人评分</span></dd>
+<dd class="ellipsis">
+<span class="">春芒文化</span> |
+<span class="it red">似水无痕</span></dd>
+<dd class="lastline"><span>15.3万字 </dd>
+<dd class="tagbtn"><span data-js="goCategory" data-id="74" data-url="https://m.zhangyue.com/category/68/74">古代言情</span><span class="dec_triangle"></span></dd>
+</dl></div></div><div class="brief_intro" data-js="brief_intro"><p data-js="brief_intro_txt">内容简介：衣香鬓影，十里洋场。在那个动荡的年代，因为父母之间的约定，她嫁入豪门。</p><div class="triangle_c">...<span class="dec_triangle"></span></div></div><div class="guess"><ul>
+<li><a data-js="goRecommendBook" data-id="11282628" data-name="鬼医嫡女之毒妃倾城" href="https://m.zhangyue.com/detail/11282628"><div class="c flex"><div class="book_cover"><img src="https://bookbk.img.zhangyue01.com/idc_1/m_1,w_200,h_266/51100c86/group6/M00/41/EF/CmRaIVjdCxqEaj3GAAAAAA7gt5I355205448.jpg?v=BWWIvM2c" alt="鬼医嫡女之毒妃倾城"></div><dl class="book_info flex_item"><dt class="flex"><div class="flex_item ellipsis">鬼医嫡女之毒妃倾城</div>
+<div class="score">9.5分</div>
+</dt><dd class="author ellipsis">Echo涂涂</dd><dd class="content ellipsis2">想她戎马一生，剑下斩过多少宵小。</dd><dd><span class="tag">古代言情</span> <span class="tag">已完结</span></dd></dl></div></a></li> </ul></div><script>$("span[data-js=goCategory]").on("click", function(e){dataPointUrl({'page_type':'detail'});});</script></body></html>`;
+  test('NovelMeta：掌阅——bookview 块限定主区（推荐区同名 tag/他书信息不干扰），title SEO 模板不当状态', () => {
+    const m = NovelMetaService.parseZhangyue(ZY_PAGE);
+    assert.ok(m.ok && m.rule === '掌阅小说网');
+    assert.equal(m.title, '雪落红炉'); // 不取推荐区《鬼医嫡女》与带[精品]的 keywords
+    assert.equal(m.author, '似水无痕'); // 同行前置「春芒文化」是出版方
+    assert.equal(m.category, '古代言情');
+    assert.equal(m.status, ''); // <title> 的「完结小说」是 SEO 固定模板，主区无状态字段
+    assert.ok(m.intro.startsWith('衣香鬓影'), '剥「内容简介：」前缀');
+    assert.ok(m.cover.startsWith('https://bookbk.img.zhangyue01.com'));
+  });
+  test('NovelMeta：掌阅端到端分派 m.zhangyue.com/detail', async () => {
+    deps.state.rcpResponse = { statusCode: 200, body: enc(ZY_PAGE) };
+    const d = await NovelMetaService.fetchDetail('https://m.zhangyue.com/detail/10161848');
+    assert.ok(d.ok && d.rule === '掌阅小说网' && d.title === '雪落红炉');
+    deps.state.rcpResponse = null;
+  });
+
   // 云起/塔读 fixture：2026-11-20 实测（云起 read 壳无 og→detail og:novel；塔读 og 全量含脏 title/双斜杠封面）
   const YQ_DETAIL = `<html><head><meta property="og:type" content="novel"><meta property="og:novel:book_name" content="粟粟"><meta property="og:novel:author" content="荆棘之歌"><meta property="og:novel:category" content="古代言情"><meta property="og:novel:status" content="连载"><meta property="og:image" content="https://wfqqreader-1252317822.image.myqcloud.com/cover/857/59718575/s_59718575.jpg"><meta property="og:description" content="山洪冲下来一个白里透红的小娃娃。"></head><body></body></html>`;
   test('NovelMeta：云起 read→detail 重写 + 塔读式脏 og:title 由 book_name 去尾——通用 og:novel 覆盖阅文/掌阅系', async () => {
