@@ -599,10 +599,13 @@ try {
     toolsState.detail = async (id) => (id === 12
       ? { id: 12, title: '三体', authors: ['刘慈欣'], rating: 9.2, tags: ['科幻'],
         files: [{ format: 'epub', size: 1 }, { format: 'mobi', size: 2 }],
-        comments: 'x'.repeat(600), coverUrl: '', downloadUrl: '' }
+        comments: 'x'.repeat(600), coverUrl: '', downloadUrl: '',
+        publisher: '重庆出版社', isbn: '9787536692930', series: '' }
       : null);
     const detailText = await RealAiTools.execute('book_detail', '{"book_id":12}');
     assert.ok(detailText.includes('《三体》（刘慈欣）') && detailText.includes('epub、mobi') && detailText.includes('…'));
+    assert.ok(detailText.includes('出版社：重庆出版社') && detailText.includes('ISBN：9787536692930'));
+    assert.ok(!detailText.includes('丛书：'));
     assert.ok((await RealAiTools.execute('book_detail', '{"book_id":99}')).includes('没有找到 id=99'));
     toolsState.notes = [];
     assert.ok((await RealAiTools.execute('book_notes', '{"book_id":12}')).includes('还没有'));

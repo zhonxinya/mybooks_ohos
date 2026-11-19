@@ -408,6 +408,19 @@ export class AiTools {
     if (detail.tags.length > 0) {
       lines.push(`标签：${detail.tags.join('、')}`);
     }
+    const meta: string[] = [];
+    if (detail.publisher.length > 0) {
+      meta.push(`出版社：${detail.publisher}`);
+    }
+    if (detail.isbn.length > 0) {
+      meta.push(`ISBN：${detail.isbn}`);
+    }
+    if (detail.series.length > 0) {
+      meta.push(`丛书：${detail.series}`);
+    }
+    if (meta.length > 0) {
+      lines.push(meta.join('　'));
+    }
     const formats: string[] = [];
     for (const f of detail.files) {
       formats.push(f.format);

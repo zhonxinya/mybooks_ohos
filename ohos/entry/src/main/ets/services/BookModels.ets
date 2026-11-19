@@ -17,6 +17,9 @@ export interface BookDetail {
   tags: string[];
   files: BookFileItem[];
   downloadUrl: string;
+  publisher: string;
+  isbn: string;
+  series: string;
 }
 
 export interface BookFileItem {
@@ -95,6 +98,9 @@ export function parseBookDetail(json: Record<string, Object>): BookDetail {
     tags: base.tags,
     files: files,
     downloadUrl: `${json['download_url'] ?? ''}`,
+    publisher: `${json['publisher'] ?? ''}`,
+    isbn: `${json['isbn'] ?? ''}`,
+    series: `${json['series'] ?? ''}`,
   };
 }
 
