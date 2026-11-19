@@ -17,6 +17,9 @@ import { util } from '@kit.ArkTS';
  * - 晋江 www.jjwxc.net onebook.php 无 og，带 schema.org Book 微数据
  *   （itemprop=articleSection/author/genre/updataStatus/image/description），
  *   gb18030 编码（charset 声明在字节 240，decodeBody 嗅探窗口内）、SSR 直出无 JS 壳。
+ * - so-novel 候选 6 镜像域质量审计（2026-11-20 离线实跑）：mcxs/yeudusk/shuhaige/quanben
+ *   实际带 og:novel 全量（通用规则即够）；唯 mianhuaks.com 无 og:novel 且封面多为站默认图
+ *   /asset/default.jpg、无类别字段——需专用规则走主区正文锚点（parseMianhua）。
  * - 站点规则会随对方改版失效，属已知取舍（用户确认「仍尝试硬写几个网文源」）。
  */
 
@@ -118,6 +121,8 @@ export class NovelMetaService {
       meta = NovelMetaService.parseJjwxc(html);
     } else if (trimmed.indexOf('ujxsw.org') >= 0) {
       meta = NovelMetaService.parseUjxsw(html);
+    } else if (trimmed.indexOf('mianhuaks.com') >= 0) {
+      meta = NovelMetaService.parseMianhua(html);
     } else {
       meta = NovelMetaService.parseGeneric(html);
     }
@@ -173,7 +178,8 @@ export class NovelMetaService {
     if (qidian !== null) {
       return `https://m.qidian.com/book/${qidian[1]}/`;
     }
-    return url;
+    // 悠久小说网 https 端口不通（2026-11-20 实测 curl 000），手贴 https 时降到 http
+    return url.replace(/^https:\/\/(\S*ujxsw\.org)/, 'http://$1');
   }
 
   /**
@@ -274,6 +280,40 @@ export class NovelMetaService {
     }
     meta.intro = NovelMetaService.clean(NovelMetaService.pickMeta(html, 'description'), INTRO_MAX);
     meta.ok = meta.title.length > 0 || meta.intro.length > 0 || meta.cover.length > 0;
+    return meta;
+  }
+
+  /** 棉花书吧（www.mianhuaks.com/book/<id>/，2026-11-20 实测）：so-novel 候选 6 域里
+   *  唯一无 og:novel 的镜像域，通用兜底只能拿到 SEO 模板句。锚点全在主区 section：
+   *  h1 书名（本页唯一 h1 即书名，无站名坑）、作者 a、状态 p；封面在主区 img——多为
+   *  站默认图 /asset/default.jpg，视为无封面留空不猜；页面无类别字段（导航「分类」
+   *  只是 /tags.html 链接）——留空不猜。简介 id="desc"（内嵌 p/防盗图，clean 剥除）。 */
+  static parseMianhua(html: string): NovelMeta {
+    const meta: NovelMeta = { ok: false, error: '', title: '', author: '', category: '',
+      status: '', intro: '', cover: '', rule: '棉花书吧' };
+    const block = html.match(/flex items-start[\s\S]{0,900}?<\/section>/);
+    const seg: string = block !== null ? block[0] : '';
+    const tit = seg.match(/<h1[^>]*>([^<]{1,60})<\/h1>/);
+    if (tit !== null) {
+      meta.title = tit[1].trim();
+    }
+    const au = seg.match(/作者：<a[^>]*>([^<]{1,40})<\/a>/);
+    if (au !== null) {
+      meta.author = au[1].trim();
+    }
+    const st = seg.match(/状态：(连载|完结)/);
+    if (st !== null) {
+      meta.status = st[1] === '连载' ? '连载中' : '已完本';
+    }
+    const pic = seg.match(/<img[^>]*src="([^"]+)"/);
+    if (pic !== null && pic[1].indexOf('default.jpg') < 0) {
+      meta.cover = pic[1]; // 相对 /thumb/…，fetchDetail 统一补全；默认图不算封面
+    }
+    const intro = html.match(/id="desc"[^>]*>([\s\S]{0,4000}?)<\/div>/);
+    if (intro !== null) {
+      meta.intro = NovelMetaService.clean(intro[1], INTRO_MAX);
+    }
+    meta.ok = meta.title.length > 0 || meta.intro.length > 0 || meta.author.length > 0;
     return meta;
   }
 

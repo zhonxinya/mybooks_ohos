@@ -1457,6 +1457,8 @@ try {
       'https://m.qidian.com/book/1050742867/');
     assert.equal(NovelMetaService.rewriteUrl('https://book.qidian.com/info/1050742867/'),
       'https://m.qidian.com/book/1050742867/');
+    assert.equal(NovelMetaService.rewriteUrl('https://www.ujxsw.org/book/90293/'),
+      'http://www.ujxsw.org/book/90293/'); // ujxsw https 端口不通（curl 000），手贴 https 降到 http
     assert.equal(NovelMetaService.rewriteUrl('https://www.wtzw.com/book/224292.html'),
       'https://www.wtzw.com/book/224292.html');
     deps.state.rcpResponse = { statusCode: 200, body: enc(QIDIAN_M_PAGE) };
@@ -1568,6 +1570,26 @@ try {
     assert.equal(m.status, ''); // 页面无状态字段——留空不猜
     assert.equal(m.cover, 'http://www.ujxsw.org/files/article/image/90/90293/90293s.jpg');
     assert.ok(m.intro.startsWith('剑仙最新章节由网友提供'));
+  });
+
+  // 棉花书吧 fixture：2026-11-20 www.mianhuaks.com/book/94801+15091 实测节选（无 og:novel，主区锚点）
+  const MH_PAGE = `<html><head><meta name="description" content="快来棉花看书体验俺打的去埃及创作的《渣受重生》，无删减版本，最新章节更新，让你一站式畅享所有精彩！" /></head><body><a href="/tags.html" class="text-sm text-gray-700 hover:text-blue-600">分类</a><main class="bg-white max-w-screen-xl mx-auto p-2 space-y-3"><section class="bg-white p-3 rounded-lg shadow shadow hover:shadow-md flex items-start"><img src="/asset/default.jpg" alt="渣受重生" class="max-w-[90px] mr-4"><div><h1 class="text-2xl font-semibold text-gray-800 mb-2">渣受重生</h1><p class="text-sm text-gray-500">作者：<a href="/profile/62500/" class="hover:text-blue-600">俺打的去埃及</a></p><p class="text-xs text-gray-500 mt-1">更新时间：2026-07-06 19:22:20</p><p class="text-xs text-gray-500 mt-1">状态：连载</p></div></section><section class="p-3 rounded-lg shadow hover:shadow-md"><h2 class="text-xl font-semibold text-gray-800 mb-2">简介</h2><div id="desc" class="text-sm text-gray-600 max-h-40 overflow-y-auto text-justify "><p></p><p>谁说只有男人能重生，左拥右抱好不逍遥．女人照样可以，混娱乐卖<img src='/asset/fonts/45.png'>行，天下大事照样参与！</p></div></section><section class="p-3"><img src="/thumb/94/94801.jpg" alt="别书" class="max-w-[90px]"></section></body></html>`;
+  test('NovelMeta：棉花书吧——主区锚点+状态归一；默认图/无类别留空，推荐区封面不误取', async () => {
+    const m = NovelMetaService.parseMianhua(MH_PAGE);
+    assert.ok(m.ok && m.rule === '棉花书吧');
+    assert.equal(m.title, '渣受重生');
+    assert.equal(m.author, '俺打的去埃及');
+    assert.equal(m.status, '连载中');
+    assert.equal(NovelMetaService.parseMianhua(MH_PAGE.replace('状态：连载', '状态：完结')).status,
+      '已完本', '完结→已完本归一');
+    assert.equal(m.category, ''); // 页面无类别字段，导航「分类」是 /tags.html 链接——留空不猜
+    assert.equal(m.cover, ''); // 主区封面是站默认图 /asset/default.jpg，不算封面；推荐区 /thumb/ 不误取
+    assert.ok(m.intro.includes('混娱乐卖') && m.intro.includes('行，') &&
+      !m.intro.includes('45.png'), '防盗图 img 须剥除且前后文连贯');
+    deps.state.rcpResponse = { statusCode: 200, body: enc(MH_PAGE) };
+    const d = await NovelMetaService.fetchDetail('https://www.mianhuaks.com/book/94801/');
+    assert.ok(d.rule === '棉花书吧' && d.title === '渣受重生', 'fetchDetail 分派命中');
+    deps.state.rcpResponse = null;
   });
 
   // 飞卢 gb2312 fixture：2026-11-20 b.faloo.com/1484744.html 实测 meta 行，GBK 字节 base64
