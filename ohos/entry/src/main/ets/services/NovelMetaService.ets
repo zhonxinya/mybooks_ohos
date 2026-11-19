@@ -81,7 +81,7 @@ export class NovelMetaService {
 
   /** 抓详情页并按站点解析；任何失败都以 ok=false + error 返回，不抛错。 */
   static async fetchDetail(url: string): Promise<NovelMeta> {
-    const trimmed: string = url.trim();
+    const trimmed: string = NovelMetaService.rewriteUrl(url.trim());
     const empty: NovelMeta = { ok: false, error: '', title: '', author: '', category: '',
       status: '', intro: '', cover: '', rule: '' };
     if (!/^https?:\/\/\S+/.test(trimmed)) {
@@ -148,6 +148,19 @@ export class NovelMetaService {
     }
     meta.ok = meta.title.length > 0 || meta.intro.length > 0 || meta.cover.length > 0;
     return meta;
+  }
+
+  /**
+   * 已知风控站的桌面 url 重写到可爬的同构入口（2026-11-20 实测）：
+   * 起点 www.qidian.com 全端返回 202 probe.js 指纹挑战（curl/undici 皆拦），
+   * 而 m.qidian.com/book/<id>/ 双指纹 200、SSR、og:novel 全量且书籍 id 相同。
+   */
+  static rewriteUrl(url: string): string {
+    const qidian = url.match(/^https?:\/\/(?:www|book)\.qidian\.com\/(?:book|info)\/(\d+)\/?$/);
+    if (qidian !== null) {
+      return `https://m.qidian.com/book/${qidian[1]}/`;
+    }
+    return url;
   }
 
   /**

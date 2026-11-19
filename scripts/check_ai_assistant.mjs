@@ -1442,6 +1442,35 @@ try {
     assert.ok(m.intro.includes('齐麟家祖祠内') && !m.intro.endsWith('&quot;') && !m.intro.endsWith('"'));
   });
 
+  // 起点移动版 fixture：2026-11-20 m.qidian.com/book/1050742867 实测（www 桌面端是 202 probe.js 风控）
+  const QIDIAN_M_PAGE = `<html><head>
+<meta property="og:title" content="美利坚：超凡入圣" />
+<meta property="og:image" content="//bookcover.yuewen.com/qdbimg/349573/1050742867/180" />
+<meta property="og:description" content="谢邀：人在白头鹰，标准炎黄纯血贵族。本想当好人，奈何超凡复苏，且自身灵根残破。故只能在这混乱渐起的动荡时代，杀出一条长生之路！【多女主】【超凡复苏】【半无敌】" />
+<meta property="og:novel:category" content="异术超能" />
+<meta property="og:novel:author" content="白魔星" />
+<meta property="og:novel:book_name" content="美利坚：超凡入圣" />
+<meta property="og:novel:status" content="连载" />
+</head><body></body></html>`;
+  test('起点：www 风控 url 重写到 m.qidian 后 og:novel 命中，协议相对封面补全', async () => {
+    assert.equal(NovelMetaService.rewriteUrl('https://www.qidian.com/book/1050742867'),
+      'https://m.qidian.com/book/1050742867/');
+    assert.equal(NovelMetaService.rewriteUrl('https://book.qidian.com/info/1050742867/'),
+      'https://m.qidian.com/book/1050742867/');
+    assert.equal(NovelMetaService.rewriteUrl('https://www.wtzw.com/book/224292.html'),
+      'https://www.wtzw.com/book/224292.html');
+    deps.state.rcpResponse = { statusCode: 200, body: enc(QIDIAN_M_PAGE) };
+    const m = await NovelMetaService.fetchDetail('https://www.qidian.com/book/1050742867/');
+    assert.ok(m.ok && m.rule === 'og:novel');
+    assert.equal(m.title, '美利坚：超凡入圣');
+    assert.equal(m.author, '白魔星');
+    assert.equal(m.category, '异术超能');
+    assert.equal(m.status, '连载中'); // 「连载」归一
+    assert.equal(m.cover, 'https://bookcover.yuewen.com/qdbimg/349573/1050742867/180');
+    assert.ok(m.intro.includes('超凡复苏'));
+    deps.state.rcpResponse = null;
+  });
+
   // 梧桐中文 fixture：2026-11-20 www.wtzw.com/book/224292.html 实测节选（无 og，类名锚点）
   const WTZW_PAGE = `<html><head><title>我的少年班全本小说-卿殇小说-无广告阅读(免费下载)-七猫中文网</title></head><body>
 <h1>免费小说就在梧桐中文网（七猫中文网）</h1>
