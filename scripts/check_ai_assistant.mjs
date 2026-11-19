@@ -1617,6 +1617,40 @@ try {
     deps.state.rcpResponse = null;
   });
 
+  // 潇湘 fixture：2026-11-20 www.xxsy.net/book/37389130704030609 实测节选（Vue SSR 无 og）
+  const XXSY_PAGE = `<html><head><title>《星际？不慌，我有万界位面！》小说在线阅读_全文免费完结无删减 – 潇湘书院</title></head><body><dl class="bookprofile"><dt><div class="book-cover" style="width:210px;"><img src="//bookcover.yuewen.com/qdbimg/349573/c_37389130704030609/180" alt="星际？不慌，我有万界位面！" class="object-cover"></div></dt><dd><div class="title"><a href="javascript:;" class="read-by-phone"><i class="iconfont"></i>手机阅读</a><h1 style="font-size:23px;">星际？不慌，我有万界位面！</h1><span>文 / 挣脱蛛网的蝴蝶</span></div><p class="sub-cols"><span>会员作品</span><span>连载中</span><span>类别：科幻空间</span><span>发布：2026-11-07</span></p></dd></dl><div id="book_intro" class="book-profile" style="white-space:pre-line;">唐砚秋穿越星际，手握重宝，能够穿越位面。 一切的悲伤已经过去。</div></body></html>`;
+  test('NovelMeta：潇湘书院——title 块内 h1 书名（前有手机阅读链接）、文/作者、sub-cols 跳会员标签、协议相对封面', async () => {
+    const m = NovelMetaService.parseXxsy(XXSY_PAGE);
+    assert.ok(m.ok && m.rule === '潇湘书院');
+    assert.equal(m.title, '星际？不慌，我有万界位面！');
+    assert.equal(m.author, '挣脱蛛网的蝴蝶');
+    assert.equal(m.status, '连载中'); // sub-cols 首 span 是「会员作品」，状态取 连载|完结
+    assert.equal(m.category, '科幻空间');
+    assert.equal(m.cover, '//bookcover.yuewen.com/qdbimg/349573/c_37389130704030609/180');
+    assert.ok(m.intro.startsWith('唐砚秋穿越星际'));
+    deps.state.rcpResponse = { statusCode: 200, body: enc(XXSY_PAGE) };
+    const d = await NovelMetaService.fetchDetail('https://www.xxsy.net/book/37389130704030609');
+    assert.ok(d.rule === '潇湘书院' && d.cover.startsWith('https://bookcover.yuewen.com'),
+      '分派命中+协议相对封面升 https');
+    deps.state.rcpResponse = null;
+  });
+
+  // 云起/塔读 fixture：2026-11-20 实测（云起 read 壳无 og→detail og:novel；塔读 og 全量含脏 title/双斜杠封面）
+  const YQ_DETAIL = `<html><head><meta property="og:type" content="novel"><meta property="og:novel:book_name" content="粟粟"><meta property="og:novel:author" content="荆棘之歌"><meta property="og:novel:category" content="古代言情"><meta property="og:novel:status" content="连载"><meta property="og:image" content="https://wfqqreader-1252317822.image.myqcloud.com/cover/857/59718575/s_59718575.jpg"><meta property="og:description" content="山洪冲下来一个白里透红的小娃娃。"></head><body></body></html>`;
+  test('NovelMeta：云起 read→detail 重写 + 塔读式脏 og:title 由 book_name 去尾——通用 og:novel 覆盖阅文/掌阅系', async () => {
+    assert.equal(NovelMetaService.rewriteUrl('https://yunqi.qq.com/read/59718575/'),
+      'https://yunqi.qq.com/detail/59718575');
+    assert.equal(NovelMetaService.rewriteUrl('https://www.xxsy.net/book/37389130704030609'),
+      'https://www.xxsy.net/book/37389130704030609'); // 他站不受影响
+    deps.state.rcpResponse = { statusCode: 200, body: enc(YQ_DETAIL) };
+    const d = await NovelMetaService.fetchDetail('https://yunqi.qq.com/read/59718575/');
+    assert.ok(d.ok && d.rule === 'og:novel' && d.title === '粟粟' && d.status === '连载中'
+      && d.category === '古代言情');
+    deps.state.rcpResponse = null;
+    const td = NovelMetaService.parseGeneric(`<html><head><meta property="og:title" content="仕途风云小说_阿诸_仕途风云最新章节_仕途风云无弹窗免费阅读_塔读免费小说,塔读"><meta property="og:novel:book_name" content="仕途风云"><meta property="og:novel:author" content="阿诸"><meta property="og:novel:category" content="现代都市"><meta property="og:novel:status" content="连载"><meta property="og:image" content="https://media3.tadu.com//2023/05/18/19/02/353ff3f10ca8409095452f668244e5a5.jpg"><meta property="og:description" content="简介：省督查室副主任荆涛。"></head><body></body></html>`);
+    assert.ok(td.rule === 'og:novel' && td.title === '仕途风云' && td.status === '连载中');
+  });
+
   // 飞卢 gb2312 fixture：2026-11-20 b.faloo.com/1484744.html 实测 meta 行，GBK 字节 base64
   test('NovelMeta：charset 嗅探+GBK 解码——飞卢老站不乱码，utf-8 页不受影响', async () => {
     const FALOO_B64 = 'PGh0bWw+PGhlYWQ+PG1ldGEgaHR0cC1lcXVpdj0iQ29udGVudC1UeXBlIiBjb250ZW50PSJ0ZXh0L2h0bWw7IGNoYXJzZXQ9Z2IyMzEyIj4KPG1ldGEgcHJvcGVydHk9Im9nOnRpdGxlIiBjb250ZW50PSLFzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOzX7tDC1cK92ijC283iz8XE8tbuzOwp1NrP39TEtsFft8nCrNChy7XN+CI+CjxtZXRhIHByb3BlcnR5PSJvZzpkZXNjcmlwdGlvbiIgY29udGVudD0iob63ycKs0KHLtc34tsC80sep1LzQocu1o7rFzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOyhv8zsxLu9tcHZ1u7M7KOsv6q+1sXMtePN8r3n1b3BpsG/vLaho7TTsazXqby2o6yxrMe9vLahraGtsazQx7y2o6y649DHvLajrNDHz7W8tqOs0MfPtc3FvLajrLWlzOXT7tbmvLajrLbg1KrT7tbmvLajrM7ez9624NSq0+7W5qGtoa3O3s/eutDX06Os1rjK/cv+o6yzrNa4yv3L/qOssru/ybTvu/nK/aGtoa3V5s/WyrWjrLW9Ij4KPG1ldGEgcHJvcGVydHk9Im9nOmltYWdlIiBjb250ZW50PSJodHRwOi8vaW1nLmZhbG9vLmNvbS9Ob3ZlbC80OTh4NzA1LzEvMTU5NS8wMDE1OTU5NTcuanBnIj4KPC9oZWFkPjxib2R5PjxoMT7FzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOw8L2gxPjwvYm9keT48L2h0bWw+';

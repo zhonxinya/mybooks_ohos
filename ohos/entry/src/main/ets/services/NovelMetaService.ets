@@ -17,6 +17,10 @@ import { util } from '@kit.ArkTS';
  * - 晋江 www.jjwxc.net onebook.php 无 og，带 schema.org Book 微数据
  *   （itemprop=articleSection/author/genre/updataStatus/image/description），
  *   gb18030 编码（charset 声明在字节 240，decodeBody 嗅探窗口内）、SSR 直出无 JS 壳。
+ * - 阅文系/掌阅系手贴场景（2026-11-20 双指纹实测）：书旗 t.shuqi.com/book/<id>.html、
+ *   塔读 tadu.com/book/<id>/、云起 yunqi.qq.com/detail/<id> 均 og:novel 全量（通用规则即中）；
+ *   云起站内导航的 /read/<id>/ 是阅读壳无 og → rewriteUrl 到 detail；潇湘 xxsy.net 无 og，
+ *   Vue SSR 正文锚点走 parseXxsy。
  * - 番茄小说 fanqienovel.com 详情页是 SPA（1.6MB __INITIAL_STATE__），但同 ID 的
  *   /api/book/info?bookId= 双指纹裸通、字段全量无签名（2026-11-20 实测）——走 rewriteUrl。
  * - so-novel 候选 6 镜像域质量审计（2026-11-20 离线实跑）：mcxs/yeudusk/shuhaige/quanben
@@ -127,6 +131,8 @@ export class NovelMetaService {
       meta = NovelMetaService.parseMianhua(html);
     } else if (trimmed.indexOf('fanqienovel.com') >= 0) {
       meta = NovelMetaService.parseFanqie(html);
+    } else if (trimmed.indexOf('xxsy.net') >= 0) {
+      meta = NovelMetaService.parseXxsy(html);
     } else {
       meta = NovelMetaService.parseGeneric(html);
     }
@@ -188,6 +194,11 @@ export class NovelMetaService {
     const fanqie = ujxsw.match(/^https?:\/\/fanqienovel\.com\/page\/(\d{15,20})\/?$/);
     if (fanqie !== null) {
       return `https://fanqienovel.com/api/book/info?bookId=${fanqie[1]}`;
+    }
+    // 云起书院站内导航链到 /read/<id>/（阅读壳无 og），同 ID 的 /detail/<id> 才带 og:novel 全量
+    const yunqi = ujxsw.match(/^https?:\/\/(?:www\.)?yunqi\.qq\.com\/read\/(\d+)\/?$/);
+    if (yunqi !== null) {
+      return `https://yunqi.qq.com/detail/${yunqi[1]}`;
     }
     return ujxsw;
   }
@@ -372,6 +383,45 @@ export class NovelMetaService {
     if (!meta.ok && meta.error.length === 0) {
       meta.error = '番茄接口返回缺少书名/简介';
     }
+    return meta;
+  }
+
+  /** 潇湘书院（www.xxsy.net/book/<id>，阅文系，2026-11-20 实测）：无 og，Vue SSR 正文锚点
+   *  （来自 legado 规则 class.title@h1 / sub-cols / book_intro 转正则）。书名在
+   *  class="title" 块内 h1（同梧桐坑，不可顶层 h1 兜底），作者同块「文 / 名」，
+   *  状态/类别在 sub-cols span（首 span 是「会员作品」标签非状态），封面 bookprofile
+   *  协议相对 //bookcover.yuewen.com，简介 id="book_intro" 纯文本 pre-line。 */
+  static parseXxsy(html: string): NovelMeta {
+    const meta: NovelMeta = { ok: false, error: '', title: '', author: '', category: '',
+      status: '', intro: '', cover: '', rule: '潇湘书院' };
+    const tit = html.match(/class="title"[\s\S]{0,200}?<h1[^>]*>([^<]{1,60})<\/h1>/);
+    if (tit !== null) {
+      meta.title = tit[1].trim();
+    }
+    const au = html.match(/文\s*\/\s*([^<]{1,40})<\/span>/);
+    if (au !== null) {
+      meta.author = au[1].trim();
+    }
+    const cols = html.match(/class="sub-cols"[\s\S]{0,400}?<\/p>/);
+    if (cols !== null) {
+      const st = cols[0].match(/(连载中|完结)/);
+      if (st !== null) {
+        meta.status = st[1] === '完结' ? '已完本' : '连载中';
+      }
+      const cat = cols[0].match(/类别：([^<\s][^<]{0,29})/);
+      if (cat !== null) {
+        meta.category = cat[1].trim();
+      }
+    }
+    const pic = html.match(/class="bookprofile"[\s\S]{0,500}?<img[^>]*src="([^"]+)"/);
+    if (pic !== null) {
+      meta.cover = pic[1]; // 协议相对 //bookcover.yuewen.com，fetchDetail 统一补全
+    }
+    const intro = html.match(/id="book_intro"[^>]*>([\s\S]{0,4000}?)<\/div>/);
+    if (intro !== null) {
+      meta.intro = NovelMetaService.clean(intro[1], INTRO_MAX);
+    }
+    meta.ok = meta.title.length > 0 || meta.intro.length > 0;
     return meta;
   }
 
