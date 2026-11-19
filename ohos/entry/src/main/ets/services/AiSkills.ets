@@ -37,4 +37,17 @@ export const AI_SKILLS: AiSkill[] = [
     prompt: '请用苏格拉底式提问引导我读《》：先问一个开放性问题，等我回答后再追问，一次只问一个问题；' +
       '必要时用 book_notes 参考我已经写过的批注，把问题接在我的思考后面。',
   },
+  {
+    label: '找书并下载',
+    hint: '搜书源→确认→下进本地书架',
+    prompt: '帮我在书源里找《》：先用 search_sonovel 搜到候选（把书名/url/书源念给我核对），' +
+      '我确认后用 add_sonovel_task 加入下载队列，之后用 list_download_tasks 向我汇报进度；' +
+      '成品会自动进本地书架，完成后提醒我去读。',
+  },
+  {
+    label: '建个书单',
+    hint: '起名→搜书→逐本入单',
+    prompt: '帮我建一个主题为「」的书单：先 create_booklist 创建，再用 search_books 找出 5 本候选并列出，' +
+      '我挑选后用 add_books_to_booklist 加进去；每步写操作都做之前先征求我的确认。',
+  },
 ];

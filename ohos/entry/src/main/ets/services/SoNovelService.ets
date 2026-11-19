@@ -18,6 +18,13 @@ export interface SoNovelDownloadProgress {
   message: string;
 }
 
+/** 服务器 downloads 目录里的一份成品（GET /local-books 响应项）。 */
+export interface SoNovelLocalBook {
+  name: string;
+  size: number;
+  timestamp: number;
+}
+
 interface SseAbortHandle {
   aborted: boolean;
   destroy?: () => void;
@@ -398,6 +405,86 @@ export class SoNovelService {
         return { status: 0, body: null, error: 'SSL 证书验证失败，请为服务端配置受信任证书，或改用 http:// 局域网地址' };
       }
       return { status: 0, body: null, error: message.length > 0 ? message : '网络请求失败' };
+    } finally {
+      httpRequest.destroy();
+    }
+  }
+
+  /**
+   * 服务器成品列表：GET /local-books 返回**裸 JSON 数组** [{name,size,timestamp}]，
+   * 是 so-novel downloads 目录（downloadPath）顶层文件，成品命名 `书名(作者).<ext>`。
+   */
+  static async listLocalBooks(): Promise<SoNovelLocalBook[]> {
+    const base = SoNovelService.getBaseUrl();
+    if (base.length === 0) {
+      throw new Error('请先配置 SoNovel 服务地址');
+    }
+    const httpRequest = http.createHttp();
+    try {
+      const response = await httpRequest.request(`${base}/local-books`, {
+        method: http.RequestMethod.GET,
+        header: {
+          'Accept': 'application/json',
+        },
+        connectTimeout: 15000,
+        readTimeout: 30000,
+        expectDataType: http.HttpDataType.STRING,
+        usingProtocol: http.HttpProtocol.HTTP1_1,
+      });
+      const raw = SoNovelService.responseText(response.result as Object | string | ArrayBuffer | undefined);
+      if (response.responseCode < 200 || response.responseCode >= 300) {
+        throw new Error(SoNovelService.httpErrorMessage(response.responseCode, raw, '成品列表'));
+      }
+      const parsed: Object = JSON.parse(raw.length > 0 ? raw : '[]');
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      const books: SoNovelLocalBook[] = [];
+      const list: Object[] = parsed as Object[];
+      for (let i = 0; i < list.length; i++) {
+        const item: Object = list[i];
+        if (item === null || typeof item !== 'object') {
+          continue;
+        }
+        const rec: Record<string, Object> = item as Record<string, Object>;
+        books.push({
+          name: String(rec['name'] ?? ''),
+          size: Number(rec['size'] ?? 0),
+          timestamp: Number(rec['timestamp'] ?? 0),
+        });
+      }
+      return books;
+    } finally {
+      httpRequest.destroy();
+    }
+  }
+
+  /** 拉取一份成品文件的字节（GET /book-download?filename=，404/403 会以错误文案抛出）。 */
+  static async fetchLocalBookBytes(filename: string): Promise<ArrayBuffer> {
+    const base = SoNovelService.getBaseUrl();
+    if (base.length === 0) {
+      throw new Error('请先配置 SoNovel 服务地址');
+    }
+    const httpRequest = http.createHttp();
+    try {
+      const response = await httpRequest.request(
+        `${base}/book-download?filename=${encodeURIComponent(filename)}`, {
+          method: http.RequestMethod.GET,
+          connectTimeout: 60000,
+          readTimeout: 300000,
+          expectDataType: http.HttpDataType.ARRAY_BUFFER,
+          usingProtocol: http.HttpProtocol.HTTP1_1,
+        });
+      if (response.responseCode < 200 || response.responseCode >= 300) {
+        throw new Error(SoNovelService.httpErrorMessage(
+          response.responseCode,
+          response.result as Object | string | ArrayBuffer | undefined, '成品拉取'));
+      }
+      const bytes: ArrayBuffer = response.result as ArrayBuffer;
+      if (bytes === undefined || bytes.byteLength === 0) {
+        throw new Error('成品拉取结果为空');
+      }
+      return bytes;
     } finally {
       httpRequest.destroy();
     }

@@ -557,8 +557,8 @@ export class AiService {
    * （4.1.0(11) 精简版）没有流式事件，无法自解析 SSE。故整包返回
    * （stream:false），OpenCode 对话暂无打字机效果，其他服务商不受影响。
    *
-   * `tools` 非空时走 **function calling 回路**：模型返回 tool_calls → 本地执行
-   * （AiTools，只读）→ 以 assistant+tool 消息回填上下文 → 再次请求，
+   * `tools` 非空时走 **function calling 回路**：模型返回 tool_calls → （写工具先过
+   * onConfirm 确认闸门）本地执行（AiTools）→ 以 assistant+tool 消息回填上下文 → 再次请求，
    * 直到模型给出文本回答或达到 MAX_TOOL_ROUNDS 轮上限。
    */
   private static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[],

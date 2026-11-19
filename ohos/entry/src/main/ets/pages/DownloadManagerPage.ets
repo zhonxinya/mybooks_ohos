@@ -1,6 +1,7 @@
 import { PageScaffold, EmptyState, LoadingState, SwipeDeleteAction, PrimaryButton, SecondaryButton, FilterChips, FilterChipItem } from '../components';
-import { DownloadTask, DownloadTaskStatus } from '../services/TalebookService';
+import { DownloadTask, DownloadTaskStatus, TalebookService } from '../services/TalebookService';
 import { DownloadTaskService } from '../services/DownloadTaskService';
+import { ReaderLauncher, ReaderOpenParams } from '../services/ReaderLauncher';
 import { SoNovelService } from '../services/SoNovelService';
 import { DateFormat } from '../utils/DateFormat';
 import { AppRouter } from '../utils/AppRouter';
@@ -141,11 +142,27 @@ struct DownloadManagerPage {
         this.getUIContext().getPromptAction().showToast({
           message: `《${task.title}》已下载并加入书架`,
         });
-      } else {
-        this.getUIContext().getPromptAction().showToast({
-          message: `《${task.title}》已在 SoNovel 服务器下载完成`,
-        });
+        return;
       }
+      if (task.filePath.length > 0) {
+        // so-novel 成品已拉回本地书架：直接点开阅读（与书架同款启动器）
+        const params: ReaderOpenParams = {
+          filePath: task.filePath,
+          bookId: task.bookId,
+          bookTitle: task.title,
+          format: task.format,
+          location: TalebookService.resolveSavedLocation(task.bookId, task.filePath),
+        };
+        if (!ReaderLauncher.open(this.getUIContext(), params)) {
+          this.getUIContext().getPromptAction().showToast({
+            message: ReaderLauncher.UNAVAILABLE_MESSAGE,
+          });
+        }
+        return;
+      }
+      this.getUIContext().getPromptAction().showToast({
+        message: `《${task.title}》已在 SoNovel 服务器下载完成`,
+      });
       return;
     }
     if (task.status === 'failed') {
@@ -319,7 +336,7 @@ struct DownloadManagerPage {
         .fontColor($r('app.color.text_tertiary'))
         .width('100%');
 
-      Text('SoNovel 下载由服务器完成，不会保存到本地书架')
+      Text('SoNovel 由服务器转换，完成后自动拉取成品到本地书架')
         .fontSize(12)
         .fontColor($r('app.color.text_tertiary'))
         .width('100%');

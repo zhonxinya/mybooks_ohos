@@ -1,12 +1,18 @@
 import { TalebookApi } from './TalebookApi';
 import { AnnotationApi, annotationTypeLabel, ANNOTATION_SCOPE_MINE } from './AnnotationApi';
-import { TalebookService } from './TalebookService';
+import { SoNovelBookPayload, DownloadTask, TalebookService } from './TalebookService';
+import { SoNovelService } from './SoNovelService';
+import { SoNovelMerge, SoNovelSearchItem } from '../utils/SoNovelMerge';
+import { DownloadTaskService } from './DownloadTaskService';
+import { BookListAddResponse, BookListApi, BookListMutationResponse } from './BookListApi';
 
 /**
  * AI 助手的本地工具集（OpenAI function calling 协议）。
  *
  * 设计约束：
- * - **一律只读**：只查用户已有的书架/书籍详情/标注/阅读历史，复用现成服务，不新增写操作。
+ * - 读工具只查用户已有数据（书架/详情/标注/历史/书源/任务）；**写工具
+ *   （建书单/加书/加下载任务）必须登记进 WRITE_TOOLS**，由回路层的确认闸门
+ *   （AiStreamHandlers.onConfirm）逐笔问过用户才执行。
  * - **返回精简文本**而非原始 JSON：省上下文 token，模型也更好引用；
  *   执行失败返回说明文本（不抛异常），协议回路（AiService.chatViaGateway）不因单个工具中断。
  * - 当前仅 OpenCode 网关通道挂载这些工具；其他服务商走 SDK 流式，不附加。
@@ -74,7 +80,53 @@ const TOOL_READING_HISTORY: AiToolDefinition = defineTool('reading_history',
   '返回用户本机最近的阅读记录（最多 10 条）：书名、当前章节、进度百分比、最近阅读时间。无需参数。',
   EMPTY_PROPS, NO_REQUIRED);
 
-const TOOL_DEFS: AiToolDefinition[] = [TOOL_SEARCH_BOOKS, TOOL_BOOK_DETAIL, TOOL_BOOK_NOTES, TOOL_READING_HISTORY];
+const SONOVEL_LIMIT: number = 8;
+const TASK_LIST_LIMIT: number = 10;
+const BOOKLIST_DEFAULT_COLOR: string = '#1890ff';
+
+const BOOKLIST_CREATE_PROPS: Record<string, AiToolProperty> = {
+  'name': prop('string', '书单名称'),
+  'description': prop('string', '书单简介，可留空'),
+};
+const BOOKLIST_ADD_PROPS: Record<string, AiToolProperty> = {
+  'booklist_id': prop('number', '书单 id（create_booklist 返回）'),
+  'book_ids': prop('string', '逗号分隔的书籍 id，如 "12,44"（来自 search_books 的 id）'),
+};
+const SONOVEL_TASK_PROPS: Record<string, AiToolProperty> = {
+  'book_name': prop('string', '小说名'),
+  'url': prop('string', '书源站详情页 url（来自 search_sonovel）'),
+  'author': prop('string', '作者，可留空'),
+  'source_id': prop('number', '书源 id（来自 search_sonovel）'),
+  'source_name': prop('string', '书源名（来自 search_sonovel）'),
+  'format': prop('string', '生成格式 epub 或 txt，默认 epub'),
+};
+const BOOKLIST_CREATE_REQUIRED: string[] = ['name'];
+const BOOKLIST_ADD_REQUIRED: string[] = ['booklist_id', 'book_ids'];
+const SONOVEL_TASK_REQUIRED: string[] = ['book_name', 'url'];
+
+const TOOL_SEARCH_SONOVEL: AiToolDefinition = defineTool('search_sonovel',
+  '在 so-novel 书源站聚合搜索网络小说，返回最多 8 条 {书名, 作者, 书源, url, 最新章节}。' +
+    '用户想下载书架上没有的网络小说时使用；url 是后续 add_sonovel_task 的必需参数。',
+  QUERY_PROPS, ['query']);
+const TOOL_ADD_SONOVEL_TASK: AiToolDefinition = defineTool('add_sonovel_task',
+  '把一本 so-novel 网络小说加入下载任务队列（参数来自 search_sonovel 的返回）。' +
+    '服务器转换完成后成品会自动拉进本地书架可供阅读。',
+  SONOVEL_TASK_PROPS, SONOVEL_TASK_REQUIRED);
+const TOOL_LIST_DOWNLOAD_TASKS: AiToolDefinition = defineTool('list_download_tasks',
+  '查看当前下载任务队列：每条任务的状态（等待/下载中/完成/失败）、进度与错误原因。无需参数。',
+  EMPTY_PROPS, NO_REQUIRED);
+const TOOL_CREATE_BOOKLIST: AiToolDefinition = defineTool('create_booklist',
+  '在 MyBooks 服务器上创建一个新书单。返回新书单 id，可用于 add_books_to_booklist。',
+  BOOKLIST_CREATE_PROPS, BOOKLIST_CREATE_REQUIRED);
+const TOOL_ADD_BOOKS_TO_BOOKLIST: AiToolDefinition = defineTool('add_books_to_booklist',
+  '把若干本书（书籍 id 来自 search_books）加入指定书单。',
+  BOOKLIST_ADD_PROPS, BOOKLIST_ADD_REQUIRED);
+
+const TOOL_DEFS: AiToolDefinition[] = [
+  TOOL_SEARCH_BOOKS, TOOL_BOOK_DETAIL, TOOL_BOOK_NOTES, TOOL_READING_HISTORY,
+  TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS,
+  TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST,
+];
 
 export class AiTools {
   /** 随请求体附带的工具定义。 */
@@ -107,6 +159,12 @@ export class AiTools {
     if (name === 'reading_history') {
       return '查看阅读历史';
     }
+    if (name === 'search_sonovel') {
+      return '搜索网络小说书源';
+    }
+    if (name === 'list_download_tasks') {
+      return '查看下载任务';
+    }
     if (name === 'create_booklist') {
       return '创建书单';
     }
@@ -134,6 +192,21 @@ export class AiTools {
       }
       if (name === 'reading_history') {
         return AiTools.readingHistory();
+      }
+      if (name === 'search_sonovel') {
+        return await AiTools.searchSoNovel(AiTools.argString(args, 'query'));
+      }
+      if (name === 'add_sonovel_task') {
+        return AiTools.addSonovelTask(args);
+      }
+      if (name === 'list_download_tasks') {
+        return AiTools.listDownloadTasks();
+      }
+      if (name === 'create_booklist') {
+        return await AiTools.createBooklist(args);
+      }
+      if (name === 'add_books_to_booklist') {
+        return await AiTools.addBooksToBooklist(args);
       }
       return `未知工具：${name}`;
     } catch (error) {
@@ -235,6 +308,130 @@ export class AiTools {
       lines.push(line);
     }
     return `最近阅读 ${cap} 本：\n${lines.join('\n')}`;
+  }
+
+  private static async searchSoNovel(query: string): Promise<string> {
+    if (query.length === 0) {
+      return '参数 query 为空，请提供小说名关键词。';
+    }
+    const envelope = await SoNovelService.search(query);
+    if (envelope.error.length > 0) {
+      return `so-novel 搜索失败：${envelope.error}`;
+    }
+    const body: Record<string, Object> | null = envelope.body as Record<string, Object> | null;
+    const data: Object | undefined = body !== null ? body['data'] : undefined;
+    if (data === undefined || !Array.isArray(data) || data.length === 0) {
+      return `各书源没有找到与「${query}」相关的小说。`;
+    }
+    const cap: number = Math.min(data.length, SONOVEL_LIMIT);
+    const lines: string[] = [];
+    for (let i = 0; i < cap; i++) {
+      const item: SoNovelSearchItem = SoNovelMerge.fromRecord(data[i] as Record<string, Object>);
+      let line: string = `- 《${item.bookName}》（${item.author.length > 0 ? item.author : '佚名'}）` +
+        ` 书源：${item.sourceName}(id=${item.sourceId})`;
+      if (item.latestChapter.length > 0) {
+        line += `，最新章节：${AiTools.clip(item.latestChapter, 30)}`;
+      }
+      line += `，url：${item.url}`;
+      lines.push(line);
+    }
+    return `书源站找到 ${cap} 条，要下载需调 add_sonovel_task（带上 url 与书源信息）：\n${lines.join('\n')}`;
+  }
+
+  private static addSonovelTask(args: Record<string, Object>): string {
+    const bookName: string = AiTools.argString(args, 'book_name');
+    const url: string = AiTools.argString(args, 'url');
+    if (bookName.length === 0 || url.length === 0) {
+      return '参数 book_name 与 url 必填（都来自 search_sonovel 的结果）。';
+    }
+    const formatRaw: string = AiTools.argString(args, 'format').toLowerCase();
+    const format: string = formatRaw === 'txt' ? 'txt' : 'epub';
+    const payload: SoNovelBookPayload = {
+      sourceId: AiTools.argNumber(args, 'source_id'),
+      sourceName: AiTools.argString(args, 'source_name'),
+      url: url,
+      bookName: bookName,
+      author: AiTools.argString(args, 'author'),
+      format: format,
+      language: 'zh-CN',
+    };
+    const dup: DownloadTask | undefined = DownloadTaskService.getTasks().find((t: DownloadTask) =>
+      t.kind === 'sonovel' && t.payload !== undefined && t.payload.url === url &&
+        (t.status === 'pending' || t.status === 'downloading'));
+    if (dup !== undefined) {
+      return `《${bookName}》已在下载队列中（状态：${DownloadTaskService.statusLabel(dup.status)}），无需重复添加。`;
+    }
+    DownloadTaskService.enqueue(payload);
+    DownloadTaskService.processQueue();
+    return `已加入下载任务：《${bookName}》（书源：${payload.sourceName.length > 0 ? payload.sourceName : '未知'}，` +
+      `格式 ${format}）。服务器转换完成后成品会自动拉进本地书架；进度可随时让我用 list_download_tasks 查。`;
+  }
+
+  private static listDownloadTasks(): string {
+    const tasks: DownloadTask[] = DownloadTaskService.getTasks();
+    if (tasks.length === 0) {
+      return '还没有下载任务。';
+    }
+    const cap: number = Math.min(tasks.length, TASK_LIST_LIMIT);
+    const lines: string[] = [];
+    for (let i = 0; i < cap; i++) {
+      const t: DownloadTask = tasks[i];
+      let line: string = `- [${DownloadTaskService.statusLabel(t.status)}] 《${t.title}》` +
+        `（${t.author.length > 0 ? t.author : '佚名'}）`;
+      if (t.status === 'downloading') {
+        line += ` 进度 ${t.progress}% ${AiTools.clip(t.message, 30)}`;
+      }
+      if (t.status === 'failed' && t.error.length > 0) {
+        line += ` 错误：${AiTools.clip(t.error, 40)}`;
+      }
+      if (t.status === 'completed' && t.filePath.length > 0) {
+        line += '，已存入本地书架';
+      }
+      lines.push(line);
+    }
+    const more: string = tasks.length > cap ? `\n（共 ${tasks.length} 条，仅列最近 ${cap} 条）` : '';
+    return `下载任务：\n${lines.join('\n')}${more}`;
+  }
+
+  private static async createBooklist(args: Record<string, Object>): Promise<string> {
+    const name: string = AiTools.argString(args, 'name');
+    if (name.length === 0) {
+      return '参数 name 为空，请给书单起个名字。';
+    }
+    const description: string = AiTools.argString(args, 'description');
+    const res: BookListMutationResponse =
+      await BookListApi.createBooklist(name, description, BOOKLIST_DEFAULT_COLOR, true);
+    if (res.err !== undefined && res.err !== 'ok') {
+      return `创建书单失败：${res.msg !== undefined && res.msg.length > 0 ? res.msg : res.err}`;
+    }
+    const booklist: Record<string, Object> | undefined = res.booklist as Record<string, Object> | undefined;
+    const id: number = booklist !== undefined ? Number(booklist['id'] ?? 0) : 0;
+    return `已创建书单「${name}」${id > 0 ? `（id=${id}）` : ''}。` +
+      '接下来可用 add_books_to_booklist 把 search_books 查到的书 id 加进来。';
+  }
+
+  private static async addBooksToBooklist(args: Record<string, Object>): Promise<string> {
+    const booklistId: number = AiTools.argNumber(args, 'booklist_id');
+    const raw: string = AiTools.argString(args, 'book_ids');
+    if (booklistId <= 0 || raw.length === 0) {
+      return '参数 booklist_id 与 book_ids（逗号分隔的书籍 id）必填。';
+    }
+    const ids: number[] = [];
+    for (const part of raw.split(',')) {
+      const num: number = Number(part.trim());
+      if (Number.isFinite(num) && num > 0) {
+        ids.push(num);
+      }
+    }
+    if (ids.length === 0) {
+      return 'book_ids 没解析出任何有效 id。';
+    }
+    const res: BookListAddResponse = await BookListApi.addBooks(booklistId, ids);
+    if (res.err !== undefined && res.err !== 'ok') {
+      return `书单加书失败：${res.msg !== undefined && res.msg.length > 0 ? res.msg : res.err}`;
+    }
+    return `已把 ${res.added !== undefined ? res.added : ids.length} 本书加入书单` +
+      `${res.book_count !== undefined ? `，书单现有 ${res.book_count} 本` : ''}。`;
   }
 
   private static parseArgs(json: string): Record<string, Object> {

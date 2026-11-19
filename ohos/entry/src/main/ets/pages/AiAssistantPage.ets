@@ -1,4 +1,5 @@
 import { pasteboard } from '@kit.BasicServicesKit';
+import { promptAction } from '@kit.ArkUI';
 import { PageScaffold, SecondaryButton, TextButton } from '../components';
 import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
@@ -18,8 +19,14 @@ interface ChatBubble {
 
 const SYSTEM_PROMPT: string =
   '你是一个电子书阅读应用的助手，回答简洁、准确、中文优先。' +
-  '你可以调用只读工具查询用户的真实数据：search_books（搜书架）、book_detail（书籍详情，需 id）、' +
-  'book_notes（该书标注，需 id）、reading_history（最近阅读记录）。' +
+  '只读工具查询真实数据：search_books（搜书架）、book_detail（书籍详情，需 id）、' +
+  'book_notes（该书标注，需 id）、reading_history（最近阅读记录）、' +
+  'search_sonovel（搜网络小说书源）、list_download_tasks（查下载任务）。' +
+  '写操作工具：create_booklist（建书单）、add_books_to_booklist（书单加书，id 来自 search_books）、' +
+  'add_sonovel_task（加入下载队列，参数来自 search_sonovel）；' +
+  '这些操作执行前都会请用户逐笔确认，被拒绝时不要坚持重试，问明原因即可。' +
+  '下载工作流：先 search_sonovel 拿 url，再 add_sonovel_task 入队，用 list_download_tasks 报进度，' +
+  '成品完成后自动进本地书架可读。' +
   '问题涉及用户的书籍或阅读情况时，先调用工具拿到真实数据再回答，绝不编造；' +
   '工具数据不足时直接说明不确定。';
 
@@ -125,14 +132,17 @@ struct AiAssistantPage {
           return Promise.resolve(false);
         }
         const summary: string = args.length > 200 ? `${args.substring(0, 200)}…` : args;
-        return this.getUIContext().getPromptAction().showAlertDialog({
+        // showDialog 的 Promise 结果是按钮下标；异常路径（返回键等）统一按拒绝兜底
+        return this.getUIContext().getPromptAction().showDialog({
           title: 'AI 想执行操作',
           message: `操作：${label}\n参数：${summary}`,
-          primaryButton: { value: '允许', action: (): void => {} },
-          secondaryButton: { value: '拒绝', action: (): void => {} },
-          showMark: false,
-          autoCancel: false,
-        });
+          buttons: [
+            { text: '拒绝', color: '#E5484D' },
+            { text: '允许', color: '#1890FF' },
+          ],
+          alignment: DialogAlignment.Center,
+        }).then((res: promptAction.ShowDialogSuccessResponse): boolean => res.index === 1)
+          .catch((): boolean => false);
       },
       onDone: (full: string) => {
         if (requestId === this.requestId && this.thinking) {
