@@ -1420,6 +1420,28 @@ try {
     assert.equal(c.status, ''); // 该站无 status 字段，不得瞎猜
   });
 
+  // 纵横 fixture：2026-11-20 www.zongheng.com/book/1435440.html 实测（Nuxt SSR，name= 写法，
+  // 且 og:description 值被站点模板二次包壳成 content=&quot;…&quot;）
+  const ZONGHENG_PAGE = `<html><head>
+<meta data-n-head="ssr" name="og:title" content="齐天">
+<meta data-n-head="ssr" name="og:description" content="content=&quot;纵横小说网提供作者(日落红尘)的经典小说《齐天》，《齐天》最新章节全文阅读服务，本站更新及时，无弹窗广告，欢迎光临(m.zongheng.com)观看小说：【大长篇爆火玄幻】【最强帝族崛起】齐麟家祖祠内，供奉着十尊古老的先祖灵牌。&quot;">
+<meta data-n-head="ssr" property="og:image" content="//static.zongheng.com/upload/cover/43/10/431084171eca1f70f6c7809392ad72a51793265377769.jpeg">
+<meta data-n-head="ssr" name="og:novel:book_name" content="齐天">
+<meta data-n-head="ssr" name="og:novel:category" content="玄幻奇幻">
+<meta data-n-head="ssr" name="og:novel:author" content="日落红尘">
+<meta data-n-head="ssr" name="og:novel:status" content="连载中">
+</head><body></body></html>`;
+  test('NovelMeta：纵横 name= 写法命中 og:novel + 站点脏 description 脱壳', () => {
+    const m = NovelMetaService.parseGeneric(ZONGHENG_PAGE);
+    assert.ok(m.ok && m.rule === 'og:novel');
+    assert.equal(m.title, '齐天');
+    assert.equal(m.author, '日落红尘');
+    assert.equal(m.category, '玄幻奇幻');
+    assert.equal(m.status, '连载中');
+    assert.ok(m.intro.startsWith('纵横小说网提供'), 'content=&quot; 包壳必须剥掉');
+    assert.ok(m.intro.includes('齐麟家祖祠内') && !m.intro.endsWith('&quot;') && !m.intro.endsWith('"'));
+  });
+
   // 飞卢 gb2312 fixture：2026-11-20 b.faloo.com/1484744.html 实测 meta 行，GBK 字节 base64
   test('NovelMeta：charset 嗅探+GBK 解码——飞卢老站不乱码，utf-8 页不受影响', async () => {
     const FALOO_B64 = 'PGh0bWw+PGhlYWQ+PG1ldGEgaHR0cC1lcXVpdj0iQ29udGVudC1UeXBlIiBjb250ZW50PSJ0ZXh0L2h0bWw7IGNoYXJzZXQ9Z2IyMzEyIj4KPG1ldGEgcHJvcGVydHk9Im9nOnRpdGxlIiBjb250ZW50PSLFzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOzX7tDC1cK92ijC283iz8XE8tbuzOwp1NrP39TEtsFft8nCrNChy7XN+CI+CjxtZXRhIHByb3BlcnR5PSJvZzpkZXNjcmlwdGlvbiIgY29udGVudD0iob63ycKs0KHLtc34tsC80sep1LzQocu1o7rFzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOyhv8zsxLu9tcHZ1u7M7KOsv6q+1sXMtePN8r3n1b3BpsG/vLaho7TTsazXqby2o6yxrMe9vLahraGtsazQx7y2o6y649DHvLajrNDHz7W8tqOs0MfPtc3FvLajrLWlzOXT7tbmvLajrLbg1KrT7tbmvLajrM7ez9624NSq0+7W5qGtoa3O3s/eutDX06Os1rjK/cv+o6yzrNa4yv3L/qOssru/ybTvu/nK/aGtoa3V5s/WyrWjrLW9Ij4KPG1ldGEgcHJvcGVydHk9Im9nOmltYWdlIiBjb250ZW50PSJodHRwOi8vaW1nLmZhbG9vLmNvbS9Ob3ZlbC80OTh4NzA1LzEvMTU5NS8wMDE1OTU5NTcuanBnIj4KPC9oZWFkPjxib2R5PjxoMT7FzLXjzfK959W9waa1yLy2o6zC283iz8XE8tbuzOw8L2gxPjwvYm9keT48L2h0bWw+';

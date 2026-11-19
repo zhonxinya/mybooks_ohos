@@ -146,7 +146,8 @@ export class NovelMetaService {
   }
 
   /** 通用规则：详情页带 og 元信息即入——优先 og:novel:* 结构化字段（2026-11-20 实测
-   *  酷匠/刺猬猫/榕树下三家官方站全量直出），否则退回 og:title/description/image 松散兜底。 */
+   *  酷匠/刺猬猫/榕树下/纵横/飞卢官方站全量直出；纵横用 name= 写法、飞卢用 property= 写法，
+   *  pickMeta 两种都认），否则退回 og:title/description/image 松散兜底。 */
   static parseGeneric(html: string): NovelMeta {
     const meta: NovelMeta = { ok: false, error: '', title: '', author: '', category: '',
       status: '', intro: '', cover: '', rule: '通用og' };
@@ -175,12 +176,26 @@ export class NovelMetaService {
     }
     meta.cover = NovelMetaService.pickMeta(html, 'og:image');
     meta.intro = NovelMetaService.clean(
-      NovelMetaService.pickMeta(html, 'og:description'), INTRO_MAX);
+      NovelMetaService.unwrapBrokenContent(NovelMetaService.pickMeta(html, 'og:description')), INTRO_MAX);
     if (meta.intro.length === 0) {
-      meta.intro = NovelMetaService.clean(NovelMetaService.pickMeta(html, 'description'), INTRO_MAX);
+      meta.intro = NovelMetaService.clean(
+        NovelMetaService.unwrapBrokenContent(NovelMetaService.pickMeta(html, 'description')), INTRO_MAX);
     }
     meta.ok = meta.intro.length > 0 || meta.cover.length > 0;
     return meta;
+  }
+
+  /**
+   * 纵横 SSR 缺陷（2026-11-20 实测）：og:description 的值本身被模板再包了一层
+   * `content=&quot;…&quot;`，不脱壳简介就带脏前后缀。其他站未见此问题，防御性剥一次。
+   */
+  private static unwrapBrokenContent(raw: string): string {
+    if (/^content=["']?(?:&quot;)?/i.test(raw)) {
+      let s: string = raw.replace(/^content=["']?(?:&quot;)?/i, '');
+      s = s.replace(/(?:"|&quot;)$/, '');
+      return s;
+    }
+    return raw;
   }
 
   /** 取 <meta property|name="key" content="…"> 的 content；属性顺序两种都认。 */
