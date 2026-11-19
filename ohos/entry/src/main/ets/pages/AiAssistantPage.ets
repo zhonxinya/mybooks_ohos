@@ -593,9 +593,16 @@ struct AiAssistantPage {
 
         // Circle Button 带图标子节点时 width/height 不生效（实测渲染仅 20vp），改用 Stack 保证 44vp 热区
         Stack() {
-          SymbolGlyph(this.thinking ? $r('sys.symbol.xmark') : $r('sys.symbol.arrow_up'))
-            .fontSize(20)
-            .fontColor([Color.White]);
+          if (this.thinking) {
+            LoadingProgress()
+              .width(22)
+              .height(22)
+              .color(Color.White);
+          } else {
+            SymbolGlyph($r('sys.symbol.arrow_up'))
+              .fontSize(20)
+              .fontColor([Color.White]);
+          }
         }
         .width(44)
         .height(44)
