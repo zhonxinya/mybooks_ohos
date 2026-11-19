@@ -238,12 +238,15 @@ const TOOL_GET_NOVEL_META: AiToolDefinition = defineTool('get_novel_meta',
     '豆瓣查不到的网文就靠它；对 17K小说网详情页解析最全。失败时换另一条书源候选的 url 重试。',
   NOVEL_META_PROPS, ['url']);
 
+// 顺序有坑：OpenCode 网关实测会丢 tools 数组最后一项（2026-11-20 板上取证：模型枚举
+// 恰缺末位 get_novel_meta，报「最后一个工具是 search_meta」）。末位放最低频工具，
+// 新增工具一律插在中间，别放最后。
 const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SEARCH_BOOKS, TOOL_BOOK_DETAIL, TOOL_BOOK_NOTES, TOOL_READING_HISTORY,
   TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS,
   TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_UPDATE_BOOK_META,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
-  TOOL_SAVE_MEMORY, TOOL_FORGET_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META,
+  TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_FORGET_MEMORY,
 ];
 
 export class AiTools {
