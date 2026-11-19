@@ -82,6 +82,17 @@ export class AiTools {
     return TOOL_DEFS;
   }
 
+  /**
+   * 写操作工具：执行前必须过用户确认闸门（AiStreamHandlers.onConfirm）。
+   * 名字与 TOOL_DEFS 里的写工具对应；新加写工具忘记登记 = 无确认直接执行，务必同步。
+   */
+  private static readonly WRITE_TOOLS: string[] =
+    ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task'];
+
+  static needsConfirm(name: string): boolean {
+    return AiTools.WRITE_TOOLS.indexOf(name) >= 0;
+  }
+
   /** 给 UI 的一句人话：正在用哪个工具。 */
   static toolLabel(name: string): string {
     if (name === 'search_books') {
@@ -95,6 +106,15 @@ export class AiTools {
     }
     if (name === 'reading_history') {
       return '查看阅读历史';
+    }
+    if (name === 'create_booklist') {
+      return '创建书单';
+    }
+    if (name === 'add_books_to_booklist') {
+      return '把书加进书单';
+    }
+    if (name === 'add_sonovel_task') {
+      return '添加 so-novel 下载任务';
     }
     return name;
   }

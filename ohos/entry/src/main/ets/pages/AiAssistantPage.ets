@@ -119,6 +119,21 @@ struct AiAssistantPage {
           this.toolHint = `正在调用工具：${label}…`;
         }
       },
+      onConfirm: (label: string, args: string): Promise<boolean> => {
+        // 写操作闸门：弹窗让用户逐笔批准；切页/停止/回退键都按拒绝处理
+        if (requestId !== this.requestId || !this.thinking) {
+          return Promise.resolve(false);
+        }
+        const summary: string = args.length > 200 ? `${args.substring(0, 200)}…` : args;
+        return this.getUIContext().getPromptAction().showAlertDialog({
+          title: 'AI 想执行操作',
+          message: `操作：${label}\n参数：${summary}`,
+          primaryButton: { value: '允许', action: (): void => {} },
+          secondaryButton: { value: '拒绝', action: (): void => {} },
+          showMark: false,
+          autoCancel: false,
+        });
+      },
       onDone: (full: string) => {
         if (requestId === this.requestId && this.thinking) {
           this.finishBubble(full, false);

@@ -597,6 +597,53 @@ try {
     assert.equal(full, '帮你查到了《三体》，id=12。');
   });
 
+  test('写工具确认闸门：拒绝/无确认方不执行，批准才执行', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+        tool_calls: [{ id: 'w1', type: 'function',
+          function: { name: 'create_booklist', arguments: '{"name":"科幻入门"}' } }] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+        tool_calls: [{ id: 'w2', type: 'function',
+          function: { name: 'add_sonovel_task', arguments: '{}' } }] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '好' } }] })) },
+    ];
+    const asked = [];
+    const confirm = (label, args) => {
+      asked.push([label, args]);
+      return Promise.resolve(label === '创建书单'); // 第一笔允许、第二笔拒绝
+    };
+    RealAiService.chatStream([{ role: 'user', content: '建个书单' }], {
+      onDelta: () => {}, onDone: () => {}, onError: () => {}, onConfirm: confirm,
+    }, 128);
+    await flush();
+    assert.deepEqual(asked, [['创建书单', '{"name":"科幻入门"}'], ['添加 so-novel 下载任务', '{}']]);
+    // 第一笔被批准 → 进入执行（t3 未接入前是未知工具文案，接入后此断言随之更新）
+    const b2 = JSON.parse(deps.state.requests[1].content);
+    assert.match(b2.messages.find((m) => m.role === 'tool').content, /未知工具：create_booklist/);
+    // 第二笔被拒绝 → 不执行，直接回填拒绝文案（历史里有两条 tool 消息，看末条）
+    const b3 = JSON.parse(deps.state.requests[2].content);
+    const toolMsgs = b3.messages.filter((m) => m.role === 'tool');
+    assert.equal(toolMsgs.length, 2);
+    assert.equal(toolMsgs[1].content, '用户拒绝了该操作');
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+        tool_calls: [{ id: 'w3', type: 'function',
+          function: { name: 'create_booklist', arguments: '{}' } }] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '算了' } }] })) },
+    ];
+    RealAiService.chatStream([{ role: 'user', content: '建个书单' }], {
+      onDelta: () => {}, onDone: () => {}, onError: () => {},
+    }, 128);
+    await flush();
+    const bNoAsk = JSON.parse(deps.state.requests[1].content);
+    assert.equal(bNoAsk.messages.find((m) => m.role === 'tool').content, '用户拒绝了该操作');
+  });
+
   test('技能：四个内置技能均带工具指引，点击填入输入框', () => {
     assert.equal(AI_SKILLS.length, 4);
     const prompts = AI_SKILLS.map((s) => s.prompt);

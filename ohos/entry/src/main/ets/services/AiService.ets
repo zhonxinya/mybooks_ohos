@@ -91,6 +91,8 @@ export interface AiStreamHandlers {
   onError: (message: string) => void;
   /** 可选：网关工具回路每次执行工具前回调一句人话（如「搜索书架」）。 */
   onTool?: (label: string) => void;
+  /** 写操作工具执行前的用户确认；返回 false 拒绝，模型收到「用户拒绝了该操作」。 */
+  onConfirm?: (label: string, argsSummary: string) => Promise<boolean>;
 }
 
 export class AiService {
@@ -374,9 +376,11 @@ export class AiService {
         }
       };
       const notice: ((label: string) => void) | undefined = handlers.onTool;
+      const ask: ((label: string, args: string) => Promise<boolean>) | undefined = handlers.onConfirm;
       AiService.chatViaGateway(config, apiKey, messages, maxTokens, gatewaySession,
         AiTools.definitions(), (): boolean => handle.aborted,
-        notice === undefined ? null : notice).then((content: string): void => {
+        notice === undefined ? null : notice,
+        ask === undefined ? null : ask).then((content: string): void => {
         if (handle.aborted) {
           return;
         }
@@ -467,7 +471,7 @@ export class AiService {
     if (AiService.isOpenCodeGateway(config.baseUrl)) {
       // 结构化输出（书单 JSON 等）不需要工具，避免模型中途改去查数据
       return AiService.chatViaGateway(config, apiKey, messages, maxTokens, rcp.createSession(),
-        null, null, null);
+        null, null, null, null);
     }
     const client: OpenAI = AiService.client(config.baseUrl, apiKey);
     const params: ChatCompletionCreateParamsBase = {
@@ -560,7 +564,8 @@ export class AiService {
   private static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[],
     maxTokens: number, session: rcp.Session, tools: AiToolDefinition[] | null,
     isAborted: (() => boolean) | null,
-    onTool: ((label: string) => void) | null): Promise<string> {
+    onTool: ((label: string) => void) | null,
+    onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null): Promise<string> {
     const headers: rcp.RequestHeaders = {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
@@ -617,6 +622,17 @@ export class AiService {
           gwMessages.push({ role: 'assistant', content: reply.content, tool_calls: calls });
           for (let i = 0; i < reply.calls.length; i++) {
             const c: GatewayToolCall = reply.calls[i];
+            if (AiTools.needsConfirm(c.name)) {
+              // 写工具先过用户确认闸门；没人能确认（onConfirm 缺省）就一律拒绝
+              let approved: boolean = false;
+              if (onConfirm !== null) {
+                approved = await onConfirm(AiTools.toolLabel(c.name), c.arguments);
+              }
+              if (!approved) {
+                gwMessages.push({ role: 'tool', content: '用户拒绝了该操作', tool_call_id: c.id });
+                continue;
+              }
+            }
             if (onTool !== null) {
               onTool(AiTools.toolLabel(c.name));
             }
