@@ -465,6 +465,25 @@ struct AiSettingsPage {
         .borderRadius($r('app.float.card_radius'))
         .backgroundColor($r('app.color.card_background'));
 
+        Row() {
+          Text('灵魂与记忆')
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'));
+          Text('人格设定 · 跨对话记忆')
+            .fontSize(11)
+            .fontColor($r('app.color.text_tertiary'))
+            .margin({ left: 8 });
+          Blank();
+          Text('›')
+            .fontSize(16)
+            .fontColor($r('app.color.text_tertiary'));
+        }
+        .width('100%')
+        .padding($r('app.float.page_padding'))
+        .borderRadius($r('app.float.card_radius'))
+        .backgroundColor($r('app.color.card_background'))
+        .onClick(() => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiPersonaPage' }));
+
         if (this.testResult.length > 0) {
           Text(this.testResult)
             .fontSize(12)

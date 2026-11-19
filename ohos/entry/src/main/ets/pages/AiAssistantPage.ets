@@ -11,6 +11,7 @@ import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { AiTools, parseToolBookLines, ToolBookLine } from '../services/AiTools';
 import { ToolResultList } from '../components/ToolResultList';
 import { AiService, AiConfig, AiMessage, AiStreamHandlers, AiAbortHandle } from '../services/AiService';
+import { AiPersona } from '../services/AiPersona';
 import { TalebookService } from '../services/TalebookService';
 import { AppRouter } from '../utils/AppRouter';
 
@@ -56,6 +57,8 @@ const SYSTEM_PROMPT: string =
   '换封面流程：先 search_cover 列出候选给用户看，选定后再 set_cover。' +
   '下载工作流：先 search_sonovel 拿 url，再 add_sonovel_task 入队，用 list_download_tasks 报进度，' +
   '成品完成后自动进本地书架可读。' +
+  '记忆工具：save_memory 记录值得跨对话保留的用户事实（偏好、正在读的书、约定），' +
+  'forget_memory 按序号删除；系统提示中若已有「用户记忆」列表，回答时自然参考、不必复述。' +
   '问题涉及用户的书籍或阅读情况时，先调用工具拿到真实数据再回答，绝不编造；' +
   '工具数据不足时直接说明不确定。';
 
@@ -302,7 +305,9 @@ struct AiAssistantPage {
 
   /** 把界面气泡转成协议消息，只带最近 N 轮（档位来自设置），避免上下文无限增长。 */
   private async buildContext(): Promise<AiMessage[]> {
-    const context: AiMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }];
+    const persona: string = AiPersona.buildPersonaPrompt();
+    const systemText: string = persona.length > 0 ? `${SYSTEM_PROMPT}\n\n${persona}` : SYSTEM_PROMPT;
+    const context: AiMessage[] = [{ role: 'system', content: systemText }];
     const bubbles: ChatBubble[] = this.messages.filter((m: ChatBubble) =>
       !m.error && (m.content.length > 0 || (m.images ?? []).length > 0));
     const start: number = Math.max(0, bubbles.length - AiService.contextRounds(this.contextK) * 2);
