@@ -10,6 +10,8 @@ import { util } from '@kit.ArkTS';
  *   纯客户端不可靠，不做站内搜索；17K 书详情页 www.17k.com 无挑战、字段全部服务端渲染。
  * - so-novel 书源站（quanben.io / mcxs / shuhaige / mianhuaks / yeudusk 等）详情页多为
  *   服务端渲染，普遍带 og:description / og:image，作为通用兜底规则。
+ * - 官方站 m.kujiang.com / www.ciweimao.com / www.rongshuxia.com 详情页带 og:novel:*
+ *   全量结构化元标签（书名/作者/类别/状态，2026-11-20 实测），优先于松散 og 字段。
  * - 站点规则会随对方改版失效，属已知取舍（用户确认「仍尝试硬写几个网文源」）。
  */
 
@@ -122,23 +124,39 @@ export class NovelMetaService {
     return meta;
   }
 
-  /** 通用规则：书源镜像站详情页普遍带 og 元信息（实测 quanben/mcxs/shuhaige 等直出）。 */
+  /** 通用规则：详情页带 og 元信息即入——优先 og:novel:* 结构化字段（2026-11-20 实测
+   *  酷匠/刺猬猫/榕树下三家官方站全量直出），否则退回 og:title/description/image 松散兜底。 */
   static parseGeneric(html: string): NovelMeta {
     const meta: NovelMeta = { ok: false, error: '', title: '', author: '', category: '',
       status: '', intro: '', cover: '', rule: '通用og' };
-    meta.title = NovelMetaService.pickMeta(html, 'og:title');
+    const bookName = NovelMetaService.pickMeta(html, 'og:novel:book_name');
+    if (bookName.length > 0) {
+      // og:novel 站：og:title 常带「最新章节-站名」尾巴，书名/作者/类别/状态一律取结构化字段
+      meta.rule = 'og:novel';
+      meta.title = bookName;
+      meta.author = NovelMetaService.pickMeta(html, 'og:novel:author');
+      meta.category = NovelMetaService.pickMeta(html, 'og:novel:category');
+      const rawStatus = NovelMetaService.pickMeta(html, 'og:novel:status');
+      if (rawStatus.indexOf('完结') >= 0 || rawStatus.indexOf('完本') >= 0) {
+        meta.status = '已完本';
+      } else if (rawStatus.indexOf('连载') >= 0) {
+        meta.status = '连载中';
+      }
+    } else {
+      meta.title = NovelMetaService.pickMeta(html, 'og:title');
+      // <h1> 常是书名（og:title 缺失时兜底），去掉书名号外的站名尾巴
+      if (meta.title.length === 0) {
+        const h1 = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/);
+        if (h1 !== null) {
+          meta.title = NovelMetaService.stripTags(h1[1]);
+        }
+      }
+    }
     meta.cover = NovelMetaService.pickMeta(html, 'og:image');
     meta.intro = NovelMetaService.clean(
       NovelMetaService.pickMeta(html, 'og:description'), INTRO_MAX);
     if (meta.intro.length === 0) {
       meta.intro = NovelMetaService.clean(NovelMetaService.pickMeta(html, 'description'), INTRO_MAX);
-    }
-    // <h1> 常是书名（og:title 缺失时兜底），去掉书名号外的站名尾巴
-    if (meta.title.length === 0) {
-      const h1 = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/);
-      if (h1 !== null) {
-        meta.title = NovelMetaService.stripTags(h1[1]);
-      }
     }
     meta.ok = meta.intro.length > 0 || meta.cover.length > 0;
     return meta;

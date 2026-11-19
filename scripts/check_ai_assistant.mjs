@@ -1383,6 +1383,42 @@ try {
     assert.ok(!bad.ok && bad.error.includes('http'));
   });
 
+  // og:novel 结构化样本（2026-11-20 实测 m.kujiang.com/book/91737、ciweimao.com/book/100506842）
+  const KUJIANG_PAGE = `<html><head>
+<meta property="og:title" content="灯下黑"/>
+<meta property="og:description" content="       贺录对祝卿安说：“离开我，我倒要看看谁敢跟你同甘。”<br />
+  单韩苼对祝卿安说：“别怕，你的窟窿我想填也不是一天两天。”">
+<meta property="og:image" content="https://bs.kjcdn.com/i/pubwmrs/6o/8w/o2u1o.jpg"/>
+<meta property="og:novel:author" content="鱼不语"/>
+<meta property="og:novel:book_name" content="灯下黑"/>
+<meta property="og:novel:status" content="完结"/>
+<meta property="og:novel:latest_chapter_name" content="第三十六章  不再灯下黑"/>
+</head><body></body></html>`;
+  const CIWEIMAO_PAGE = `<html><head>
+<meta property="og:title" content="型月模拟，雅典娜的头号走狗最新章节(幻想成为正义的伙伴),型月模拟，雅典娜的头号走狗无弹窗全文阅读-欢乐书客"/>
+<meta property="og:description" content="穿越型月13年，间桐悠只想做两件事：
+1，保护好弟弟妹妹。
+2，弄死间桐脏砚。">
+<meta property="og:image" content="https://e1.kuangxiangit.com/uploads/allimg/c261016/16-10-26135300-10127.jpg"/>
+<meta property="og:novel:category" content="科幻无限"/>
+<meta property="og:novel:author" content="幻想成为正义的伙伴"/>
+<meta property="og:novel:book_name" content="型月模拟，雅典娜的头号走狗"/>
+</head><body></body></html>`;
+  test('NovelMeta：og:novel 结构化规则——书名去站名尾巴、状态归一、缺字段不崩', () => {
+    const k = NovelMetaService.parseGeneric(KUJIANG_PAGE);
+    assert.ok(k.ok && k.rule === 'og:novel');
+    assert.equal(k.title, '灯下黑');
+    assert.equal(k.author, '鱼不语');
+    assert.equal(k.status, '已完本'); // 「完结」归一
+    assert.ok(k.cover.startsWith('https://bs.kjcdn.com/'));
+    assert.ok(k.intro.includes('贺录对祝卿安') && k.intro.includes('单韩苼')); // <br/> 转换行不断句
+    const c = NovelMetaService.parseGeneric(CIWEIMAO_PAGE);
+    assert.ok(c.ok && c.rule === 'og:novel');
+    assert.equal(c.title, '型月模拟，雅典娜的头号走狗'); // og:title 带「无弹窗全文阅读-欢乐书客」尾巴，弃用
+    assert.equal(c.category, '科幻无限');
+    assert.equal(c.status, ''); // 该站无 status 字段，不得瞎猜
+  });
+
   test('get_novel_meta：17K url 走工具输出简介/封面，读工具不过闸门，行模板带类别/状态/字数', async () => {
     deps.state.rcpResponse = { statusCode: 200, body: enc(K17_PAGE) };
     const s = await RealAiTools.execute('get_novel_meta', '{"url":"https://www.17k.com/book/1018082.html"}');
@@ -1392,6 +1428,9 @@ try {
     assert.equal(RealAiTools.needsConfirm('get_novel_meta'), false);
     const empty = await RealAiTools.execute('get_novel_meta', '{}');
     assert.ok(empty.includes('url 必填'));
+    deps.state.rcpResponse = { statusCode: 200, body: enc(KUJIANG_PAGE) };
+    const kj = await RealAiTools.execute('get_novel_meta', '{"url":"https://m.kujiang.com/book/91737"}');
+    assert.ok(kj.includes('规则：og:novel') && kj.includes('书名：灯下黑') && kj.includes('状态：已完本'));
     deps.state.rcpResponse = null;
     // search_sonovel 行模板增强：JSON 里已有的类别/状态/字数要上屏，并提示 get_novel_meta
     toolsState.sonovelEnvelope = { status: 200, error: '', body: { code: 200, message: '', data: [
