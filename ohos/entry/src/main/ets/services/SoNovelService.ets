@@ -411,7 +411,7 @@ export class SoNovelService {
   }
 
   /**
-   * 服务器成品列表：GET /local-books 返回**裸 JSON 数组** [{name,size,timestamp}]，
+   * 服务器成品列表：GET /local-books 返回 [{name,size,timestamp}]（裸数组或 {code,message,data} 信封），
    * 是 so-novel downloads 目录（downloadPath）顶层文件，成品命名 `书名(作者).<ext>`。
    */
   static async listLocalBooks(): Promise<SoNovelLocalBook[]> {
@@ -436,11 +436,17 @@ export class SoNovelService {
         throw new Error(SoNovelService.httpErrorMessage(response.responseCode, raw, '成品列表'));
       }
       const parsed: Object = JSON.parse(raw.length > 0 ? raw : '[]');
-      if (!Array.isArray(parsed)) {
-        return [];
+      // 服务端有两种形态：裸数组 [{name,size,timestamp}]，或 {code,message,data:[...]} 信封
+      let list: Object[] = [];
+      if (Array.isArray(parsed)) {
+        list = parsed as Object[];
+      } else if (parsed !== null && typeof parsed === 'object') {
+        const data = (parsed as Record<string, Object>)['data'];
+        if (Array.isArray(data)) {
+          list = data as Object[];
+        }
       }
       const books: SoNovelLocalBook[] = [];
-      const list: Object[] = parsed as Object[];
       for (let i = 0; i < list.length; i++) {
         const item: Object = list[i];
         if (item === null || typeof item !== 'object') {
