@@ -189,7 +189,9 @@ export const SoNovelMerge = {
   fromRecord: (raw) => ({
     sourceId: Number(raw['sourceId'] ?? 0), sourceName: String(raw['sourceName'] ?? ''),
     url: String(raw['url'] ?? ''), bookName: String(raw['bookName'] ?? ''), author: String(raw['author'] ?? ''),
-    category: '', latestChapter: String(raw['latestChapter'] ?? ''), lastUpdateTime: '', status: String(raw['status'] ?? ''),
+    category: String(raw['category'] ?? ''), latestChapter: String(raw['latestChapter'] ?? ''),
+    lastUpdateTime: String(raw['lastUpdateTime'] ?? ''), status: String(raw['status'] ?? ''),
+    wordCount: String(raw['wordCount'] ?? ''),
   }),
 };
 export const DownloadTaskService = {
@@ -302,12 +304,23 @@ function stageMetaSearch() {
   writeFileSync(join(dir, 'RealMetaSearch.ts'), source);
 }
 
+/** NovelMetaService 真实入检：同样复用 rcp 桩。 */
+function stageNovelMeta() {
+  let source = read('services/NovelMetaService.ets');
+  source = source
+    .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`);
+  writeFileSync(join(dir, 'RealNovelMeta.ts'), source);
+}
+
 function stageAiTools() {
   let source = read('services/AiTools.ets');
   source = source
     // 类型注解用的 DoubanDetail/DoubanHit 被 strip-types 擦除，只需值导入 MetaSearchService
     .replace(`import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';`,
       `import { MetaSearchService } from './RealMetaSearch.ts';`)
+    .replace(`import { NovelMeta, NovelMetaService } from './NovelMetaService';`,
+      `import { NovelMetaService } from './RealNovelMeta.ts';`)
     .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
     .replace(`from './TalebookApi'`, `from './aiToolsDeps.ts'`)
     .replace(`from './AnnotationApi'`, `from './aiToolsDeps.ts'`)
@@ -396,6 +409,7 @@ try {
   stageAiPersona();
   stageChatStore();
   stageMetaSearch();
+  stageNovelMeta();
   stageAiTools();
   const load = async (name) => import(pathToFileURL(join(dir, `${name}.ts`)).href);
   const { AiAssistantPage } = await load('AiAssistantPage');
@@ -407,6 +421,7 @@ try {
   const { AiChatStore } = await load('RealAiChatStore');
   const { personaState } = await load('personaDeps');
   const { MetaSearchService } = await load('RealMetaSearch');
+  const { NovelMetaService } = await load('RealNovelMeta');
   const deps = await load('aiServiceDeps');
   const { AiService: RealAiService } = await load('RealAiService');
   const { AiTools: RealAiTools, parseToolBookLines } = await load('RealAiTools');
@@ -885,7 +900,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 15 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 16 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -1323,6 +1338,71 @@ try {
     const blocked = await MetaSearchService.detail('2567698');
     assert.ok(!blocked.ok && blocked.error.includes('403'));
     deps.state.rcpResponse = null;
+  });
+
+  // 17K 详情页样本节选（2026-11-19 www.17k.com/book/1018082.html 实测锚点）
+  const K17_PAGE = `<html><head>
+<title>武逆焚天_疯橘子_武逆焚天最新章节_在线阅读-17K小说网</title>
+<meta property="og:image" content="https://cdn.static.17k.com/book/189x272/82/80/1018082.jpg-189x272?v=0" />
+<meta property="og:description" content="  神奇的大陆，因神兽而支离破碎！！&lt;br&gt;  各方势力追寻多年的重宝出世……">
+<script>window.$__BOOK = { type: 'book', bookId: 1018082, bookName: '武逆焚天',
+  authorName: '疯橘子', authorId: 37093114, chapterId: 0, chapterName: '', vip: 1 }</script>
+</head><body>
+<div class="Header"><a href="/all/book/2_0_0_0_2_0_0_0_1.html">完本小说</a></div>
+<div class="Info Sign"><h1><a href="/list/1018082.html">武逆焚天</a></h1>
+<div class="label"><a title="连载小说" href="#"><span class="green">连载小说</span></a></div>
+<table><tr><th>授权级别：</th><td><span class="red">签约作品</span></td>
+<th>作品类别：</th><td><a href="/all/book/2_21_8______1.html">东方玄幻</a></td></tr></table>
+</body></html>`;
+  test('NovelMeta：17K 详情页解析全字段（导航「完本小说」不得误判状态）', () => {
+    const m = NovelMetaService.parse17k(K17_PAGE);
+    assert.ok(m.ok);
+    assert.equal(m.title, '武逆焚天');
+    assert.equal(m.author, '疯橘子');
+    assert.equal(m.status, '连载中'); // 顶部导航也有「完本小说」，必须限定 .label 块
+    assert.equal(m.category, '东方玄幻');
+    assert.ok(m.cover.startsWith('https://cdn.static.17k.com/'));
+    assert.ok(m.intro.includes('神奇的大陆') && m.intro.includes('重宝出世') && !m.intro.includes('&lt;'));
+  });
+
+  test('NovelMeta：通用 og 规则、相对封面补全、WAF 挑战页识别、非 http url', async () => {
+    const gen = `<html><head><meta property="og:image" content="/files/article/image/2/2402/2402s.jpg">
+<meta property="og:description" content="蒸汽与机械的浪潮中，谁能触及非凡？"></head>
+<body><h1>诡秘之主</h1></body></html>`;
+    deps.state.rcpResponse = { statusCode: 200, body: enc(gen) };
+    const m = await NovelMetaService.fetchDetail('http://www.mcxs.info/book/2402/');
+    assert.ok(m.ok && m.rule === '通用og');
+    assert.equal(m.cover, 'http://www.mcxs.info/files/article/image/2/2402/2402s.jpg');
+    assert.ok(m.intro.includes('蒸汽与机械'));
+    // WAF 挑战页 → 明确报「换书源」，不能报解析失败
+    deps.state.rcpResponse = { statusCode: 200, body: enc("<script>var arg1='AB';reload('acw_sc__v2')</script>") };
+    const waf = await NovelMetaService.fetchDetail('https://search.17k.com/search.xhtml?c.q=x');
+    assert.ok(!waf.ok && waf.error.includes('WAF'));
+    deps.state.rcpResponse = null;
+    const bad = await NovelMetaService.fetchDetail('javascript:alert(1)');
+    assert.ok(!bad.ok && bad.error.includes('http'));
+  });
+
+  test('get_novel_meta：17K url 走工具输出简介/封面，读工具不过闸门，行模板带类别/状态/字数', async () => {
+    deps.state.rcpResponse = { statusCode: 200, body: enc(K17_PAGE) };
+    const s = await RealAiTools.execute('get_novel_meta', '{"url":"https://www.17k.com/book/1018082.html"}');
+    assert.ok(s.includes('书名：武逆焚天') && s.includes('作者：疯橘子') &&
+      s.includes('类别：东方玄幻') && s.includes('状态：连载中') &&
+      s.includes('简介：') && s.includes('神奇的大陆'));
+    assert.equal(RealAiTools.needsConfirm('get_novel_meta'), false);
+    const empty = await RealAiTools.execute('get_novel_meta', '{}');
+    assert.ok(empty.includes('url 必填'));
+    deps.state.rcpResponse = null;
+    // search_sonovel 行模板增强：JSON 里已有的类别/状态/字数要上屏，并提示 get_novel_meta
+    toolsState.sonovelEnvelope = { status: 200, error: '', body: { code: 200, message: '', data: [
+      { sourceId: 4, sourceName: '全本小说网', url: 'http://www.quanben.io/n/gmzz/list.html',
+        bookName: '诡秘之主', author: '爱潜水的乌贼', category: '玄幻', status: '已完结',
+        wordCount: '956万字', latestChapter: '12月1日新番外' },
+    ] } };
+    const row = await RealAiTools.execute('search_sonovel', '{"query":"诡秘之主"}');
+    assert.ok(row.includes('类别：玄幻') && row.includes('已完结') && row.includes('字数：956万字') &&
+      row.includes('get_novel_meta'));
+    toolsState.sonovelEnvelope = null;
   });
 
   test('search_meta：query/book_id 三通道聚合、subject_id 详情模式、读工具不过闸门', async () => {
