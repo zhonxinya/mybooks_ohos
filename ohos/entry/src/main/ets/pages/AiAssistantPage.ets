@@ -3,9 +3,10 @@ import { promptAction } from '@kit.ArkUI';
 import { PageScaffold, SecondaryButton, TextButton } from '../components';
 import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
-import { parseToolBookLines, ToolBookLine } from '../services/AiTools';
+import { AiTools, parseToolBookLines, ToolBookLine } from '../services/AiTools';
 import { ToolResultList } from '../components/ToolResultList';
 import { AiService, AiMessage, AiStreamHandlers, AiAbortHandle } from '../services/AiService';
+import { TalebookService } from '../services/TalebookService';
 import { AppRouter } from '../utils/AppRouter';
 
 /** 工具调用活动：回路里每次工具执行产生一条，流式期间实时翻转状态。 */
@@ -48,6 +49,11 @@ const SYSTEM_PROMPT: string =
 
 const MAX_HISTORY_ROUNDS: number = 10;
 
+/** 对话历史持久化（preferences 明文 KV，与账号列表同层）：只存已固化的气泡。 */
+const CHAT_HISTORY_KEY: string = 'ai_chat_history';
+/** 历史上限：超出丢弃最旧条目，避免 preferences.json 无限膨胀。 */
+const CHAT_HISTORY_MAX: number = 60;
+
 @Entry
 @Component
 struct AiAssistantPage {
@@ -66,6 +72,7 @@ struct AiAssistantPage {
 
   aboutToAppear(): void {
     this.configured = AiService.isReady();
+    this.loadHistory();
   }
 
   onPageShow(): void {
@@ -91,10 +98,89 @@ struct AiAssistantPage {
       last.error = this.streamingText.length === 0;
       last.activities = this.liveActivities;
       this.messages = this.messages.slice();
+      this.saveHistory();
     }
     this.streamingText = '';
     this.liveActivities = [];
     this.thinking = false;
+  }
+
+  /** 固化消息落盘（streaming 气泡除外）；在每轮完成/停止/清空时调用。 */
+  private saveHistory(): void {
+    const items: ChatBubble[] = this.messages.filter((m: ChatBubble) => !m.streaming);
+    TalebookService.prefSet(CHAT_HISTORY_KEY, JSON.stringify(items.slice(-CHAT_HISTORY_MAX)));
+  }
+
+  /** 读回历史；坏条目（缺字段/类型不符）逐条丢弃，整体损坏则视为无历史。 */
+  private loadHistory(): void {
+    const raw: string = TalebookService.prefGet(CHAT_HISTORY_KEY, '');
+    if (raw.length === 0) {
+      return;
+    }
+    try {
+      const arr: Object = JSON.parse(raw);
+      if (!Array.isArray(arr)) {
+        return;
+      }
+      const bubbles: ChatBubble[] = [];
+      for (const entry of arr as Object[]) {
+        if (entry === null || typeof entry !== 'object') {
+          continue;
+        }
+        const m: Record<string, Object> = entry as Record<string, Object>;
+        if (typeof m['role'] !== 'string' || typeof m['content'] !== 'string') {
+          continue;
+        }
+        const actsRaw: Object = m['activities'];
+        const activities: ChatActivity[] = [];
+        if (Array.isArray(actsRaw)) {
+          for (const a of actsRaw as Object[]) {
+            if (a === null || typeof a !== 'object') {
+              continue;
+            }
+            const rec: Record<string, Object> = a as Record<string, Object>;
+            if (typeof rec['name'] !== 'string' || typeof rec['label'] !== 'string') {
+              continue;
+            }
+            const booksRaw: Object = rec['books'];
+            const books: ToolBookLine[] = [];
+            if (Array.isArray(booksRaw)) {
+              for (const b of booksRaw as Object[]) {
+                if (b === null || typeof b !== 'object') {
+                  continue;
+                }
+                const br: Record<string, Object> = b as Record<string, Object>;
+                if (typeof br['title'] !== 'string') {
+                  continue;
+                }
+                books.push({
+                  title: br['title'],
+                  subtitle: typeof br['subtitle'] === 'string' ? br['subtitle'] : '',
+                  cover: typeof br['cover'] === 'string' ? br['cover'] : '',
+                });
+              }
+            }
+            activities.push({
+              name: rec['name'],
+              label: rec['label'],
+              state: typeof rec['state'] === 'string' ? rec['state'] : 'done',
+              books: books,
+              summary: typeof rec['summary'] === 'string' ? rec['summary'] : '',
+            });
+          }
+        }
+        bubbles.push({
+          role: m['role'],
+          content: m['content'],
+          streaming: false,
+          error: m['error'] === true,
+          activities: activities,
+        });
+      }
+      this.messages = bubbles.slice(-CHAT_HISTORY_MAX);
+    } catch (_error) {
+      // 历史损坏：保持空会话，下一次保存会覆盖
+    }
   }
 
   /** 把界面气泡转成协议消息，只带最近 N 轮，避免上下文无限增长。 */
@@ -124,6 +210,7 @@ struct AiAssistantPage {
 
     this.messages.push({ role: 'user', content: question, streaming: false, error: false, activities: [] });
     this.messages.push({ role: 'assistant', content: '', streaming: true, error: false, activities: [] });
+    this.saveHistory();
     this.streamingText = '';
     this.liveActivities = [];
     this.input = '';
@@ -199,6 +286,7 @@ struct AiAssistantPage {
     if (isError) {
       this.errorTip = text;
     }
+    this.saveHistory();
     this.scrollToEnd();
   }
 
@@ -226,7 +314,9 @@ struct AiAssistantPage {
 
   /** 工具执行完：把最后一条同名 doing 翻成 done/rejected，书目结果转结构化条目。 */
   private endActivity(name: string, label: string, text: string): void {
-    const books: ToolBookLine[] = parseToolBookLines(text);
+    // 结构化缓存带封面（search_books），文本解析仅兜底（书源/任务等无图工具）
+    const cached: ToolBookLine[] = AiTools.takeLastBooks();
+    const books: ToolBookLine[] = cached.length > 0 ? cached : parseToolBookLines(text);
     const firstLine: string = text.length > 0 ? text.split('\n')[0] : '';
     const summary: string = books.length > 0 || firstLine.length === 0 ? '' :
       (firstLine.length > 48 ? `${firstLine.substring(0, 48)}…` : firstLine);
@@ -263,6 +353,7 @@ struct AiAssistantPage {
     this.stopStreaming();
     this.messages = [];
     this.errorTip = '';
+    this.saveHistory();
   }
 
   private async copyBubble(index: number): Promise<void> {

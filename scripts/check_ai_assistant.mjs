@@ -28,7 +28,7 @@ const state = {
   ready: true, handlers: null, copied: '', cancel: null,
   shelf: { books: [] }, search: async () => ({ body: { books: [] } }),
   recommend: async () => [], summary: async () => '', review: async () => '', meta: async () => ({}),
-  settings: settingsDefaults(),
+  settings: settingsDefaults(), prefs: new Map(),
 };
 globalThis.__aiCheck = state;
 // 设置页保存时会记一个配置版本号，桩掉避免 save() 抛错
@@ -75,7 +75,11 @@ export const AiBookService = {
   recommend: (...args) => state.recommend(...args),
 };
 export const ShelfApi = { getShelf: async () => state.shelf };
-export const TalebookService = { searchAsync: (...args) => state.search(...args) };
+export const TalebookService = {
+  searchAsync: (...args) => state.search(...args),
+  prefGet: (key, def) => (state.prefs.has(key) ? state.prefs.get(key) : (def ?? '')),
+  prefSet: (key, value) => { state.prefs.set(key, value); },
+};
 export const pasteboard = {
   MIMETYPE_TEXT_PLAIN: 'text/plain', createData: (_type, text) => text,
   getSystemPasteboard: () => ({ setData: (text) => { state.copied = text; return Promise.resolve(); } }),
@@ -230,7 +234,9 @@ function stagePage(name) {
   const shims = new Set();
   source = source.replace(/^import \{([^}]+)\} from '([^']+)';\n/gm, (_all, clause, path) => {
     if (path === '../services/AiTools') {
-      return "import { parseToolBookLines } from './RealAiTools.ts';\n" +
+      const names = clause.split(',').map((part) => part.trim());
+      const values = names.filter((name) => name !== 'ToolBookLine');
+      return `import { ${values.join(', ')} } from './RealAiTools.ts';\n` +
         "import type { ToolBookLine } from './RealAiTools.ts';\n";
     }
     if (path === '../services/AiSkills') {
@@ -804,6 +810,43 @@ try {
     assert.equal(appended.state, 'rejected');
     assert.equal(appended.name, 'add_sonovel_task');
     assert.equal(appended.summary, '用户拒绝了该操作');
+  });
+
+  test('search_books 结构化缓存：takeLastBooks 带封面、读后即清、下次执行防串台', async () => {
+    toolsState.search = async (q) => (q === '三体'
+      ? [{ id: 12, title: '三体', authors: ['刘慈欣'], coverUrl: '/get/cover/12.jpg' }] : []);
+    const text = await RealAiTools.execute('search_books', '{"query":"三体"}');
+    assert.ok(text.includes('- 《三体》（刘慈欣） id=12'));
+    const books = RealAiTools.takeLastBooks();
+    assert.equal(books.length, 1);
+    assert.equal(books[0].title, '《三体》');
+    assert.equal(books[0].cover, '/get/cover/12.jpg');
+    assert.equal(RealAiTools.takeLastBooks().length, 0, '读后即清');
+    await RealAiTools.execute('search_books', '{"query":"鲁滨逊"}');
+    assert.equal(RealAiTools.takeLastBooks().length, 0, '无结果时不留旧缓存');
+  });
+
+  test('对话页历史持久化：finishBubble 落盘、loadHistory 恢复、clearChat 清空', () => {
+    state.prefs.clear();
+    const page = chat();
+    page.messages.push({ role: 'user', content: '你好', streaming: false, error: false, activities: [] });
+    page.messages.push({ role: 'assistant', content: '', streaming: true, error: false, activities: [] });
+    page.finishBubble('你好，有什么可以帮你？', false);
+    const saved = JSON.parse(state.prefs.get('ai_chat_history'));
+    assert.equal(saved.length, 2);
+    assert.equal(saved[1].content, '你好，有什么可以帮你？');
+    const page2 = chat();
+    page2.loadHistory();
+    assert.equal(page2.messages.length, 2);
+    assert.equal(page2.messages[0].content, '你好');
+    assert.equal(page2.messages[1].streaming, false);
+    // 坏条目丢弃：手写一条缺 role 的记录
+    state.prefs.set('ai_chat_history', '[{"content":"x"},{"role":"user","content":"好"}]');
+    const page3 = chat();
+    page3.loadHistory();
+    assert.equal(page3.messages.length, 1);
+    page3.clearChat();
+    assert.equal(state.prefs.get('ai_chat_history'), '[]');
   });
 
   test('网关工具回路：超过轮数上限报错收场，最后一轮不挂 tools', async () => {

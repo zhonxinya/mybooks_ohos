@@ -10,6 +10,8 @@ import { BookListAddResponse, BookListApi, BookListMutationResponse } from './Bo
 export interface ToolBookLine {
   title: string;
   subtitle: string;
+  /** 封面相对路径（服务端书库有图时填充；文本解析路径为空串）。 */
+  cover: string;
 }
 
 /**
@@ -35,6 +37,7 @@ export function parseToolBookLines(text: string): ToolBookLine[] {
     books.push({
       title: body.substring(open, close + 1),
       subtitle: prefix.length > 0 ? `${prefix} ${suffix}` : suffix,
+      cover: '',
     });
   }
   return books;
@@ -179,6 +182,18 @@ export class AiTools {
     return AiTools.WRITE_TOOLS.indexOf(name) >= 0;
   }
 
+  /**
+   * 最近一次书目型工具的结构化结果（含封面），供对话页渲染卡片。
+   * 工具回路串行执行，读后即清即可避免与下一次结果串台。
+   */
+  private static lastBooks: ToolBookLine[] = [];
+
+  static takeLastBooks(): ToolBookLine[] {
+    const books: ToolBookLine[] = AiTools.lastBooks;
+    AiTools.lastBooks = [];
+    return books;
+  }
+
   /** 给 UI 的一句人话：正在用哪个工具。 */
   static toolLabel(name: string): string {
     if (name === 'search_books') {
@@ -213,6 +228,7 @@ export class AiTools {
 
   /** 执行一次工具调用；永不抛出，返回给模型的文本结果。 */
   static async execute(name: string, argsJson: string): Promise<string> {
+    AiTools.lastBooks = [];
     try {
       const args: Record<string, Object> = AiTools.parseArgs(argsJson);
       if (name === 'search_books') {
@@ -257,9 +273,16 @@ export class AiTools {
       return `书架中没有找到与「${query}」相关的书。`;
     }
     const lines: string[] = [];
+    const structured: ToolBookLine[] = [];
     for (const b of books) {
       lines.push(`- 《${b.title}》（${b.authors.join('、')}） id=${b.id}`);
+      structured.push({
+        title: `《${b.title}》`,
+        subtitle: b.authors.join('、'),
+        cover: b.coverUrl,
+      });
     }
+    AiTools.lastBooks = structured;
     return `找到 ${books.length} 本：\n${lines.join('\n')}`;
   }
 

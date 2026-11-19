@@ -1,4 +1,5 @@
 import { ToolBookLine } from '../services/AiTools';
+import { AuthImage } from './AuthImage';
 
 /**
  * 工具结果的书目列表渲染：书名行 + 副标题行，供对话页活动区使用。
@@ -11,24 +12,31 @@ export struct ToolResultList {
   build() {
     Column({ space: 6 }) {
       ForEach(this.items, (item: ToolBookLine, idx: number) => {
-        Column({ space: 1 }) {
-          Text(item.title)
-            .fontSize(13)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%');
-          if (item.subtitle.length > 0) {
-            Text(item.subtitle)
-              .fontSize(11)
-              .fontColor($r('app.color.text_secondary'))
+        Row({ space: 8 }) {
+          if (item.cover.length > 0) {
+            AuthImage({ url: item.cover, imageWidth: 36, imageHeight: 48 })
+          }
+          Column({ space: 1 }) {
+            Text(item.title)
+              .fontSize(13)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.text_primary'))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .width('100%');
+            if (item.subtitle.length > 0) {
+              Text(item.subtitle)
+                .fontSize(11)
+                .fontColor($r('app.color.text_secondary'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .width('100%');
+            }
           }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1);
         }
-        .alignItems(HorizontalAlign.Start)
+        .alignItems(VerticalAlign.Center)
         .width('100%')
         .padding({ left: 10, right: 10, top: 6, bottom: 6 })
         .borderRadius($r('app.float.chip_radius'))
