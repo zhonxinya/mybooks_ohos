@@ -677,15 +677,6 @@ export struct SettingsPage {
                 showChevron: true,
                 onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminSyslogPage' }),
               });
-              if (ServerRegistry.supports(ServerFeature.ADMIN_RESOURCES)) {
-                Divider().color($r('app.color.divider')).strokeWidth(0.5);
-                SettingCell({
-                  title: '资源导航',
-                  subtitle: '站长推荐的外部资源',
-                  showChevron: true,
-                  onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AdminResourcesPage' }),
-                });
-              }
               if (ServerRegistry.supports(ServerFeature.ADMIN_TOOLBOX)) {
                 Divider().color($r('app.color.divider')).strokeWidth(0.5);
                 SettingCell({
