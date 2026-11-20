@@ -973,6 +973,30 @@ try {
     assert.equal(full, '帮你查到了《三体》，id=12。');
   });
 
+  test('长任务：连续 6 轮 tool_calls 在新上限（12）内正常完成——旧上限 4 会在第 5 轮报错截断', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    const mk = (i) => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+      tool_calls: [{ id: `call_${i}`, type: 'function',
+        function: { name: 'search_books', arguments: `{"query":"三体${i}"}` } }] } }] })) });
+    deps.state.rcpResponses = [mk(1), mk(2), mk(3), mk(4), mk(5), mk(6),
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '6 本都查完了。' } }] })) }];
+    toolsState.search = async (q) => [{ id: 12, title: q, authors: ['刘慈欣'] }];
+    let error = '';
+    let full = '';
+    const toolResults = [];
+    RealAiService.chatStream([{ role: 'user', content: '把三体系列全查一遍' }], {
+      onDelta: (t) => { full += t; }, onDone: () => {}, onError: (m) => { error = m; },
+      onToolResult: (name, l, text) => { toolResults.push(text); },
+    }, 256);
+    await flush();
+    assert.equal(error, '', '6 轮工具调用不得触发上限错误');
+    assert.equal(deps.state.requests.length, 7, '6 轮回路 + 1 轮最终回答');
+    assert.equal(toolResults.length, 6);
+    assert.equal(full, '6 本都查完了。');
+  });
+
   test('写工具确认闸门：拒绝/无确认方不执行，批准才执行', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
@@ -1116,6 +1140,26 @@ try {
     assert.equal(page.permissionLabel(), '逐笔确认');
     // 页面桩走 shim 的 AiService.savePermission，落在全局 settings 里
     assert.equal(state.settings.permission, 'confirm');
+  });
+
+  test('系统提示词：不复述工具枚举、含中文思考约束，权限补注三档都用准确档位名', async () => {
+    chat();
+    const store = AiChatStore.instance();
+    const sys = (await store.buildContext())[0].content;
+    assert.ok(!sys.includes('（书籍详情，需 id）'), '旧版逐工具枚举未删净（与 tools payload 重复）');
+    assert.ok(!sys.includes('写操作工具：create_booklist'), '写工具清单枚举未删净');
+    assert.ok(sys.includes('回答与思考过程一律使用中文'), '缺中文约束');
+    assert.ok(sys.includes('当前为「逐笔确认」权限模式'), 'confirm 档缺补注');
+    state.settings.permission = 'readonly';
+    const ro = (await store.buildContext())[0].content;
+    assert.ok(ro.includes('当前为「只读」权限模式'), 'readonly 档缺补注');
+    assert.ok(ro.includes('「逐笔确认」或「自动放行」'), 'readonly 补注未给准确目标档位名');
+    assert.ok(!ro.includes('当前为「逐笔确认」权限模式'), 'readonly 档不得再带 confirm 补注');
+    state.settings.permission = 'auto';
+    const auto = (await store.buildContext())[0].content;
+    assert.ok(auto.includes('当前为「自动放行」权限模式'), 'auto 档缺补注');
+    assert.ok(auto.includes('不逐笔确认、直接执行'), 'auto 补注缺行为定义');
+    state.settings.permission = 'confirm';
   });
 
   test('技能：六个内置技能均带工具指引，点击填入输入框', () => {
@@ -1407,8 +1451,8 @@ try {
       onDelta: () => {}, onDone: () => {}, onError: (m) => { error = m; },
     }, 128);
     await flush();
-    assert.equal(deps.state.requests.length, 5);
-    assert.ok(!('tools' in JSON.parse(deps.state.requests[4].content)), '最后一轮不挂工具');
+    assert.equal(deps.state.requests.length, 13);
+    assert.ok(!('tools' in JSON.parse(deps.state.requests[12].content)), '最后一轮不挂工具');
     assert.match(error, /上限/);
     deps.state.rcpResponse = null;
   });

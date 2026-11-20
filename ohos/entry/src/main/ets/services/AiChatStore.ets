@@ -36,36 +36,30 @@ export interface ChatBubble {
 /** 写操作闸门确认弹窗；需要 UIContext，只有页面在场时可用。 */
 export type ConfirmUi = (label: string, args: string) => Promise<boolean>;
 
+/**
+ * 系统提示词只留**行为规则与跨工具流程**：单个工具的名称/用途/参数由请求体
+ * tools 数组自带（AiTools 描述是权威来源，此处复述既烧 token 又会与代码漂移）。
+ * 权限模式说明由 permissionPromptNote 按当前档位追加，三档都有明确表述。
+ */
 const SYSTEM_PROMPT: string =
-  '你是一个电子书阅读应用的助手，回答简洁、准确、中文优先。' +
-  '只读工具查询真实数据：search_books（搜书架）、book_detail（书籍详情，需 id）、' +
-  'book_notes（该书标注，需 id）、reading_history（最近阅读记录）、' +
-  'search_sonovel（搜网络小说书源）、list_download_tasks（查下载任务）、' +
-  'search_cover（按 ISBN/书名检索封面候选，需 id）、' +
-  'search_meta（多站元数据：豆瓣直连检索与评分/出版社/ISBN 详情、传 book_id 拿服务端多源候选、网文源更新状态）。' +
-  '写操作工具：create_booklist（建书单）、add_books_to_booklist（书单加书，id 来自 search_books）、' +
-  'add_sonovel_task（加入下载队列，参数来自 search_sonovel）、' +
-  'update_book_meta（改书籍元数据：书名/作者/标签/出版社/ISBN/丛书/简介/评分，只传要改的字段）、' +
-  'set_cover（换封面，index 来自对同一本书的 search_cover）；' +
-  '这些操作执行前都会请用户逐笔确认，被拒绝时不要坚持重试，问明原因即可。' +
-  '改元数据前先用 book_detail 核对现值，把「从什么改成什么」讲清楚再调用工具。' +
-  '换封面流程：先 search_cover 列出候选给用户看，选定后再 set_cover。' +
-  '下载工作流：先 search_sonovel 拿 url，再 add_sonovel_task 入队，用 list_download_tasks 报进度，' +
-  '成品完成后自动进本地书架可读。' +
-  '记忆工具：save_memory 记录值得跨对话保留的用户事实（偏好、正在读的书、约定），' +
-  'forget_memory 按序号删除；系统提示中若已有「用户记忆」列表，回答时自然参考、不必复述。' +
-  '问题涉及用户的书籍或阅读情况时，先调用工具拿到真实数据再回答，绝不编造；' +
-  '工具数据不足时直接说明不确定。';
+  '你是一个电子书阅读应用的助手。回答与思考过程一律使用中文（书名、参数值等原文引用除外），简洁、准确。' +
+  '问题涉及用户的书籍、阅读情况或其他可查证的信息时，先调用相应工具拿到真实数据再回答，绝不编造；' +
+  '工具数据不足时直接说明不确定。' +
+  '写操作（建书单、加书、下载任务、改元数据、换封面、删记忆）一律按后文的权限模式说明处理。' +
+  '换封面流程：先 search_cover 列出候选给用户看，用户选定后再 set_cover。' +
+  '网文下载流程：search_sonovel 拿 url → add_sonovel_task 入队 → list_download_tasks 报进度，成品完成后自动进本地书架可读。' +
+  '系统提示中若已有「用户记忆」列表，回答时自然参考、不必复述。';
 
-/** 权限模式的提示词补注（confirm 模式与 SYSTEM_PROMPT 默认描述一致，无需追加）。 */
+/** 权限模式补注：追加在系统提示末尾，用顶栏徽标的准确档位名（模型曾瞎编「可写/编辑模式」）。 */
 function permissionPromptNote(mode: AiPermissionMode): string {
   if (mode === 'readonly') {
-    return '当前为只读权限模式：写操作工具不可用；用户要求改动数据时，说明需先在对话页顶栏切换权限模式。';
+    return '当前为「只读」权限模式：写操作工具不可用，调用会被系统拒绝。' +
+      '用户要求改动数据时，请其点击对话页顶栏「权限」徽标切换到「逐笔确认」或「自动放行」。';
   }
   if (mode === 'auto') {
-    return '当前为自动放行权限模式：写操作工具不逐笔确认、直接执行；执行后如实汇报改了什么，被拒绝或失败时不要重试。';
+    return '当前为「自动放行」权限模式：写操作工具不逐笔确认、直接执行；执行后如实汇报改了什么，失败时不要重试。';
   }
-  return '';
+  return '当前为「逐笔确认」权限模式：每个写操作工具执行前会请用户批准，用户拒绝时不要坚持重试，问明原因即可。';
 }
 
 /** 附图发送前的压缩长边（像素）：够模型看清，又不至于撑爆请求体。 */
