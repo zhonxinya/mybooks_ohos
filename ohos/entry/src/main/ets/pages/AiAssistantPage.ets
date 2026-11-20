@@ -1,5 +1,5 @@
 import { pasteboard } from '@kit.BasicServicesKit';
-import { promptAction, SymbolGlyphModifier } from '@kit.ArkUI';
+import { LengthMetrics, promptAction, SymbolGlyphModifier } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
@@ -7,7 +7,7 @@ import { PageScaffold, SecondaryButton, TextButton } from '../components';
 import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { ToolResultList } from '../components/ToolResultList';
-import { AiChatStore, ChatActivity, ChatBubble } from '../services/AiChatStore';
+import { AiChatStore, AskRequest, ChatActivity, ChatBubble } from '../services/AiChatStore';
 import { AiService } from '../services/AiService';
 import { SpeakService } from '../services/SpeakService';
 import { AiPermissionMode } from '../services/AiTools';
@@ -39,6 +39,8 @@ struct AiAssistantPage {
   @State speakingIndex: number = -1;
   /** 工具回路实时活动时间线；finishBubble 时快照进气泡成为历史。 */
   @State liveActivities: ChatActivity[] = [];
+  /** ask_user 在途反问卡片（store.pendingAsk 镜像）；null=无。 */
+  @State pendingAsk: AskRequest | null = null;
   /** 流式中的思考过程（store.streamingReasoning 镜像）。 */
   @State streamingReasoning: string = '';
   /** 会话状态机在全局单例里：退出页面不中断流式回复，后台照常完成并落盘。 */
@@ -96,6 +98,7 @@ struct AiAssistantPage {
     this.streamingText = this.store.streamingText;
     this.streamingReasoning = this.store.streamingReasoning;
     this.liveActivities = this.store.liveActivities.slice();
+    this.pendingAsk = this.store.pendingAsk;
     this.thinking = this.store.thinking;
     this.errorTip = this.store.errorTip;
     this.configured = this.store.configured;
@@ -326,6 +329,9 @@ struct AiAssistantPage {
       } else {
         this.chatList();
         this.skillBar();
+      }
+      if (this.pendingAsk !== null) {
+        this.askCard();
       }
       this.inputBar();
     }
@@ -596,6 +602,58 @@ struct AiAssistantPage {
     .scrollable(ScrollDirection.Horizontal)
     .width('100%')
     .align(Alignment.Start);
+  }
+
+  /** 反问问题文案（pendingAsk 镜像解引用，@Builder 内不做局部变量）。 */
+  private askQuestion(): string {
+    const ask: AskRequest | null = this.pendingAsk;
+    return ask === null ? '' : ask.question;
+  }
+
+  private askOptions(): string[] {
+    const ask: AskRequest | null = this.pendingAsk;
+    return ask === null ? [] : ask.options;
+  }
+
+  /**
+   * ask_user 反问卡片：AI 需要用户拍板时挂在输入条上方，点选项即把答复归还回路续跑。
+   * 视图解绑/停止键都会在 store 侧按跳过收敛，卡片不会残留成死按钮。
+   */
+  @Builder
+  askCard() {
+    Column({ space: 10 }) {
+      Text(this.askQuestion())
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .width('100%');
+      Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(8), cross: LengthMetrics.vp(8) } }) {
+        ForEach(this.askOptions(), (opt: string) => {
+          Text(opt)
+            .fontSize(13)
+            .fontColor($r('app.color.brand_primary'))
+            .padding({ left: 12, right: 12, top: 7, bottom: 7 })
+            .borderRadius(14)
+            .backgroundColor($r('app.color.brand_primary_light'))
+            .onClick(() => this.store.answerAsk(opt));
+        }, (opt: string) => opt);
+        Text('跳过')
+          .fontSize(13)
+          .fontColor($r('app.color.text_secondary'))
+          .padding({ left: 12, right: 12, top: 7, bottom: 7 })
+          .borderRadius(14)
+          .border({ width: 1, color: $r('app.color.divider') })
+          .onClick(() => this.store.answerAsk(''));
+      }
+      .width('100%');
+    }
+    .width('100%')
+    .padding(14)
+    .borderRadius($r('app.float.card_radius'))
+    .backgroundColor($r('app.color.card_background'))
+    .shadow({ radius: 8, type: ShadowType.COLOR, color: $r('app.color.button_shadow'), offsetX: 0, offsetY: 2 })
+    .alignItems(HorizontalAlign.Start)
+    .margin({ left: $r('app.float.page_padding'), right: $r('app.float.page_padding'), bottom: 8 });
   }
 
   @Builder
