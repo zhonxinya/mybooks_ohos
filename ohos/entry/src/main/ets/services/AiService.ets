@@ -8,7 +8,7 @@ import { ChatCompletionContentPart } from '@iuroc/openai/src/main/ets/openai@4.7
 import { ChatCompletionContentPartText } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { ChatCompletionContentPartImage } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { TalebookService } from './TalebookService';
-import { AiTools, AiToolDefinition } from './AiTools';
+import { AiTools, AiPermissionMode, AiToolDefinition } from './AiTools';
 
 /**
  * AI 能力统一走 **OpenAI 兼容 API 调用**（架构约束：不在应用内集成端侧小模型）；
@@ -92,6 +92,8 @@ const KEY_SESSION_ID: string = 'ai_opencode_session';
 /** vision 手动覆盖：'on'/'off'；空串=按模型名自动检测。 */
 const KEY_VISION: string = 'ai_vision';
 const KEY_CONTEXT: string = 'ai_context_length';
+/** 权限模式：'readonly'/'confirm'/'auto'；未设置时按逐笔确认。 */
+const KEY_PERMISSION: string = 'ai_permission_mode';
 
 /** 上下文长度档位（K tokens），设置页下拉与轮数映射共用。 */
 export const CONTEXT_LENGTH_OPTIONS: number[] = [4, 8, 32, 128, 200];
@@ -164,6 +166,19 @@ export class AiService {
       return 30;
     }
     return 50;
+  }
+
+  /** 读权限模式（非法/未设置值一律回落为逐笔确认）。 */
+  static loadPermission(): AiPermissionMode {
+    const raw: string = TalebookService.prefGet(KEY_PERMISSION, 'confirm');
+    if (raw === 'readonly' || raw === 'auto') {
+      return raw;
+    }
+    return 'confirm';
+  }
+
+  static savePermission(mode: AiPermissionMode): void {
+    TalebookService.prefSet(KEY_PERMISSION, mode);
   }
 
   /** 各服务商 Key 的存储键；自定义服务商 id 带时间戳，不与前缀冲突。 */
@@ -433,8 +448,9 @@ export class AiService {
       const ask: ((label: string, args: string) => Promise<boolean>) | undefined = handlers.onConfirm;
       const done: ((name: string, label: string, text: string) => void) | undefined = handlers.onToolResult;
       const think: ((text: string) => void) | undefined = handlers.onReasoning;
+      const permission: AiPermissionMode = AiService.loadPermission();
       AiService.chatViaGateway(config, apiKey, messages, maxTokens, gatewaySession,
-        AiTools.definitions(), (): boolean => handle.aborted,
+        AiTools.definitions(permission), permission, (): boolean => handle.aborted,
         notice === undefined ? null : notice,
         ask === undefined ? null : ask,
         done === undefined ? null : done,
@@ -539,7 +555,7 @@ export class AiService {
     if (AiService.isOpenCodeGateway(config.baseUrl)) {
       // 结构化输出（书单 JSON 等）不需要工具，避免模型中途改去查数据
       return AiService.chatViaGateway(config, apiKey, messages, maxTokens, rcp.createSession(),
-        null, null, null, null, null, null);
+        null, AiService.loadPermission(), null, null, null, null, null);
     }
     const client: OpenAI = AiService.client(config.baseUrl, apiKey);
     const params: ChatCompletionCreateParamsBase = {
@@ -655,12 +671,14 @@ export class AiService {
    * （4.1.0(11) 精简版）没有流式事件，无法自解析 SSE。故整包返回
    * （stream:false），OpenCode 对话暂无打字机效果，其他服务商不受影响。
    *
-   * `tools` 非空时走 **function calling 回路**：模型返回 tool_calls → （写工具先过
-   * onConfirm 确认闸门）本地执行（AiTools）→ 以 assistant+tool 消息回填上下文 → 再次请求，
+   * `tools` 非空时走 **function calling 回路**：模型返回 tool_calls → （写工具按
+   * `permission` 三档处理：只读挡下 / 逐笔过 onConfirm / 自动放行）本地执行（AiTools）
+   * → 以 assistant+tool 消息回填上下文 → 再次请求，
    * 直到模型给出文本回答或达到 MAX_TOOL_ROUNDS 轮上限。
    */
   private static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[],
     maxTokens: number, session: rcp.Session, tools: AiToolDefinition[] | null,
+    permission: AiPermissionMode,
     isAborted: (() => boolean) | null,
     onTool: ((label: string, name: string) => void) | null,
     onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null,
@@ -726,19 +744,33 @@ export class AiService {
           gwMessages.push({ role: 'assistant', content: reply.content, tool_calls: calls });
           for (let i = 0; i < reply.calls.length; i++) {
             const c: GatewayToolCall = reply.calls[i];
-            const label: string = AiTools.toolLabel(c.name);
+            let label: string = AiTools.toolLabel(c.name);
             if (AiTools.needsConfirm(c.name)) {
-              // 写工具先过用户确认闸门；没人能确认（onConfirm 缺省）就一律拒绝
-              let approved: boolean = false;
-              if (onConfirm !== null) {
-                approved = await onConfirm(label, c.arguments);
-              }
-              if (!approved) {
-                gwMessages.push({ role: 'tool', content: '用户拒绝了该操作', tool_call_id: c.id });
+              if (permission === 'readonly') {
+                // 只读模式 tools 里本就没有写工具；走到这里说明模型幻觉调用，回路层同样挡下
+                const blocked: string = '当前为只读权限模式，写操作不可执行';
+                gwMessages.push({ role: 'tool', content: blocked, tool_call_id: c.id });
                 if (onResult !== null) {
-                  onResult(c.name, label, '用户拒绝了该操作');
+                  onResult(c.name, label, blocked);
                 }
                 continue;
+              }
+              if (permission === 'confirm') {
+                // 写工具先过用户确认闸门；没人能确认（onConfirm 缺省）就一律拒绝
+                let approved: boolean = false;
+                if (onConfirm !== null) {
+                  approved = await onConfirm(label, c.arguments);
+                }
+                if (!approved) {
+                  gwMessages.push({ role: 'tool', content: '用户拒绝了该操作', tool_call_id: c.id });
+                  if (onResult !== null) {
+                    onResult(c.name, label, '用户拒绝了该操作');
+                  }
+                  continue;
+                }
+              } else {
+                // 自动放行：不弹确认，活动时间线标注执行方式
+                label = `${label}（自动执行）`;
               }
             }
             if (onTool !== null) {

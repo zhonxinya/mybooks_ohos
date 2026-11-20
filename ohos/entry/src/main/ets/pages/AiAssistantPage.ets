@@ -1,5 +1,5 @@
 import { pasteboard } from '@kit.BasicServicesKit';
-import { promptAction } from '@kit.ArkUI';
+import { promptAction, SymbolGlyphModifier } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
@@ -8,6 +8,8 @@ import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { ToolResultList } from '../components/ToolResultList';
 import { AiChatStore, ChatActivity, ChatBubble } from '../services/AiChatStore';
+import { AiService } from '../services/AiService';
+import { AiPermissionMode } from '../services/AiTools';
 import { AppRouter } from '../utils/AppRouter';
 
 /** 技能卡片/芯片点击：把现成提示词填入输入框，用户可先补书名再发送。 */
@@ -25,6 +27,8 @@ struct AiAssistantPage {
   @State pendingImages: string[] = [];
   @State visionEnabled: boolean = false;
   @State contextK: number = 8;
+  /** 权限模式镜像（顶栏徽标显示 + bindMenu 勾选当前项）。 */
+  @State permission: AiPermissionMode = 'confirm';
   /** 流式输出用：整段重建列表的代价高，这里只改最后一条气泡的内容。 */
   @State streamingText: string = '';
   /** 工具回路实时活动时间线；finishBubble 时快照进气泡成为历史。 */
@@ -83,7 +87,48 @@ struct AiAssistantPage {
     this.configured = this.store.configured;
     this.visionEnabled = this.store.visionEnabled;
     this.contextK = this.store.contextK;
+    this.permission = AiService.loadPermission();
     this.scrollToEnd();
+  }
+
+  /** 权限模式徽标短文案。 */
+  private permissionLabel(): string {
+    if (this.permission === 'readonly') {
+      return '只读';
+    }
+    if (this.permission === 'auto') {
+      return '自动放行';
+    }
+    return '逐笔确认';
+  }
+
+  private applyPermission(mode: AiPermissionMode): void {
+    AiService.savePermission(mode);
+    this.permission = mode;
+    this.toast(`已切换为「${this.permissionLabel()}」模式`);
+  }
+
+  /** 权限模式菜单：当前项带勾（MenuElement[] 形式，理由同 BookshelfPage.sortMenuItems）。 */
+  private permissionMenuItems(): MenuElement[] {
+    const items: MenuElement[] = [];
+    const options: Array<[AiPermissionMode, string]> = [
+      ['readonly', '只读（仅查询，不能改数据）'],
+      ['confirm', '逐笔确认（写操作逐个批准）'],
+      ['auto', '自动放行（写操作直接执行）'],
+    ];
+    for (const option of options) {
+      const mode: AiPermissionMode = option[0];
+      const item: MenuElement = {
+        value: option[1],
+        action: () => this.applyPermission(mode),
+      };
+      if (mode === this.permission) {
+        item.symbolIcon = new SymbolGlyphModifier($r('sys.symbol.checkmark'))
+          .fontColor([$r('app.color.brand_primary')]);
+      }
+      items.push(item);
+    }
+    return items;
   }
 
   /** 输入条「停止」按钮：用户主动中断，与切页无关。 */
@@ -208,6 +253,14 @@ struct AiAssistantPage {
   @Builder
   headerAction() {
     Row({ space: 4 }) {
+      // 权限模式徽标：点击弹三档菜单，当前项带勾
+      Text(`权限·${this.permissionLabel()}`)
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+        .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+        .borderRadius($r('app.float.chip_radius'))
+        .border({ width: 1, color: $r('app.color.divider') })
+        .bindMenu(this.permissionMenuItems())
       TextButton({
         label: '设置',
         onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiSettingsPage' }),

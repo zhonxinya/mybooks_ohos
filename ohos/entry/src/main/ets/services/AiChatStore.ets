@@ -1,7 +1,7 @@
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { image } from '@kit.ImageKit';
 import { util } from '@kit.ArkTS';
-import { AiTools, parseToolBookLines, ToolBookLine } from './AiTools';
+import { AiTools, AiPermissionMode, parseToolBookLines, ToolBookLine } from './AiTools';
 import { AiService, AiConfig, AiMessage, AiStreamHandlers, AiAbortHandle } from './AiService';
 import { AiPersona } from './AiPersona';
 import { TalebookService } from './TalebookService';
@@ -56,6 +56,17 @@ const SYSTEM_PROMPT: string =
   'forget_memory 按序号删除；系统提示中若已有「用户记忆」列表，回答时自然参考、不必复述。' +
   '问题涉及用户的书籍或阅读情况时，先调用工具拿到真实数据再回答，绝不编造；' +
   '工具数据不足时直接说明不确定。';
+
+/** 权限模式的提示词补注（confirm 模式与 SYSTEM_PROMPT 默认描述一致，无需追加）。 */
+function permissionPromptNote(mode: AiPermissionMode): string {
+  if (mode === 'readonly') {
+    return '当前为只读权限模式：写操作工具不可用；用户要求改动数据时，说明需先在对话页顶栏切换权限模式。';
+  }
+  if (mode === 'auto') {
+    return '当前为自动放行权限模式：写操作工具不逐笔确认、直接执行；执行后如实汇报改了什么，被拒绝或失败时不要重试。';
+  }
+  return '';
+}
 
 /** 附图发送前的压缩长边（像素）：够模型看清，又不至于撑爆请求体。 */
 const IMAGE_MAX_EDGE: number = 1024;
@@ -299,7 +310,12 @@ export class AiChatStore {
   /** 把界面气泡转成协议消息，只带最近 N 轮（档位来自设置），避免上下文无限增长。 */
   async buildContext(): Promise<AiMessage[]> {
     const persona: string = AiPersona.buildPersonaPrompt();
-    const systemText: string = persona.length > 0 ? `${SYSTEM_PROMPT}\n\n${persona}` : SYSTEM_PROMPT;
+    let systemText: string = persona.length > 0 ? `${SYSTEM_PROMPT}\n\n${persona}` : SYSTEM_PROMPT;
+    // 权限模式说明追加在最后，覆盖 SYSTEM_PROMPT 里「逐笔确认」的默认描述
+    const modeNote: string = permissionPromptNote(AiService.loadPermission());
+    if (modeNote.length > 0) {
+      systemText = `${systemText}\n\n${modeNote}`;
+    }
     const context: AiMessage[] = [{ role: 'system', content: systemText }];
     const bubbles: ChatBubble[] = this.messages.filter((m: ChatBubble) =>
       !m.error && (m.content.length > 0 || (m.images ?? []).length > 0));
