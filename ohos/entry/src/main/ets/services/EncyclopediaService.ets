@@ -11,6 +11,20 @@ export interface EncyclopediaHit {
   error: string;
 }
 
+/** 通用网页搜索单条结果。summary 可能为空（纯标题卡片）。 */
+export interface WebSearchHit {
+  title: string;
+  url: string;
+  summary: string;
+}
+
+/** 通用网页搜索整体结果：ok=false 时 error 说明原因（同百科通道容错风格）。 */
+export interface WebSearchResult {
+  ok: boolean;
+  items: WebSearchHit[];
+  error: string;
+}
+
 /** 百度主搜 UA：百科卡走 SERP 内嵌 JSON（baike item 页被安全验证挡，SERP 是唯一可用公开入口）。 */
 const BAIDU_UA: string =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
@@ -133,6 +147,69 @@ export class EncyclopediaService {
     } catch (error) {
       hit.error = error instanceof Error ? error.message : `${error}`;
       return hit;
+    }
+  }
+
+  /**
+   * 通用网页搜索：同一条百度 SERP 通道取普通结果列表（百科工具已验证该入口可达）。
+   * organic 容器 `class="result c-container"` 内：mu=属性为原站直链（比 link 跳转可靠）、
+   * <!--s-text--> 标记标题（含 <em> 高亮）、summary-text_* 为摘要（CSS Modules 哈希后缀会变）。
+   * 卡片模板五花八门，任一锚点缺失只丢该条；全部拿不到才回解析失败。
+   */
+  static async searchWeb(query: string, limit: number = 6): Promise<WebSearchResult> {
+    const result: WebSearchResult = { ok: false, items: [], error: '' };
+    try {
+      const html: string = await EncyclopediaService.fetchText(
+        `https://www.baidu.com/s?wd=${encodeURIComponent(query)}`, BAIDU_UA);
+      const starts: number[] = [];
+      const containerRe: RegExp = /class="result c-container/g;
+      let pos: RegExpExecArray | null = containerRe.exec(html);
+      while (pos !== null && starts.length < 30) {
+        starts.push(pos.index);
+        pos = containerRe.exec(html);
+      }
+      for (let i = 0; i < starts.length && result.items.length < limit; i++) {
+        const from: number = starts[i];
+        const to: number = i + 1 < starts.length ? starts[i + 1] : Math.min(html.length, from + 9000);
+        const seg: string = html.substring(from, to);
+        // mu=原站直链；recommend_list 是榜单推广位（也带 http mu），按域名排除
+        const mu: RegExpExecArray | null = /mu="(https?:\/\/[^"]{1,300})"/.exec(seg.substring(0, 900));
+        if (mu === null || mu[1].indexOf('recommend_list') >= 0) {
+          continue;
+        }
+        let rawTitle: string = '';
+        const stext: RegExpExecArray | null = /<!--s-text-->([\s\S]{1,300}?)<!--\/s-text-->/.exec(seg);
+        if (stext !== null) {
+          rawTitle = stext[1];
+        } else {
+          const h3: RegExpExecArray | null = /<h3[^>]*>([\s\S]{1,300}?)<\/h3>/.exec(seg);
+          if (h3 !== null) {
+            rawTitle = h3[1];
+          }
+        }
+        const title: string = EncyclopediaService.stripHtml(rawTitle);
+        if (title.length === 0) {
+          continue;
+        }
+        let summary: string = '';
+        const sum: RegExpExecArray | null = /class="[^"]*summary-text_[^"]*">([\s\S]{1,600}?)<\/span>/.exec(seg);
+        if (sum !== null) {
+          summary = EncyclopediaService.stripHtml(sum[1]);
+          if (summary.length > ABSTRACT_MAX) {
+            summary = `${summary.substring(0, ABSTRACT_MAX)}…`;
+          }
+        }
+        result.items.push({ title: title, url: mu[1], summary: summary });
+      }
+      if (result.items.length === 0) {
+        result.error = '搜索结果页没有可用的普通结果（可能被反爬拦截或无命中）';
+        return result;
+      }
+      result.ok = true;
+      return result;
+    } catch (error) {
+      result.error = error instanceof Error ? error.message : `${error}`;
+      return result;
     }
   }
 }
