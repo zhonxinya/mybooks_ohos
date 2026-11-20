@@ -120,7 +120,7 @@ writeFileSync(join(dir, 'shim.ts'), shim);
 writeFileSync(join(dir, 'aiServiceDeps.ts'), `
 // Buffer.from(x).buffer 带池化填充，必须 slice 出精确字节（模拟 rcp 的紧凑 ArrayBuffer）
 const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
-export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [], sourceJson: null, written: [] };
+export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpThrowQueue: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [], sourceJson: null, written: [] };
 export const util = {
   // 透传 encoding（gbk/gb2312 走 Node 内置 TextDecoder），utf-8 用法不受影响
   TextDecoder: { create: (encoding) => ({ decodeToString: (u8) => new TextDecoder(encoding ?? 'utf-8').decode(u8) }) },
@@ -146,6 +146,7 @@ export const rcp = {
     fetch: async (request) => {
       state.lastRequest = request;
       state.requests.push(request);
+      if (state.rcpThrowQueue.length > 0) { throw state.rcpThrowQueue.shift(); }
       if (state.rcpError) { throw state.rcpError; }
       const queued = state.rcpResponses.length > 0 ? state.rcpResponses.shift() : null;
       return queued ?? state.rcpResponse ?? { statusCode: 200, body: enc(JSON.stringify({ data: state.models })) };
@@ -222,6 +223,8 @@ export const toolsState = {
   booklistCreateResult: null, booklistAddResult: null, booklistCreateCalls: [], booklistAddCalls: [],
   bookDetailAsync: null, editCalls: [], editResult: null,
   referBooks: null, referSearchCalls: [], applyReferCalls: [], applyReferResult: null,
+  // 一次性抛错开关：非空则下一次调用抛该消息并自动复位（工具失败处理用例用）
+  searchThrowOnce: '', createThrowOnce: '',
 };
 // 仅作类型标注用的名字（strip-types 后仍走值 import），占位防命名导出缺失
 export const SoNovelBookPayload = undefined;
@@ -257,6 +260,9 @@ export const DownloadTaskService = {
 export const BookListApi = {
   createBooklist: async (name, description, color, isPublic) => {
     toolsState.booklistCreateCalls.push({ name, description, color, isPublic });
+    if (toolsState.createThrowOnce.length > 0) {
+      const e = toolsState.createThrowOnce; toolsState.createThrowOnce = ''; throw new Error(e);
+    }
     return toolsState.booklistCreateResult ?? { err: 'ok', booklist: { id: 77 } };
   },
   addBooks: async (id, ids) => {
@@ -265,7 +271,12 @@ export const BookListApi = {
   },
 };
 export const TalebookApi = {
-  search: async (q) => (toolsState.search ? await toolsState.search(q) : []),
+  search: async (q) => {
+    if (toolsState.searchThrowOnce.length > 0) {
+      const e = toolsState.searchThrowOnce; toolsState.searchThrowOnce = ''; throw new Error(e);
+    }
+    return toolsState.search ? await toolsState.search(q) : [];
+  },
   getBookDetail: async (id) => (toolsState.detail ? await toolsState.detail(id) : null),
   searchRefer: async (id, opts) => {
     toolsState.referSearchCalls.push({ id, opts });
@@ -351,6 +362,15 @@ function stageMetaSearch() {
   writeFileSync(join(dir, 'RealMetaSearch.ts'), source);
 }
 
+/** EncyclopediaService 真实入检：rcp/util 复用 aiServiceDeps 桩（双通道都走 fetchText）。 */
+function stageEncyclopedia() {
+  let source = read('services/EncyclopediaService.ets');
+  source = source
+    .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`);
+  writeFileSync(join(dir, 'RealEncyclopedia.ts'), source);
+}
+
 /** NovelMetaService 真实入检：同样复用 rcp 桩；引擎分派点用 Reader3Native 替身。 */
 function stageNovelMeta() {
   let source = read('services/NovelMetaService.ets');
@@ -382,6 +402,8 @@ function stageAiTools() {
       `import { MetaSearchService } from './RealMetaSearch.ts';`)
     .replace(`import { NovelMeta, NovelMetaService } from './NovelMetaService';`,
       `import { NovelMetaService } from './RealNovelMeta.ts';`)
+    .replace(`import { EncyclopediaHit, EncyclopediaService } from './EncyclopediaService';`,
+      `import { EncyclopediaService } from './RealEncyclopedia.ts';`)
     .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
     .replace(`from './TalebookApi'`, `from './aiToolsDeps.ts'`)
     .replace(`from './AnnotationApi'`, `from './aiToolsDeps.ts'`)
@@ -471,6 +493,7 @@ try {
   stageChatStore();
   stageMetaSearch();
   stageNovelMeta();
+  stageEncyclopedia();
   stageReader3();
   stageAiTools();
   const load = async (name) => import(pathToFileURL(join(dir, `${name}.ts`)).href);
@@ -962,7 +985,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 16 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 17 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -971,6 +994,77 @@ try {
     assert.equal(toolMsg.tool_call_id, 'call_1');
     assert.ok(toolMsg.content.includes('- 《三体》（刘慈欣） id=12'));
     assert.equal(full, '帮你查到了《三体》，id=12。');
+  });
+
+  test('网关请求重试：网络异常/429/5xx 退避后重试，其他 4xx 不重试，重试用尽才报错', async () => {
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    const reply = (t) => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: t } }] })) });
+    const runOnce = (prep) => {
+      deps.state.requests.length = 0;
+      deps.state.rcpResponses.length = 0;
+      deps.state.rcpThrowQueue.length = 0;
+      prep();
+      const box = { full: '', error: '' };
+      return new Promise((resolve) => {
+        RealAiService.chatStream([{ role: 'user', content: 'hi' }], {
+          onDelta: (t) => { box.full += t; },
+          onDone: () => resolve(box), onError: (m) => { box.error = m; resolve(box); },
+        }, 64);
+      });
+    };
+    // 网络异常：第一次 fetch 抛、第二次成功——旧行为在此直接报废整条回复
+    let r = await runOnce(() => {
+      deps.state.rcpThrowQueue = [new Error('连接失败')];
+      deps.state.rcpResponses = [reply('重试后成功')];
+    });
+    assert.equal(r.error, '');
+    assert.equal(r.full, '重试后成功');
+    assert.equal(deps.state.requests.length, 2);
+    // 429 限流：退避后重试拿到回答
+    r = await runOnce(() => {
+      deps.state.rcpResponses = [{ statusCode: 429, body: enc('rate limited') }, reply('429 恢复')];
+    });
+    assert.equal(r.error, '');
+    assert.equal(deps.state.requests.length, 2);
+    // 400 参数错误：重试无意义，一次即报错
+    r = await runOnce(() => { deps.state.rcpResponses = [{ statusCode: 400, body: enc('bad request') }]; });
+    assert.ok(r.error.includes('400'), r.error);
+    assert.equal(deps.state.requests.length, 1);
+    // 5xx 重试用尽（1+2 次）才报错
+    r = await runOnce(() => {
+      deps.state.rcpResponses = [{ statusCode: 502, body: enc('bad gateway') },
+        { statusCode: 502, body: enc('bad gateway') }, { statusCode: 503, body: enc('unavailable') }];
+    });
+    assert.ok(r.error.length > 0);
+    assert.equal(deps.state.requests.length, 3);
+  });
+
+  test('工具失败处理：只读瞬时失败自动重试一次，写工具永不自动重试，确定性失败给修正指引', async () => {
+    // 1 只读工具瞬时失败：第一次抛「连接超时」，代码层重试后拿到正常结果
+    let okCalls = 0;
+    toolsState.searchThrowOnce = '连接超时';
+    toolsState.search = async () => { okCalls += 1; return [{ id: 12, title: '三体', authors: ['刘慈欣'] }]; };
+    let out = await RealAiTools.execute('search_books', '{"query":"三体"}');
+    assert.ok(out.includes('《三体》'), out);
+    assert.equal(okCalls, 1, '重试那次应走正常通道（首次由 throwOnce 抛出）');
+    // 2 只读工具重试后仍瞬时失败：文案带「已自动重试一次」，且恰好尝试 2 次
+    let attempts = 0;
+    toolsState.search = async () => { attempts += 1; throw new Error('HTTP 502 bad gateway'); };
+    out = await RealAiTools.execute('search_books', '{"query":"三体"}');
+    assert.ok(out.includes('暂时失败') && out.includes('已自动重试一次'), out);
+    assert.equal(attempts, 2, '只读瞬时失败应恰好尝试 2 次');
+    // 3 写工具瞬时失败：永不自动重试（部分成功可能已落服务端），文案不声称重试过
+    toolsState.booklistCreateCalls.length = 0;
+    toolsState.createThrowOnce = '连接超时';
+    out = await RealAiTools.execute('create_booklist', '{"name":"重试测试"}');
+    assert.ok(out.includes('暂时失败') && !out.includes('已自动重试'), out);
+    assert.equal(toolsState.booklistCreateCalls.length, 1, '写工具不得自动重试');
+    // 4 确定性失败：非瞬时，回「执行失败」+ 修正指引
+    toolsState.search = async () => { throw new Error('参数非法'); };
+    out = await RealAiTools.execute('search_books', '{"query":"x"}');
+    assert.ok(out.includes('执行失败') && out.includes('不要原样重试'), out);
+    toolsState.search = null;
+    toolsState.booklistCreateCalls.length = 0;
   });
 
   test('长任务：连续 6 轮 tool_calls 在新上限（12）内正常完成——旧上限 4 会在第 5 轮报错截断', async () => {
@@ -1050,11 +1144,11 @@ try {
   test('权限模式：definitions(mode) 三档过滤——readonly 去写工具，其余全量', () => {
     const WRITE = ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task',
       'update_book_meta', 'set_cover', 'forget_memory'];
-    assert.equal(RealAiTools.definitions().length, 16);
-    assert.equal(RealAiTools.definitions('confirm').length, 16);
-    assert.equal(RealAiTools.definitions('auto').length, 16);
+    assert.equal(RealAiTools.definitions().length, 17);
+    assert.equal(RealAiTools.definitions('confirm').length, 17);
+    assert.equal(RealAiTools.definitions('auto').length, 17);
     const ro = RealAiTools.definitions('readonly');
-    assert.equal(ro.length, 10);
+    assert.equal(ro.length, 11);
     for (const name of WRITE) {
       assert.ok(!ro.some((d) => d.function.name === name), `readonly 泄漏写工具 ${name}`);
     }
@@ -1083,7 +1177,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 10);
+    assert.equal(b1.tools.length, 11);
     assert.ok(!b1.tools.some((d) => d.function.name === 'create_booklist'));
     const b2 = JSON.parse(deps.state.requests[1].content);
     assert.equal(b2.messages.find((m) => m.role === 'tool').content,
@@ -1114,7 +1208,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 16, 'auto 模式写工具须在 tools 里');
+    assert.equal(b1.tools.length, 17, 'auto 模式写工具须在 tools 里');
     assert.equal(asked, 0, 'auto 模式不该弹确认');
     assert.deepEqual(labels, [['create_booklist', '创建书单（自动执行）']]);
     assert.deepEqual(toolsState.booklistCreateCalls.map((c) => c.name), ['科幻入门']);
@@ -1149,6 +1243,8 @@ try {
     assert.ok(!sys.includes('（书籍详情，需 id）'), '旧版逐工具枚举未删净（与 tools payload 重复）');
     assert.ok(!sys.includes('写操作工具：create_booklist'), '写工具清单枚举未删净');
     assert.ok(sys.includes('回答与思考过程一律使用中文'), '缺中文约束');
+    assert.ok(sys.includes('工具返回「暂时失败」时可稍后原样重试一次'), '缺工具失败重试引导');
+    assert.ok(sys.includes('返回「执行失败」时按错误提示修正参数或方案再试'), '缺确定性失败修正指引');
     assert.ok(sys.includes('当前为「逐笔确认」权限模式'), 'confirm 档缺补注');
     state.settings.permission = 'readonly';
     const ro = (await store.buildContext())[0].content;
@@ -1159,6 +1255,7 @@ try {
     const auto = (await store.buildContext())[0].content;
     assert.ok(auto.includes('当前为「自动放行」权限模式'), 'auto 档缺补注');
     assert.ok(auto.includes('不逐笔确认、直接执行'), 'auto 补注缺行为定义');
+    assert.ok(!auto.includes('失败时不要重试'), 'auto 补注与工具失败重试引导矛盾');
     state.settings.permission = 'confirm';
   });
 
@@ -2176,6 +2273,64 @@ try {
     const d3 = await RealAiTools.execute('search_meta', '{}');
     assert.ok(d3.includes('至少提供'));
     deps.state.rcpResponse = null;
+  });
+
+  test('百科工具：SERP 百科卡解析、维基 snippet 去标签、通道独立容错与聚合文案', async () => {
+    const { EncyclopediaService } = await load('RealEncyclopedia');
+    deps.state.rcpThrowQueue.length = 0;
+    deps.state.rcpError = null;
+    const serp = '<html><body><script>x</script>' +
+      '{"tools":{"title":"刘慈欣","url":"https://baike.baidu.com/item/%E5%88%98%E6%85%88%E6%AC%A3/142084"},' +
+      '"source":"百度百科","baikeid":"142084","abstract":"刘慈欣,男,汉族,1963年生,高级工程师、科幻作家。"}' +
+      '</body></html>';
+    const wikiJson = JSON.stringify({ query: { search: [
+      { title: '刘慈欣', snippet: '<b>刘慈欣</b>，1963年生中国科幻作家' }] } });
+    // 1 百度百科卡
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(serp) }];
+    let bk = await EncyclopediaService.searchBaike('刘慈欣');
+    assert.ok(bk.ok && bk.title === '刘慈欣' && bk.abstract.includes('汉族') && bk.url.includes('baike.baidu.com'), JSON.stringify(bk));
+    // 2 无百科卡 → 明确文案
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc('<html>no card</html>') }];
+    bk = await EncyclopediaService.searchBaike('不存在的词');
+    assert.ok(!bk.ok && bk.error.includes('没有百科词条'), bk.error);
+    // 3 item 级拦截（403）转 ok=false 不外抛
+    deps.state.rcpResponses = [{ statusCode: 403, body: enc('verify') }];
+    bk = await EncyclopediaService.searchBaike('x');
+    assert.ok(!bk.ok && bk.error.includes('403'), bk.error);
+    // 4 维基 snippet 去标签 + 词条链接
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(wikiJson) }];
+    const wk = await EncyclopediaService.searchWikipedia('刘慈欣');
+    assert.ok(wk.ok && !wk.abstract.includes('<b>') && wk.abstract.includes('科幻作家'), JSON.stringify(wk));
+    assert.equal(wk.url, 'https://zh.wikipedia.org/wiki/%E5%88%98%E6%85%88%E6%AC%A3');
+    // 5 工具聚合：双通道都有
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(serp) }, { statusCode: 200, body: enc(wikiJson) }];
+    let out = await RealAiTools.execute('search_encyclopedia', '{"query":"刘慈欣"}');
+    assert.ok(out.includes('【百度百科】刘慈欣') && out.includes('【维基百科】刘慈欣') && out.includes('链接：'), out);
+    // 6 维基不可达（被墙 403）仍给百度结果并如实标注
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(serp) }, { statusCode: 403, body: enc('blocked') }];
+    out = await RealAiTools.execute('search_encyclopedia', '{"query":"刘慈欣"}');
+    assert.ok(out.includes('【百度百科】刘慈欣') && out.includes('【维基百科】未获取到'), out);
+    // 7 双通道全挂 → 汇总失败文案（不抛错，不触发无意义重试）
+    deps.state.rcpResponses = [{ statusCode: 503, body: enc('down') }, { statusCode: 503, body: enc('down') }];
+    out = await RealAiTools.execute('search_encyclopedia', '{"query":"x"}');
+    assert.ok(out.includes('百科检索失败') && out.includes('503'), out);
+    // 8 无 tools 卡时 fallback：纯词/整句 SERP 的 AI 问答卡引用项形态（板上真实踩坑）
+    const serpCite = '<html><script>var x=1;</script>' +
+      '{"url_no":2,"url":"https://baike.baidu.com/item/%E5%88%98%E6%85%88%E6%AC%A3/142084",' +
+      '"text":"刘慈欣-高级工程师、科幻作家","source":"百度百科","publish_time":0,"icon":"https://i.png",' +
+      '"abstract":"刘慈欣,男,汉族,1963年6月23日出生于北京,祖籍河南,高级工程师、科幻作家。"}' +
+      '</html>';
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(serpCite) }];
+    bk = await EncyclopediaService.searchBaike('刘慈欣是谁');
+    assert.ok(bk.ok && bk.title === '刘慈欣-高级工程师、科幻作家' &&
+      bk.abstract.includes('1963年') && bk.url.includes('baike.baidu.com'), JSON.stringify(bk));
+    // 9 cite 形态但 abstract 距 source 超窗口 → 不误取无关摘要
+    const serpFar = '<html>{"url":"https://baike.baidu.com/item/a","text":"词条","source":"百度百科"}' +
+      'x'.repeat(1000) + '{"abstract":"太远的摘要不应该被取到内容内容内容。"}</html>';
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(serpFar) }];
+    bk = await EncyclopediaService.searchBaike('y');
+    assert.ok(!bk.ok && bk.error.includes('没有百科词条'), bk.error);
+    deps.state.rcpError = null;
   });
 
   test('灵魂管理页：灵魂保存/恢复默认，手动补记与删除记忆', () => {

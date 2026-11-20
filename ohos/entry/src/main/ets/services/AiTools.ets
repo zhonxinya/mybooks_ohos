@@ -8,6 +8,7 @@ import { BookListAddResponse, BookListApi, BookListMutationResponse } from './Bo
 import { AiPersona } from './AiPersona';
 import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';
 import { NovelMeta, NovelMetaService } from './NovelMetaService';
+import { EncyclopediaHit, EncyclopediaService } from './EncyclopediaService';
 
 /** 工具结果里的一本书（供对话页做结构化列表渲染）。 */
 export interface ToolBookLine {
@@ -238,6 +239,14 @@ const TOOL_GET_NOVEL_META: AiToolDefinition = defineTool('get_novel_meta',
     '豆瓣查不到的网文就靠它；对 17K小说网详情页解析最全。失败时换另一条书源候选的 url 重试。',
   NOVEL_META_PROPS, ['url']);
 
+const ENCYCLOPEDIA_PROPS: Record<string, AiToolProperty> = {
+  'query': prop('string', '百科词条名（如「刘慈欣」「三体」），只给名词本身，不要带「是谁/什么是」等整句问话'),
+};
+const TOOL_SEARCH_ENCYCLOPEDIA: AiToolDefinition = defineTool('search_encyclopedia',
+  '搜百科词条（百度百科+维基百科双通道）：回答「这位作者是谁/这本书什么背景/某地某概念」类问题，' +
+    '返回词条标题、摘要与链接。query 传词条名而非整句问话。一个通道不可达会如实标注并仍给另一通道结果。',
+  ENCYCLOPEDIA_PROPS, ['query']);
+
 // 顺序有坑：OpenCode 网关实测会丢 tools 数组最后一项（2026-11-20 板上取证：模型枚举
 // 恰缺末位 get_novel_meta，报「最后一个工具是 search_meta」）。末位放最低频工具，
 // 新增工具一律插在中间，别放最后。
@@ -246,7 +255,8 @@ const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS,
   TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_UPDATE_BOOK_META,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
-  TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_FORGET_MEMORY,
+  TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_SEARCH_ENCYCLOPEDIA,
+  TOOL_FORGET_MEMORY,
 ];
 
 /**
@@ -343,6 +353,9 @@ export class AiTools {
     if (name === 'get_novel_meta') {
       return '抓书源站详情页';
     }
+    if (name === 'search_encyclopedia') {
+      return '搜百科词条';
+    }
     if (name === 'save_memory') {
       return '记住用户的事';
     }
@@ -353,10 +366,49 @@ export class AiTools {
   }
 
   /** 执行一次工具调用；永不抛出，返回给模型的文本结果。 */
+  /**
+   * 工具执行入口（失败处理见 dispatch 外层循环）：
+   * - 只读工具的**瞬时失败**（网络/限流/5xx）在代码层自动重试一次——模型层重试
+   *   要整趟网关往返（秒级+token），这类失败无副作用，本地重试最快最省。
+   * - **写工具永不自动重试**：部分成功可能已落在服务端，盲目重试会重复执行；
+   *   只回传分类文案，由模型（和用户确认闸门）决定下一步。
+   */
   static async execute(name: string, argsJson: string): Promise<string> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await AiTools.dispatch(name, argsJson);
+      } catch (error) {
+        const msg: string = error instanceof Error ? error.message : `${error}`;
+        const transient: boolean = AiTools.isTransientError(msg);
+        if (transient && attempt === 0 && !AiTools.needsConfirm(name)) {
+          continue;
+        }
+        if (transient) {
+          const note: string = AiTools.needsConfirm(name) ? '' : '（已自动重试一次）';
+          return `工具 ${name} 暂时失败${note}：${msg}。可稍后原样重试一次，或换个说法。`;
+        }
+        return `工具 ${name} 执行失败：${msg}。请按错误原因修正参数或方案，不要原样重试。`;
+      }
+    }
+    return '';
+  }
+
+  /** 网络/限流/服务端不可用类错误判为瞬时（可重试），其余为确定性错误。 */
+  private static isTransientError(message: string): boolean {
+    const keys: string[] = ['超时', 'timeout', 'Timeout', '连接', 'connection', 'Connection',
+      'network', 'Network', 'unavailable', 'Unavailable', 'reset', 'ECONN', 'econn',
+      '429', '500', '502', '503', '504', '暂时不可用'];
+    for (let i = 0; i < keys.length; i++) {
+      if (message.indexOf(keys[i]) >= 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static async dispatch(name: string, argsJson: string): Promise<string> {
     AiTools.lastBooks = [];
-    try {
-      const args: Record<string, Object> = AiTools.parseArgs(argsJson);
+    const args: Record<string, Object> = AiTools.parseArgs(argsJson);
       if (name === 'search_books') {
         return await AiTools.searchBooks(AiTools.argString(args, 'query'));
       }
@@ -399,6 +451,9 @@ export class AiTools {
       if (name === 'get_novel_meta') {
         return await AiTools.getNovelMeta(args);
       }
+      if (name === 'search_encyclopedia') {
+        return await AiTools.searchEncyclopedia(AiTools.argString(args, 'query'));
+      }
       if (name === 'save_memory') {
         return AiPersona.appendMemory(AiTools.argString(args, 'content'));
       }
@@ -406,9 +461,6 @@ export class AiTools {
         return AiPersona.removeMemory(AiTools.argNumber(args, 'index'));
       }
       return `未知工具：${name}`;
-    } catch (error) {
-      return `工具 ${name} 执行失败：${error instanceof Error ? error.message : `${error}`}`;
-    }
   }
 
   /**
@@ -654,6 +706,34 @@ export class AiTools {
     }
     out += '\n要把简介写进书架用 update_book_meta 的 comment 字段。';
     return out;
+  }
+
+  /**
+   * 百科双通道聚合：各通道独立容错（EncyclopediaService 已把网络失败转成 ok=false），
+   * 全失败才回失败文案——不抛错，避免 execute 层对「被墙」这类确定性失败做无意义重试。
+   */
+  private static async searchEncyclopedia(query: string): Promise<string> {
+    const trimmed: string = query.trim();
+    if (trimmed.length === 0) {
+      return '参数 query 为空，请提供百科词条关键词。';
+    }
+    const bk: EncyclopediaHit = await EncyclopediaService.searchBaike(trimmed);
+    const wk: EncyclopediaHit = await EncyclopediaService.searchWikipedia(trimmed);
+    if (!bk.ok && !wk.ok) {
+      return `百科检索失败：百度百科（${bk.error}）；维基百科（${wk.error}）`;
+    }
+    const parts: string[] = [];
+    if (bk.ok) {
+      parts.push(`【百度百科】${bk.title}\n${bk.abstract}\n链接：${bk.url}`);
+    } else {
+      parts.push(`【百度百科】未获取到：${bk.error}`);
+    }
+    if (wk.ok) {
+      parts.push(`【维基百科】${wk.title}\n${wk.abstract}\n链接：${wk.url}`);
+    } else {
+      parts.push(`【维基百科】未获取到：${wk.error}`);
+    }
+    return parts.join('\n\n');
   }
 
   private static async setCover(args: Record<string, Object>): Promise<string> {
