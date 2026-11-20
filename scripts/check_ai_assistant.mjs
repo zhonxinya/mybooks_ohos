@@ -294,6 +294,10 @@ export const toolsState = {
   referBooks: null, referSearchCalls: [], applyReferCalls: [], applyReferResult: null,
   // add_to_shelf 用：登录态、配额检查可用性/结果、内存目录、talebook 入队记录
   authOk: true, quotaSupported: true, quotaResult: null, dirs: new Set(), talebookEnqueues: [],
+  // 书单管理/推送/统计工具用：可编程响应 + 调用记录
+  myBooklists: null, booklistDetail: null, booklistUpdateCalls: [], booklistDeleteCalls: [],
+  booklistRemoveCalls: [], pushResult: null, pushCalls: [], devices: null,
+  readingStats: null, currentReading: null,
   // 一次性抛错开关：非空则下一次调用抛该消息并自动复位（工具失败处理用例用）
   searchThrowOnce: '', createThrowOnce: '',
 };
@@ -314,6 +318,10 @@ export const DownloadTask = undefined;
 export const SoNovelSearchItem = undefined;
 export const BookListAddResponse = undefined;
 export const BookListMutationResponse = undefined;
+export const BookListDetailResponse = undefined;
+export const BookListUpdatePayload = undefined;
+export const BookListsResponse = undefined;
+export const ApiMessageResult = undefined;
 export const SoNovelService = {
   search: async (_q) => toolsState.sonovelEnvelope ?? { status: 0, body: null, error: '未配置 SoNovel 服务地址' },
 };
@@ -366,6 +374,21 @@ export const BookListApi = {
     toolsState.booklistAddCalls.push({ id, ids });
     return toolsState.booklistAddResult ?? { err: 'ok', added: ids.length, book_count: ids.length };
   },
+  getMyBooklists: async () => toolsState.myBooklists ?? { err: 'ok', booklists: [] },
+  getBooklistDetail: async (id) => (toolsState.booklistDetail !== null && toolsState.booklistDetail[id] !== undefined
+    ? { err: 'ok', booklist: toolsState.booklistDetail[id] } : { err: 'notfound', msg: '书单不存在' }),
+  updateBooklist: async (id, payload) => {
+    toolsState.booklistUpdateCalls.push({ id, payload });
+    return toolsState.booklistUpdateResult ?? { err: 'ok' };
+  },
+  deleteBooklist: async (id) => {
+    toolsState.booklistDeleteCalls.push(id);
+    return { err: 'ok' };
+  },
+  removeBook: async (id, bookId) => {
+    toolsState.booklistRemoveCalls.push({ id, bookId });
+    return { err: 'ok' };
+  },
 };
 export const TalebookApi = {
   search: async (q) => {
@@ -384,6 +407,13 @@ export const TalebookApi = {
     return toolsState.applyReferResult ?? { err: 'ok' };
   },
   getDownloadQuota: async () => toolsState.quotaResult ?? {},
+  getUserDevices: async () => toolsState.devices ?? [],
+  sendToDevice: async (bookId, type, url, mailbox, ftpUser, ftpPass, ftpPath) => {
+    toolsState.pushCalls.push({ bookId, type, url, mailbox });
+    return toolsState.pushResult ?? { err: 'ok', msg: '推送成功' };
+  },
+  getReadingStats: async () => toolsState.readingStats,
+  getCurrentReadingBooks: async () => toolsState.currentReading ?? [],
 };
 export const ReferBook = undefined;
 export const ReferSearchOpts = undefined;
@@ -620,7 +650,13 @@ function stageAiTools() {
     .replace(`from './BookModels'`, `from './aiToolsDeps.ts'`)
     .replace(`from './ServerProfile'`, `from './aiToolsDeps.ts'`)
     .replace(`from './AccountManager'`, `from './aiToolsDeps.ts'`)
-    .replace(`from '@kit.CoreFileKit'`, `from './aiToolsDeps.ts'`);
+    .replace(`from '@kit.CoreFileKit'`, `from './aiToolsDeps.ts'`)
+    .replace(`import { BookListSummary, parseBookListSummary, parseBookListSummaries } from '../models/BookListModels';`,
+      `import type { BookListSummary } from './BookListModels.ts';\nimport { parseBookListSummary, parseBookListSummaries } from './BookListModels.ts';`)
+    .replace(`import { ReadingDevice, deviceTypeLabel } from '../models/DeviceModels';`,
+      `import type { ReadingDevice } from './DeviceModels.ts';\nimport { deviceTypeLabel } from './DeviceModels.ts';`)
+    .replace(`import { HomeBook, ReadingStatsSummary } from '../models/HomeModels';`,
+      `import type { HomeBook, ReadingStatsSummary } from './HomeModels.ts';`);
   writeFileSync(join(dir, 'RealAiTools.ts'), source);
 }
 
@@ -691,6 +727,9 @@ const rtB64 = (bytes) => Buffer.from(bytes).toString('base64');
 
 try {
   stagePure('BookModels', 'services/BookModels.ets', []);
+  stagePure('BookListModels', 'models/BookListModels.ets', []);
+  stagePure('DeviceModels', 'models/DeviceModels.ets', []);
+  stagePure('HomeModels', 'models/HomeModels.ets', []);
   stagePure('LibraryMatch', 'utils/LibraryMatch.ets', ['BookItem']);
   stagePure('MdParse', 'services/MdParse.ets', []);
   stagePure('AiSkills', 'services/AiSkills.ets', []);
@@ -1222,6 +1261,121 @@ try {
     toolsState.detail = null;
   });
 
+  test('AiTools：书单全生命周期（list/update 读合并写/delete/remove/非本人拒绝）', async () => {
+    const mine = { err: 'ok', booklists: [
+      { id: 5, name: '科幻入门', description: 'd1', color: '#1890ff', is_public: true,
+        book_count: 12, is_owner: true },
+      { id: 9, name: '待读', description: '', color: '#ff5722', is_public: false,
+        book_count: 3, is_owner: true },
+    ] };
+    toolsState.myBooklists = mine;
+    toolsState.booklistDetail = { 5: { id: 5, name: '科幻入门', description: 'd1', color: '#1890ff',
+      is_public: true, book_count: 12, is_owner: true },
+    9: { id: 9, name: '待读', description: '', color: '#ff5722', is_public: false,
+      book_count: 3, is_owner: true },
+    77: { id: 77, name: '别人的', description: '', color: '#1890ff', is_public: true,
+      book_count: 1, is_owner: false } };
+    const l = await RealAiTools.execute('list_booklists', '{}');
+    assert.ok(l.includes('「科幻入门」（id=5，12 本，公开') && l.includes('「待读」（id=9，3 本，私有'), l);
+    // update 读-合并-写：只改名，description/color/is_public 必须回填原值（update 是全量覆盖）
+    const u = await RealAiTools.execute('update_booklist', '{"booklist_id":5,"name":"科幻经典"}');
+    assert.ok(u.includes('名称「科幻入门」→「科幻经典」'), u);
+    const p = toolsState.booklistUpdateCalls[0].payload;
+    assert.equal(p.name, '科幻经典');
+    assert.equal(p.description, 'd1');
+    assert.equal(p.color, '#1890ff');
+    assert.equal(p.is_public, true);
+    // is_public 切换 + 非法值拒绝 + 全空拒绝
+    assert.ok((await RealAiTools.execute('update_booklist', '{"booklist_id":9,"is_public":"true"}'))
+      .includes('已设为公开'));
+    assert.ok((await RealAiTools.execute('update_booklist', '{"booklist_id":9,"is_public":"yes"}'))
+      .includes('只接受 true 或 false'));
+    assert.ok((await RealAiTools.execute('update_booklist', '{"booklist_id":9}')).includes('至少给出'));
+    // 同值不算改动
+    assert.ok((await RealAiTools.execute('update_booklist', '{"booklist_id":9,"name":"待读"}'))
+      .includes('与现值相同'));
+    // 非本人书单拒绝一切改动
+    assert.ok((await RealAiTools.execute('update_booklist', '{"booklist_id":77,"name":"x"}'))
+      .includes('找不到你创建的书单'));
+    assert.ok((await RealAiTools.execute('delete_booklist', '{"booklist_id":77}'))
+      .includes('找不到你创建的书单'));
+    // delete：先查详情再删，文案带名称与书本数
+    const d = await RealAiTools.execute('delete_booklist', '{"booklist_id":9}');
+    assert.ok(d.includes('书单「待读」（3 本）已删除') && d.includes('不受影响'), d);
+    assert.deepEqual(toolsState.booklistDeleteCalls, [9]);
+    // remove_book：书单校验 + 书名回填
+    toolsState.detail = async (id) => (id === 12
+      ? { id: 12, title: '三体', authors: ['刘慈欣'], rating: 9, tags: [], files: [],
+        comments: '', coverUrl: '', downloadUrl: '', publisher: '', isbn: '', series: '' } : null);
+    const r = await RealAiTools.execute('remove_book_from_booklist', '{"booklist_id":5,"book_id":12}');
+    assert.ok(r.includes('已把《三体》从书单「科幻入门」移出'), r);
+    assert.deepEqual(toolsState.booklistRemoveCalls, [{ id: 5, bookId: 12 }]);
+    assert.ok((await RealAiTools.execute('remove_book_from_booklist', '{"booklist_id":5}'))
+      .includes('都要给出'));
+    assert.equal(RealAiTools.needsConfirm('update_booklist'), true);
+    assert.equal(RealAiTools.needsConfirm('delete_booklist'), true);
+    assert.equal(RealAiTools.needsConfirm('list_booklists'), false);
+    assert.equal(RealAiTools.toolLabel('list_booklists'), '查询我的书单');
+    toolsState.booklistUpdateCalls.length = 0;
+    toolsState.booklistDeleteCalls.length = 0;
+    toolsState.booklistRemoveCalls.length = 0;
+    toolsState.myBooklists = null;
+    toolsState.booklistDetail = null;
+    toolsState.detail = null;
+  });
+
+  test('AiTools：push_to_device 与 reading_stats（kindle 邮箱、设备自动匹配、ftp 拒绝）', async () => {
+    toolsState.detail = async (id) => (id === 12
+      ? { id: 12, title: '三体', authors: ['刘慈欣'], rating: 9, tags: [], files: [],
+        comments: '', coverUrl: '', downloadUrl: '', publisher: '', isbn: '', series: '' } : null);
+    toolsState.devices = [
+      { name: 'K1', type: 'kindle', ip: '', port: 0, schema: 'http', mailbox: 'me@kindle.com',
+        ftpUsername: '', ftpPassword: '', ftpPath: '' },
+      { name: 'B1', type: 'boox', ip: '192.168.1.9', port: 8080, schema: 'http', mailbox: '',
+        ftpUsername: '', ftpPassword: '', ftpPath: '' },
+    ];
+    // kindle 省略 target → 自动取登记邮箱
+    const k = await RealAiTools.execute('push_to_device', '{"book_id":12,"device_type":"kindle"}');
+    assert.ok(k.includes('已把《三体》推送到') && k.includes('me@kindle.com'), k);
+    assert.deepEqual(toolsState.pushCalls[0],
+      { bookId: 12, type: 'kindle', url: '', mailbox: 'me@kindle.com' });
+    // boox 省略 target → 按类型拼设备地址
+    assert.ok((await RealAiTools.execute('push_to_device', '{"book_id":12,"device_type":"boox"}'))
+      .includes('http://192.168.1.9:8080'));
+    // 未登记类型且没给 target → 引导；显式 target 可用
+    assert.ok((await RealAiTools.execute('push_to_device', '{"book_id":12,"device_type":"duokan"}'))
+      .includes('没有登记'));
+    assert.ok((await RealAiTools.execute('push_to_device',
+      '{"book_id":12,"device_type":"duokan","target":"http://10.0.0.2:8000"}')).includes('推送'));
+    // ftp 与非法类型拒绝
+    assert.ok((await RealAiTools.execute('push_to_device', '{"book_id":12,"device_type":"ftp"}'))
+      .includes('详情页'));
+    assert.ok((await RealAiTools.execute('push_to_device', '{"book_id":12,"device_type":"nook"}'))
+      .includes('不支持的设备类型'));
+    // 未登录挡下
+    toolsState.authOk = false;
+    assert.ok((await RealAiTools.execute('push_to_device', '{"book_id":12,"device_type":"boox"}'))
+      .includes('尚未登录'));
+    toolsState.authOk = true;
+    assert.equal(RealAiTools.needsConfirm('push_to_device'), true);
+    // reading_stats：四格计数 + 在读列表
+    toolsState.readingStats = { totalReading: 4, totalReadDone: 21, monthReading: 2, monthReadDone: 1 };
+    toolsState.currentReading = [
+      { id: 12, title: '三体', author: '刘慈欣', cover: '', recommender: null },
+      { id: 13, title: '活着', author: '', cover: '', recommender: null },
+    ];
+    const s = await RealAiTools.execute('reading_stats', '{}');
+    assert.ok(s.includes('累计在读 4 本、累计读完 21 本') && s.includes('本月读完 1 本'), s);
+    assert.ok(s.includes('- 《三体》（刘慈欣）') && s.includes('- 《活着》（佚名）'), s);
+    toolsState.readingStats = null;
+    assert.ok((await RealAiTools.execute('reading_stats', '{}')).includes('未返回阅读统计'));
+    assert.equal(RealAiTools.needsConfirm('reading_stats'), false);
+    toolsState.pushCalls.length = 0;
+    toolsState.devices = null;
+    toolsState.currentReading = null;
+    toolsState.detail = null;
+  });
+
   test('网关工具回路：执行 tool_calls 回填结果，第二轮拿到最终回答', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
@@ -1253,7 +1407,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 19 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 25 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -1522,13 +1676,14 @@ try {
   });
 
   test('权限模式：definitions(mode) 三档过滤——readonly 去写工具，其余全量', () => {
-    const WRITE = ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task', 'add_to_shelf',
+    const WRITE = ['create_booklist', 'add_books_to_booklist', 'update_booklist', 'delete_booklist',
+      'remove_book_from_booklist', 'add_sonovel_task', 'add_to_shelf', 'push_to_device',
       'update_book_meta', 'set_cover', 'forget_memory'];
-    assert.equal(RealAiTools.definitions().length, 19);
-    assert.equal(RealAiTools.definitions('confirm').length, 19);
-    assert.equal(RealAiTools.definitions('auto').length, 19);
+    assert.equal(RealAiTools.definitions().length, 25);
+    assert.equal(RealAiTools.definitions('confirm').length, 25);
+    assert.equal(RealAiTools.definitions('auto').length, 25);
     const ro = RealAiTools.definitions('readonly');
-    assert.equal(ro.length, 12);
+    assert.equal(ro.length, 14);
     assert.ok(ro.some((d) => d.function.name === 'list_categories'), 'list_categories 是只读工具须保留');
     for (const name of WRITE) {
       assert.ok(!ro.some((d) => d.function.name === name), `readonly 泄漏写工具 ${name}`);
@@ -1558,7 +1713,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 12);
+    assert.equal(b1.tools.length, 14);
     assert.ok(!b1.tools.some((d) => d.function.name === 'create_booklist'));
     const b2 = JSON.parse(deps.state.requests[1].content);
     assert.equal(b2.messages.find((m) => m.role === 'tool').content,
@@ -1589,7 +1744,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 19, 'auto 模式写工具须在 tools 里');
+    assert.equal(b1.tools.length, 25, 'auto 模式写工具须在 tools 里');
     assert.equal(asked, 0, 'auto 模式不该弹确认');
     assert.deepEqual(labels, [['create_booklist', '创建书单（自动执行）']]);
     assert.deepEqual(toolsState.booklistCreateCalls.map((c) => c.name), ['科幻入门']);

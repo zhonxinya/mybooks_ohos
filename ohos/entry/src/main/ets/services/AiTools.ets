@@ -1,10 +1,14 @@
-import { ReferBook, ReferSearchOpts, ReferSearchResponse, TalebookApi } from './TalebookApi';
+import { ApiMessageResult, ReferBook, ReferSearchOpts, ReferSearchResponse, TalebookApi } from './TalebookApi';
 import { AnnotationApi, annotationTypeLabel, ANNOTATION_SCOPE_MINE } from './AnnotationApi';
 import { SoNovelBookPayload, DownloadTask, TalebookService } from './TalebookService';
 import { SoNovelService } from './SoNovelService';
 import { SoNovelMerge, SoNovelSearchItem } from '../utils/SoNovelMerge';
 import { DownloadTaskService } from './DownloadTaskService';
-import { BookListAddResponse, BookListApi, BookListMutationResponse } from './BookListApi';
+import { BookListAddResponse, BookListApi, BookListDetailResponse, BookListMutationResponse,
+  BookListUpdatePayload, BookListsResponse } from './BookListApi';
+import { BookListSummary, parseBookListSummary, parseBookListSummaries } from '../models/BookListModels';
+import { ReadingDevice, deviceTypeLabel } from '../models/DeviceModels';
+import { HomeBook, ReadingStatsSummary } from '../models/HomeModels';
 import { AiPersona } from './AiPersona';
 import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';
 import { NovelMeta, NovelMetaService } from './NovelMetaService';
@@ -171,6 +175,46 @@ const TOOL_ADD_TO_SHELF: AiToolDefinition = defineTool('add_to_shelf',
     '再加入本机下载队列并立即开始，完成后出现在书架。用户说「把某本书加到书架/存到本机」时使用。' +
     '与 add_sonovel_task 不同：这本是服务器上已有的成品书。',
   ADD_TO_SHELF_PROPS, ['book_id']);
+
+const BOOKLIST_ID_PROP: AiToolProperty = prop('number', '书单 id（来自 list_booklists 返回）');
+const BOOKLIST_REMOVE_BOOK_PROPS: Record<string, AiToolProperty> = {
+  'booklist_id': BOOKLIST_ID_PROP,
+  'book_id': BOOK_ID_PROP,
+};
+const BOOKLIST_UPDATE_PROPS: Record<string, AiToolProperty> = {
+  'booklist_id': BOOKLIST_ID_PROP,
+  'name': prop('string', '新书单名；留空不改'),
+  'description': prop('string', '新书单简介；留空不改'),
+  'is_public': prop('string', '公开传 true、私有传 false；留空不改'),
+};
+const BOOKLIST_DELETE_PROPS: Record<string, AiToolProperty> = { 'booklist_id': BOOKLIST_ID_PROP };
+const PUSH_DEVICE_PROPS: Record<string, AiToolProperty> = {
+  'book_id': BOOK_ID_PROP,
+  'device_type': prop('string', '设备类型：kindle/duokan/ireader/hanwang/boox/dangdang/purelibro/koreader'),
+  'target': prop('string', 'kindle 填 Kindle 邮箱；其他填设备地址（如 http://192.168.1.5:2222）；留空自动按类型匹配服务器已登记设备'),
+};
+const TOOL_LIST_BOOKLISTS: AiToolDefinition = defineTool('list_booklists',
+  '列出当前用户创建的所有书单：{id, 书名数, 公开/私有, 名称}。需要对书单增删改查但不知道书单 id 时先查它，' +
+    '不要凭空猜 id，也不要为加一本书而重复新建书单。',
+  EMPTY_PROPS, NO_REQUIRED);
+const TOOL_UPDATE_BOOKLIST: AiToolDefinition = defineTool('update_booklist',
+  '重命名书单、改简介或切换公开/私有。只改传入的字段，其余保持原值。书单 id 来自 list_booklists。',
+  BOOKLIST_UPDATE_PROPS, ['booklist_id']);
+const TOOL_DELETE_BOOKLIST: AiToolDefinition = defineTool('delete_booklist',
+  '删除用户自己创建的书单（只删书单，书本身不受影响）。执行前向用户复述书单名称与书本数确认。id 来自 list_booklists。',
+  BOOKLIST_DELETE_PROPS, ['booklist_id']);
+const TOOL_REMOVE_BOOK_FROM_BOOKLIST: AiToolDefinition = defineTool('remove_book_from_booklist',
+  '把一本书从指定书单移出（书库里的书不受影响）。两个 id 分别来自 list_booklists 与 search_books。',
+  BOOKLIST_REMOVE_BOOK_PROPS, ['booklist_id', 'book_id']);
+const TOOL_PUSH_TO_DEVICE: AiToolDefinition = defineTool('push_to_device',
+  '把服务器书库里的一本书推送到用户的电子阅读器或阅读 App（kindle/duokan/ireader/hanwang/boox/' +
+    'dangdang/purelibro/koreader）。kindle 的 target 是 Kindle 邮箱；其他设备 target 是设备地址，' +
+    '留空则自动匹配服务器「发送到设备」里已登记的同类型设备。FTP 推送不支持，请引导用户到书籍详情页操作。',
+  PUSH_DEVICE_PROPS, ['book_id', 'device_type']);
+const TOOL_READING_STATS: AiToolDefinition = defineTool('reading_stats',
+  '返回用户的阅读统计：累计在读/累计读完/本月在读/本月读完的书数，并列出当前在读的书。' +
+    '回答「我最近读了多少书/这个月读完几本」类问题时使用。无需参数。',
+  EMPTY_PROPS, NO_REQUIRED);
 const TOOL_CREATE_BOOKLIST: AiToolDefinition = defineTool('create_booklist',
   '在 MyBooks 服务器上创建一个新书单。返回新书单 id，可用于 add_books_to_booklist。',
   BOOKLIST_CREATE_PROPS, BOOKLIST_CREATE_REQUIRED);
@@ -275,7 +319,10 @@ const TOOL_SEARCH_ENCYCLOPEDIA: AiToolDefinition = defineTool('search_encycloped
 const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SEARCH_BOOKS, TOOL_BOOK_DETAIL, TOOL_BOOK_NOTES, TOOL_READING_HISTORY,
   TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS, TOOL_ADD_TO_SHELF,
-  TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_UPDATE_BOOK_META, TOOL_LIST_CATEGORIES,
+  TOOL_PUSH_TO_DEVICE, TOOL_READING_STATS,
+  TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_LIST_BOOKLISTS, TOOL_UPDATE_BOOKLIST,
+  TOOL_DELETE_BOOKLIST, TOOL_REMOVE_BOOK_FROM_BOOKLIST,
+  TOOL_UPDATE_BOOK_META, TOOL_LIST_CATEGORIES,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
   TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_SEARCH_ENCYCLOPEDIA,
   TOOL_FORGET_MEMORY,
@@ -305,7 +352,8 @@ export class AiTools {
    * 名字与 TOOL_DEFS 里的写工具对应；新加写工具忘记登记 = 无确认直接执行，务必同步。
    */
   private static readonly WRITE_TOOLS: string[] =
-    ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task', 'add_to_shelf',
+    ['create_booklist', 'add_books_to_booklist', 'update_booklist', 'delete_booklist',
+      'remove_book_from_booklist', 'add_sonovel_task', 'add_to_shelf', 'push_to_device',
       'update_book_meta', 'set_cover', 'forget_memory'];
 
   static needsConfirm(name: string): boolean {
@@ -375,6 +423,24 @@ export class AiTools {
     }
     if (name === 'add_to_shelf') {
       return '加入书架';
+    }
+    if (name === 'push_to_device') {
+      return '推送到阅读设备';
+    }
+    if (name === 'reading_stats') {
+      return '查看阅读统计';
+    }
+    if (name === 'list_booklists') {
+      return '查询我的书单';
+    }
+    if (name === 'update_booklist') {
+      return '修改书单';
+    }
+    if (name === 'delete_booklist') {
+      return '删除书单';
+    }
+    if (name === 'remove_book_from_booklist') {
+      return '从书单移出书籍';
     }
     if (name === 'create_booklist') {
       return '创建书单';
@@ -494,6 +560,24 @@ export class AiTools {
       }
       if (name === 'add_to_shelf') {
         return await AiTools.addToShelf(args);
+      }
+      if (name === 'push_to_device') {
+        return await AiTools.pushToDevice(args);
+      }
+      if (name === 'reading_stats') {
+        return await AiTools.readingStats();
+      }
+      if (name === 'list_booklists') {
+        return await AiTools.listBooklists();
+      }
+      if (name === 'update_booklist') {
+        return await AiTools.updateBooklist(args);
+      }
+      if (name === 'delete_booklist') {
+        return await AiTools.deleteBooklist(args);
+      }
+      if (name === 'remove_book_from_booklist') {
+        return await AiTools.removeBookFromBooklist(args);
       }
       if (name === 'create_booklist') {
         return await AiTools.createBooklist(args);
@@ -1141,6 +1225,197 @@ export class AiTools {
     DownloadTaskService.processQueue();
     return `《${detail.title}》已加入下载队列（格式 ${format}），下载完成后会自动出现在书架；` +
       '进度可随时调 list_download_tasks 查看。';
+  }
+
+  /** 推送工具支持的设备类型（ftp 需凭据走页面，不开放给模型）。 */
+  private static readonly PUSH_TOOL_TYPES: string[] =
+    ['kindle', 'duokan', 'ireader', 'hanwang', 'boox', 'dangdang', 'purelibro', 'koreader'];
+
+  private static async listBooklists(): Promise<string> {
+    const rsp: BookListsResponse = await BookListApi.getMyBooklists();
+    if (rsp.err !== undefined && rsp.err !== 'ok') {
+      return `书单查询失败：${rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err}`;
+    }
+    const lists: BookListSummary[] = parseBookListSummaries(rsp.booklists);
+    if (lists.length === 0) {
+      return '你还没有创建过书单。要新建可调 create_booklist。';
+    }
+    const cap: number = Math.min(lists.length, 20);
+    const lines: string[] = [];
+    for (let i = 0; i < cap; i++) {
+      const b: BookListSummary = lists[i];
+      lines.push(`- 书单「${b.name}」（id=${b.id}，${b.bookCount} 本，${b.isPublic ? '公开' : '私有'}）`);
+    }
+    const more: string = lists.length > cap ? `\n（共 ${lists.length} 个，仅列前 ${cap} 个）` : '';
+    return `我的书单：\n${lines.join('\n')}${more}`;
+  }
+
+  /** 取用户自己拥有的书单摘要；不存在或非本人创建返回 null（增删改共用前置校验）。 */
+  private static async ownBooklist(id: number): Promise<BookListSummary | null> {
+    const rsp: BookListDetailResponse = await BookListApi.getBooklistDetail(id, 1, 1, 'asc');
+    if (rsp.err !== undefined && rsp.err !== 'ok' || rsp.booklist === undefined) {
+      return null;
+    }
+    const summary: BookListSummary = parseBookListSummary(rsp.booklist as Record<string, Object>);
+    return summary.isOwner ? summary : null;
+  }
+
+  private static async updateBooklist(args: Record<string, Object>): Promise<string> {
+    const id: number = AiTools.argNumber(args, 'booklist_id');
+    if (id <= 0) {
+      return '参数 booklist_id 无效，请先用 list_booklists 查询。';
+    }
+    const name: string = AiTools.argString(args, 'name');
+    const description: string = AiTools.argString(args, 'description');
+    const pubRaw: string = AiTools.argString(args, 'is_public').toLowerCase();
+    if (name.length === 0 && description.length === 0 && pubRaw.length === 0) {
+      return '请至少给出 name、description、is_public 之一。';
+    }
+    if (pubRaw.length > 0 && pubRaw !== 'true' && pubRaw !== 'false') {
+      return 'is_public 只接受 true 或 false。';
+    }
+    const cur: BookListSummary | null = await AiTools.ownBooklist(id);
+    if (cur === null) {
+      return `找不到你创建的书单 id=${id}，先用 list_booklists 核对。`;
+    }
+    // update 接口为全量覆盖：未改字段必须回填原值（书籍 edit 接口同款教训）
+    const payload: BookListUpdatePayload = {
+      name: name.length > 0 ? name : cur.name,
+      description: description.length > 0 ? description : cur.description,
+      color: cur.color,
+      is_public: pubRaw.length > 0 ? pubRaw === 'true' : cur.isPublic,
+    };
+    const rsp: BookListMutationResponse = await BookListApi.updateBooklist(id, payload);
+    if (rsp.err !== undefined && rsp.err !== 'ok') {
+      return `书单更新失败：${rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err}`;
+    }
+    const changes: string[] = [];
+    if (name.length > 0 && name !== cur.name) {
+      changes.push(`名称「${cur.name}」→「${name}」`);
+    }
+    if (description.length > 0 && description !== cur.description) {
+      changes.push('简介已更新');
+    }
+    if (pubRaw.length > 0 && (pubRaw === 'true') !== cur.isPublic) {
+      changes.push(pubRaw === 'true' ? '已设为公开' : '已设为私有');
+    }
+    if (changes.length === 0) {
+      return `书单「${cur.name}」各字段与现值相同，未做改动。`;
+    }
+    return `书单已更新：${changes.join('；')}。`;
+  }
+
+  private static async deleteBooklist(args: Record<string, Object>): Promise<string> {
+    const id: number = AiTools.argNumber(args, 'booklist_id');
+    if (id <= 0) {
+      return '参数 booklist_id 无效，请先用 list_booklists 查询。';
+    }
+    const cur: BookListSummary | null = await AiTools.ownBooklist(id);
+    if (cur === null) {
+      return `找不到你创建的书单 id=${id}，先用 list_booklists 核对。`;
+    }
+    const rsp: ApiMessageResult = await BookListApi.deleteBooklist(id);
+    if (rsp.err !== undefined && rsp.err !== 'ok') {
+      return `书单删除失败：${rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err}`;
+    }
+    return `书单「${cur.name}」（${cur.bookCount} 本）已删除，书库里的书不受影响。`;
+  }
+
+  private static async removeBookFromBooklist(args: Record<string, Object>): Promise<string> {
+    const id: number = AiTools.argNumber(args, 'booklist_id');
+    const bookId: number = AiTools.argNumber(args, 'book_id');
+    if (id <= 0 || bookId <= 0) {
+      return 'booklist_id 与 book_id 都要给出（分别来自 list_booklists 与 search_books）。';
+    }
+    const cur: BookListSummary | null = await AiTools.ownBooklist(id);
+    if (cur === null) {
+      return `找不到你创建的书单 id=${id}，先用 list_booklists 核对。`;
+    }
+    const rsp: ApiMessageResult = await BookListApi.removeBook(id, bookId);
+    if (rsp.err !== undefined && rsp.err !== 'ok') {
+      return `移出失败：${rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err}`;
+    }
+    const detail: BookDetail | null = await TalebookApi.getBookDetail(bookId);
+    const title: string = detail !== null ? detail.title : `id=${bookId}`;
+    return `已把《${title}》从书单「${cur.name}」移出，书本身不受影响。`;
+  }
+
+  private static async pushToDevice(args: Record<string, Object>): Promise<string> {
+    const bookId: number = AiTools.argNumber(args, 'book_id');
+    const type: string = AiTools.argString(args, 'device_type').toLowerCase();
+    if (bookId <= 0) {
+      return '参数 book_id 无效，请先用 search_books 拿到书籍 id。';
+    }
+    if (type === 'ftp') {
+      return 'FTP 推送需要账号凭据，请在书籍详情页「发送到设备」中操作。';
+    }
+    if (AiTools.PUSH_TOOL_TYPES.indexOf(type) < 0) {
+      return `不支持的设备类型「${type}」，可选：${AiTools.PUSH_TOOL_TYPES.join('/')}。`;
+    }
+    const authenticated: boolean = await TalebookService.ensureAuthenticated();
+    if (!authenticated) {
+      return '尚未登录 MyBooks 服务器，无法推送。请先登录后再让我重试。';
+    }
+    const target: string = AiTools.argString(args, 'target').trim();
+    let url: string = '';
+    let mailbox: string = '';
+    if (type === 'kindle') {
+      mailbox = target;
+      if (mailbox.length === 0) {
+        const devices: ReadingDevice[] = await TalebookApi.getUserDevices();
+        for (let i = 0; i < devices.length; i++) {
+          if (devices[i].type === 'kindle' && devices[i].mailbox.length > 0) {
+            mailbox = devices[i].mailbox;
+            break;
+          }
+        }
+      }
+      if (mailbox.length === 0) {
+        return '请提供 Kindle 邮箱（target 参数），或先在服务器「发送到设备」登记 Kindle 邮箱。';
+      }
+    } else {
+      url = target;
+      if (url.length === 0) {
+        const devices: ReadingDevice[] = await TalebookApi.getUserDevices();
+        for (let i = 0; i < devices.length; i++) {
+          if (devices[i].type === type) {
+            url = `${devices[i].schema === 'https' ? 'https' : 'http'}://${devices[i].ip}:${devices[i].port}`;
+            break;
+          }
+        }
+      }
+      if (url.length === 0) {
+        return `服务器没有登记${deviceTypeLabel(type)}设备，请在 target 里给出设备地址（如 http://ip:端口）。`;
+      }
+    }
+    const rsp: ApiMessageResult = await TalebookApi.sendToDevice(bookId, type, url, mailbox, '', '', '');
+    if (rsp.err !== undefined && rsp.err !== 'ok') {
+      return `推送失败：${rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err}`;
+    }
+    const detail: BookDetail | null = await TalebookApi.getBookDetail(bookId);
+    const title: string = detail !== null ? detail.title : `id=${bookId}`;
+    const dest: string = mailbox.length > 0 ? mailbox : url;
+    return `已把《${title}》推送到${deviceTypeLabel(type)}（${dest}）。`;
+  }
+
+  private static async readingStats(): Promise<string> {
+    const stats: ReadingStatsSummary | null = await TalebookApi.getReadingStats();
+    if (stats === null) {
+      return '服务器未返回阅读统计（可能未启用该功能或未登录）。';
+    }
+    let text: string = `阅读统计：累计在读 ${stats.totalReading} 本、累计读完 ${stats.totalReadDone} 本；` +
+      `本月在读 ${stats.monthReading} 本、本月读完 ${stats.monthReadDone} 本。`;
+    const reading: HomeBook[] = await TalebookApi.getCurrentReadingBooks();
+    if (reading.length === 0) {
+      return `${text}\n当前没有在读的书记录。`;
+    }
+    const cap: number = Math.min(reading.length, 8);
+    const lines: string[] = [];
+    for (let i = 0; i < cap; i++) {
+      lines.push(`- 《${reading[i].title}》（${reading[i].author.length > 0 ? reading[i].author : '佚名'}）`);
+    }
+    const more: string = reading.length > cap ? `\n（共 ${reading.length} 本，仅列 ${cap} 本）` : '';
+    return `${text}\n当前在读：\n${lines.join('\n')}${more}`;
   }
 
   private static async createBooklist(args: Record<string, Object>): Promise<string> {
