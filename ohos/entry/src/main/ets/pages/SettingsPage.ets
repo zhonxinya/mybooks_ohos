@@ -531,6 +531,13 @@ export struct SettingsPage {
                 showChevron: true,
                 onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiSettingsPage' }),
               });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '元数据源规则',
+                subtitle: '导入 Legado 书源，网文元数据按规则提取',
+                showChevron: true,
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/NovelMetaSourcePage' }),
+              });
             }
             .width('100%')
             .borderRadius($r('app.float.card_radius'))

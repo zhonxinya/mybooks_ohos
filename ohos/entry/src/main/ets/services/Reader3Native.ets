@@ -78,13 +78,8 @@ export class Reader3Native {
     if (!Reader3Native.available()) {
       return null;
     }
-    if (!Reader3Native.loaded) {
-      // 同步读+解析放到微任务之后，不卡调用帧；整库缓存
-      Reader3Native.sources = await Promise.resolve().then((): BookSource[] => Reader3Native.readSourceFile());
-      Reader3Native.loaded = true;
-      hilog.info(0x0000, 'Reader3Native', 'loaded %{public}d book sources', Reader3Native.sources.length);
-    }
-    const source: BookSource | null = Reader3Native.matchSource(Reader3Native.sources, bookUrl);
+    const sources: BookSource[] = await Reader3Native.ensureLoaded();
+    const source: BookSource | null = Reader3Native.matchSource(sources, bookUrl);
     if (source === null) {
       // 未命中不算失败：语料没这个站属常态，静默走站点规则兜底。装载量变化时打一条便于排查导入问题
       if (!Reader3Native.matchLogged) {
@@ -112,6 +107,94 @@ export class Reader3Native {
   }
 
   // ---- 书源库 ----
+
+  /** 装载缓存（首次读文件放微任务之后，不卡调用帧）。 */
+  private static async ensureLoaded(): Promise<BookSource[]> {
+    if (!Reader3Native.loaded) {
+      Reader3Native.sources = await Promise.resolve().then((): BookSource[] => Reader3Native.readSourceFile());
+      Reader3Native.loaded = true;
+      hilog.info(0x0000, 'Reader3Native', 'loaded %{public}d book sources', Reader3Native.sources.length);
+    }
+    return Reader3Native.sources;
+  }
+
+  /** 已导入书源数（导入页状态显示用）。 */
+  static async count(): Promise<number> {
+    return (await Reader3Native.ensureLoaded()).length;
+  }
+
+  /** 校验 Legado 书源 JSON 文本：数组、逐条须有 bookSourceUrl；无效条目过滤，全无效抛错。 */
+  private static parseSources(text: string): BookSource[] {
+    const trimmed: string = text.trim();
+    if (trimmed.length === 0) {
+      throw new Error('内容为空');
+    }
+    let data: Object;
+    try {
+      data = JSON.parse(trimmed) as Object;
+    } catch (error) {
+      throw new Error('不是有效的 JSON');
+    }
+    if (!Array.isArray(data)) {
+      throw new Error('书源须为 JSON 数组（Legado 导出格式）');
+    }
+    const valid: BookSource[] = [];
+    for (const s of data as BookSource[]) {
+      if (s !== null && s !== undefined && typeof s.bookSourceUrl === 'string' && s.bookSourceUrl.length > 0) {
+        valid.push(s);
+      }
+    }
+    if (valid.length === 0) {
+      throw new Error('未解析到有效书源（每条须含 bookSourceUrl）');
+    }
+    return valid;
+  }
+
+  /**
+   * 导入书源库：校验后**覆盖**沙箱 files 目录的 bookmeta_sources.json 并刷新缓存。
+   * 全量 Legado 字段原样保留（引擎只读 ruleBookInfo，多余字段无害）。
+   */
+  static async importFromText(jsonText: string): Promise<number> {
+    const valid: BookSource[] = Reader3Native.parseSources(jsonText);
+    const text: string = JSON.stringify(valid);
+    const path: string = `${Reader3Native.writeDir()}/${SOURCE_FILE}`;
+    const file = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+    try {
+      fs.writeSync(file.fd, text);
+    } finally {
+      fs.closeSync(file);
+    }
+    Reader3Native.sources = valid;
+    Reader3Native.loaded = true;
+    hilog.info(0x0000, 'Reader3Native', 'imported %{public}d sources -> %{public}s', valid.length, path);
+    return valid.length;
+  }
+
+  /** URL 导入（书源或订阅直链）：rcp 抓文本再走 importFromText。 */
+  static async importFromUrl(url: string): Promise<number> {
+    const headers: rcp.RequestHeaders = { 'User-Agent': DEFAULT_UA };
+    const request: rcp.Request = new rcp.Request(url, 'GET', headers);
+    const session: rcp.Session = rcp.createSession();
+    try {
+      const response: rcp.Response = await session.fetch(request);
+      if (response.statusCode !== 200) {
+        throw new Error(`HTTP ${response.statusCode}`);
+      }
+      const bytes: ArrayBuffer = response.body ?? new ArrayBuffer(0);
+      return Reader3Native.importFromText(Reader3Native.decode(bytes, '', response.headers));
+    } finally {
+      session.close();
+    }
+  }
+
+  /** 写入目录：UIAbility filesDir 优先，异步续体拿不到 context 时用模块沙箱固定视图。 */
+  private static writeDir(): string {
+    try {
+      return getContext().filesDir;
+    } catch (error) {
+      return '/data/storage/el2/base/haps/entry/files';
+    }
+  }
 
   /** 候选目录：UIAbility 语义的 filesDir 优先，再列模块/独立两个沙箱固定视图
    *  （异步续体里 getContext() 可能拿不到 context），最后 /data/local/tmp

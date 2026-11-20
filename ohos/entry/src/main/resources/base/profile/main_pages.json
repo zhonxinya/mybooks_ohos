@@ -76,6 +76,7 @@
     "pages/AiAssistantPage",
     "pages/AiBookPanelPage",
     "pages/AiRecommendPage",
+    "pages/NovelMetaSourcePage",
     "pages/PrivacyPolicyPage",
     "pages/UserAgreementPage",
     "pages/OpenSourceLicensesPage"
