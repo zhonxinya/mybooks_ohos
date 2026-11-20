@@ -120,7 +120,7 @@ writeFileSync(join(dir, 'shim.ts'), shim);
 writeFileSync(join(dir, 'aiServiceDeps.ts'), `
 // Buffer.from(x).buffer 带池化填充，必须 slice 出精确字节（模拟 rcp 的紧凑 ArrayBuffer）
 const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
-export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [], sourceJson: null, written: [] };
+export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpThrowQueue: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [], sourceJson: null, written: [] };
 export const util = {
   // 透传 encoding（gbk/gb2312 走 Node 内置 TextDecoder），utf-8 用法不受影响
   TextDecoder: { create: (encoding) => ({ decodeToString: (u8) => new TextDecoder(encoding ?? 'utf-8').decode(u8) }) },
@@ -146,6 +146,7 @@ export const rcp = {
     fetch: async (request) => {
       state.lastRequest = request;
       state.requests.push(request);
+      if (state.rcpThrowQueue.length > 0) { throw state.rcpThrowQueue.shift(); }
       if (state.rcpError) { throw state.rcpError; }
       const queued = state.rcpResponses.length > 0 ? state.rcpResponses.shift() : null;
       return queued ?? state.rcpResponse ?? { statusCode: 200, body: enc(JSON.stringify({ data: state.models })) };
@@ -973,6 +974,49 @@ try {
     assert.equal(full, '帮你查到了《三体》，id=12。');
   });
 
+  test('网关请求重试：网络异常/429/5xx 退避后重试，其他 4xx 不重试，重试用尽才报错', async () => {
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    const reply = (t) => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: t } }] })) });
+    const runOnce = (prep) => {
+      deps.state.requests.length = 0;
+      deps.state.rcpResponses.length = 0;
+      deps.state.rcpThrowQueue.length = 0;
+      prep();
+      const box = { full: '', error: '' };
+      return new Promise((resolve) => {
+        RealAiService.chatStream([{ role: 'user', content: 'hi' }], {
+          onDelta: (t) => { box.full += t; },
+          onDone: () => resolve(box), onError: (m) => { box.error = m; resolve(box); },
+        }, 64);
+      });
+    };
+    // 网络异常：第一次 fetch 抛、第二次成功——旧行为在此直接报废整条回复
+    let r = await runOnce(() => {
+      deps.state.rcpThrowQueue = [new Error('连接失败')];
+      deps.state.rcpResponses = [reply('重试后成功')];
+    });
+    assert.equal(r.error, '');
+    assert.equal(r.full, '重试后成功');
+    assert.equal(deps.state.requests.length, 2);
+    // 429 限流：退避后重试拿到回答
+    r = await runOnce(() => {
+      deps.state.rcpResponses = [{ statusCode: 429, body: enc('rate limited') }, reply('429 恢复')];
+    });
+    assert.equal(r.error, '');
+    assert.equal(deps.state.requests.length, 2);
+    // 400 参数错误：重试无意义，一次即报错
+    r = await runOnce(() => { deps.state.rcpResponses = [{ statusCode: 400, body: enc('bad request') }]; });
+    assert.ok(r.error.includes('400'), r.error);
+    assert.equal(deps.state.requests.length, 1);
+    // 5xx 重试用尽（1+2 次）才报错
+    r = await runOnce(() => {
+      deps.state.rcpResponses = [{ statusCode: 502, body: enc('bad gateway') },
+        { statusCode: 502, body: enc('bad gateway') }, { statusCode: 503, body: enc('unavailable') }];
+    });
+    assert.ok(r.error.length > 0);
+    assert.equal(deps.state.requests.length, 3);
+  });
+
   test('长任务：连续 6 轮 tool_calls 在新上限（12）内正常完成——旧上限 4 会在第 5 轮报错截断', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
@@ -1149,6 +1193,7 @@ try {
     assert.ok(!sys.includes('（书籍详情，需 id）'), '旧版逐工具枚举未删净（与 tools payload 重复）');
     assert.ok(!sys.includes('写操作工具：create_booklist'), '写工具清单枚举未删净');
     assert.ok(sys.includes('回答与思考过程一律使用中文'), '缺中文约束');
+    assert.ok(sys.includes('工具返回「执行失败」时不要立刻放弃'), '缺工具失败重试引导');
     assert.ok(sys.includes('当前为「逐笔确认」权限模式'), 'confirm 档缺补注');
     state.settings.permission = 'readonly';
     const ro = (await store.buildContext())[0].content;
@@ -1159,6 +1204,7 @@ try {
     const auto = (await store.buildContext())[0].content;
     assert.ok(auto.includes('当前为「自动放行」权限模式'), 'auto 档缺补注');
     assert.ok(auto.includes('不逐笔确认、直接执行'), 'auto 补注缺行为定义');
+    assert.ok(!auto.includes('失败时不要重试'), 'auto 补注与工具失败重试引导矛盾');
     state.settings.permission = 'confirm';
   });
 

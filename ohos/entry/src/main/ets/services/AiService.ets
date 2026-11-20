@@ -105,6 +105,8 @@ const TIMEOUT_MS: number = 180000;
  *  上限按「长任务」定：批量场景如 4 本书×（搜+下载）=8 轮，12 轮留余量；
  *  同时兜住模型死循环烧 token。退出对话页不打断回路（后台完成落盘），分钟级任务可行。 */
 const MAX_TOOL_ROUNDS: number = 12;
+/** 网关单轮请求最多尝试次数（1 次原始 + 2 次重试）：网络抖动/429/5xx 不该报废整条回复。 */
+const MAX_GATEWAY_ATTEMPTS: number = 3;
 
 /** 流式回调：`delta` 为本次增量文本，`done` 表示结束。 */
 export interface AiStreamHandlers {
@@ -663,6 +665,13 @@ export class AiService {
     return baseUrl.indexOf('opencode.ai') >= 0;
   }
 
+  /** 退避等待（网关重试间隔用）。 */
+  private static sleep(ms: number): Promise<void> {
+    return new Promise<void>((resolve: () => void) => {
+      setTimeout(resolve, ms);
+    });
+  }
+
   /**
    * OpenCode 网关对话通道：**绕过 @iuroc SDK 直连 rcp**。
    *
@@ -715,17 +724,36 @@ export class AiService {
           payload['tools'] = attach;
         }
         const request: rcp.Request = new rcp.Request(url, 'POST', headers, JSON.stringify(payload));
+        // 单轮请求失败（网络抖动 / 429 / 5xx）直接 throw 会让整条多轮回复报废——
+        // 用户侧表现为「工具调用失败不重试、会话中断」。退避重试，其余 4xx 无意义不重试。
         let statusCode: number = 0;
         let text: string = '';
-        try {
-          const response: rcp.Response = await session.fetch(request);
-          statusCode = response.statusCode;
-          text = AiService.responseBodyText(response.body);
-        } catch (error) {
-          throw new Error(AiService.friendlyMessage(error instanceof Error ? error.message : String(error)));
+        let lastError: string = '';
+        for (let attempt = 0; attempt < MAX_GATEWAY_ATTEMPTS; attempt++) {
+          if (attempt > 0) {
+            if (isAborted !== null && isAborted()) {
+              return '';
+            }
+            await AiService.sleep(attempt * 1000);
+          }
+          try {
+            const response: rcp.Response = await session.fetch(request);
+            statusCode = response.statusCode;
+            text = AiService.responseBodyText(response.body);
+          } catch (error) {
+            lastError = AiService.friendlyMessage(error instanceof Error ? error.message : String(error));
+            continue;
+          }
+          if (statusCode >= 200 && statusCode < 300) {
+            break;
+          }
+          if (statusCode !== 429 && statusCode < 500) {
+            throw new Error(AiService.httpErrorText(statusCode, text));
+          }
+          lastError = AiService.httpErrorText(statusCode, text);
         }
         if (statusCode < 200 || statusCode >= 300) {
-          throw new Error(AiService.httpErrorText(statusCode, text));
+          throw new Error(lastError);
         }
         const reply: GatewayReply = AiService.parseGatewayReply(text);
         if (reply.reasoning.length > 0 && onReasoning !== null) {
