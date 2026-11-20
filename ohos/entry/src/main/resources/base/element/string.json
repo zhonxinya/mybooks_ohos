@@ -51,6 +51,10 @@
     {
       "name": "feature_coming_soon",
       "value": "功能开发中"
+    },
+    {
+      "name": "mic_permission_reason",
+      "value": "语音对话功能需要麦克风进行语音输入"
     }
   ]
 }

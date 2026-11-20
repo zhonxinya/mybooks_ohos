@@ -75,6 +75,13 @@ export const AiService = {
   loadPermission: () => state.settings.permission ?? 'confirm',
   savePermission: (mode) => { state.settings.permission = mode; },
   complete: async () => state.settings.completeReply,
+  loadAutoSpeak: () => state.settings.autoSpeak === true,
+  saveAutoSpeak: (v) => { state.settings.autoSpeak = v; },
+};
+// 页面测试不触发真实播报，但 import 名要在（对话页 ttsAvailable 门控下调用不到）
+export const QwenAudioService = {
+  startRecording: async () => {}, stopRecording: async () => '', stopRecordingCleanup: () => {},
+  transcribe: async () => '', synthesize: async () => '/tmp/tts_test.mp3', playFile: async () => true, stopPlayback: () => {},
 };
 // bindMenu 当前项勾选用的符号修饰器桩（页面测试不渲染 UI，仅保证符号可解析）
 export const SymbolGlyphModifier = class {
@@ -120,10 +127,15 @@ writeFileSync(join(dir, 'shim.ts'), shim);
 writeFileSync(join(dir, 'aiServiceDeps.ts'), `
 // Buffer.from(x).buffer 带池化填充，必须 slice 出精确字节（模拟 rcp 的紧凑 ArrayBuffer）
 const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
-export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpThrowQueue: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [], sourceJson: null, written: [] };
+export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpThrowQueue: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [], sourceJson: null, written: [], ttsFiles: [], lastOpenedPath: '' };
 export const util = {
-  // 透传 encoding（gbk/gb2312 走 Node 内置 TextDecoder），utf-8 用法不受影响
-  TextDecoder: { create: (encoding) => ({ decodeToString: (u8) => new TextDecoder(encoding ?? 'utf-8').decode(u8) }) },
+  // 透传 encoding（gbk/gb2312 走 Node 内置 TextDecoder），utf-8 用法不受影响；
+  // QwenAudioService 用 new util.TextDecoder()，AiService 用 create()，class 双形态兼容
+  TextDecoder: class {
+    static create(encoding, _options) { return new this(encoding); }
+    constructor(encoding) { this.enc = encoding ?? 'utf-8'; }
+    decodeToString(u8) { return new TextDecoder(this.enc).decode(u8); }
+  },
   // Reader3Native http 桥用：utf-8 文本→字节→base64（与 ArkTS 语义一致）
   TextEncoder: class { encodeInto(s) { return new Uint8Array(Buffer.from(s ?? '', 'utf8')); } },
   Base64Helper: class { encodeToStringSync(u8) { return Buffer.from(u8).toString('base64'); } },
@@ -158,19 +170,43 @@ export const rcp = {
 export const fs = {
   accessSync: (p) => state.sourceJson !== null && p.endsWith('bookmeta_sources.json'),
   statSync: () => ({ size: state.sourceJson === null ? 0 : Buffer.byteLength(state.sourceJson, 'utf8') }),
-  openSync: () => ({ fd: 7 }),
+  openSync: (p) => { state.lastOpenedPath = typeof p === 'string' ? p : ''; return { fd: 7 }; },
   readSync: (fd, buf) => { const b = Buffer.from(state.sourceJson ?? '', 'utf8'); b.copy(Buffer.from(buf)); return b.length; },
-  writeSync: (fd, text) => { state.written.push(text); state.sourceJson = text; },
+  // QwenAudioService 写 mp3 传 ArrayBuffer：非字符串不得污染 sourceJson；
+  // /tts/ 路径的写入登记进 ttsFiles，让 cleanupTtsCache 的 list/unlink 有真实对象
+  writeSync: (fd, data) => {
+    state.written.push(data);
+    if (typeof data === 'string') { state.sourceJson = data; }
+    if (state.lastOpenedPath.includes('/tts/')) {
+      const p = state.lastOpenedPath;
+      state.ttsFiles.push(p.slice(p.lastIndexOf('/') + 1));
+    }
+  },
   closeSync: () => {},
+  mkdirSync: () => {},
+  listFileSync: (p) => p.endsWith('/tts') ? state.ttsFiles.slice() : [],
+  unlinkSync: (p) => { const name = p.slice(p.lastIndexOf('/') + 1); const i = state.ttsFiles.indexOf(name); if (i >= 0) { state.ttsFiles.splice(i, 1); } },
   OpenMode: { READ_ONLY: 0, READ_WRITE: 2, CREATE: 64, TRUNC: 512 },
 };
 export { fs as fileIo };
 export const hilog = { info: () => {}, warn: () => {}, error: () => {} };
+// QwenAudioService 顶层 import 的名字必须齐全（录音/播放不在用例内走空壳即可）
+export class BusinessError extends Error { code = 0; }
+export const audio = {
+  AudioSamplingRate: { SAMPLE_RATE_16000: 8 }, AudioChannel: { CHANNEL_1: 1 },
+  AudioSampleFormat: { SAMPLE_FORMAT_S16LE: 2 }, AudioEncodingType: { ENCODING_TYPE_RAW: 0 },
+  SourceType: { SOURCE_TYPE_MIC: 6 },
+  createAudioCapturer: async () => ({ on: () => {}, start: async () => {}, stop: async () => {}, release: async () => {} }),
+};
+export const media = {
+  createAVPlayer: async () => ({ on: () => {}, off: () => {}, prepare: async () => {}, play: async () => {}, stop: async () => {}, release: async () => {} }),
+};
 export const TalebookService = {
   prefGet: (key, fallback = '') => state.store.has('p:' + key) ? state.store.get('p:' + key) : fallback,
   prefSet: (key, value) => { state.store.set('p:' + key, value); },
   secureGet: (key) => state.store.has('s:' + key) ? state.store.get('s:' + key) : '',
   secureSet: (key, value) => { if (value === '') { state.store.delete('s:' + key); } else { state.store.set('s:' + key, value); } },
+  dataDir: () => '/data/storage/el2/base/haps/entry/files',
 };
 `);
 
@@ -371,6 +407,22 @@ function stageEncyclopedia() {
   writeFileSync(join(dir, 'RealEncyclopedia.ts'), source);
 }
 
+/** QwenAudioService 真实入检：rcp/fs/存储复用 aiServiceDeps 桩；audio/media 空壳（不测录音/播放）。 */
+function stageQwenAudio() {
+  let source = read('services/QwenAudioService.ets');
+  source = source
+    .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.AudioKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.MediaKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.CoreFileKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.PerformanceAnalysisKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.BasicServicesKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from './TalebookService'`, `from './aiServiceDeps.ts'`)
+    .replace(`from './AiService'`, `from './RealAiService.ts'`);
+  writeFileSync(join(dir, 'RealQwenAudio.ts'), source);
+}
+
 /** NovelMetaService 真实入检：同样复用 rcp 桩；引擎分派点用 Reader3Native 替身。 */
 function stageNovelMeta() {
   let source = read('services/NovelMetaService.ets');
@@ -453,7 +505,7 @@ function stagePage(name) {
     for (const name of clause.split(',').map((part) => part.trim())) {
       if (['AiService', 'AiBookService', 'ShelfApi', 'TalebookService', 'pasteboard', 'AppRouter', 'AI_PROVIDERS',
         'CONTEXT_LENGTH_OPTIONS', 'fileIo as fs', 'photoAccessHelper', 'image', 'util', 'common',
-        'promptAction', 'SymbolGlyphModifier'].includes(name)) {
+        'promptAction', 'SymbolGlyphModifier', 'QwenAudioService'].includes(name)) {
         shims.add(name);
       }
     }
@@ -494,6 +546,7 @@ try {
   stageMetaSearch();
   stageNovelMeta();
   stageEncyclopedia();
+  stageQwenAudio();
   stageReader3();
   stageAiTools();
   const load = async (name) => import(pathToFileURL(join(dir, `${name}.ts`)).href);
@@ -2331,6 +2384,62 @@ try {
     bk = await EncyclopediaService.searchBaike('y');
     assert.ok(!bk.ok && bk.error.includes('没有百科词条'), bk.error);
     deps.state.rcpError = null;
+  });
+
+  test('Token Plan 音频链路：ASR/TTS 请求形态、缓存清理与未配 Key 容错', async () => {
+    const { QwenAudioService } = await load('RealQwenAudio');
+    deps.state.rcpResponses.length = 0;
+    deps.state.rcpThrowQueue.length = 0;
+    deps.state.rcpError = null;
+    deps.state.requests.length = 0;
+    deps.state.ttsFiles.length = 0;
+    const prevProvider = deps.state.store.get('p:ai_provider');
+    // 前面设置页用例会把 ai_base_url 落盘覆盖 preset；origin() 派生自它，必须先清
+    const prevBaseUrl = deps.state.store.get('s:ai_base_url');
+    deps.state.store.delete('s:ai_base_url');
+    deps.state.store.set('p:ai_provider', 'qwen-tokenplan');
+    deps.state.store.set('s:ai_api_key_qwen-tokenplan', 'sk-test');
+    // ① ASR：DashScope 原生路径 + data URI 前缀 + output.text 解析
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(JSON.stringify({ output: { text: '推荐一本科幻' } })) }];
+    assert.equal(await QwenAudioService.transcribe('QUJDRA=='), '推荐一本科幻');
+    const asrReq = deps.state.requests[0];
+    assert.equal(asrReq.url, 'https://token-plan.maas.qianwenaiapi.com/api/v1/services/aigc/multimodal-generation/generation');
+    assert.equal(asrReq.headers['Authorization'], 'Bearer sk-test');
+    const asrBody = JSON.parse(asrReq.content);
+    assert.equal(asrBody.model, 'qwen-audio-3.0-asr-flash');
+    assert.ok(asrBody.input.messages[0].content[0].input_audio.data.startsWith('data:audio/wav;base64,QUJDRA=='));
+    assert.equal(asrBody.parameters.format, 'wav');
+    // ② 空录音直接返回空串，不发请求（「没听清」分支的前提）
+    const reqCount = deps.state.requests.length;
+    assert.equal(await QwenAudioService.transcribe(''), '');
+    assert.equal(deps.state.requests.length, reqCount);
+    // ③ TTS：合成→OSS 下载→落盘 /tts/，缓存只留最近 5 个（先种 5 个旧的）
+    for (let i = 0; i < 5; i++) { deps.state.ttsFiles.push(`tts_00${i}.mp3`); }
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ output: { audio: { url: 'https://oss.example/a.mp3?Expires=1' } } })) },
+      { statusCode: 200, body: enc('MP3DATA') },
+    ];
+    const path = await QwenAudioService.synthesize('你好');
+    assert.ok(path.includes('/tts/tts_') && path.endsWith('.mp3'), path);
+    const ttsReq = deps.state.requests[deps.state.requests.length - 2];
+    assert.equal(ttsReq.url, 'https://token-plan.maas.qianwenaiapi.com/api/v1/services/audio/tts/SpeechSynthesizer');
+    const ttsBody = JSON.parse(ttsReq.content);
+    assert.equal(ttsBody.model, 'qwen-audio-3.0-tts-plus');
+    assert.equal(ttsBody.input.voice, 'longanhuan_v3.6');
+    assert.equal(ttsBody.input.sample_rate, 22050);
+    assert.equal(deps.state.rcpResponses.length, 0);
+    assert.equal(deps.state.ttsFiles.length, 5);
+    assert.ok(!deps.state.ttsFiles.includes('tts_000.mp3') && deps.state.ttsFiles.includes(path.slice(path.lastIndexOf('/') + 1)));
+    // ④ 非 2xx 透传状态码与响应体片段
+    deps.state.rcpResponses = [{ statusCode: 401, body: enc('{"code":"InvalidApiKey"}') }];
+    await assert.rejects(() => QwenAudioService.transcribe('QUJD'), /HTTP 401: \{"code":"InvalidApiKey"\}/);
+    // ⑤ 未配 Key：明确指向设置页，不带网络错误
+    deps.state.store.delete('s:ai_api_key_qwen-tokenplan');
+    await assert.rejects(() => QwenAudioService.synthesize('x'), /未配置 Token Plan API Key/);
+    if (prevProvider === undefined) { deps.state.store.delete('p:ai_provider'); } else { deps.state.store.set('p:ai_provider', prevProvider); }
+    if (prevBaseUrl !== undefined) { deps.state.store.set('s:ai_base_url', prevBaseUrl); }
+    deps.state.requests.length = 0;
+    deps.state.ttsFiles.length = 0;
   });
 
   test('灵魂管理页：灵魂保存/恢复默认，手动补记与删除记忆', () => {

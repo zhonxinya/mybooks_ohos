@@ -52,6 +52,9 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
   // Key 在 opencode.ai/console 创建；网关强制 x-opencode-session 请求头（见 gatewayConfiguration）
   { id: 'opencode', name: 'OpenCode (Go)', baseUrl: 'https://opencode.ai/zen/go/v1', model: 'big-pickle',
     vision: false },
+  // Token Plan 订阅网关：除文字模型外，音频三端点（ASR/TTS/realtime）见 docs/token-plan-audio-protocol-2026-11-20.md
+  { id: 'qwen-tokenplan', name: 'Token Plan (千问)', baseUrl: 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1',
+    model: 'qwen3.6-flash', vision: false },
   { id: 'custom', name: '自定义', baseUrl: '', model: '', vision: false },
 ];
 
@@ -82,6 +85,8 @@ export interface AiConfig {
 const KEY_PROVIDER: string = 'ai_provider';
 const KEY_BASE_URL: string = 'ai_base_url';
 const KEY_MODEL: string = 'ai_model';
+/** 对话页：AI 回复完成后自动用 Token Plan TTS 朗读（默认关）。 */
+const KEY_AUTO_SPEAK: string = 'ai_auto_speak';
 /** 旧版单 Key；首次读取时迁移到当前服务商后清空。 */
 const KEY_API_KEY: string = 'ai_api_key';
 const KEY_API_KEY_PREFIX: string = 'ai_api_key_';
@@ -183,6 +188,14 @@ export class AiService {
 
   static savePermission(mode: AiPermissionMode): void {
     TalebookService.prefSet(KEY_PERMISSION, mode);
+  }
+
+  static loadAutoSpeak(): boolean {
+    return TalebookService.prefGet(KEY_AUTO_SPEAK, '0') === '1';
+  }
+
+  static saveAutoSpeak(on: boolean): void {
+    TalebookService.prefSet(KEY_AUTO_SPEAK, on ? '1' : '0');
   }
 
   /** 各服务商 Key 的存储键；自定义服务商 id 带时间戳，不与前缀冲突。 */
