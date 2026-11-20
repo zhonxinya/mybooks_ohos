@@ -40,16 +40,21 @@ export type ConfirmUi = (label: string, args: string) => Promise<boolean>;
  * 系统提示词只留**行为规则与跨工具流程**：单个工具的名称/用途/参数由请求体
  * tools 数组自带（AiTools 描述是权威来源，此处复述既烧 token 又会与代码漂移）。
  * 权限模式说明由 permissionPromptNote 按当前档位追加，三档都有明确表述。
+ * 工具指引段（SYSTEM_PROMPT_TOOLS）只在通道挂 tools 时拼入，见 buildContext。
  */
 const SYSTEM_PROMPT: string =
   '你是一个电子书阅读应用的助手。回答与思考过程一律使用中文（书名、参数值等原文引用除外），简洁、准确。' +
+  '问题涉及用户的书籍、阅读情况或其他可查证的信息，而你没有可靠依据时，如实说明不确定，绝不编造。' +
+  '系统提示中若已有「用户记忆」列表，回答时自然参考、不必复述。';
+
+/** 工具通道的行为规则与跨工具流程（仅 OpenCode 网关挂 tools 时可用）。 */
+const SYSTEM_PROMPT_TOOLS: string =
   '问题涉及用户的书籍、阅读情况或其他可查证的信息时，先调用相应工具拿到真实数据再回答，绝不编造；' +
   '工具数据不足时直接说明不确定。' +
   '工具返回「暂时失败」时可稍后原样重试一次；返回「执行失败」时按错误提示修正参数或方案再试，勿原样重试；仍失败如实告知，不反复重试。' +
   '写操作（建书单、加书、下载任务、改元数据、换封面、删记忆）一律按后文的权限模式说明处理。' +
   '换封面流程：先 search_cover 列出候选给用户看，用户选定后再 set_cover。' +
-  '网文下载流程：search_sonovel 拿 url → add_sonovel_task 入队 → list_download_tasks 报进度，成品完成后自动进本地书架可读。' +
-  '系统提示中若已有「用户记忆」列表，回答时自然参考、不必复述。';
+  '网文下载流程：search_sonovel 拿 url → add_sonovel_task 入队 → list_download_tasks 报进度，成品完成后自动进本地书架可读。';
 
 /** 权限模式补注：追加在系统提示末尾，用顶栏徽标的准确档位名（模型曾瞎编「可写/编辑模式」）。 */
 function permissionPromptNote(mode: AiPermissionMode): string {
@@ -305,11 +310,17 @@ export class AiChatStore {
   /** 把界面气泡转成协议消息，只带最近 N 轮（档位来自设置），避免上下文无限增长。 */
   async buildContext(): Promise<AiMessage[]> {
     const persona: string = AiPersona.buildPersonaPrompt();
+    // 无 tools 的通道（非 OpenCode 网关）不提工具与权限模式：模型看不见工具定义，
+    // 指引只会诱导它伪造伪工具调用文本当正文输出（还会被后续上下文模仿强化）
+    const toolsOn: boolean = AiService.supportsTools();
     let systemText: string = persona.length > 0 ? `${SYSTEM_PROMPT}\n\n${persona}` : SYSTEM_PROMPT;
-    // 权限模式说明追加在最后，覆盖 SYSTEM_PROMPT 里「逐笔确认」的默认描述
-    const modeNote: string = permissionPromptNote(AiService.loadPermission());
-    if (modeNote.length > 0) {
-      systemText = `${systemText}\n\n${modeNote}`;
+    if (toolsOn) {
+      systemText = `${systemText}${SYSTEM_PROMPT_TOOLS}`;
+      // 权限模式说明追加在最后，覆盖 SYSTEM_PROMPT 里「逐笔确认」的默认描述
+      const modeNote: string = permissionPromptNote(AiService.loadPermission());
+      if (modeNote.length > 0) {
+        systemText = `${systemText}\n\n${modeNote}`;
+      }
     }
     const context: AiMessage[] = [{ role: 'system', content: systemText }];
     const bubbles: ChatBubble[] = this.messages.filter((m: ChatBubble) =>

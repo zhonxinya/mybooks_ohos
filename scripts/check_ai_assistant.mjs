@@ -73,6 +73,7 @@ export const AiService = {
         /vl|vision|4o|omni|gemini|claude|llava|qvq/i.test(model) };
   },
   detectVision: (model) => /vl|vision|4o|omni|gemini|claude|llava|qvq/i.test(model),
+  supportsTools: () => (state.settings.config.baseUrl ?? '').indexOf('opencode.ai') >= 0,
   contextRounds: (k) => (k <= 4 ? 4 : k <= 8 ? 8 : k <= 32 ? 16 : k <= 128 ? 30 : 50),
   loadPermission: () => state.settings.permission ?? 'confirm',
   savePermission: (mode) => { state.settings.permission = mode; },
@@ -1525,9 +1526,12 @@ try {
     assert.equal(state.settings.permission, 'confirm');
   });
 
-  test('系统提示词：不复述工具枚举、含中文思考约束，权限补注三档都用准确档位名', async () => {
+  test('系统提示词：网关档含工具指引与三档权限补注，非网关档不提工具', async () => {
     chat();
     const store = AiChatStore.instance();
+    // 工具指引段只在挂 tools 的网关通道出现，本用例主体先钉成网关配置
+    const savedConfig = state.settings.config;
+    state.settings.config = { ...savedConfig, baseUrl: 'https://opencode.ai/zen/go/v1' };
     const sys = (await store.buildContext())[0].content;
     assert.ok(!sys.includes('（书籍详情，需 id）'), '旧版逐工具枚举未删净（与 tools payload 重复）');
     assert.ok(!sys.includes('写操作工具：create_booklist'), '写工具清单枚举未删净');
@@ -1546,6 +1550,15 @@ try {
     assert.ok(auto.includes('不逐笔确认、直接执行'), 'auto 补注缺行为定义');
     assert.ok(!auto.includes('失败时不要重试'), 'auto 补注与工具失败重试引导矛盾');
     state.settings.permission = 'confirm';
+    // 非网关通道不挂 tools：提「调用工具」会诱导模型伪造伪工具调用文本当正文
+    state.settings.config = { ...savedConfig, baseUrl: 'https://api.deepseek.com/v1' };
+    const noTools = (await store.buildContext())[0].content;
+    assert.ok(!noTools.includes('先调用相应工具'), '无 tools 档不得写「先调用相应工具」');
+    assert.ok(!noTools.includes('权限模式'), '无 tools 档不得带权限补注');
+    assert.ok(!noTools.includes('search_sonovel'), '无 tools 档不得带跨工具流程指引');
+    assert.ok(noTools.includes('回答与思考过程一律使用中文'), '中文约束应全档保留');
+    assert.ok(noTools.includes('如实说明不确定，绝不编造'), '无 tools 档仍须防编造');
+    state.settings.config = savedConfig;
   });
 
   test('技能：六个内置技能均带工具指引，点击填入输入框', () => {
