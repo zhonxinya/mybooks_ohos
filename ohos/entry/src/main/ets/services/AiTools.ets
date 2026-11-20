@@ -8,6 +8,7 @@ import { BookListAddResponse, BookListApi, BookListMutationResponse } from './Bo
 import { AiPersona } from './AiPersona';
 import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';
 import { NovelMeta, NovelMetaService } from './NovelMetaService';
+import { EncyclopediaHit, EncyclopediaService } from './EncyclopediaService';
 
 /** 工具结果里的一本书（供对话页做结构化列表渲染）。 */
 export interface ToolBookLine {
@@ -238,6 +239,14 @@ const TOOL_GET_NOVEL_META: AiToolDefinition = defineTool('get_novel_meta',
     '豆瓣查不到的网文就靠它；对 17K小说网详情页解析最全。失败时换另一条书源候选的 url 重试。',
   NOVEL_META_PROPS, ['url']);
 
+const ENCYCLOPEDIA_PROPS: Record<string, AiToolProperty> = {
+  'query': prop('string', '百科词条关键词：人名（作者）、作品名、地名、概念等'),
+};
+const TOOL_SEARCH_ENCYCLOPEDIA: AiToolDefinition = defineTool('search_encyclopedia',
+  '搜百科词条（百度百科+维基百科双通道）：回答「这位作者是谁/这本书什么背景/某地某概念」类问题，' +
+    '返回词条标题、摘要与链接。一个通道不可达会如实标注并仍给另一通道结果。',
+  ENCYCLOPEDIA_PROPS, ['query']);
+
 // 顺序有坑：OpenCode 网关实测会丢 tools 数组最后一项（2026-11-20 板上取证：模型枚举
 // 恰缺末位 get_novel_meta，报「最后一个工具是 search_meta」）。末位放最低频工具，
 // 新增工具一律插在中间，别放最后。
@@ -246,7 +255,8 @@ const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS,
   TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_UPDATE_BOOK_META,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
-  TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_FORGET_MEMORY,
+  TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_SEARCH_ENCYCLOPEDIA,
+  TOOL_FORGET_MEMORY,
 ];
 
 /**
@@ -343,6 +353,9 @@ export class AiTools {
     if (name === 'get_novel_meta') {
       return '抓书源站详情页';
     }
+    if (name === 'search_encyclopedia') {
+      return '搜百科词条';
+    }
     if (name === 'save_memory') {
       return '记住用户的事';
     }
@@ -437,6 +450,9 @@ export class AiTools {
       }
       if (name === 'get_novel_meta') {
         return await AiTools.getNovelMeta(args);
+      }
+      if (name === 'search_encyclopedia') {
+        return await AiTools.searchEncyclopedia(AiTools.argString(args, 'query'));
       }
       if (name === 'save_memory') {
         return AiPersona.appendMemory(AiTools.argString(args, 'content'));
@@ -690,6 +706,34 @@ export class AiTools {
     }
     out += '\n要把简介写进书架用 update_book_meta 的 comment 字段。';
     return out;
+  }
+
+  /**
+   * 百科双通道聚合：各通道独立容错（EncyclopediaService 已把网络失败转成 ok=false），
+   * 全失败才回失败文案——不抛错，避免 execute 层对「被墙」这类确定性失败做无意义重试。
+   */
+  private static async searchEncyclopedia(query: string): Promise<string> {
+    const trimmed: string = query.trim();
+    if (trimmed.length === 0) {
+      return '参数 query 为空，请提供百科词条关键词。';
+    }
+    const bk: EncyclopediaHit = await EncyclopediaService.searchBaike(trimmed);
+    const wk: EncyclopediaHit = await EncyclopediaService.searchWikipedia(trimmed);
+    if (!bk.ok && !wk.ok) {
+      return `百科检索失败：百度百科（${bk.error}）；维基百科（${wk.error}）`;
+    }
+    const parts: string[] = [];
+    if (bk.ok) {
+      parts.push(`【百度百科】${bk.title}\n${bk.abstract}\n链接：${bk.url}`);
+    } else {
+      parts.push(`【百度百科】未获取到：${bk.error}`);
+    }
+    if (wk.ok) {
+      parts.push(`【维基百科】${wk.title}\n${wk.abstract}\n链接：${wk.url}`);
+    } else {
+      parts.push(`【维基百科】未获取到：${wk.error}`);
+    }
+    return parts.join('\n\n');
   }
 
   private static async setCover(args: Record<string, Object>): Promise<string> {
