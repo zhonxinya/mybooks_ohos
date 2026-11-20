@@ -975,9 +975,9 @@ try {
     toolsState.processed = 0;
     const t = await RealAiTools.execute('add_sonovel_task',
       '{"book_name":"夜的命名术","url":"http://x/book/1/","author":"会说话的肘子","source_id":3,"source_name":"某书源"}');
-    // so-novel=云端下载：文案必须说清成品入库在线书库，不得暗示已存到手机本地
+    // so-novel 下载在服务器（云端）执行，完成后应用拉取落架——文案两头都要说准
     assert.ok(t.includes('已加入云端下载任务') && t.includes('格式 epub') &&
-      t.includes('入库到在线书库'), t);
+      t.includes('下载与转换在服务器进行') && t.includes('自动拉取到本地书架'), t);
     assert.equal(toolsState.tasks.length, 1);
     assert.equal(toolsState.processed, 1);
     const dup = await RealAiTools.execute('add_sonovel_task', '{"book_name":"夜的命名术","url":"http://x/book/1/"}');
