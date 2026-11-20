@@ -313,6 +313,15 @@ const TOOL_SEARCH_ENCYCLOPEDIA: AiToolDefinition = defineTool('search_encycloped
     '返回词条标题、摘要与链接。query 传词条名而非整句问话。一个通道不可达会如实标注并仍给另一通道结果。',
   ENCYCLOPEDIA_PROPS, ['query']);
 
+const ASK_USER_PROPS: Record<string, AiToolProperty> = {
+  'question': prop('string', '要向用户确认的问题，一句话'),
+  'options': prop('string', '候选项，用顿号「、」分隔，2-6 个，每项尽量短'),
+};
+const TOOL_ASK_USER: AiToolDefinition = defineTool('ask_user',
+  '信息不足以安全执行、或存在多个合理候选需要用户拍板时，向用户提出一个带选项的问题并等待其选择；' +
+    '用户的答复会作为本工具的结果返回，收到后再继续。不要用它闲聊或问与当前任务无关的信息。',
+  ASK_USER_PROPS, ['question', 'options']);
+
 // 顺序有坑：OpenCode 网关实测会丢 tools 数组最后一项（2026-11-20 板上取证：模型枚举
 // 恰缺末位 get_novel_meta，报「最后一个工具是 search_meta」）。末位放最低频工具，
 // 新增工具一律插在中间，别放最后。
@@ -325,7 +334,7 @@ const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_UPDATE_BOOK_META, TOOL_LIST_CATEGORIES,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
   TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_SEARCH_ENCYCLOPEDIA,
-  TOOL_FORGET_MEMORY,
+  TOOL_ASK_USER, TOOL_FORGET_MEMORY,
 ];
 
 /**
@@ -478,6 +487,9 @@ export class AiTools {
     if (name === 'forget_memory') {
       return '删除一条记忆';
     }
+    if (name === 'ask_user') {
+      return '向用户提问';
+    }
     return name;
   }
 
@@ -599,6 +611,11 @@ export class AiTools {
       }
       if (name === 'forget_memory') {
         return AiPersona.removeMemory(AiTools.argNumber(args, 'index'));
+      }
+      if (name === 'ask_user') {
+        // 文字对话页由回路层（AiService.runToolLoop）拦截执行反问交互；
+        // 能走到这里说明是无卡片的渠道（如语音通话），引导模型改用正文直接提问
+        return '当前渠道不支持交互式反问，请把问题写在正文里直接问用户，然后停下等待回复';
       }
       return `未知工具：${name}`;
   }

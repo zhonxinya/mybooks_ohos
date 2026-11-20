@@ -36,6 +36,12 @@ export interface ChatBubble {
 /** 写操作闸门确认弹窗；需要 UIContext，只有页面在场时可用。 */
 export type ConfirmUi = (label: string, args: string) => Promise<boolean>;
 
+/** ask_user 反问卡片的待答状态：对话页渲染选项按钮，点选/跳过经 answerAsk 归还回路。 */
+export interface AskRequest {
+  question: string;
+  options: string[];
+}
+
 /**
  * 系统提示词只留**行为规则与跨工具流程**：单个工具的名称/用途/参数由请求体
  * tools 数组自带（AiTools 描述是权威来源，此处复述既烧 token 又会与代码漂移）。
@@ -53,6 +59,8 @@ const SYSTEM_PROMPT_TOOLS: string =
   '工具数据不足时直接说明不确定。' +
   '工具返回「暂时失败」时可稍后原样重试一次；返回「执行失败」时按错误提示修正参数或方案再试，勿原样重试；仍失败如实告知，不反复重试。' +
   '写操作（建书单、加书、下载任务、改元数据、换封面、删记忆）一律按后文的权限模式说明处理。' +
+  '需要用户在多个候选间拍板、或缺少无法安全臆断的关键信息时，用 ask_user 提出一个问题并给 2-6 个简短选项，' +
+    '得到答复前不要执行有后果的操作；用户跳过时基于现状谨慎收敛，不要反复追问。' +
   '换封面流程：先 search_cover 列出候选给用户看，用户选定后再 set_cover。' +
   '网文下载流程：search_sonovel 拿 url → add_sonovel_task 入队 → list_download_tasks 报进度，成品完成后自动进本地书架可读。';
 
@@ -106,6 +114,9 @@ export class AiChatStore {
   private viewSync: (() => void) | null = null;
   private confirmUi: ConfirmUi | null = null;
   private viewToken: number = 0;
+  /** ask_user 在途反问卡片；null=无。回路 await 在 answerAsk 上，退出页面按跳过收敛。 */
+  pendingAsk: AskRequest | null = null;
+  private askResolve: ((answer: string) => void) | null = null;
 
   static instance(): AiChatStore {
     if (AiChatStore.inst === null) {
@@ -126,7 +137,20 @@ export class AiChatStore {
     if (this.viewToken === token) {
       this.viewSync = null;
       this.confirmUi = null;
+      // 卡片随视图消失：在途反问按跳过收敛，回路照常收尾落盘
+      this.answerAsk('');
     }
+  }
+
+  /** 卡片点选（跳过传空串）：把答复归还等待中的回路并清卡片。无在途反问则忽略。 */
+  answerAsk(option: string): void {
+    const resolve: ((answer: string) => void) | null = this.askResolve;
+    this.askResolve = null;
+    this.pendingAsk = null;
+    if (resolve !== null) {
+      resolve(option);
+    }
+    this.notify();
   }
 
   private notify(): void {
@@ -153,6 +177,8 @@ export class AiChatStore {
 
   stopStreaming(): void {
     this.requestId++;
+    // 停止键：在途反问卡片一并收起（跳过语义），等待中的回路随即在 isAborted 处收尾
+    this.answerAsk('');
     const handle: AiAbortHandle | null = this.abort;
     this.abort = null;
     if (handle !== null) {
@@ -408,6 +434,17 @@ export class AiChatStore {
           return Promise.resolve(false);
         }
         return this.confirmUi(label, args);
+      },
+      onAsk: (question: string, options: string[]): Promise<string> => {
+        // 反问卡片：视图不在场/轮次已换代时直接按跳过收敛，绝不让回路无限等待
+        if (requestId !== this.requestId || !this.thinking || this.viewSync === null) {
+          return Promise.resolve('');
+        }
+        return new Promise<string>((resolve: (answer: string) => void): void => {
+          this.askResolve = resolve;
+          this.pendingAsk = { question: question, options: options };
+          this.notify();
+        });
       },
       onDone: (full: string) => {
         if (requestId === this.requestId && this.thinking) {

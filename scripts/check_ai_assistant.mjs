@@ -1074,7 +1074,7 @@ try {
     assert.equal(deps.state.chatCalls.length, 2, 'errs=' + JSON.stringify(errs));
     assert.equal(deps.state.chatCalls[0].body.stream, true);
     assert.ok(Array.isArray(deps.state.chatCalls[0].body.tools) &&
-      deps.state.chatCalls[0].body.tools.length === 25, 'SDK 通道请求体须挂全量 tools');
+      deps.state.chatCalls[0].body.tools.length === 26, 'SDK 通道请求体须挂全量 tools');
     // 第二轮：assistant tool_calls + tool 结果回填，终轮回答
     const msgs = deps.state.chatCalls[1].body.messages;
     const asst = msgs.find((m) => m.role === 'assistant' && m.tool_calls !== undefined);
@@ -1481,7 +1481,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 25 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 26 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -1490,6 +1490,68 @@ try {
     assert.equal(toolMsg.tool_call_id, 'call_1');
     assert.ok(toolMsg.content.includes('- 《三体》（刘慈欣） id=12'));
     assert.equal(full, '帮你查到了《三体》，id=12。');
+  });
+
+  test('工具回路：ask_user 反问——onAsk 点选回填答复，跳过/无回调收敛，逗号归一拆分', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    const askReply = (opts) => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+      tool_calls: [{ id: 'q1', type: 'function', function: { name: 'ask_user',
+        arguments: JSON.stringify({ question: '转成什么格式？', options: opts }) } }] } }] })) });
+    const finalReply = (t) => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: t } }] })) });
+
+    // 1) 用户点选：onAsk 收到拆好的问题与选项，回填「用户选择了」续跑
+    deps.state.rcpResponses = [askReply('epub、mobi、txt'), finalReply('好，转 mobi')];
+    let seen = null;
+    const labels = [];
+    const results = [];
+    const errs = [];
+    RealAiService.chatStream([{ role: 'user', content: '把这本转个格式' }], {
+      onDelta: () => {}, onDone: () => {}, onError: (e) => { errs.push(e); },
+      onAsk: (q, os) => { seen = [q, os]; return Promise.resolve('mobi'); },
+      onTool: (l) => { labels.push(l); },
+      onToolResult: (n, l, t, id) => { results.push([n, t, id]); },
+    }, 128);
+    await flush();
+    assert.deepEqual(errs, []);
+    assert.deepEqual(seen, ['转成什么格式？', ['epub', 'mobi', 'txt']]);
+    assert.deepEqual(labels, ['向用户提问']);
+    const back1 = JSON.parse(deps.state.requests[1].content);
+    const tool1 = back1.messages.find((m) => m.role === 'tool');
+    assert.equal(tool1.content, '用户选择了「mobi」');
+    assert.equal(tool1.tool_call_id, 'q1');
+    assert.ok(back1.messages.some((m) => m.role === 'assistant' && m.tool_calls !== undefined),
+      'ask_user 也须回填 assistant(tool_calls)');
+    assert.deepEqual(results, [['ask_user', '用户选择了「mobi」', 'q1']]);
+
+    // 2) 跳过 + 英文逗号归一
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses = [askReply('epub, mobi'), finalReply('按默认来')];
+    let seen2 = null;
+    RealAiService.chatStream([{ role: 'user', content: '转格式' }], {
+      onDelta: () => {}, onDone: () => {}, onError: () => {},
+      onAsk: (q, os) => { seen2 = os; return Promise.resolve(''); },
+    }, 128);
+    await flush();
+    assert.deepEqual(seen2, ['epub', 'mobi'], '英文逗号须归一并去空白');
+    assert.ok(JSON.parse(deps.state.requests[1].content).messages
+      .find((m) => m.role === 'tool').content.startsWith('用户跳过了该问题'), '空答复=跳过文案');
+
+    // 3) 无 onAsk 渠道：收敛为跳过而不是挂等
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses = [askReply('a、b'), finalReply('那我按常见做法')];
+    RealAiService.chatStream([{ role: 'user', content: '转格式' }], {
+      onDelta: () => {}, onDone: () => {}, onError: () => {},
+    }, 128);
+    await flush();
+    assert.ok(JSON.parse(deps.state.requests[1].content).messages
+      .find((m) => m.role === 'tool').content.startsWith('用户跳过了该问题'), '缺回调按跳过收敛');
+
+    // 4) 语音等直调执行器的渠道：兜底文案引导模型用正文提问
+    const voiceText = await RealAiTools.execute('ask_user', '{"question":"x","options":"a、b"}');
+    assert.ok(voiceText.includes('当前渠道不支持'), voiceText);
+    assert.equal(RealAiTools.toolLabel('ask_user'), '向用户提问');
   });
 
   test('网关请求重试：网络异常/429/5xx 退避后重试，其他 4xx 不重试，重试用尽才报错', async () => {
@@ -1753,11 +1815,11 @@ try {
     const WRITE = ['create_booklist', 'add_books_to_booklist', 'update_booklist', 'delete_booklist',
       'remove_book_from_booklist', 'add_sonovel_task', 'add_to_shelf', 'push_to_device',
       'update_book_meta', 'set_cover', 'forget_memory'];
-    assert.equal(RealAiTools.definitions().length, 25);
-    assert.equal(RealAiTools.definitions('confirm').length, 25);
-    assert.equal(RealAiTools.definitions('auto').length, 25);
+    assert.equal(RealAiTools.definitions().length, 26);
+    assert.equal(RealAiTools.definitions('confirm').length, 26);
+    assert.equal(RealAiTools.definitions('auto').length, 26);
     const ro = RealAiTools.definitions('readonly');
-    assert.equal(ro.length, 13);
+    assert.equal(ro.length, 14);
     assert.ok(ro.some((d) => d.function.name === 'list_categories'), 'list_categories 是只读工具须保留');
     for (const name of WRITE) {
       assert.ok(!ro.some((d) => d.function.name === name), `readonly 泄漏写工具 ${name}`);
@@ -1787,8 +1849,9 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 13);
+    assert.equal(b1.tools.length, 14);
     assert.ok(!b1.tools.some((d) => d.function.name === 'create_booklist'));
+    assert.ok(b1.tools.some((d) => d.function.name === 'ask_user'), 'ask_user 是只读交互工具，只读档须保留');
     const b2 = JSON.parse(deps.state.requests[1].content);
     assert.equal(b2.messages.find((m) => m.role === 'tool').content,
       '当前为只读权限模式，写操作不可执行');
@@ -1818,7 +1881,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 25, 'auto 模式写工具须在 tools 里');
+    assert.equal(b1.tools.length, 26, 'auto 模式写工具须在 tools 里');
     assert.equal(asked, 0, 'auto 模式不该弹确认');
     assert.deepEqual(labels, [['create_booklist', '创建书单（自动执行）']]);
     assert.deepEqual(toolsState.booklistCreateCalls.map((c) => c.name), ['科幻入门']);

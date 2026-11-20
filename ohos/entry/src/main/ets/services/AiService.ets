@@ -133,6 +133,8 @@ export interface AiStreamHandlers {
   onToolResult?: (name: string, label: string, text: string, callId: string) => void;
   /** 写操作工具执行前的用户确认；返回 false 拒绝，模型收到「用户拒绝了该操作」。 */
   onConfirm?: (label: string, argsSummary: string) => Promise<boolean>;
+  /** ask_user 反问工具：把问题与选项抛给界面等待点选；返回空串表示用户跳过。 */
+  onAsk?: (question: string, options: string[]) => Promise<string>;
 }
 
 export class AiService {
@@ -549,7 +551,8 @@ export class AiService {
         notice === undefined ? null : notice,
         ask === undefined ? null : ask,
         done === undefined ? null : done,
-        think === undefined ? null : think).then((content: string): void => {
+        think === undefined ? null : think,
+        handlers.onAsk === undefined ? null : handlers.onAsk).then((content: string): void => {
         if (handle.aborted) {
           return;
         }
@@ -596,7 +599,8 @@ export class AiService {
         notice === undefined ? null : notice,
         ask === undefined ? null : ask,
         done === undefined ? null : done,
-        think === undefined ? null : think).then((content: string): void => {
+        think === undefined ? null : think,
+        handlers.onAsk === undefined ? null : handlers.onAsk).then((content: string): void => {
         if (handle.aborted) {
           return;
         }
@@ -698,7 +702,7 @@ export class AiService {
     if (AiService.isOpenCodeGateway(config.baseUrl)) {
       // 结构化输出（书单 JSON 等）不需要工具，避免模型中途改去查数据
       return AiService.chatViaGateway(config, apiKey, messages, maxTokens, rcp.createSession(),
-        null, AiService.loadPermission(), null, null, null, null, null);
+        null, AiService.loadPermission(), null, null, null, null, null, null);
     }
     const client: OpenAI = AiService.client(config.baseUrl, apiKey);
     const params: ChatCompletionCreateParamsBase = {
@@ -845,7 +849,8 @@ export class AiService {
     onTool: ((label: string, name: string) => void) | null,
     onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null,
     onResult: ((name: string, label: string, text: string, callId: string) => void) | null,
-    onReasoning: ((text: string) => void) | null): Promise<string> {
+    onReasoning: ((text: string) => void) | null,
+    onAsk: ((question: string, options: string[]) => Promise<string>) | null): Promise<string> {
     const headers: rcp.RequestHeaders = {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
@@ -905,7 +910,7 @@ export class AiService {
     };
     try {
       return await AiService.runToolLoop(gwMessages, transport, tools, permission, isAborted,
-        onTool, onConfirm, onResult, onReasoning);
+        onTool, onConfirm, onResult, onReasoning, onAsk);
     } finally {
       session.close();
       // 中断/异常可能留下未取配对条目，回路收尾一律清理
@@ -925,7 +930,8 @@ export class AiService {
     onTool: ((label: string, name: string) => void) | null,
     onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null,
     onResult: ((name: string, label: string, text: string, callId: string) => void) | null,
-    onReasoning: ((text: string) => void) | null): Promise<string> {
+    onReasoning: ((text: string) => void) | null,
+    onAsk: ((question: string, options: string[]) => Promise<string>) | null): Promise<string> {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
       if (isAborted !== null && isAborted()) {
         return '';
@@ -968,7 +974,8 @@ export class AiService {
         // 串行白白叠加等待。含写工具保持串行——确认闸门与执行顺序必须和模型输出一致。
         let allAuto: boolean = true;
         for (let i = 0; i < reply.calls.length; i++) {
-          if (AiTools.needsConfirm(reply.calls[i].name)) {
+          // ask_user 需要停下来等用户点选，不能与其他工具并发执行
+          if (AiTools.needsConfirm(reply.calls[i].name) || reply.calls[i].name === 'ask_user') {
             allAuto = false;
             break;
           }
@@ -1000,6 +1007,33 @@ export class AiService {
         for (let i = 0; i < reply.calls.length; i++) {
           const c: GatewayToolCall = reply.calls[i];
           let label: string = AiTools.toolLabel(c.name);
+          if (c.name === 'ask_user') {
+            // 反问工具不落执行器：把问题与选项抛给界面等待点选，答复作为工具结果回填。
+            // 没人能答（无卡片渠道/异常）按跳过处理，模型据此收敛而不是反复追问。
+            if (onTool !== null) {
+              onTool(label, c.name);
+            }
+            let answer: string = '';
+            if (onAsk !== null) {
+              const parsed: AskPayload = AiService.parseAskArgs(c.arguments);
+              try {
+                answer = await onAsk(parsed.question, parsed.options);
+              } catch (_error) {
+                answer = '';
+              }
+            }
+            const askResult: string = answer.length > 0
+              ? `用户选择了「${answer}」`
+              : '用户跳过了该问题（未作答）。请基于已有信息谨慎继续，不要反复追问';
+            gwMessages.push({ role: 'tool', content: askResult, tool_call_id: c.id });
+            if (onResult !== null) {
+              onResult(c.name, label, askResult, c.id);
+            }
+            if (isAborted !== null && isAborted()) {
+              return '';
+            }
+            continue;
+          }
           if (AiTools.needsConfirm(c.name)) {
             if (permission === 'readonly') {
               // 只读模式 tools 里本就没有写工具；走到这里说明模型幻觉调用，回路层同样挡下
@@ -1048,6 +1082,46 @@ export class AiService {
       return reply.content;
     }
     return '';
+  }
+
+  /**
+   * 解析 ask_user 参数：问题 + 候选项。options 约定为顿号分隔串，但模型常交英文逗号/
+   * 分号甚至 JSON 数组，这里全部归一为顿号再拆分，最多取 6 项、去空白。
+   */
+  private static parseAskArgs(argsJson: string): AskPayload {
+    let question: string = '';
+    const options: string[] = [];
+    try {
+      const obj: Record<string, Object> = JSON.parse(argsJson) as Record<string, Object>;
+      const qRaw: Object | undefined = obj['question'];
+      if (typeof qRaw === 'string') {
+        question = qRaw as string;
+      }
+      let text: string = '';
+      const oRaw: Object | undefined = obj['options'];
+      if (typeof oRaw === 'string') {
+        text = oRaw as string;
+      } else if (Array.isArray(oRaw)) {
+        const parts: string[] = [];
+        for (const it of oRaw as Object[]) {
+          if (typeof it === 'string') {
+            parts.push(it as string);
+          }
+        }
+        text = parts.join('、');
+      }
+      text = text.replace(/，/g, '、').replace(/,/g, '、')
+        .replace(/；/g, '、').replace(/;/g, '、');
+      for (const seg of text.split('、')) {
+        const s: string = seg.trim();
+        if (s.length > 0 && options.length < 6) {
+          options.push(s);
+        }
+      }
+    } catch (_error) {
+      // 参数坏 JSON：返回空壳，卡片只剩问题文案，用户仍可跳过
+    }
+    return { question: question, options: options };
   }
 
   /**
@@ -1368,4 +1442,10 @@ interface GatewayReply {
 /** SDK 会话只用到 cancel()；单独声明避免依赖 rcp 的完整类型。 */
 interface AiSessionHolder {
   cancel: () => void;
+}
+
+/** ask_user 参数解析结果：问题 + 拆好的候选项。 */
+interface AskPayload {
+  question: string;
+  options: string[];
 }
