@@ -2100,13 +2100,18 @@ try {
     assert.strictEqual(m.name, '导入书');
   });
 
-  test('Reader3 导入校验：坏 JSON / 非数组 / 全无效条目 → 抛错且不落盘', async () => {
+  test('Reader3 导入校验：坏 JSON 带开头片段 / 无 bookSourceUrl 对象 / 全无效 → 抛错不落盘；单书源对象可导入', async () => {
     const { Reader3Native } = await load('RealReader3');
     const before = deps.state.written.length;
-    await assert.rejects(() => Reader3Native.importFromText('这不是JSON'), /不是有效的 JSON/);
-    await assert.rejects(() => Reader3Native.importFromText('{"bookSourceUrl":"x"}'), /JSON 数组/);
+    await assert.rejects(() => Reader3Native.importFromText('这不是JSON'), /不是有效的 JSON（开头：这不是JSON/);
+    // URL 指到网页（书源站常见坑）：报错须能看出拿到的是 HTML
+    await assert.rejects(() => Reader3Native.importFromText('<html><body>404</body></html>'), /开头：<html/);
+    await assert.rejects(() => Reader3Native.importFromText('{"foo":1}'), /格式不支持/);
     await assert.rejects(() => Reader3Native.importFromText('[]'), /未解析到有效书源/);
     assert.strictEqual(deps.state.written.length, before, '失败导入不得写盘');
+    // 单个书源对象（Legado 单本分享形态）= 1 条导入成功
+    Reader3Native.loaded = false;
+    assert.strictEqual(await Reader3Native.importFromText('{"bookSourceUrl":"https://one.example","bookSourceName":"单源"}'), 1);
   });
 
   test('Reader3 导入：URL 通道 rcp 抓取（非 200 报错）走同一校验落盘', async () => {

@@ -123,7 +123,10 @@ export class Reader3Native {
     return (await Reader3Native.ensureLoaded()).length;
   }
 
-  /** 校验 Legado 书源 JSON 文本：数组、逐条须有 bookSourceUrl；无效条目过滤，全无效抛错。 */
+  /**
+   * 校验 Legado 书源 JSON 文本：**数组或单个书源对象**都接受（Legado 分享既有整包
+   * 数组也有单本书源）；逐条须有 bookSourceUrl，无效条目过滤，全无效抛错。
+   */
   private static parseSources(text: string): BookSource[] {
     const trimmed: string = text.trim();
     if (trimmed.length === 0) {
@@ -133,13 +136,21 @@ export class Reader3Native {
     try {
       data = JSON.parse(trimmed) as Object;
     } catch (error) {
-      throw new Error('不是有效的 JSON');
+      // 带开头片段：区分「文件被截断」与「URL 拿到的其实是 HTML 页」两类真实失败
+      const head: string = trimmed.substring(0, 40).replace(/\s+/g, ' ');
+      throw new Error(`不是有效的 JSON（开头：${head}…）`);
     }
-    if (!Array.isArray(data)) {
-      throw new Error('书源须为 JSON 数组（Legado 导出格式）');
+    let list: BookSource[] = [];
+    if (Array.isArray(data)) {
+      list = data as BookSource[];
+    } else if (data !== null && typeof data === 'object' &&
+      typeof (data as BookSource).bookSourceUrl === 'string') {
+      list = [data as BookSource];
+    } else {
+      throw new Error('格式不支持：需为书源数组或含 bookSourceUrl 的单个书源对象');
     }
     const valid: BookSource[] = [];
-    for (const s of data as BookSource[]) {
+    for (const s of list) {
       if (s !== null && s !== undefined && typeof s.bookSourceUrl === 'string' && s.bookSourceUrl.length > 0) {
         valid.push(s);
       }
@@ -155,7 +166,15 @@ export class Reader3Native {
    * 全量 Legado 字段原样保留（引擎只读 ruleBookInfo，多余字段无害）。
    */
   static async importFromText(jsonText: string): Promise<number> {
-    const valid: BookSource[] = Reader3Native.parseSources(jsonText);
+    let valid: BookSource[];
+    try {
+      valid = Reader3Native.parseSources(jsonText);
+    } catch (error) {
+      // 失败必须留痕：页面上的红字一闪而过，事后无从排查（本次 bug 就吃了没日志的亏）
+      const message: string = error instanceof Error ? error.message : String(error);
+      hilog.warn(0x0000, 'Reader3Native', 'import rejected: %{public}s', message);
+      throw new Error(message);
+    }
     const text: string = JSON.stringify(valid);
     const path: string = `${Reader3Native.writeDir()}/${SOURCE_FILE}`;
     const file = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
