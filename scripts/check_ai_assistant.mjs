@@ -160,7 +160,7 @@ writeFileSync(join(dir, 'shim.ts'), shim);
 writeFileSync(join(dir, 'aiServiceDeps.ts'), `
 // Buffer.from(x).buffer 带池化填充，必须 slice 出精确字节（模拟 rcp 的紧凑 ArrayBuffer）
 const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
-export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpThrowQueue: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [], sourceJson: null, written: [], ttsFiles: [], lastOpenedPath: '' };
+export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpThrowQueue: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [], chatStreamRounds: null, chatResponse: null, chatResponses: [], sourceJson: null, written: [], ttsFiles: [], lastOpenedPath: '' };
 export const util = {
   // 透传 encoding（gbk/gb2312 走 Node 内置 TextDecoder），utf-8 用法不受影响；
   // QwenAudioService 用 new util.TextDecoder()，AiService 用 create()，class 双形态兼容
@@ -178,7 +178,19 @@ export class OpenAI {
   chat = { completions: { create: (body, options) => {
     state.chatCalls.push({ body, options });
     const ok = { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: 'ok' } }] })) };
-    const resp = state.chatResponse ?? ok;
+    let resp = state.chatResponse ?? ok;
+    if (Array.isArray(state.chatResponses) && state.chatResponses.length > 0) {
+      resp = state.chatResponses.shift();
+    }
+    // 流式 tool_calls 回路用例：chatStreamRounds 按轮预置批次，每轮 create 消费一批（微任务内喂，
+    // 必须在该轮 response 落定前送达——真实 SDK 亦如此）
+    if (Array.isArray(state.chatStreamRounds) && state.chatStreamRounds.length > 0) {
+      const chunks = state.chatStreamRounds.shift();
+      Promise.resolve().then(() => {
+        // 真实 SDK onData 一次收一批 chunks[]，喂单元素会因缺 length 静默空转
+        try { options.onData(chunks); } catch (e) { console.log('FEEDERR', e.message); }
+      });
+    }
     return { session: { cancel: () => { state.chatCancelled = true; } }, response: Promise.resolve(resp) };
   } } };
   constructor(options) { state.lastOptions = options; }
@@ -721,7 +733,7 @@ const deferred = () => {
 };
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 // 工具回路是多轮 await，微任务队列跑干净需要连续 tick
-const flush = async () => { for (let i = 0; i < 24; i++) await tick(); };
+const flush = async () => { for (let i = 0; i < 96; i++) await tick(); };
 const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
 const rtB64 = (bytes) => Buffer.from(bytes).toString('base64');
 
@@ -746,7 +758,14 @@ try {
   stageQwenAudio();
   stageReader3();
   stageAiTools();
-  const load = async (name) => import(pathToFileURL(join(dir, `${name}.ts`)).href);
+  const load = async (name) => {
+    try {
+      return await import(pathToFileURL(join(dir, `${name}.ts`)).href);
+    } catch (e) {
+      console.log('LOAD FAIL', name, String(e).slice(0, 300));
+      throw e;
+    }
+  };
   const { AiAssistantPage } = await load('AiAssistantPage');
   const { AiBookPanelPage } = await load('AiBookPanelPage');
   const { AiRecommendPage } = await load('AiRecommendPage');
@@ -1020,6 +1039,61 @@ try {
     assert.equal(deps.state.chatCalls[0].options.requestConfiguration, undefined);
     assert.equal(deps.state.chatCalls[0].body.stream, true);
   });
+  test('SDK 流式回路：tool_calls 分片累积→执行回填→终轮打字机（非网关服务商同享工具）', async () => {
+    deps.state.store.clear();
+    deps.state.chatCalls.length = 0;
+    RealAiService.saveConfig('deepseek', 'https://api.deepseek.com/v1', 'deepseek-chat', 'sk-d', 0.5);
+    deps.state.chatStreamRounds = [
+      [
+        { choices: [{ delta: { content: '先查' } }] },
+        { choices: [{ delta: { content: '一下', tool_calls: [
+          { index: 0, id: 'call_9', function: { name: 'search_books', arguments: '{"qu' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'ery":"三体"}' } }] } }] },
+      ],
+      [
+        { choices: [{ delta: { content: '找到' } }] },
+        { choices: [{ delta: { content: '一本' } }] },
+      ],
+    ];
+    deps.state.chatResponses = [{ statusCode: 200, body: enc('{}') },
+      { statusCode: 200, body: enc('{}') }];
+    const deltas = [];
+    const activities = [];
+    const errs = [];
+    const handlers = {
+      onDelta: (t) => { deltas.push(t); },
+      onDone: () => {},
+      onError: (e) => { errs.push(e); },
+      onTool: (label) => { activities.push(label); },
+      onToolResult: (name, label, text, callId) => { activities.push(`${label}:${text}:${callId}`); },
+    };
+    toolsState.search = async (q) => (q === '三体' ? [{ id: 12, title: '三体', authors: ['刘慈欣'] }] : []);
+    RealAiService.chatStream([{ role: 'user', content: '搜三体' }], handlers);
+    await flush();
+    // 第一轮：挂 tools，正文分片打字机 + tool_calls 按 index 分片
+    assert.equal(deps.state.chatCalls.length, 2, 'errs=' + JSON.stringify(errs));
+    assert.equal(deps.state.chatCalls[0].body.stream, true);
+    assert.ok(Array.isArray(deps.state.chatCalls[0].body.tools) &&
+      deps.state.chatCalls[0].body.tools.length === 25, 'SDK 通道请求体须挂全量 tools');
+    // 第二轮：assistant tool_calls + tool 结果回填，终轮回答
+    const msgs = deps.state.chatCalls[1].body.messages;
+    const asst = msgs.find((m) => m.role === 'assistant' && m.tool_calls !== undefined);
+    assert.ok(asst !== undefined, '须回填 assistant(tool_calls)');
+    assert.equal(asst.tool_calls[0].id, 'call_9');
+    assert.equal(asst.tool_calls[0].function.name, 'search_books');
+    assert.equal(asst.tool_calls[0].function.arguments, '{"query":"三体"}');
+    const toolMsg = msgs.find((m) => m.role === 'tool');
+    assert.ok(toolMsg !== undefined && toolMsg.tool_call_id === 'call_9' && toolMsg.content.includes('三体'),
+      JSON.stringify(toolMsg));
+    assert.deepEqual(activities, ['搜索书架', '搜索书架:找到 1 本：\n- 《三体》（刘慈欣） id=12:call_9']);
+    // 打字机：两轮正文分片都直达 onDelta（工具轮正文在前，终轮在后），全文定稿不重复回调
+    assert.equal(deltas.join(''), '先查一下找到一本');
+    deps.state.chatStreamRounds = null;
+    deps.state.chatResponses = [];
+    deps.state.chatCalls.length = 0;
+    toolsState.search = null;
+  });
+
   test('OpenCode 网关：fetchModels 携带同一会话 id，非 opencode 不带', async () => {
     deps.state.store.clear();
     deps.state.store.set('p:ai_opencode_session', 'persisted-id');
@@ -1683,7 +1757,7 @@ try {
     assert.equal(RealAiTools.definitions('confirm').length, 25);
     assert.equal(RealAiTools.definitions('auto').length, 25);
     const ro = RealAiTools.definitions('readonly');
-    assert.equal(ro.length, 14);
+    assert.equal(ro.length, 13);
     assert.ok(ro.some((d) => d.function.name === 'list_categories'), 'list_categories 是只读工具须保留');
     for (const name of WRITE) {
       assert.ok(!ro.some((d) => d.function.name === name), `readonly 泄漏写工具 ${name}`);
@@ -1713,7 +1787,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 14);
+    assert.equal(b1.tools.length, 13);
     assert.ok(!b1.tools.some((d) => d.function.name === 'create_booklist'));
     const b2 = JSON.parse(deps.state.requests[1].content);
     assert.equal(b2.messages.find((m) => m.role === 'tool').content,
@@ -2149,7 +2223,7 @@ try {
   test('记忆工具：save_memory 直接落盘，forget_memory 登记写闸门', async () => {
     personaState.files.clear();
     assert.equal(RealAiTools.needsConfirm('forget_memory'), true);
-    assert.equal(RealAiTools.needsConfirm('save_memory'), false);
+    assert.equal(RealAiTools.needsConfirm('save_memory'), true, 'save_memory 写语义须过确认闸门（漏网已修）');
     const r1 = await RealAiTools.execute('save_memory', JSON.stringify({ content: '用户偏好刘慈欣' }));
     assert.match(r1, /已记住/);
     assert.deepEqual(AiPersona.loadMemories(), ['用户偏好刘慈欣']);

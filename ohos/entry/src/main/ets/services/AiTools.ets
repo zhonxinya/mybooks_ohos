@@ -354,7 +354,7 @@ export class AiTools {
   private static readonly WRITE_TOOLS: string[] =
     ['create_booklist', 'add_books_to_booklist', 'update_booklist', 'delete_booklist',
       'remove_book_from_booklist', 'add_sonovel_task', 'add_to_shelf', 'push_to_device',
-      'update_book_meta', 'set_cover', 'forget_memory'];
+      'update_book_meta', 'set_cover', 'save_memory', 'forget_memory'];
 
   static needsConfirm(name: string): boolean {
     return AiTools.WRITE_TOOLS.indexOf(name) >= 0;

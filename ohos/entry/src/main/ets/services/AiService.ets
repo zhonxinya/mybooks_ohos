@@ -505,6 +505,7 @@ export class AiService {
     const config: AiConfig = AiService.loadConfig();
     const apiKey: string = AiService.apiKeyFor(config.providerId);
 
+    // 配置校验先行（回路重构后 client 创建已上移，校验必须在前）
     if (config.baseUrl.length === 0 || config.model.length === 0) {
       handlers.onError('请先在「AI 助手 → 模型设置」里填写接口地址与模型');
       return handle;
@@ -563,9 +564,53 @@ export class AiService {
       return handle;
     }
 
+    const client: OpenAI = AiService.client(config.baseUrl, apiKey);
+    const sdkPermission: AiPermissionMode = AiService.loadPermission();
+    const sdkTools: AiToolDefinition[] = AiTools.definitions(sdkPermission);
+    if (sdkTools.length > 0) {
+      // 非网关通道同样走 function calling 回路：传输换成 SDK 流式
+      // （sdkStreamRound 打字机保留 + 运行时累积 tool_calls），回路主体与网关共用。
+      const gwMessages: GatewayMessage[] = [];
+      for (let i = 0; i < messages.length; i++) {
+        gwMessages.push({ role: messages[i].role, content: AiService.gatewayContent(messages[i]) });
+      }
+      const sessionBox: AiSessionHolder[] = [];
+      handle.destroy = (): void => {
+        handle.aborted = true;
+        try {
+          // rcp.Session.cancel()：中断在途请求，否则流式响应会一直占着连接
+          sessionBox[0]?.cancel();
+        } catch (_error) {
+          // 已结束的会话再 cancel 会抛，忽略
+        }
+      };
+      const notice: ((label: string, name: string) => void) | undefined = handlers.onTool;
+      const ask: ((label: string, args: string) => Promise<boolean>) | undefined = handlers.onConfirm;
+      const done: ((name: string, label: string, text: string, callId: string) => void) | undefined = handlers.onToolResult;
+      const think: ((text: string) => void) | undefined = handlers.onReasoning;
+      const transport = async (attach: AiToolDefinition[] | null): Promise<GatewayReply | null> =>
+        AiService.sdkStreamRound(client, config, gwMessages, maxTokens, attach, handle,
+          handlers.onDelta, think === undefined ? null : think, sessionBox);
+      AiService.runToolLoop(gwMessages, transport, sdkTools, sdkPermission,
+        (): boolean => handle.aborted,
+        notice === undefined ? null : notice,
+        ask === undefined ? null : ask,
+        done === undefined ? null : done,
+        think === undefined ? null : think).then((content: string): void => {
+        if (handle.aborted) {
+          return;
+        }
+        // 流式模式正文已逐块 onDelta 过，这里只定稿全文，不得重复回调
+        full = content;
+        finish('');
+      }).catch((error: Error): void => {
+        finish(error.message);
+      });
+      return handle;
+    }
+
     let session: AiSessionHolder | null = null;
     try {
-      const client: OpenAI = AiService.client(config.baseUrl, apiKey);
       const params: ChatCompletionCreateParamsBase = {
         model: config.model,
         messages: AiService.toSdkMessages(messages),
@@ -760,12 +805,15 @@ export class AiService {
   }
 
   /**
-   * 当前配置通道是否具备工具能力：仅 OpenCode 网关通道会在请求体挂 tools。
+   * 当前配置通道是否具备工具能力：所有 OpenAI 兼容通道都走 rcp 整包工具回路
+   * （挂 tools + function calling），仅自定义/非标准接口例外。
    * 系统提示词据此决定是否写工具指引——无 tools 还让模型「先调用工具」，
    * 模型会伪造伪工具调用文本当正文输出（实测 Token Plan 通道 [tools] xxx [/tools]）。
    */
   static supportsTools(): boolean {
-    return AiService.isOpenCodeGateway(AiService.loadConfig().baseUrl);
+    // 回路已泛化：网关整包回路 + SDK 流式回路（运行时累积 tool_calls）都挂 tools，
+    // 项目内所有服务商均为 OpenAI 兼容。若未来接入非兼容服务商，在此按 providerId 排除。
+    return true;
   }
 
   /** 退避等待（网关重试间隔用）。 */
@@ -809,173 +857,312 @@ export class AiService {
       gwMessages.push({ role: messages[i].role, content: AiService.gatewayContent(messages[i]) });
     }
     const url: string = `${AiService.normalizeBaseUrl(config.baseUrl)}/chat/completions`;
-    try {
-      for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-        if (isAborted !== null && isAborted()) {
-          return '';
+    // 网关传输：整包 fetch + 退避重试（网络抖动/429/5xx），null=用户中断
+    const transport = async (attach: AiToolDefinition[] | null): Promise<GatewayReply | null> => {
+      const payload: Record<string, Object> = {
+        'model': config.model,
+        'messages': gwMessages,
+        'stream': false,
+        'temperature': config.temperature,
+        'max_tokens': maxTokens,
+      };
+      if (attach !== null && attach.length > 0) {
+        payload['tools'] = attach;
+      }
+      const request: rcp.Request = new rcp.Request(url, 'POST', headers, JSON.stringify(payload));
+      // 单轮请求失败直接 throw 会让整条多轮回复报废——
+      // 用户侧表现为「工具调用失败不重试、会话中断」。退避重试，其余 4xx 无意义不重试。
+      let statusCode: number = 0;
+      let text: string = '';
+      let lastError: string = '';
+      for (let attempt = 0; attempt < MAX_GATEWAY_ATTEMPTS; attempt++) {
+        if (attempt > 0) {
+          if (isAborted !== null && isAborted()) {
+            return null;
+          }
+          await AiService.sleep(attempt * 1000);
         }
-        // 剩 3 轮时提醒模型收敛：多数截断本可避免（软着陆只是兜底，别靠它）
-        if (round === MAX_TOOL_ROUNDS - 3) {
-          gwMessages.push({
-            role: 'user',
-            content: '（内部提示）工具调用仅剩 3 轮。请尽快汇总已获得的结果准备最终回答，不要再发起非必要的工具调用。',
-          });
-        }
-        // 最后一轮不带 tools，逼模型给最终回答而不是继续调工具
-        const attach: AiToolDefinition[] | null = round < MAX_TOOL_ROUNDS ? tools : null;
-        const payload: Record<string, Object> = {
-          'model': config.model,
-          'messages': gwMessages,
-          'stream': false,
-          'temperature': config.temperature,
-          'max_tokens': maxTokens,
-        };
-        if (attach !== null && attach.length > 0) {
-          payload['tools'] = attach;
-        }
-        const request: rcp.Request = new rcp.Request(url, 'POST', headers, JSON.stringify(payload));
-        // 单轮请求失败（网络抖动 / 429 / 5xx）直接 throw 会让整条多轮回复报废——
-        // 用户侧表现为「工具调用失败不重试、会话中断」。退避重试，其余 4xx 无意义不重试。
-        let statusCode: number = 0;
-        let text: string = '';
-        let lastError: string = '';
-        for (let attempt = 0; attempt < MAX_GATEWAY_ATTEMPTS; attempt++) {
-          if (attempt > 0) {
-            if (isAborted !== null && isAborted()) {
-              return '';
-            }
-            await AiService.sleep(attempt * 1000);
-          }
-          try {
-            const response: rcp.Response = await session.fetch(request);
-            statusCode = response.statusCode;
-            text = AiService.responseBodyText(response.body);
-          } catch (error) {
-            lastError = AiService.friendlyMessage(error instanceof Error ? error.message : String(error));
-            continue;
-          }
-          if (statusCode >= 200 && statusCode < 300) {
-            break;
-          }
-          if (statusCode !== 429 && statusCode < 500) {
-            throw new Error(AiService.httpErrorText(statusCode, text));
-          }
-          lastError = AiService.httpErrorText(statusCode, text);
-        }
-        if (statusCode < 200 || statusCode >= 300) {
-          throw new Error(lastError);
-        }
-        const reply: GatewayReply = AiService.parseGatewayReply(text);
-        if (reply.reasoning.length > 0 && onReasoning !== null) {
-          // 整包模式：本轮思考过程一次性给出（工具回路多轮则逐轮累积）
-          onReasoning(reply.reasoning);
-        }
-        if (reply.calls !== null && reply.calls.length > 0) {
-          if (round === MAX_TOOL_ROUNDS) {
-            // 软着陆：模型此前已产出正文时保留部分成果，整条回复不再报废；
-            // 只有纯工具调用没正文可给才报错（此时前文也无总结价值）
-            if (reply.content.length > 0) {
-              return `${reply.content}\n\n（本次任务工具调用达到 ${MAX_TOOL_ROUNDS} 轮上限，以上为中断时的结果；如需继续请再发一条消息。）`;
-            }
-            throw new Error(`模型连续调用工具达到上限（${MAX_TOOL_ROUNDS} 轮），请把问题说具体些再试`);
-          }
-          const calls: Record<string, Object>[] = [];
-          for (let i = 0; i < reply.calls.length; i++) {
-            const c: GatewayToolCall = reply.calls[i];
-            const fn: Record<string, Object> = { 'name': c.name, 'arguments': c.arguments };
-            const call: Record<string, Object> = { 'id': c.id, 'type': 'function', 'function': fn };
-            calls.push(call);
-          }
-          gwMessages.push({ role: 'assistant', content: reply.content, tool_calls: calls });
-          // 同轮全是免确认（只读）工具 → Promise.all 并发：网络类工具单项要几秒，
-          // 串行白白叠加等待。含写工具保持串行——确认闸门与执行顺序必须和模型输出一致。
-          let allAuto: boolean = true;
-          for (let i = 0; i < reply.calls.length; i++) {
-            if (AiTools.needsConfirm(reply.calls[i].name)) {
-              allAuto = false;
-              break;
-            }
-          }
-          if (allAuto) {
-            const labels: string[] = [];
-            const tasks: Promise<string>[] = [];
-            for (let i = 0; i < reply.calls.length; i++) {
-              const c: GatewayToolCall = reply.calls[i];
-              const l: string = AiTools.toolLabel(c.name);
-              labels.push(l);
-              if (onTool !== null) {
-                onTool(l, c.name);
-              }
-              tasks.push(AiTools.execute(c.name, c.arguments, c.id));
-            }
-            const results: string[] = await Promise.all(tasks);
-            for (let i = 0; i < results.length; i++) {
-              gwMessages.push({ role: 'tool', content: results[i], tool_call_id: reply.calls[i].id });
-              if (onResult !== null) {
-                onResult(reply.calls[i].name, labels[i], results[i], reply.calls[i].id);
-              }
-            }
-            if (isAborted !== null && isAborted()) {
-              return '';
-            }
-            continue;
-          }
-          for (let i = 0; i < reply.calls.length; i++) {
-            const c: GatewayToolCall = reply.calls[i];
-            let label: string = AiTools.toolLabel(c.name);
-            if (AiTools.needsConfirm(c.name)) {
-              if (permission === 'readonly') {
-                // 只读模式 tools 里本就没有写工具；走到这里说明模型幻觉调用，回路层同样挡下
-                const blocked: string = '当前为只读权限模式，写操作不可执行';
-                gwMessages.push({ role: 'tool', content: blocked, tool_call_id: c.id });
-                if (onResult !== null) {
-                  onResult(c.name, label, blocked, c.id);
-                }
-                continue;
-              }
-              if (permission === 'confirm') {
-                // 写工具先过用户确认闸门；没人能确认（onConfirm 缺省）就一律拒绝
-                let approved: boolean = false;
-                if (onConfirm !== null) {
-                  approved = await onConfirm(label, c.arguments);
-                }
-                if (!approved) {
-                  gwMessages.push({ role: 'tool', content: '用户拒绝了该操作', tool_call_id: c.id });
-                  if (onResult !== null) {
-                    onResult(c.name, label, '用户拒绝了该操作', c.id);
-                  }
-                  continue;
-                }
-              } else {
-                // 自动放行：不弹确认，活动时间线标注执行方式
-                label = `${label}（自动执行）`;
-              }
-            }
-            if (onTool !== null) {
-              onTool(label, c.name);
-            }
-            const result: string = await AiTools.execute(c.name, c.arguments);
-            gwMessages.push({ role: 'tool', content: result, tool_call_id: c.id });
-            if (onResult !== null) {
-              onResult(c.name, label, result, c.id);
-            }
-            if (isAborted !== null && isAborted()) {
-              return '';
-            }
-          }
+        try {
+          const response: rcp.Response = await session.fetch(request);
+          statusCode = response.statusCode;
+          text = AiService.responseBodyText(response.body);
+        } catch (error) {
+          lastError = AiService.friendlyMessage(error instanceof Error ? error.message : String(error));
           continue;
         }
-        if (reply.content.length === 0) {
-          throw new Error('AI 返回内容为空，请检查模型是否可用');
+        if (statusCode >= 200 && statusCode < 300) {
+          break;
         }
-        return reply.content;
+        if (statusCode !== 429 && statusCode < 500) {
+          throw new Error(AiService.httpErrorText(statusCode, text));
+        }
+        lastError = AiService.httpErrorText(statusCode, text);
       }
-      return '';
+      if (statusCode < 200 || statusCode >= 300) {
+        throw new Error(lastError);
+      }
+      return AiService.parseGatewayReply(text);
+    };
+    try {
+      return await AiService.runToolLoop(gwMessages, transport, tools, permission, isAborted,
+        onTool, onConfirm, onResult, onReasoning);
     } finally {
       session.close();
       // 中断/异常可能留下未取配对条目，回路收尾一律清理
       AiTools.clearPendingBooks();
     }
+  }
+
+  /**
+   * function calling 回路主体（网关整包与 SDK 流式两个传输层共用）：
+   * 请求 → 有 tool_calls 则执行并回填上下文 → 再请求，直到文本回答或轮次上限。
+   * transport 返回 null 表示用户已中断。
+   */
+  private static async runToolLoop(gwMessages: GatewayMessage[],
+    transport: (attach: AiToolDefinition[] | null) => Promise<GatewayReply | null>,
+    tools: AiToolDefinition[] | null, permission: AiPermissionMode,
+    isAborted: (() => boolean) | null,
+    onTool: ((label: string, name: string) => void) | null,
+    onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null,
+    onResult: ((name: string, label: string, text: string, callId: string) => void) | null,
+    onReasoning: ((text: string) => void) | null): Promise<string> {
+    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      if (isAborted !== null && isAborted()) {
+        return '';
+      }
+      // 剩 3 轮时提醒模型收敛：多数截断本可避免（软着陆只是兜底，别靠它）
+      if (round === MAX_TOOL_ROUNDS - 3) {
+        gwMessages.push({
+          role: 'user',
+          content: '（内部提示）工具调用仅剩 3 轮。请尽快汇总已获得的结果准备最终回答，不要再发起非必要的工具调用。',
+        });
+      }
+      // 最后一轮不带 tools，逼模型给最终回答而不是继续调工具
+      const attach: AiToolDefinition[] | null = round < MAX_TOOL_ROUNDS ? tools : null;
+      const reply: GatewayReply | null = await transport(attach);
+      if (reply === null) {
+        return '';
+      }
+      if (reply.reasoning.length > 0 && onReasoning !== null) {
+        // 整包模式：本轮思考过程一次性给出（工具回路多轮则逐轮累积）
+        onReasoning(reply.reasoning);
+      }
+      if (reply.calls !== null && reply.calls.length > 0) {
+        if (round === MAX_TOOL_ROUNDS) {
+          // 软着陆：模型此前已产出正文时保留部分成果，整条回复不再报废；
+          // 只有纯工具调用没正文可给才报错（此时前文也无总结价值）
+          if (reply.content.length > 0) {
+            return `${reply.content}\n\n（本次任务工具调用达到 ${MAX_TOOL_ROUNDS} 轮上限，以上为中断时的结果；如需继续请再发一条消息。）`;
+          }
+          throw new Error(`模型连续调用工具达到上限（${MAX_TOOL_ROUNDS} 轮），请把问题说具体些再试`);
+        }
+        const calls: Record<string, Object>[] = [];
+        for (let i = 0; i < reply.calls.length; i++) {
+          const c: GatewayToolCall = reply.calls[i];
+          const fn: Record<string, Object> = { 'name': c.name, 'arguments': c.arguments };
+          const call: Record<string, Object> = { 'id': c.id, 'type': 'function', 'function': fn };
+          calls.push(call);
+        }
+        gwMessages.push({ role: 'assistant', content: reply.content, tool_calls: calls });
+        // 同轮全是免确认（只读）工具 → Promise.all 并发：网络类工具单项要几秒，
+        // 串行白白叠加等待。含写工具保持串行——确认闸门与执行顺序必须和模型输出一致。
+        let allAuto: boolean = true;
+        for (let i = 0; i < reply.calls.length; i++) {
+          if (AiTools.needsConfirm(reply.calls[i].name)) {
+            allAuto = false;
+            break;
+          }
+        }
+        if (allAuto) {
+          const labels: string[] = [];
+          const tasks: Promise<string>[] = [];
+          for (let i = 0; i < reply.calls.length; i++) {
+            const c: GatewayToolCall = reply.calls[i];
+            const l: string = AiTools.toolLabel(c.name);
+            labels.push(l);
+            if (onTool !== null) {
+              onTool(l, c.name);
+            }
+            tasks.push(AiTools.execute(c.name, c.arguments, c.id));
+          }
+          const results: string[] = await Promise.all(tasks);
+          for (let i = 0; i < results.length; i++) {
+            gwMessages.push({ role: 'tool', content: results[i], tool_call_id: reply.calls[i].id });
+            if (onResult !== null) {
+              onResult(reply.calls[i].name, labels[i], results[i], reply.calls[i].id);
+            }
+          }
+          if (isAborted !== null && isAborted()) {
+            return '';
+          }
+          continue;
+        }
+        for (let i = 0; i < reply.calls.length; i++) {
+          const c: GatewayToolCall = reply.calls[i];
+          let label: string = AiTools.toolLabel(c.name);
+          if (AiTools.needsConfirm(c.name)) {
+            if (permission === 'readonly') {
+              // 只读模式 tools 里本就没有写工具；走到这里说明模型幻觉调用，回路层同样挡下
+              const blocked: string = '当前为只读权限模式，写操作不可执行';
+              gwMessages.push({ role: 'tool', content: blocked, tool_call_id: c.id });
+              if (onResult !== null) {
+                onResult(c.name, label, blocked, c.id);
+              }
+              continue;
+            }
+            if (permission === 'confirm') {
+              // 写工具先过用户确认闸门；没人能确认（onConfirm 缺省）就一律拒绝
+              let approved: boolean = false;
+              if (onConfirm !== null) {
+                approved = await onConfirm(label, c.arguments);
+              }
+              if (!approved) {
+                gwMessages.push({ role: 'tool', content: '用户拒绝了该操作', tool_call_id: c.id });
+                if (onResult !== null) {
+                  onResult(c.name, label, '用户拒绝了该操作', c.id);
+                }
+                continue;
+              }
+            } else {
+              // 自动放行：不弹确认，活动时间线标注执行方式
+              label = `${label}（自动执行）`;
+            }
+          }
+          if (onTool !== null) {
+            onTool(label, c.name);
+          }
+          const result: string = await AiTools.execute(c.name, c.arguments);
+          gwMessages.push({ role: 'tool', content: result, tool_call_id: c.id });
+          if (onResult !== null) {
+            onResult(c.name, label, result, c.id);
+          }
+          if (isAborted !== null && isAborted()) {
+            return '';
+          }
+        }
+        continue;
+      }
+      if (reply.content.length === 0) {
+        throw new Error('AI 返回内容为空，请检查模型是否可用');
+      }
+      return reply.content;
+    }
+    return '';
+  }
+
+  /**
+   * SDK 流式传输层：单轮 stream 请求，正文经 onDelta 打字机回调，
+   * 同时运行时累积 tool_calls 分片（SDK onData 的 chunk 是 JSON.parse 透传，
+   * 与 reasoning_content 同源——类型层没声明不等于运行时没带）。
+   * 分片按 OpenAI 标准：首片带 id/name，后续片按 index 续 arguments。
+   * 返回 null 表示用户中断。
+   */
+  private static sdkStreamRound(client: OpenAI, config: AiConfig, gwMessages: GatewayMessage[],
+    maxTokens: number, attach: AiToolDefinition[] | null, handle: AiAbortHandle,
+    onDelta: (text: string) => void, onReasoning: ((text: string) => void) | null,
+    sessionBox: AiSessionHolder[]): Promise<GatewayReply | null> {
+    return new Promise<GatewayReply | null>((resolve, reject): void => {
+      const reply: GatewayReply = { content: '', calls: null, reasoning: '' };
+      const slots: GatewayToolCall[] = [];
+      let settled: boolean = false;
+      const payload: Record<string, Object> = {
+        'model': config.model,
+        'messages': gwMessages,
+        'stream': true,
+        'temperature': config.temperature,
+        'max_tokens': maxTokens,
+      };
+      if (attach !== null && attach.length > 0) {
+        payload['tools'] = attach;
+      }
+      const result = client.chat.completions.create(
+        payload as Object as ChatCompletionCreateParamsBase, {
+          onData: (chunks: ChatCompletionChunk[]): void => {
+            if (handle.aborted || settled) {
+              return;
+            }
+            let piece: string = '';
+            let think: string = '';
+            for (let i = 0; i < chunks.length; i++) {
+              const choices = chunks[i].choices;
+              if (choices === undefined || choices.length === 0) {
+                continue;
+              }
+              const deltaObj: Record<string, Object> = choices[0].delta as Object as Record<string, Object>;
+              const content: Object | undefined = deltaObj['content'];
+              if (typeof content === 'string') {
+                piece += content;
+              }
+              const reasoning: Object | undefined = deltaObj['reasoning_content'];
+              if (typeof reasoning === 'string') {
+                think += reasoning;
+              }
+              const tcs: Object | undefined = deltaObj['tool_calls'];
+              if (Array.isArray(tcs)) {
+                const list: Object[] = tcs as Object[];
+                for (let j = 0; j < list.length; j++) {
+                  const tc: Record<string, Object> = list[j] as Record<string, Object>;
+                  const idxRaw: Object | undefined = tc['index'];
+                  const idx: number = typeof idxRaw === 'number' ? idxRaw : slots.length;
+                  const fn: Record<string, Object> | undefined =
+                    tc['function'] as Record<string, Object>;
+                  const idPiece: string = typeof tc['id'] === 'string' ? tc['id'] as string : '';
+                  const namePiece: string = fn !== undefined && typeof fn['name'] === 'string' ?
+                    fn['name'] as string : '';
+                  const argPiece: string = fn !== undefined && typeof fn['arguments'] === 'string' ?
+                    fn['arguments'] as string : '';
+                  while (slots.length <= idx) {
+                    slots.push({ id: '', name: '', arguments: '' });
+                  }
+                  if (idPiece.length > 0) {
+                    slots[idx].id = idPiece;
+                  }
+                  if (namePiece.length > 0) {
+                    slots[idx].name += namePiece;
+                  }
+                  slots[idx].arguments += argPiece;
+                }
+              }
+            }
+            if (think.length > 0 && onReasoning !== null) {
+              onReasoning(think);
+            }
+            if (piece.length > 0) {
+              reply.content += piece;
+              onDelta(piece);
+            }
+          },
+          onError: (error: Error): void => {
+            if (!settled) {
+              settled = true;
+              reject(new Error(AiService.friendlyMessage(error.message)));
+            }
+          },
+        });
+      sessionBox[0] = result.session as AiSessionHolder;
+      result.response.then((response): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (handle.aborted) {
+          resolve(null);
+          return;
+        }
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(AiService.httpErrorText(response.statusCode,
+            AiService.responseText(response.body))));
+          return;
+        }
+        reply.calls = slots.length > 0 ? slots : null;
+        resolve(reply);
+      }).catch((error: Error): void => {
+        if (!settled) {
+          settled = true;
+          reject(new Error(AiService.friendlyMessage(error.message)));
+        }
+      });
+    });
   }
 
   /** 解析网关整包响应：正文 + tool_calls（不依赖 SDK 的 ChatCompletionMessage 类型）。 */
