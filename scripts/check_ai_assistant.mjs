@@ -2246,6 +2246,76 @@ try {
     assert.equal(state.prefs.get('ai_chat_history'), '[]');
   });
 
+  test('多会话：新建归档、互换切换、删除存档、重新生成原位替换、生成中禁止、旧历史兼容', async () => {
+    const page = chat();
+    const store = page.store;
+    const arch = () => JSON.parse(state.prefs.get('ai_chat_sessions'));
+    // 会话 A：一问一答后开新会话，A 应整条归档且标题取首问
+    await page.send('第一个问题');
+    state.handlers.onDone('回答一');
+    assert.equal(store.newSession(), true);
+    assert.equal(store.messages.length, 0);
+    assert.equal(arch().length, 1);
+    assert.equal(arch()[0].title, '第一个问题');
+    const aId = arch()[0].id;
+    // 会话 B：再一问一答；切换到 A —— B 进档、A 出档（互换语义）
+    await page.send('第二个问题');
+    state.handlers.onDone('回答二');
+    const bId = store.currentId;
+    assert.equal(store.switchSession(aId), true);
+    assert.deepEqual(store.messages.map((m) => m.content), ['第一个问题', '回答一']);
+    assert.equal(store.currentId, aId);
+    const swapped = arch();
+    assert.equal(swapped.length, 1);
+    assert.equal(swapped[0].id, bId);
+    assert.equal(swapped[0].title, '第二个问题');
+    // 同 id 切换幂等 no-op、未知 id 拒绝；删除存档项生效
+    assert.equal(store.switchSession(aId), false);
+    assert.equal(store.switchSession('nope'), false);
+    store.deleteSession(bId);
+    assert.equal(store.sessions.length, 0);
+    // 重新生成：抹掉最后 user 及其后全部并重发，原位出新答案（A 会话内 2+2 截 2 补 2）
+    await page.send('第三个问题');
+    state.handlers.onDone('回答三');
+    assert.equal(store.regenerate(), true);
+    assert.equal(store.messages.length, 4, '截掉最后 user+assistant 后重发，条数持平');
+    assert.equal(store.messages[2].content, '第三个问题');
+    assert.equal(store.messages[3].streaming, true);
+    await flush(); // regenerate 内 send 是 fire-and-forget，等 handlers 挂上
+    state.handlers.onDone('重答三');
+    assert.equal(store.messages[3].content, '重答三');
+    assert.equal(store.messages.length, 4, '重发不叠加旧答案');
+    // 生成中：新建/切换/重生成全部拒绝（不制造双头流）
+    await page.send('第四个问题');
+    assert.equal(store.newSession(), false);
+    assert.equal(store.switchSession(aId), false);
+    assert.equal(store.regenerate(), false);
+    state.handlers.onDone('回答四');
+    // 归档往返闭环：新建归档 A（含重生成后的完整消息），切回 A 内容原样回来
+    assert.equal(store.newSession(), true);
+    assert.equal(store.sessions.length, 1);
+    assert.equal(store.sessions[0].title, '第一个问题');
+    const aSnap = store.sessions[0].id;
+    assert.equal(store.messages.length, 0);
+    assert.equal(store.switchSession(aSnap), true);
+    assert.deepEqual(store.messages.map((m) => m.content),
+      ['第一个问题', '回答一', '第三个问题', '重答三', '第四个问题', '回答四'], '六条消息完整往返');
+    assert.ok(state.prefs.get('ai_chat_history').includes('重答三'), '切换后当前落盘键随会话走');
+  });
+
+  test('多会话：空会话不重复新建，标题兜底「新对话」', async () => {
+    const page = chat();
+    const store = page.store;
+    assert.equal(store.newSession(), true);
+    assert.equal(store.sessions.length, 0, '空当前会话不归档');
+    // 只有 assistant 气泡（理论上不该发生，但归档标题必须兜底）
+    store.messages.push({ role: 'assistant', content: '孤儿', streaming: false, error: false, activities: [] });
+    assert.equal(store.newSession(), true);
+    assert.equal(store.sessions.length, 1);
+    assert.equal(store.sessions[0].title, '新对话');
+    assert.equal(store.currentTitle(), '新对话');
+  });
+
   test('网关工具回路：超过轮数上限报错收场，最后一轮不挂 tools', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
