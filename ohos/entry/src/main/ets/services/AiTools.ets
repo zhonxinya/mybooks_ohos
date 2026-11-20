@@ -249,14 +249,27 @@ const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_FORGET_MEMORY,
 ];
 
+/**
+ * AI 权限模式（对话页顶栏切换，持久化在偏好 ai_permission_mode）：
+ * - readonly：请求体只带读工具（模型看不见写工具），幻觉出的写调用也会被回路挡下；
+ * - confirm：写工具执行前逐个过 onConfirm 确认闸门（默认）；
+ * - auto：写工具不弹确认直接执行，活动时间线标注「自动执行」。
+ */
+export type AiPermissionMode = 'readonly' | 'confirm' | 'auto';
+
 export class AiTools {
-  /** 随请求体附带的工具定义。 */
-  static definitions(): AiToolDefinition[] {
+  /** 随请求体附带的工具定义；readonly 模式过滤掉写工具。 */
+  static definitions(mode: AiPermissionMode = 'confirm'): AiToolDefinition[] {
+    if (mode === 'readonly') {
+      return TOOL_DEFS.filter((d: AiToolDefinition): boolean =>
+      AiTools.WRITE_TOOLS.indexOf(d.function.name) < 0);
+    }
     return TOOL_DEFS;
   }
 
   /**
-   * 写操作工具：执行前必须过用户确认闸门（AiStreamHandlers.onConfirm）。
+   * 写操作工具：confirm 模式下执行前必须过用户确认闸门（AiStreamHandlers.onConfirm），
+   * readonly 模式下不出现在 tools 里。
    * 名字与 TOOL_DEFS 里的写工具对应；新加写工具忘记登记 = 无确认直接执行，务必同步。
    */
   private static readonly WRITE_TOOLS: string[] =

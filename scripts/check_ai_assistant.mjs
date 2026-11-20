@@ -72,7 +72,14 @@ export const AiService = {
   },
   detectVision: (model) => /vl|vision|4o|omni|gemini|claude|llava|qvq/i.test(model),
   contextRounds: (k) => (k <= 4 ? 4 : k <= 8 ? 8 : k <= 32 ? 16 : k <= 128 ? 30 : 50),
+  loadPermission: () => state.settings.permission ?? 'confirm',
+  savePermission: (mode) => { state.settings.permission = mode; },
   complete: async () => state.settings.completeReply,
+};
+// bindMenu 当前项勾选用的符号修饰器桩（页面测试不渲染 UI，仅保证符号可解析）
+export const SymbolGlyphModifier = class {
+  constructor(_symbol) {}
+  fontColor(_colors) { return this; }
 };
 export const AiBookService = {
   summarize: (...args) => state.summary(...args),
@@ -198,8 +205,8 @@ function stageAiService() {
     source = source.replace(`import { ${type} }`, `import type { ${type} }`);
   }
   source = source
-    .replace(`import { AiTools, AiToolDefinition } from './AiTools';`,
-      `import { AiTools } from './RealAiTools.ts';\nimport type { AiToolDefinition } from './RealAiTools.ts';`)
+    .replace(`import { AiTools, AiPermissionMode, AiToolDefinition } from './AiTools';`,
+      `import { AiTools } from './RealAiTools.ts';\nimport type { AiPermissionMode, AiToolDefinition } from './RealAiTools.ts';`)
     .replace(`from '@iuroc/openai'`, `from './aiServiceDeps.ts'`)
     .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
     .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
@@ -315,8 +322,8 @@ export const TalebookService = { dataDir: () => personaState.dir };
 function stageChatStore() {
   let source = read('services/AiChatStore.ets');
   source = source
-    .replace(`import { AiTools, parseToolBookLines, ToolBookLine } from './AiTools';`,
-      `import { AiTools, parseToolBookLines } from './RealAiTools.ts';\nimport type { ToolBookLine } from './RealAiTools.ts';`)
+    .replace(`import { AiTools, AiPermissionMode, parseToolBookLines, ToolBookLine } from './AiTools';`,
+      `import { AiTools, parseToolBookLines } from './RealAiTools.ts';\nimport type { AiPermissionMode, ToolBookLine } from './RealAiTools.ts';`)
     .replace(`import { AiService, AiConfig, AiMessage, AiStreamHandlers, AiAbortHandle } from './AiService';`,
       `import { AiService } from './shim.ts';`)
     .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
@@ -401,7 +408,7 @@ function stagePage(name) {
   source = source.replace(/^import \{([^}]+)\} from '([^']+)';\n/gm, (_all, clause, path) => {
     if (path === '../services/AiTools') {
       const names = clause.split(',').map((part) => part.trim());
-      const values = names.filter((name) => name !== 'ToolBookLine');
+      const values = names.filter((name) => name !== 'ToolBookLine' && name !== 'AiPermissionMode');
       return `import { ${values.join(', ')} } from './RealAiTools.ts';\n` +
         "import type { ToolBookLine } from './RealAiTools.ts';\n";
     }
@@ -424,7 +431,7 @@ function stagePage(name) {
     for (const name of clause.split(',').map((part) => part.trim())) {
       if (['AiService', 'AiBookService', 'ShelfApi', 'TalebookService', 'pasteboard', 'AppRouter', 'AI_PROVIDERS',
         'CONTEXT_LENGTH_OPTIONS', 'fileIo as fs', 'photoAccessHelper', 'image', 'util', 'common',
-        'promptAction'].includes(name)) {
+        'promptAction', 'SymbolGlyphModifier'].includes(name)) {
         shims.add(name);
       }
     }
@@ -1014,6 +1021,101 @@ try {
     await flush();
     const bNoAsk = JSON.parse(deps.state.requests[1].content);
     assert.equal(bNoAsk.messages.find((m) => m.role === 'tool').content, '用户拒绝了该操作');
+  });
+
+  test('权限模式：definitions(mode) 三档过滤——readonly 去写工具，其余全量', () => {
+    const WRITE = ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task',
+      'update_book_meta', 'set_cover', 'forget_memory'];
+    assert.equal(RealAiTools.definitions().length, 16);
+    assert.equal(RealAiTools.definitions('confirm').length, 16);
+    assert.equal(RealAiTools.definitions('auto').length, 16);
+    const ro = RealAiTools.definitions('readonly');
+    assert.equal(ro.length, 10);
+    for (const name of WRITE) {
+      assert.ok(!ro.some((d) => d.function.name === name), `readonly 泄漏写工具 ${name}`);
+    }
+    assert.ok(ro.some((d) => d.function.name === 'search_books'), 'readonly 应保留读工具');
+    assert.ok(RealAiTools.definitions('readonly') !== RealAiTools.definitions('confirm'),
+      'readonly 不得返回 TOOL_DEFS 本体（防调用方原地污染）');
+  });
+
+  test('权限模式：只读——请求体不带写工具，幻觉写调用被回路挡下且不弹确认', async () => {
+    deps.state.store.set('p:ai_permission_mode', 'readonly');
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+        tool_calls: [{ id: 'r1', type: 'function',
+          function: { name: 'create_booklist', arguments: '{"name":"违规书单"}' } }] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '当前只读，无法创建。' } }] })) },
+    ];
+    let asked = 0;
+    const toolResults = [];
+    RealAiService.chatStream([{ role: 'user', content: '建个书单' }], {
+      onDelta: () => {}, onDone: () => {}, onError: () => {},
+      onConfirm: () => { asked += 1; return Promise.resolve(true); },
+      onToolResult: (name, l, text) => { toolResults.push([name, text]); },
+    }, 128);
+    await flush();
+    const b1 = JSON.parse(deps.state.requests[0].content);
+    assert.equal(b1.tools.length, 10);
+    assert.ok(!b1.tools.some((d) => d.function.name === 'create_booklist'));
+    const b2 = JSON.parse(deps.state.requests[1].content);
+    assert.equal(b2.messages.find((m) => m.role === 'tool').content,
+      '当前为只读权限模式，写操作不可执行');
+    assert.equal(asked, 0, '只读模式不该弹确认');
+    assert.deepEqual(toolsState.booklistCreateCalls, [], '被挡下的写工具不得执行');
+    assert.deepEqual(toolResults[0], ['create_booklist', '当前为只读权限模式，写操作不可执行']);
+    deps.state.store.delete('p:ai_permission_mode');
+  });
+
+  test('权限模式：自动放行——写工具不弹确认直接执行，活动标注「自动执行」', async () => {
+    deps.state.store.set('p:ai_permission_mode', 'auto');
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+        tool_calls: [{ id: 'a1', type: 'function',
+          function: { name: 'create_booklist', arguments: '{"name":"科幻入门"}' } }] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '已建好' } }] })) },
+    ];
+    let asked = 0;
+    const labels = [];
+    RealAiService.chatStream([{ role: 'user', content: '建个书单' }], {
+      onDelta: () => {}, onDone: () => {}, onError: () => {},
+      onConfirm: () => { asked += 1; return Promise.resolve(false); },
+      onTool: (l, name) => { labels.push([name, l]); },
+    }, 128);
+    await flush();
+    const b1 = JSON.parse(deps.state.requests[0].content);
+    assert.equal(b1.tools.length, 16, 'auto 模式写工具须在 tools 里');
+    assert.equal(asked, 0, 'auto 模式不该弹确认');
+    assert.deepEqual(labels, [['create_booklist', '创建书单（自动执行）']]);
+    assert.deepEqual(toolsState.booklistCreateCalls.map((c) => c.name), ['科幻入门']);
+    toolsState.booklistCreateCalls.length = 0;
+    deps.state.store.delete('p:ai_permission_mode');
+  });
+
+  test('权限模式：未设置/非法值回落逐笔确认，顶栏徽标镜像与持久化联动', () => {
+    deps.state.store.delete('p:ai_permission_mode');
+    assert.equal(RealAiService.loadPermission(), 'confirm');
+    deps.state.store.set('p:ai_permission_mode', 'garbage');
+    assert.equal(RealAiService.loadPermission(), 'confirm');
+    RealAiService.savePermission('readonly');
+    assert.equal(RealAiService.loadPermission(), 'readonly');
+    deps.state.store.delete('p:ai_permission_mode');
+    const page = chat();
+    page.permission = 'readonly';
+    assert.equal(page.permissionLabel(), '只读');
+    page.permission = 'auto';
+    assert.equal(page.permissionLabel(), '自动放行');
+    page.applyPermission('confirm');
+    assert.equal(page.permission, 'confirm');
+    assert.equal(page.permissionLabel(), '逐笔确认');
+    // 页面桩走 shim 的 AiService.savePermission，落在全局 settings 里
+    assert.equal(state.settings.permission, 'confirm');
   });
 
   test('技能：六个内置技能均带工具指引，点击填入输入框', () => {
