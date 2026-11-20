@@ -7,7 +7,7 @@ import { PageScaffold, SecondaryButton, TextButton } from '../components';
 import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { ToolResultList } from '../components/ToolResultList';
-import { AiChatStore, AskRequest, ChatActivity, ChatBubble } from '../services/AiChatStore';
+import { AiChatStore, AskRequest, ChatActivity, ChatBubble, ChatSession } from '../services/AiChatStore';
 import { AiService } from '../services/AiService';
 import { SpeakService } from '../services/SpeakService';
 import { AiPermissionMode } from '../services/AiTools';
@@ -41,6 +41,11 @@ struct AiAssistantPage {
   @State liveActivities: ChatActivity[] = [];
   /** ask_user 在途反问卡片（store.pendingAsk 镜像）；null=无。 */
   @State pendingAsk: AskRequest | null = null;
+  /** 存档会话列表与当前会话 id（store 镜像），供「对话」面板渲染。 */
+  @State sessions: ChatSession[] = [];
+  @State currentId: string = '';
+  /** 对话管理半模态面板开关（页面局部态）。 */
+  @State sessionsSheet: boolean = false;
   /** 流式中的思考过程（store.streamingReasoning 镜像）。 */
   @State streamingReasoning: string = '';
   /** 会话状态机在全局单例里：退出页面不中断流式回复，后台照常完成并落盘。 */
@@ -99,6 +104,8 @@ struct AiAssistantPage {
     this.streamingReasoning = this.store.streamingReasoning;
     this.liveActivities = this.store.liveActivities.slice();
     this.pendingAsk = this.store.pendingAsk;
+    this.sessions = this.store.sessions.slice();
+    this.currentId = this.store.currentId;
     this.thinking = this.store.thinking;
     this.errorTip = this.store.errorTip;
     this.configured = this.store.configured;
@@ -291,7 +298,13 @@ struct AiAssistantPage {
       });
     }
     .width('100%')
-    .height('100%');
+    .height('100%')
+    .bindSheet($$this.sessionsSheet, this.sessionsSheetView(), {
+      height: SheetSize.FIT_CONTENT,
+      dragBar: true,
+      showClose: true,
+      title: { title: '对话管理' },
+    });
   }
 
   @Builder
@@ -313,10 +326,113 @@ struct AiAssistantPage {
         label: '设置',
         onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiSettingsPage' }),
       });
+      // 对话管理入口：半模态面板列出存档会话（切换/删除/新建）
+      Text('对话')
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+        .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+        .borderRadius($r('app.float.chip_radius'))
+        .border({ width: 1, color: $r('app.color.divider') })
+        .onClick(() => this.sessionsSheet = true);
       if (this.messages.length > 0) {
         TextButton({ label: '清空', onTap: () => this.clearChat() });
       }
     }
+  }
+
+  /** 会话行的相对时间短标（今天显时分，否则显月日）。 */
+  private sessionTime(ts: number): string {
+    const d: Date = new Date(ts);
+    const now: Date = new Date();
+    if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()
+      && d.getDate() === now.getDate()) {
+      const hh: string = d.getHours() < 10 ? `0${d.getHours()}` : `${d.getHours()}`;
+      const mm: string = d.getMinutes() < 10 ? `0${d.getMinutes()}` : `${d.getMinutes()}`;
+      return `${hh}:${mm}`;
+    }
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  }
+
+  /**
+   * 对话管理面板：当前会话置顶带勾（不可点对比），存档会话点击切换、X 删除。
+   * 生成中一律拒绝切换/新建/删除当前内容相关操作（store 返回 false 转提示）。
+   */
+  @Builder
+  sessionsSheetView() {
+    Column() {
+      Column({ space: 6 }) {
+        Row({ space: 8 }) {
+          SymbolGlyph($r('sys.symbol.checkmark'))
+            .fontSize(14)
+            .fontColor([$r('app.color.brand_primary')]);
+          Text(this.store.currentTitle())
+            .fontSize(14)
+            .fontColor($r('app.color.brand_primary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1);
+          Text('当前')
+            .fontSize(11)
+            .fontColor($r('app.color.text_tertiary'));
+        }
+        .width('100%')
+        .padding({ left: 10, right: 10, top: 10, bottom: 10 });
+
+        if (this.sessions.length === 0) {
+          Text('没有其它对话：切换话题时点「新建对话」，当前对话会完整存档')
+            .fontSize(12)
+            .fontColor($r('app.color.text_tertiary'))
+            .padding(10)
+            .width('100%');
+        }
+        ForEach(this.sessions, (s: ChatSession) => {
+          Row({ space: 8 }) {
+            Text(s.title)
+              .fontSize(14)
+              .fontColor($r('app.color.text_primary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .layoutWeight(1);
+            Text(this.sessionTime(s.updatedAt))
+              .fontSize(11)
+              .fontColor($r('app.color.text_tertiary'));
+            Stack() {
+              SymbolGlyph($r('sys.symbol.trash'))
+                .fontSize(14)
+                .fontColor([$r('app.color.text_secondary')]);
+            }
+            .width(28)
+            .height(28)
+            .borderRadius(14)
+            .backgroundColor($r('app.color.page_background'))
+            .onClick(() => this.store.deleteSession(s.id));
+          }
+          .width('100%')
+          .padding({ left: 10, right: 10, top: 10, bottom: 10 })
+          .onClick(() => {
+            if (!this.store.switchSession(s.id)) {
+              this.toast('生成中，请稍候再切换');
+            } else {
+              this.sessionsSheet = false;
+            }
+          });
+        }, (s: ChatSession) => s.id);
+      }
+      .width('100%');
+
+      TextButton({
+        label: '＋ 新建对话',
+        onTap: () => {
+          if (!this.store.newSession()) {
+            this.toast('生成中，请稍候再新建');
+          } else {
+            this.sessionsSheet = false;
+          }
+        },
+      });
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, bottom: 16 });
   }
 
   @Builder
@@ -513,6 +629,17 @@ struct AiAssistantPage {
       if (bubble.role === 'assistant' && !bubble.streaming && !bubble.error && bubble.content.length > 0) {
         Row({ space: 12 }) {
           TextButton({ label: '复制', onTap: () => { void this.copyBubble(index); } });
+          if (index === this.messages.length - 1 && !this.thinking) {
+            // 重新生成只挂在最新一条回答上：重发最后一条用户消息、原位替换答案
+            TextButton({
+              label: '重新生成',
+              onTap: () => {
+                if (!this.store.regenerate()) {
+                  this.toast('生成中，请稍候');
+                }
+              },
+            });
+          }
           if (this.ttsAvailable) {
             TextButton({
               label: this.speakingIndex === index ? '停止播报' : '播报',

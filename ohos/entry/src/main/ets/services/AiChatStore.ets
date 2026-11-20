@@ -42,6 +42,14 @@ export interface AskRequest {
   options: string[];
 }
 
+/** 存档会话（不含当前会话）：切换/新建时当前会话整条归档到这里。 */
+export interface ChatSession {
+  id: string;
+  title: string;
+  updatedAt: number;
+  messages: ChatBubble[];
+}
+
 /**
  * 系统提示词只留**行为规则与跨工具流程**：单个工具的名称/用途/参数由请求体
  * tools 数组自带（AiTools 描述是权威来源，此处复述既烧 token 又会与代码漂移）。
@@ -84,6 +92,10 @@ const IMAGE_JPEG_QUALITY: number = 80;
 const CHAT_HISTORY_KEY: string = 'ai_chat_history';
 /** 历史上限：超出丢弃最旧条目，避免 preferences.json 无限膨胀。 */
 const CHAT_HISTORY_MAX: number = 60;
+/** 会话存档键：不含当前会话（当前仍走 ai_chat_history，退出页面重进照常恢复）。 */
+const CHAT_SESSIONS_KEY: string = 'ai_chat_sessions';
+/** 存档会话数上限：超出按 updatedAt 从旧到新丢弃。 */
+const CHAT_SESSIONS_MAX: number = 12;
 
 /**
  * AI 对话全局会话仓库（单例）：流式状态机与历史都挂在这里，脱离页面实例存活。
@@ -117,6 +129,17 @@ export class AiChatStore {
   /** ask_user 在途反问卡片；null=无。回路 await 在 answerAsk 上，退出页面按跳过收敛。 */
   pendingAsk: AskRequest | null = null;
   private askResolve: ((answer: string) => void) | null = null;
+  /** 存档会话列表（时间戳 id 去重、updatedAt 排序截顶）；当前会话不在其中。 */
+  sessions: ChatSession[] = [];
+  private static idSeq: number = 0;
+
+  /** 会话 id：毫秒+进程内递增，杜绝同毫秒新建/切换撞 id。 */
+  private nextId(): string {
+    AiChatStore.idSeq++;
+    return `${Date.now()}-${AiChatStore.idSeq}`;
+  }
+  /** 当前会话 id：仅会话面板显示「当前」用，重启无需恢复（内容就在 ai_chat_history）。 */
+  currentId: string = '';
 
   static instance(): AiChatStore {
     if (AiChatStore.inst === null) {
@@ -171,7 +194,9 @@ export class AiChatStore {
   ensureLoaded(): void {
     if (!this.loaded) {
       this.loaded = true;
+      this.currentId = this.nextId();
       this.loadHistory();
+      this.loadSessions();
     }
   }
 
@@ -215,12 +240,20 @@ export class AiChatStore {
       return;
     }
     try {
-      const arr: Object = JSON.parse(raw);
-      if (!Array.isArray(arr)) {
-        return;
-      }
-      const bubbles: ChatBubble[] = [];
-      for (const entry of arr as Object[]) {
+      this.messages = this.parseBubbles(JSON.parse(raw)).slice(-CHAT_HISTORY_MAX);
+    } catch (_error) {
+      // 历史损坏：保持空会话，下一次保存会覆盖
+    }
+    this.notify();
+  }
+
+  /** 解析气泡数组（当前会话与存档会话共用）；坏条目（缺字段/类型不符）逐条丢弃。 */
+  private parseBubbles(parsed: Object): ChatBubble[] {
+    const bubbles: ChatBubble[] = [];
+    if (!Array.isArray(parsed)) {
+      return bubbles;
+    }
+      for (const entry of parsed as Object[]) {
         if (entry === null || typeof entry !== 'object') {
           continue;
         }
@@ -286,11 +319,7 @@ export class AiChatStore {
           reasoning: typeof reasoningRaw === 'string' ? reasoningRaw : '',
         });
       }
-      this.messages = bubbles.slice(-CHAT_HISTORY_MAX);
-    } catch (_error) {
-      // 历史损坏：保持空会话，下一次保存会覆盖
-    }
-    this.notify();
+    return bubbles;
   }
 
   /** 沙箱图片压缩成长边 1024 的 jpeg data URL；失败返回空串（该图不发送）。 */
@@ -548,6 +577,145 @@ export class AiChatStore {
     this.notify();
   }
 
+  // —— 多会话：当前会话始终走 ai_chat_history，切换/新建时整条归档进 ai_chat_sessions ——
+
+  /** 会话标题：取首条用户消息前 20 字；没有则空串（调用侧兜底「新对话」）。 */
+  private sessionTitle(bubbles: ChatBubble[]): string {
+    for (const b of bubbles) {
+      if (b.role === 'user') {
+        const t: string = b.content.trim();
+        if (t.length === 0) {
+          continue;
+        }
+        return t.length > 20 ? `${t.slice(0, 20)}…` : t;
+      }
+    }
+    return '';
+  }
+
+  /** 面板显示的当前会话标题。 */
+  currentTitle(): string {
+    const t: string = this.sessionTitle(this.messages);
+    return t.length > 0 ? t : '新对话';
+  }
+
+  private saveSessions(): void {
+    TalebookService.prefSet(CHAT_SESSIONS_KEY, JSON.stringify(this.sessions));
+  }
+
+  private loadSessions(): void {
+    const raw: string = TalebookService.prefGet(CHAT_SESSIONS_KEY, '');
+    if (raw.length === 0) {
+      return;
+    }
+    try {
+      const arr: Object = JSON.parse(raw);
+      if (!Array.isArray(arr)) {
+        return;
+      }
+      const list: ChatSession[] = [];
+      for (const entry of arr as Object[]) {
+        if (entry === null || typeof entry !== 'object') {
+          continue;
+        }
+        const rec: Record<string, Object> = entry as Record<string, Object>;
+        if (typeof rec['id'] !== 'string' || typeof rec['title'] !== 'string'
+          || typeof rec['updatedAt'] !== 'number') {
+          continue;
+        }
+        list.push({ id: rec['id'], title: rec['title'], updatedAt: rec['updatedAt'],
+          messages: this.parseBubbles(rec['messages']) });
+      }
+      list.sort((a: ChatSession, b: ChatSession): number => b.updatedAt - a.updatedAt);
+      this.sessions = list.slice(0, CHAT_SESSIONS_MAX);
+    } catch (_error) {
+      // 存档损坏：视为无存档，下一次保存覆盖
+    }
+  }
+
+  /** 当前会话归档（空会话与在途 streaming 气泡不入档）；超上限按 updatedAt 丢最旧。 */
+  private stashCurrent(): void {
+    const items: ChatBubble[] = this.messages.filter((m: ChatBubble) => !m.streaming);
+    if (items.length === 0) {
+      return;
+    }
+    const title: string = this.sessionTitle(items);
+    this.sessions.push({ id: this.currentId,
+      title: title.length > 0 ? title : '新对话', updatedAt: Date.now(),
+      messages: items.slice(-CHAT_HISTORY_MAX) });
+    if (this.sessions.length > CHAT_SESSIONS_MAX) {
+      this.sessions.sort((a: ChatSession, b: ChatSession): number => a.updatedAt - b.updatedAt);
+      this.sessions.shift();
+    }
+    this.saveSessions();
+  }
+
+  /** 开新会话：当前先归档再切空。生成中禁止（与切换/删除统一，不制造双头流）。 */
+  newSession(): boolean {
+    if (this.thinking) {
+      return false;
+    }
+    if (this.messages.length === 0) {
+      return true;
+    }
+    this.stashCurrent();
+    this.messages = [];
+    this.currentId = this.nextId();
+    this.errorTip = '';
+    this.saveHistory();
+    this.notify();
+    return true;
+  }
+
+  /** 切会话：当前与目标整条互换（当前进存档、目标出档）。生成中禁止。 */
+  switchSession(id: string): boolean {
+    if (this.thinking || id === this.currentId) {
+      return false;
+    }
+    const index: number = this.sessions.findIndex((s: ChatSession): boolean => s.id === id);
+    if (index < 0) {
+      return false;
+    }
+    this.stashCurrent();
+    const target: ChatSession = this.sessions[index];
+    this.sessions.splice(index, 1);
+    this.saveSessions();
+    this.messages = target.messages.slice();
+    this.currentId = target.id;
+    this.errorTip = '';
+    this.saveHistory();
+    this.notify();
+    return true;
+  }
+
+  /** 删除一个存档会话（当前会话不可删——丢弃当前请用「清空」，语义单一）。 */
+  deleteSession(id: string): void {
+    const index: number = this.sessions.findIndex((s: ChatSession): boolean => s.id === id);
+    if (index < 0) {
+      return;
+    }
+    this.sessions.splice(index, 1);
+    this.saveSessions();
+    this.notify();
+  }
+
+  /** 重新生成：抹掉最后一条用户消息及其后全部，原样重发该问题（原位替换答案）。 */
+  regenerate(): boolean {
+    if (this.thinking) {
+      return false;
+    }
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i].role === 'user') {
+        const question: ChatBubble = this.messages[i];
+        this.messages = this.messages.slice(0, i);
+        this.saveHistory();
+        void this.send(question.content, question.images ?? []);
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** 仅离线回归用：隔离单例状态，避免用例串台。 */
   resetForTest(): void {
     this.requestId++;
@@ -562,6 +730,9 @@ export class AiChatStore {
     this.thinking = false;
     this.errorTip = '';
     this.loaded = true;
+    this.sessions = [];
+    this.currentId = this.nextId();
     TalebookService.prefSet(CHAT_HISTORY_KEY, '[]');
+    TalebookService.prefSet(CHAT_SESSIONS_KEY, '[]');
   }
 }
