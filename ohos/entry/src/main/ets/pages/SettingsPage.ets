@@ -519,13 +519,6 @@ export struct SettingsPage {
           if (this.isExpanded(SECTION_AI)) {
             Column() {
               SettingCell({
-                title: 'AI 书单推荐',
-                subtitle: '按书架偏好生成推荐书单',
-                showChevron: true,
-                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiRecommendPage' }),
-              });
-              Divider().color($r('app.color.divider')).strokeWidth(0.5);
-              SettingCell({
                 title: '模型设置',
                 subtitle: this.aiConfigSubtitle(),
                 showChevron: true,
