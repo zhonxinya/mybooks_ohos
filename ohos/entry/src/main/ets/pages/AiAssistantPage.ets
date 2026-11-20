@@ -8,7 +8,7 @@ import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { ToolResultList } from '../components/ToolResultList';
 import { AiChatStore, AskRequest, ChatActivity, ChatBubble, ChatSession } from '../services/AiChatStore';
-import { AiService } from '../services/AiService';
+import { AiConfig, AiService } from '../services/AiService';
 import { SpeakService } from '../services/SpeakService';
 import { AiPermissionMode } from '../services/AiTools';
 import { AppRouter } from '../utils/AppRouter';
@@ -46,6 +46,9 @@ struct AiAssistantPage {
   @State currentId: string = '';
   /** 对话管理半模态面板开关（页面局部态）。 */
   @State sessionsSheet: boolean = false;
+  /** 顶栏模型快切（只改全局配置的 model 字段）：当前模型 id + 服务商模型列表。 */
+  @State currentModel: string = '';
+  @State modelChoices: string[] = [];
   /** 流式中的思考过程（store.streamingReasoning 镜像）。 */
   @State streamingReasoning: string = '';
   /** 会话状态机在全局单例里：退出页面不中断流式回复，后台照常完成并落盘。 */
@@ -61,12 +64,84 @@ struct AiAssistantPage {
       (): void => this.syncFromStore(),
       (label: string, args: string): Promise<boolean> => this.requestConfirm(label, args));
     this.syncFromStore();
+    this.loadModelState();
   }
 
   onPageShow(): void {
     this.store.refreshSettings();
     this.loadVoiceState();
+    this.loadModelState();
     this.syncFromStore();
+  }
+
+  /**
+   * 模型快切态：currentModel 始终跟随全局配置（设置页改完返回即同步）；
+   * 列表为空且已配置地址时静默拉一次，失败不打扰——菜单里给「重新获取」出口。
+   */
+  private loadModelState(): void {
+    const cfg: AiConfig = AiService.loadConfig();
+    this.currentModel = cfg.model;
+    if (this.modelChoices.length > 0 || cfg.baseUrl.length === 0) {
+      return;
+    }
+    AiService.fetchModels(cfg.providerId, cfg.baseUrl, '').then((ids: string[]): void => {
+      this.modelChoices = ids.length > 40 ? ids.slice(0, 40) : ids;
+    }).catch((): void => {
+      // 服务商无 models 端点/限流等：菜单退化为重试项
+    });
+  }
+
+  /** 徽标短标签：模型名截 14 字符，未配置回「模型」。 */
+  private modelChipLabel(): string {
+    const m: string = this.currentModel;
+    if (m.length === 0) {
+      return '模型';
+    }
+    return m.length > 14 ? `${m.substring(0, 14)}…` : m;
+  }
+
+  private modelMenuItems(): MenuElement[] {
+    const items: MenuElement[] = [];
+    for (const id of this.modelChoices) {
+      const item: MenuElement = {
+        value: id,
+        action: () => this.pickModel(id),
+      };
+      if (id === this.currentModel) {
+        item.symbolIcon = new SymbolGlyphModifier($r('sys.symbol.checkmark'))
+          .fontColor([$r('app.color.brand_primary')]);
+      }
+      items.push(item);
+    }
+    if (items.length === 0) {
+      items.push({
+        value: '获取模型列表（可重试）',
+        action: (): void => {
+          this.loadModelState();
+        },
+      });
+    } else {
+      items.push({
+        value: '重新获取模型列表',
+        action: (): void => {
+          this.modelChoices = [];
+          this.loadModelState();
+        },
+      });
+    }
+    return items;
+  }
+
+  /** 部分保存：只换 model（apiKey 传空不覆盖已存 Key），下一条消息起生效。 */
+  private pickModel(id: string): void {
+    if (id === this.currentModel) {
+      return;
+    }
+    const cfg: AiConfig = AiService.loadConfig();
+    AiService.saveConfig(cfg.providerId, cfg.baseUrl, id, '', cfg.temperature,
+      cfg.visionOverride, cfg.contextLength);
+    this.currentModel = id;
+    this.toast(`已切换模型 ${id}，下一条消息生效`);
   }
 
   /** 播报可用性：系统引擎档始终可用（失败时按钮里报错）；云端档仅 Token Plan 服务商。 */
@@ -322,6 +397,14 @@ struct AiAssistantPage {
         .borderRadius($r('app.float.chip_radius'))
         .border({ width: 1, color: $r('app.color.divider') })
         .bindMenu(this.permissionMenuItems())
+      // 模型快切徽标：点击弹当前服务商模型列表，选中即改全局配置（与设置页同源）
+      Text(this.modelChipLabel())
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+        .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+        .borderRadius($r('app.float.chip_radius'))
+        .border({ width: 1, color: $r('app.color.divider') })
+        .bindMenu(this.modelMenuItems())
       TextButton({
         label: '设置',
         onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiSettingsPage' }),

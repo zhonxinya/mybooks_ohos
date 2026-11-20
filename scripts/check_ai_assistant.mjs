@@ -35,6 +35,8 @@ const state = {
 globalThis.__aiCheck = state;
 // 设置页保存时会记一个配置版本号，桩掉避免 save() 抛错
 globalThis.AppStorage = { setOrCreate: () => {} };
+// bindMenu 构造器（权限/模型菜单）运行时引用 $r 取资源；测试不渲染，桩成资源名即可
+globalThis.$r = (name) => name;
 const shim = `
 const state = globalThis.__aiCheck;
 export const AiService = {
@@ -3236,6 +3238,50 @@ try {
     const none = await RealAiTools.execute('search_web', '{"query":"  "}');
     assert.ok(none.includes('query 为空'), none);
     deps.state.rcpError = null;
+  });
+
+  test('对话页模型快切：徽标跟配置、菜单勾选+刷新、部分保存只动 model、失败退化重试', async () => {
+    resetSettings(); // 前序语音用例把 config 改到 glm-4v，这里从默认配置起算
+    const page = chat();
+    state.settings.models = ['glm-4', 'glm-4-plus', 'deepseek-chat'];
+    state.settings.fetchError = '';
+    page.modelChoices = [];
+    page.onPageShow();
+    await flush();
+    assert.equal(page.currentModel, 'deepseek-chat', '徽标跟随全局配置');
+    assert.equal(page.modelChipLabel(), 'deepseek-chat');
+    assert.deepEqual(page.modelChoices, ['glm-4', 'glm-4-plus', 'deepseek-chat']);
+    const items = page.modelMenuItems();
+    assert.equal(items.length, 4, '3 模型 + 刷新项');
+    assert.ok(items[2].symbolIcon !== undefined, '当前模型带勾');
+    assert.ok(items[0].symbolIcon === undefined);
+    // 切换：部分保存原样回填 model 之外字段，apiKey 传空不覆盖已存 Key
+    page.pickModel('glm-4-plus');
+    const saved = state.settings.saved;
+    assert.equal(saved.model, 'glm-4-plus');
+    assert.equal(saved.apiKey, '', '部分保存不带 Key');
+    assert.equal(saved.baseUrl, 'https://api.deepseek.com/v1');
+    assert.equal(saved.contextLength, 8, '上下文档位等其他字段透传');
+    assert.equal(page.currentModel, 'glm-4-plus');
+    assert.equal(state.settings.config.model, 'glm-4-plus', '下一条消息即生效（配置已更新）');
+    // 再点当前项不重复保存
+    const savedBefore = state.settings.saved;
+    page.pickModel('glm-4-plus');
+    assert.equal(state.settings.saved, savedBefore, '同模型点击为 no-op');
+    // 长名截断：切换后徽标 14 字 + 省略号
+    page.pickModel('very-long-model-name-for-truncation-xyz');
+    assert.equal(page.modelChipLabel(), 'very-long-mode…', '14 字 + 省略号');
+    // 拉取失败：列表空、菜单退化为单个获取项，徽标仍显当前模型
+    state.settings.fetchError = '服务商不支持模型列表';
+    page.modelChoices = [];
+    page.onPageShow();
+    await flush();
+    assert.deepEqual(page.modelChoices, []);
+    const retry = page.modelMenuItems();
+    assert.equal(retry.length, 1);
+    assert.ok(retry[0].value.includes('获取模型列表'), retry[0].value);
+    assert.equal(page.modelChipLabel(), 'very-long-mode…');
+    state.settings.fetchError = '';
   });
 
   test('Token Plan 音频链路：ASR/TTS 请求形态、缓存清理与未配 Key 容错', async () => {
