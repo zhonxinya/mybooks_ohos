@@ -123,7 +123,7 @@ export interface AiStreamHandlers {
   /** 可选：网关工具回路每次执行工具前回调一句人话（如「搜索书架」）。 */
   onTool?: (label: string, name: string) => void;
   /** 工具执行完毕（含用户拒绝）：对话页据此把活动时间线从「进行中」翻到「完成/拒绝」。 */
-  onToolResult?: (name: string, label: string, text: string) => void;
+  onToolResult?: (name: string, label: string, text: string, callId: string) => void;
   /** 写操作工具执行前的用户确认；返回 false 拒绝，模型收到「用户拒绝了该操作」。 */
   onConfirm?: (label: string, argsSummary: string) => Promise<boolean>;
 }
@@ -463,7 +463,7 @@ export class AiService {
       };
       const notice: ((label: string, name: string) => void) | undefined = handlers.onTool;
       const ask: ((label: string, args: string) => Promise<boolean>) | undefined = handlers.onConfirm;
-      const done: ((name: string, label: string, text: string) => void) | undefined = handlers.onToolResult;
+      const done: ((name: string, label: string, text: string, callId: string) => void) | undefined = handlers.onToolResult;
       const think: ((text: string) => void) | undefined = handlers.onReasoning;
       const permission: AiPermissionMode = AiService.loadPermission();
       AiService.chatViaGateway(config, apiKey, messages, maxTokens, gatewaySession,
@@ -706,7 +706,7 @@ export class AiService {
     isAborted: (() => boolean) | null,
     onTool: ((label: string, name: string) => void) | null,
     onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null,
-    onResult: ((name: string, label: string, text: string) => void) | null,
+    onResult: ((name: string, label: string, text: string, callId: string) => void) | null,
     onReasoning: ((text: string) => void) | null): Promise<string> {
     const headers: rcp.RequestHeaders = {
       'Authorization': `Bearer ${apiKey}`,
@@ -723,6 +723,13 @@ export class AiService {
       for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
         if (isAborted !== null && isAborted()) {
           return '';
+        }
+        // 剩 3 轮时提醒模型收敛：多数截断本可避免（软着陆只是兜底，别靠它）
+        if (round === MAX_TOOL_ROUNDS - 3) {
+          gwMessages.push({
+            role: 'user',
+            content: '（内部提示）工具调用仅剩 3 轮。请尽快汇总已获得的结果准备最终回答，不要再发起非必要的工具调用。',
+          });
         }
         // 最后一轮不带 tools，逼模型给最终回答而不是继续调工具
         const attach: AiToolDefinition[] | null = round < MAX_TOOL_ROUNDS ? tools : null;
@@ -775,6 +782,11 @@ export class AiService {
         }
         if (reply.calls !== null && reply.calls.length > 0) {
           if (round === MAX_TOOL_ROUNDS) {
+            // 软着陆：模型此前已产出正文时保留部分成果，整条回复不再报废；
+            // 只有纯工具调用没正文可给才报错（此时前文也无总结价值）
+            if (reply.content.length > 0) {
+              return `${reply.content}\n\n（本次任务工具调用达到 ${MAX_TOOL_ROUNDS} 轮上限，以上为中断时的结果；如需继续请再发一条消息。）`;
+            }
             throw new Error(`模型连续调用工具达到上限（${MAX_TOOL_ROUNDS} 轮），请把问题说具体些再试`);
           }
           const calls: Record<string, Object>[] = [];
@@ -785,6 +797,39 @@ export class AiService {
             calls.push(call);
           }
           gwMessages.push({ role: 'assistant', content: reply.content, tool_calls: calls });
+          // 同轮全是免确认（只读）工具 → Promise.all 并发：网络类工具单项要几秒，
+          // 串行白白叠加等待。含写工具保持串行——确认闸门与执行顺序必须和模型输出一致。
+          let allAuto: boolean = true;
+          for (let i = 0; i < reply.calls.length; i++) {
+            if (AiTools.needsConfirm(reply.calls[i].name)) {
+              allAuto = false;
+              break;
+            }
+          }
+          if (allAuto) {
+            const labels: string[] = [];
+            const tasks: Promise<string>[] = [];
+            for (let i = 0; i < reply.calls.length; i++) {
+              const c: GatewayToolCall = reply.calls[i];
+              const l: string = AiTools.toolLabel(c.name);
+              labels.push(l);
+              if (onTool !== null) {
+                onTool(l, c.name);
+              }
+              tasks.push(AiTools.execute(c.name, c.arguments, c.id));
+            }
+            const results: string[] = await Promise.all(tasks);
+            for (let i = 0; i < results.length; i++) {
+              gwMessages.push({ role: 'tool', content: results[i], tool_call_id: reply.calls[i].id });
+              if (onResult !== null) {
+                onResult(reply.calls[i].name, labels[i], results[i], reply.calls[i].id);
+              }
+            }
+            if (isAborted !== null && isAborted()) {
+              return '';
+            }
+            continue;
+          }
           for (let i = 0; i < reply.calls.length; i++) {
             const c: GatewayToolCall = reply.calls[i];
             let label: string = AiTools.toolLabel(c.name);
@@ -794,7 +839,7 @@ export class AiService {
                 const blocked: string = '当前为只读权限模式，写操作不可执行';
                 gwMessages.push({ role: 'tool', content: blocked, tool_call_id: c.id });
                 if (onResult !== null) {
-                  onResult(c.name, label, blocked);
+                  onResult(c.name, label, blocked, c.id);
                 }
                 continue;
               }
@@ -807,7 +852,7 @@ export class AiService {
                 if (!approved) {
                   gwMessages.push({ role: 'tool', content: '用户拒绝了该操作', tool_call_id: c.id });
                   if (onResult !== null) {
-                    onResult(c.name, label, '用户拒绝了该操作');
+                    onResult(c.name, label, '用户拒绝了该操作', c.id);
                   }
                   continue;
                 }
@@ -822,7 +867,7 @@ export class AiService {
             const result: string = await AiTools.execute(c.name, c.arguments);
             gwMessages.push({ role: 'tool', content: result, tool_call_id: c.id });
             if (onResult !== null) {
-              onResult(c.name, label, result);
+              onResult(c.name, label, result, c.id);
             }
             if (isAborted !== null && isAborted()) {
               return '';
@@ -838,6 +883,8 @@ export class AiService {
       return '';
     } finally {
       session.close();
+      // 中断/异常可能留下未取配对条目，回路收尾一律清理
+      AiTools.clearPendingBooks();
     }
   }
 

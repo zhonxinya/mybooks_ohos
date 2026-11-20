@@ -257,7 +257,7 @@ export const toolsState = {
   search: null, detail: null, notes: [], notesError: '', history: [],
   sonovelEnvelope: null, tasks: [], processed: 0,
   booklistCreateResult: null, booklistAddResult: null, booklistCreateCalls: [], booklistAddCalls: [],
-  bookDetailAsync: null, editCalls: [], editResult: null,
+  bookDetailAsync: null, editCalls: [], editResult: null, bookNavAsync: null,
   referBooks: null, referSearchCalls: [], applyReferCalls: [], applyReferResult: null,
   // 一次性抛错开关：非空则下一次调用抛该消息并自动复位（工具失败处理用例用）
   searchThrowOnce: '', createThrowOnce: '',
@@ -334,6 +334,8 @@ export const TalebookService = {
     toolsState.editCalls.push({ id, payload });
     return toolsState.editResult ?? { status: 200, body: { err: 'ok' }, error: '' };
   },
+  getBookNavCachedAsync: async () => (toolsState.bookNavAsync
+    ? await toolsState.bookNavAsync() : { status: 200, body: null, error: 'stub: 未设置' }),
 };
 export const AnnotationApi = {
   listBookAnnotations: async (_id, _scope) => {
@@ -975,7 +977,9 @@ try {
     toolsState.processed = 0;
     const t = await RealAiTools.execute('add_sonovel_task',
       '{"book_name":"夜的命名术","url":"http://x/book/1/","author":"会说话的肘子","source_id":3,"source_name":"某书源"}');
-    assert.ok(t.includes('已加入下载任务') && t.includes('格式 epub'));
+    // so-novel 下载在服务器（云端）执行，完成后应用拉取落架——文案两头都要说准
+    assert.ok(t.includes('已加入云端下载任务') && t.includes('格式 epub') &&
+      t.includes('下载与转换在服务器进行') && t.includes('自动拉取到本地书架'), t);
     assert.equal(toolsState.tasks.length, 1);
     assert.equal(toolsState.processed, 1);
     const dup = await RealAiTools.execute('add_sonovel_task', '{"book_name":"夜的命名术","url":"http://x/book/1/"}');
@@ -1038,7 +1042,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 17 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 18 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -1144,6 +1148,118 @@ try {
     assert.equal(full, '6 本都查完了。');
   });
 
+  test('工具回路并行：同轮全只读并发执行（先齐 T 后齐 R），tool 消息保序、卡片按 callId 配对', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    toolsState.search = async (q) => [{ id: q.length, title: q, authors: [`${q}作者`] }];
+    const events = [];
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '', tool_calls: [
+        { id: 'c1', type: 'function', function: { name: 'search_books', arguments: '{"query":"三体"}' } },
+        { id: 'c2', type: 'function', function: { name: 'search_books', arguments: '{"query":"球状闪电"}' } },
+        { id: 'c3', type: 'function', function: { name: 'search_books', arguments: '{"query":"乡村教师"}' } },
+      ] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '三本都在。' } }] })) },
+    ];
+    let full = '';
+    let error = '';
+    RealAiService.chatStream([{ role: 'user', content: '三本都查一下' }], {
+      onDelta: (t) => { full += t; }, onDone: () => {}, onError: (m) => { error = m; },
+      onTool: (l, name) => { events.push('T'); },
+      onToolResult: (name, l, text, cid) => { events.push('R' + cid); },
+    }, 256);
+    await flush();
+    assert.equal(error, '');
+    // 并行分支特征：三个 onTool 先行（活动区同时亮三条 doing），结果按原序回填
+    assert.deepEqual(events, ['T', 'T', 'T', 'Rc1', 'Rc2', 'Rc3']);
+    const b2 = JSON.parse(deps.state.requests[1].content);
+    const toolMsgs = b2.messages.filter((m) => m.role === 'tool');
+    assert.deepEqual(toolMsgs.map((m) => m.tool_call_id), ['c1', 'c2', 'c3']);
+    assert.ok(toolMsgs[0].content.includes('《三体》') && !toolMsgs[0].content.includes('球状闪电'),
+      '第一条 tool 结果不得混入后完成的查询');
+    assert.ok(full.includes('三本都在。'));
+    // AiTools 层配对契约：并行 execute 两笔，takeLastBooksFor 各归各（静态槽会被后完成者覆盖）
+    const p1 = RealAiTools.execute('search_books', '{"query":"甲书"}', 'k1');
+    const p2 = RealAiTools.execute('search_books', '{"query":"乙书"}', 'k2');
+    await Promise.all([p1, p2]);
+    assert.equal(RealAiTools.takeLastBooksFor('k1')[0].title, '《甲书》');
+    assert.equal(RealAiTools.takeLastBooksFor('k2')[0].title, '《乙书》');
+  });
+
+  test('工具回路并行边界：含写工具轮保持串行（T/R 交替），闸门语义不变', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    RealAiService.savePermission('auto');
+    toolsState.search = async (q) => [{ id: 12, title: q, authors: ['刘慈欣'] }];
+    const events = [];
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '', tool_calls: [
+        { id: 'm1', type: 'function', function: { name: 'search_books', arguments: '{"query":"三体"}' } },
+        { id: 'm2', type: 'function', function: { name: 'create_booklist', arguments: '{"name":"混轮"}' } },
+      ] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: ' done' } }] })) },
+    ];
+    RealAiService.chatStream([{ role: 'user', content: '查完顺手建书单' }], {
+      onDelta: () => {}, onDone: () => {}, onError: () => {},
+      onTool: (l, name) => { events.push('T' + name); },
+      onToolResult: (name, l, text, cid) => { events.push('R' + cid); },
+    }, 256);
+    await flush();
+    assert.deepEqual(events, ['Tsearch_books', 'Rm1', 'Tcreate_booklist', 'Rm2'],
+      '写工具不得与只读并发跑（顺序与确认语义依赖串行）');
+    assert.equal(toolsState.booklistCreateCalls.length, 1);
+    toolsState.booklistCreateCalls.length = 0;
+    RealAiService.savePermission('confirm');
+  });
+
+  test('工具回路收尾：剩 3 轮注入收敛提示；上限轮有正文软着陆、无正文才报错', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    toolsState.search = async (q) => [{ id: 1, title: q, authors: [] }];
+    const mk = () => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+      tool_calls: [{ id: 'x', type: 'function', function: { name: 'search_books', arguments: '{"query":"q"}' } }] } }] })) });
+    const final = (t) => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: t } }] })) });
+    // ① 第 9 轮请求带内部提示、第 8 轮不带，模型随即收尾 → 提示只注入一次
+    deps.state.rcpResponses = [...Array(9).fill(0).map(mk), final('查完了。')];
+    let error = '';
+    let full = '';
+    RealAiService.chatStream([{ role: 'user', content: '慢慢查' }], {
+      onDelta: (t) => { full += t; }, onDone: () => {}, onError: (m) => { error = m; },
+    }, 256);
+    await flush();
+    assert.equal(error, '');
+    const b9 = JSON.parse(deps.state.requests[9].content);
+    const b8 = JSON.parse(deps.state.requests[8].content);
+    const hinted = (msgs) => msgs.filter((m) => m.role === 'user' && `${m.content}`.includes('仅剩 3 轮')).length;
+    assert.equal(hinted(b8.messages), 0, '前 9 轮不得注入');
+    assert.equal(hinted(b9.messages), 1, 'round==MAX-3 注入一次收敛提示');
+    // ② 上限轮模型带正文+幻觉 tool_calls → 软着陆返回部分成果，不报废整条回复
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses = [...Array(12).fill(0).map(mk),
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '已查到部分内容。',
+        tool_calls: [{ id: 'y', type: 'function', function: { name: 'search_books', arguments: '{"query":"q"}' } }] } }] })) }];
+    error = '';
+    full = '';
+    RealAiService.chatStream([{ role: 'user', content: '无限查' }], {
+      onDelta: (t) => { full += t; }, onDone: () => {}, onError: (m) => { error = m; },
+    }, 256);
+    await flush();
+    assert.equal(error, '', '上限轮有正文不得报错');
+    assert.ok(full.includes('已查到部分内容。') && full.includes('12 轮上限'), full);
+    // ③ 上限轮纯工具无正文 → 仍按旧语义报错（没有可交付内容）
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses = [...Array(13).fill(0).map(mk)];
+    error = '';
+    RealAiService.chatStream([{ role: 'user', content: '光查不说' }], {
+      onDelta: () => {}, onDone: () => {}, onError: (m) => { error = m; },
+    }, 256);
+    await flush();
+    assert.match(error, /达到上限/, '无正文时仍提示达到上限');
+  });
+
   test('写工具确认闸门：拒绝/无确认方不执行，批准才执行', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
@@ -1197,11 +1313,12 @@ try {
   test('权限模式：definitions(mode) 三档过滤——readonly 去写工具，其余全量', () => {
     const WRITE = ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task',
       'update_book_meta', 'set_cover', 'forget_memory'];
-    assert.equal(RealAiTools.definitions().length, 17);
-    assert.equal(RealAiTools.definitions('confirm').length, 17);
-    assert.equal(RealAiTools.definitions('auto').length, 17);
+    assert.equal(RealAiTools.definitions().length, 18);
+    assert.equal(RealAiTools.definitions('confirm').length, 18);
+    assert.equal(RealAiTools.definitions('auto').length, 18);
     const ro = RealAiTools.definitions('readonly');
-    assert.equal(ro.length, 11);
+    assert.equal(ro.length, 12);
+    assert.ok(ro.some((d) => d.function.name === 'list_categories'), 'list_categories 是只读工具须保留');
     for (const name of WRITE) {
       assert.ok(!ro.some((d) => d.function.name === name), `readonly 泄漏写工具 ${name}`);
     }
@@ -1230,7 +1347,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 11);
+    assert.equal(b1.tools.length, 12);
     assert.ok(!b1.tools.some((d) => d.function.name === 'create_booklist'));
     const b2 = JSON.parse(deps.state.requests[1].content);
     assert.equal(b2.messages.find((m) => m.role === 'tool').content,
@@ -1261,7 +1378,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 17, 'auto 模式写工具须在 tools 里');
+    assert.equal(b1.tools.length, 18, 'auto 模式写工具须在 tools 里');
     assert.equal(asked, 0, 'auto 模式不该弹确认');
     assert.deepEqual(labels, [['create_booklist', '创建书单（自动执行）']]);
     assert.deepEqual(toolsState.booklistCreateCalls.map((c) => c.name), ['科幻入门']);
@@ -1384,9 +1501,25 @@ try {
     assert.equal(RealAiTools.takeLastBooks().length, 0, '无结果时不留旧缓存');
   });
 
+  test('list_categories：解析 nav 分类与子标签，空数据给兜底提示', async () => {
+    toolsState.bookNavAsync = async () => ({ status: 200, body: { navs: [
+      { legend: '科幻时空', tags: [{ name: '科幻', count: 12 }, { name: '', count: 1 }] },
+      { legend: '文化', tags: [] },
+      { legend: '', tags: [{ name: '幽灵分类' }] },
+    ] } });
+    const out = await RealAiTools.execute('list_categories', '{}');
+    assert.ok(out.includes('现有 2 个分类'), out);
+    assert.ok(out.includes('· 科幻时空：科幻') && out.includes('· 文化'), out);
+    assert.ok(!out.includes('幽灵分类') && !out.includes('undefined'), '空 legend 跳过、名字段过滤空串');
+    toolsState.bookNavAsync = async () => ({ status: 200, body: { navs: [] } });
+    assert.ok((await RealAiTools.execute('list_categories', '{}')).includes('没有读到分类列表'));
+    toolsState.bookNavAsync = null;
+  });
+
   test('update_book_meta：读-合并-写，只覆盖点名字段；空改动与失败路径', async () => {
     toolsState.bookDetailAsync = async () => ({ status: 200, body: { book: {
       title: '三体', authors: ['刘慈欣'], tags: ['科幻'], publisher: 'so-novel', comments: '旧简介',
+      category: '科幻时空',
       isbn: '', series: '', languages: ['zh'], translators: [], series_index: 1, rating: null } } });
     toolsState.editCalls.length = 0;
     const out = await RealAiTools.execute('update_book_meta', '{"book_id":1481,"title":"三体（新版）"}');
@@ -1396,13 +1529,21 @@ try {
     assert.equal(p.title, '三体（新版）');
     assert.deepEqual(p.authors, ['刘慈欣'], '未传 authors 保持原值');
     assert.deepEqual(p.tags, ['科幻']);
+    assert.equal(p.category, '科幻时空', '未传 category 必须保持原值（edit 接口全量覆盖）');
     assert.equal(p.publisher, 'so-novel');
     assert.equal(p.series_index, 1);
     assert.ok(!('rating' in p), '原值 null 且未传时不发 rating');
-    // 逗号分隔多值
-    const multi = await RealAiTools.execute('update_book_meta', '{"book_id":1481,"authors":"刘慈欣, 某某","tags":"科幻, 经典"}');
+    // 逗号分隔多值 + 分类改名（edit 字段名实测为 category 单数字符串；categories 会被服务端忽略）
+    const multi = await RealAiTools.execute('update_book_meta',
+      '{"book_id":1481,"authors":"刘慈欣, 某某","tags":"科幻, 经典","category":"科学"}');
     assert.ok(multi.includes('作者 →「刘慈欣、某某」') && multi.includes('标签 →「科幻、经典」'));
+    assert.ok(multi.includes('分类「科幻时空」→「科学」'), multi);
+    assert.equal(toolsState.editCalls[1].payload.category, '科学');
     assert.deepEqual(toolsState.editCalls[1].payload.authors, ['刘慈欣', '某某']);
+    // 分类与原值相同：不算改动（防无意义全量写）
+    const sameCat = await RealAiTools.execute('update_book_meta', '{"book_id":1481,"category":"科幻时空"}');
+    assert.ok(sameCat.includes('没有要修改'), sameCat);
+    assert.equal(toolsState.editCalls.length, 2);
     // 全空参数：不发请求
     const noop = await RealAiTools.execute('update_book_meta', '{"book_id":1481}');
     assert.ok(noop.includes('没有要修改'), noop);
