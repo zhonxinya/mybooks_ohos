@@ -2314,6 +2314,22 @@ try {
     deps.state.rcpResponses = [{ statusCode: 503, body: enc('down') }, { statusCode: 503, body: enc('down') }];
     out = await RealAiTools.execute('search_encyclopedia', '{"query":"x"}');
     assert.ok(out.includes('百科检索失败') && out.includes('503'), out);
+    // 8 无 tools 卡时 fallback：纯词/整句 SERP 的 AI 问答卡引用项形态（板上真实踩坑）
+    const serpCite = '<html><script>var x=1;</script>' +
+      '{"url_no":2,"url":"https://baike.baidu.com/item/%E5%88%98%E6%85%88%E6%AC%A3/142084",' +
+      '"text":"刘慈欣-高级工程师、科幻作家","source":"百度百科","publish_time":0,"icon":"https://i.png",' +
+      '"abstract":"刘慈欣,男,汉族,1963年6月23日出生于北京,祖籍河南,高级工程师、科幻作家。"}' +
+      '</html>';
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(serpCite) }];
+    bk = await EncyclopediaService.searchBaike('刘慈欣是谁');
+    assert.ok(bk.ok && bk.title === '刘慈欣-高级工程师、科幻作家' &&
+      bk.abstract.includes('1963年') && bk.url.includes('baike.baidu.com'), JSON.stringify(bk));
+    // 9 cite 形态但 abstract 距 source 超窗口 → 不误取无关摘要
+    const serpFar = '<html>{"url":"https://baike.baidu.com/item/a","text":"词条","source":"百度百科"}' +
+      'x'.repeat(1000) + '{"abstract":"太远的摘要不应该被取到内容内容内容。"}</html>';
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(serpFar) }];
+    bk = await EncyclopediaService.searchBaike('y');
+    assert.ok(!bk.ok && bk.error.includes('没有百科词条'), bk.error);
     deps.state.rcpError = null;
   });
 

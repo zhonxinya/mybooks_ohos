@@ -240,11 +240,11 @@ const TOOL_GET_NOVEL_META: AiToolDefinition = defineTool('get_novel_meta',
   NOVEL_META_PROPS, ['url']);
 
 const ENCYCLOPEDIA_PROPS: Record<string, AiToolProperty> = {
-  'query': prop('string', '百科词条关键词：人名（作者）、作品名、地名、概念等'),
+  'query': prop('string', '百科词条名（如「刘慈欣」「三体」），只给名词本身，不要带「是谁/什么是」等整句问话'),
 };
 const TOOL_SEARCH_ENCYCLOPEDIA: AiToolDefinition = defineTool('search_encyclopedia',
   '搜百科词条（百度百科+维基百科双通道）：回答「这位作者是谁/这本书什么背景/某地某概念」类问题，' +
-    '返回词条标题、摘要与链接。一个通道不可达会如实标注并仍给另一通道结果。',
+    '返回词条标题、摘要与链接。query 传词条名而非整句问话。一个通道不可达会如实标注并仍给另一通道结果。',
   ENCYCLOPEDIA_PROPS, ['query']);
 
 // 顺序有坑：OpenCode 网关实测会丢 tools 数组最后一项（2026-11-20 板上取证：模型枚举

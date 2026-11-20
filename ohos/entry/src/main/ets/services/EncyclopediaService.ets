@@ -65,24 +65,32 @@ export class EncyclopediaService {
     try {
       const html: string = await EncyclopediaService.fetchText(
         `https://www.baidu.com/s?wd=${encodeURIComponent(query)}`, BAIDU_UA);
-      const card: number = html.indexOf('"source":"百度百科"');
-      if (card < 0) {
-        hit.error = '搜索结果中没有百科词条';
-        return hit;
-      }
-      const from: number = Math.max(0, card - 30000);
-      const window: string = html.substring(from, Math.min(html.length, card + 3000));
+      // SERP 有两种百科卡形态且随 query 变化：词条卡（"tools"，多见于「词 百科」）、
+      // AI 问答卡内引用项（url/text/source+abstract，纯词与整句均有）。先前者，不中则后者。
       const tools: RegExpExecArray | null =
-        /"tools":\{"title":"([^"]*)","url":"([^"]*)"/.exec(window);
-      const abs: RegExpExecArray | null = /"abstract":"([^"]*)"/.exec(window);
-      if (tools === null || tools[1].length === 0) {
-        hit.error = '百科卡片解析失败';
-        return hit;
+        /"tools":\{"title":"([^"]*)","url":"([^"]*)"([\s\S]{0,3000}?)"abstract":"([^"]*)"/.exec(html);
+      let title: string = '';
+      let url: string = '';
+      let rawAbstract: string = '';
+      if (tools !== null && tools[1].length > 0) {
+        title = tools[1];
+        url = tools[2];
+        rawAbstract = tools[4];
+      } else {
+        const cite: RegExpExecArray | null =
+          /"url":"(https:\/\/baike\.baidu\.com\/item\/[^"]{1,300})","text":"([^"]{1,200})","source":"百度百科"([\s\S]{0,800}?)"abstract":"([^"]{10,})"/.exec(html);
+        if (cite === null) {
+          hit.error = '搜索结果中没有百科词条';
+          return hit;
+        }
+        url = cite[1];
+        title = cite[2];
+        rawAbstract = cite[4];
       }
       hit.ok = true;
-      hit.title = EncyclopediaService.unescapeJsonString(tools[1]);
-      hit.url = tools[2];
-      hit.abstract = abs !== null ? EncyclopediaService.unescapeJsonString(abs[1]) : '';
+      hit.title = EncyclopediaService.unescapeJsonString(title);
+      hit.url = url;
+      hit.abstract = EncyclopediaService.unescapeJsonString(rawAbstract);
       if (hit.abstract.length > ABSTRACT_MAX) {
         hit.abstract = `${hit.abstract.substring(0, ABSTRACT_MAX)}…`;
       }
