@@ -4,8 +4,11 @@ import { util } from '@kit.ArkTS';
 import { PageScaffold, PrimaryButton, SecondaryButton, SectionTitle } from '../components';
 import { Reader3Native } from '../services/Reader3Native';
 
-/** 导入文件最大读取字节数（2MB，与 talebook 书源管理页同参数，足够容纳数千条书源）。 */
-const IMPORT_FILE_MAX_BYTES: number = 2 * 1024 * 1024;
+/**
+ * 导入文件最大读取字节数。Legado 整包导出（数千条、带注释与图标 url）常超 2MB，
+ * 上限过低会把 JSON 拦腰截断成「不是有效的 JSON」——按 8MB 放宽，超限明确报错而非截断。
+ */
+const IMPORT_FILE_MAX_BYTES: number = 8 * 1024 * 1024;
 
 /**
  * 元数据源规则（网文元数据用的 Legado 书源库）导入页。
@@ -82,7 +85,9 @@ struct NovelMetaSourcePage {
     }
     const text: string = this.readTextFile(uris[0]);
     if (text.length === 0) {
-      this.finish(false, '导入失败：文件为空或无法读取');
+      if (this.statusText.length === 0) {
+        this.finish(false, '导入失败：文件为空或无法读取');
+      }
       return;
     }
     await this.runImport('文件导入', async (): Promise<number> => Reader3Native.importFromText(text));
@@ -93,9 +98,13 @@ struct NovelMetaSourcePage {
       const file = fs.openSync(uri, fs.OpenMode.READ_ONLY);
       try {
         const stat = fs.statSync(file.fd);
-        const size: number = Math.min(Number(stat.size), IMPORT_FILE_MAX_BYTES);
+        const size: number = Number(stat.size);
         if (size <= 0) {
           return '';
+        }
+        if (size > IMPORT_FILE_MAX_BYTES) {
+          // 绝不截断读取：截半的 JSON 只会得到莫名的「不是有效的 JSON」
+          throw new Error(`文件约 ${Math.round(size / 1048576)}MB，超过 ${IMPORT_FILE_MAX_BYTES / 1048576}MB 上限`);
         }
         const buffer = new ArrayBuffer(size);
         const readLength: number = fs.readSync(file.fd, buffer, { offset: 0, length: size });
@@ -105,7 +114,8 @@ struct NovelMetaSourcePage {
         fs.closeSync(file.fd);
       }
     } catch (error) {
-      this.toast(`读取文件失败：${error}`);
+      const message: string = error instanceof Error ? error.message : String(error);
+      this.finish(false, `导入失败：读取文件失败（${message}）`);
       return '';
     }
   }
