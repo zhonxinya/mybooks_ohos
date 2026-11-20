@@ -1,6 +1,7 @@
 import { BookshelfPage } from './BookshelfPage';
 import { BooksTabPage } from './BooksTabPage';
 import { SettingsPage } from './SettingsPage';
+import { DownloadFloatingBar } from '../components/DownloadFloatingBar';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { ReleaseInfo, UpdateCheckResult, UpdateService } from '../services/UpdateService';
 import { consumeAudioLaunch, AudioLaunchRequest } from '../services/AudioPlaybackService';
@@ -187,30 +188,42 @@ struct MainTabs {
     .justifyContent(FlexAlign.Center);
   }
 
+  /**
+   * 常驻下载进度条（#1434）浮在 tab 栏上方，仅在有活动任务时自显隐：
+   * 进度 tick 的高频重建收在小组件内部，Tabs 本体不受影响；
+   * 无活动时组件渲染空，不拦截任何手势。
+   */
   build() {
-    Tabs({ barPosition: BarPosition.End, controller: this.tabsController, index: this.currentIndex }) {
-      TabContent() {
-        BookshelfPage();
-      }.tabBar(this.tabBuilder(0, '书架', $r('sys.symbol.square_grid_2x2')));
+    Stack({ alignContent: Alignment.Bottom }) {
+      Tabs({ barPosition: BarPosition.End, controller: this.tabsController, index: this.currentIndex }) {
+        TabContent() {
+          BookshelfPage();
+        }.tabBar(this.tabBuilder(0, '书架', $r('sys.symbol.square_grid_2x2')));
 
-      TabContent() {
-        if (this.showBooksTab) {
-          BooksTabPage();
-        }
-      }.tabBar(this.tabBuilder(1, '小说', $r('sys.symbol.book')));
+        TabContent() {
+          if (this.showBooksTab) {
+            BooksTabPage();
+          }
+        }.tabBar(this.tabBuilder(1, '小说', $r('sys.symbol.book')));
 
-      TabContent() {
-        if (this.showSettingsTab) {
-          SettingsPage();
-        }
-      }.tabBar(this.tabBuilder(2, '设置', $r('sys.symbol.gearshape')));
+        TabContent() {
+          if (this.showSettingsTab) {
+            SettingsPage();
+          }
+        }.tabBar(this.tabBuilder(2, '设置', $r('sys.symbol.gearshape')));
+      }
+      .barMode(BarMode.Fixed)
+      .barHeight(56)
+      .barBackgroundColor($r('app.color.card_background'))
+      .onChange((index: number) => this.onTabChanged(index))
+      .width('100%')
+      .height('100%')
+      .backgroundColor($r('app.color.page_background'));
+
+      DownloadFloatingBar()
+        .margin({ left: 12, right: 12, bottom: 64 });
     }
-    .barMode(BarMode.Fixed)
-    .barHeight(56)
-    .barBackgroundColor($r('app.color.card_background'))
-    .onChange((index: number) => this.onTabChanged(index))
     .width('100%')
-    .height('100%')
-    .backgroundColor($r('app.color.page_background'));
+    .height('100%');
   }
 }
