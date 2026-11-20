@@ -759,6 +759,15 @@ export class AiService {
     return baseUrl.indexOf('opencode.ai') >= 0;
   }
 
+  /**
+   * 当前配置通道是否具备工具能力：仅 OpenCode 网关通道会在请求体挂 tools。
+   * 系统提示词据此决定是否写工具指引——无 tools 还让模型「先调用工具」，
+   * 模型会伪造伪工具调用文本当正文输出（实测 Token Plan 通道 [tools] xxx [/tools]）。
+   */
+  static supportsTools(): boolean {
+    return AiService.isOpenCodeGateway(AiService.loadConfig().baseUrl);
+  }
+
   /** 退避等待（网关重试间隔用）。 */
   private static sleep(ms: number): Promise<void> {
     return new Promise<void>((resolve: () => void) => {
