@@ -45,9 +45,18 @@ struct AiSettingsPage {
   @State testOk: boolean = false;
   @State probingVoice: boolean = false;
   @State autoSpeakOn: boolean = false;
+  /** 语音通话对话模型：false=跟随全局；provider 0=跟随，其余=providers[index-1]。 */
+  @State voiceFollow: boolean = true;
+  @State voiceProviderId: string = '';
+  @State voiceModel: string = '';
+  @State voiceModelOptions: string[] = [];
+  @State voiceFetchingModels: boolean = false;
 
   aboutToAppear(): void {
     this.autoSpeakOn = AiService.loadAutoSpeak();
+    this.voiceProviderId = AiService.loadVoiceProviderId();
+    this.voiceFollow = this.voiceProviderId.length === 0;
+    this.voiceModel = AiService.loadVoiceModel();
     this.providers = AiService.listProviders();
     const config: AiConfig = AiService.loadConfig();
     this.providerId = config.providerId;
@@ -296,6 +305,102 @@ struct AiSettingsPage {
       }
     }
     return 0;
+  }
+
+  // ———— 语音通话对话模型（改动即存，与自动播报开关同语义） ————
+
+  /** 下拉首项固定为「跟随全局」，其余是全部服务商（预设+自定义）。 */
+  private voiceProviderItems(): SelectOption[] {
+    const items: SelectOption[] = [];
+    const globalName: string = AiService.presetOf(AiService.loadConfig().providerId).name;
+    const first: SelectOption = { value: `跟随全局（${globalName}）` };
+    items.push(first);
+    for (let i = 0; i < this.providers.length; i++) {
+      const opt: SelectOption = { value: this.providers[i].name };
+      items.push(opt);
+    }
+    return items;
+  }
+
+  private voiceProviderSelectedIndex(): number {
+    if (this.voiceFollow) {
+      return 0;
+    }
+    const idx: number = this.indexOfProvider(this.voiceProviderId);
+    return idx >= 0 ? idx + 1 : 0;
+  }
+
+  private selectVoiceProvider(index: number): void {
+    if (index <= 0) {
+      this.voiceFollow = true;
+      this.voiceProviderId = '';
+      this.voiceModel = '';
+      this.voiceModelOptions = [];
+      AiService.saveVoiceConfig('', '');
+      return;
+    }
+    const preset: AiProviderPreset = this.providers[index - 1];
+    this.voiceFollow = false;
+    this.voiceProviderId = preset.id;
+    this.voiceModel = '';
+    this.voiceModelOptions = [];
+    AiService.saveVoiceConfig(preset.id, '');
+  }
+
+  private voiceModelItems(): SelectOption[] {
+    const ids: string[] = [];
+    for (let i = 0; i < this.voiceModelOptions.length; i++) {
+      ids.push(this.voiceModelOptions[i]);
+    }
+    const presetModel: string = AiService.presetOf(this.voiceProviderId).model;
+    if (ids.length === 0 && presetModel.length > 0) {
+      ids.push(presetModel);
+    }
+    if (this.voiceModel.length > 0 && ids.indexOf(this.voiceModel) < 0) {
+      ids.push(this.voiceModel);
+    }
+    const items: SelectOption[] = [];
+    for (let i = 0; i < ids.length; i++) {
+      const opt: SelectOption = { value: ids[i] };
+      items.push(opt);
+    }
+    return items;
+  }
+
+  /** 语音服务商的接口地址：自定义商取注册地址；全局同款复用已保存的全局地址。 */
+  private voiceBaseUrl(): string {
+    const config: AiConfig = AiService.loadConfig();
+    if (this.voiceProviderId === config.providerId) {
+      return config.baseUrl;
+    }
+    return AiService.presetOf(this.voiceProviderId).baseUrl;
+  }
+
+  private async fetchVoiceModels(): Promise<void> {
+    if (this.voiceFetchingModels || this.voiceProviderId.length === 0) {
+      return;
+    }
+    this.voiceFetchingModels = true;
+    try {
+      const ids: string[] = await AiService.fetchModels(this.voiceProviderId, this.voiceBaseUrl(), '');
+      if (ids.length === 0) {
+        this.toast('该服务未返回模型列表');
+      } else {
+        this.voiceModelOptions = ids;
+        this.toast(`获取到 ${ids.length} 个模型，可从下拉选择`);
+      }
+    } catch (error) {
+      this.toast(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.voiceFetchingModels = false;
+    }
+  }
+
+  /** 当前生效的语音对话模型（一行人话，跟随全局时展示全局值）。 */
+  private voiceSummary(): string {
+    const voice: AiConfig = AiService.loadVoiceConfig();
+    const name: string = AiService.presetOf(voice.providerId).name;
+    return `当前使用：${name} · ${voice.model}`;
   }
 
   private toast(message: string): void {
@@ -559,6 +664,46 @@ struct AiSettingsPage {
               this.autoSpeakOn = on;
               AiService.saveAutoSpeak(on);
             });
+        }
+        .width('100%');
+
+        Column({ space: 6 }) {
+          Text('语音通话对话模型')
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%');
+          Text(this.voiceSummary())
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%');
+          Select(this.voiceProviderItems())
+            .selected(this.voiceProviderSelectedIndex())
+            .value(this.voiceFollow ? '跟随全局' : AiService.presetOf(this.voiceProviderId).name)
+            .width('100%')
+            .onSelect((index: number, value: string) => this.selectVoiceProvider(index));
+          if (!this.voiceFollow) {
+            Row() {
+              Text('模型')
+                .fontSize(13)
+                .fontColor($r('app.color.text_secondary'));
+              Blank();
+              Text(this.voiceFetchingModels ? '拉取中…' : '拉取模型列表')
+                .fontSize(13)
+                .fontColor($r('app.color.brand_primary'))
+                .onClick(() => {
+                  void this.fetchVoiceModels();
+                });
+            }
+            .width('100%');
+            Select(this.voiceModelItems())
+              .selected(Math.max(0, this.voiceModelOptions.indexOf(this.voiceModel)))
+              .value(this.voiceModel.length > 0 ? this.voiceModel : '使用该服务商默认模型')
+              .width('100%')
+              .onSelect((index: number, value: string) => {
+                this.voiceModel = value;
+                AiService.saveVoiceConfig(this.voiceProviderId, value);
+              });
+          }
         }
         .width('100%');
 

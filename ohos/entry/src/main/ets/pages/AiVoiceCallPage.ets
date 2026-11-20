@@ -204,7 +204,7 @@ struct AiVoiceCallPage {
       for (let i = keepFrom; i < this.history.length; i++) {
         messages.push(this.history[i]);
       }
-      const answer: string = await AiService.complete(messages, 512);
+      const answer: string = await AiService.complete(messages, 512, AiService.loadVoiceConfig());
       if (!alive()) {
         return;
       }

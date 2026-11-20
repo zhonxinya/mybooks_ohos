@@ -23,6 +23,7 @@ const settingsDefaults = () => ({
     { id: 'opencode', name: 'OpenCode (Go)', baseUrl: 'https://opencode.ai/inference/openai/v1', model: 'big-pickle', vision: false },
   ],
   keys: new Set(['deepseek']), saved: null, models: [], fetchError: '', completeReply: 'ok',
+  voiceProviderId: '', voiceModel: '', voiceConfig: null, lastCompleteConfig: null,
 });
 const state = {
   ready: true, handlers: null, copied: '', cancel: null,
@@ -74,9 +75,31 @@ export const AiService = {
   contextRounds: (k) => (k <= 4 ? 4 : k <= 8 ? 8 : k <= 32 ? 16 : k <= 128 ? 30 : 50),
   loadPermission: () => state.settings.permission ?? 'confirm',
   savePermission: (mode) => { state.settings.permission = mode; },
-  complete: async () => state.settings.completeReply,
+  complete: async (messages, maxTokens, config) => {
+    state.settings.lastCompleteConfig = config === undefined ? state.settings.config : config;
+    return state.settings.completeReply;
+  },
   loadAutoSpeak: () => state.settings.autoSpeak === true,
   saveAutoSpeak: (v) => { state.settings.autoSpeak = v; },
+  loadVoiceProviderId: () => state.settings.voiceProviderId,
+  loadVoiceModel: () => state.settings.voiceModel,
+  hasVoiceProvider: () => state.settings.voiceProviderId.length > 0,
+  saveVoiceConfig: (providerId, model) => {
+    state.settings.voiceProviderId = providerId;
+    state.settings.voiceModel = model;
+  },
+  loadVoiceConfig: () => {
+    if (state.settings.voiceProviderId.length > 0) {
+      const p = state.settings.providers.find((x) => x.id === state.settings.voiceProviderId);
+      if (p !== undefined && p.id !== state.settings.config.providerId) {
+        return { providerId: p.id, baseUrl: p.baseUrl,
+          model: state.settings.voiceModel.length > 0 ? state.settings.voiceModel : p.model,
+          hasKey: state.settings.keys.has(p.id), temperature: state.settings.config.temperature,
+          vision: false, visionOverride: '', contextLength: state.settings.config.contextLength };
+      }
+    }
+    return state.settings.config;
+  },
 };
 // 页面测试不触发真实播报，但 import 名要在（对话页 ttsAvailable 门控下调用不到）
 export const QwenAudioService = {
@@ -2581,6 +2604,79 @@ try {
     if (prevBaseUrl !== undefined) { deps.state.store.set('s:ai_base_url', prevBaseUrl); }
     deps.state.requests.length = 0;
     deps.state.ttsFiles.length = 0;
+  });
+
+  test('语音通话对话模型：跟随全局/独立服务商解析/complete 按 override 出请求', async () => {
+    deps.state.store.clear();
+    RealAiService.saveConfig('deepseek', 'https://api.deepseek.com/v1', 'deepseek-chat', 'sk-d', 0.5);
+    // ① 未单独配置 → 跟随全局
+    assert.equal(RealAiService.loadVoiceConfig().providerId, 'deepseek');
+    assert.equal(RealAiService.hasVoiceProvider(), false);
+    // ② 独立选 Token Plan：地址随预设解析，Key 单独判
+    RealAiService.saveVoiceConfig('qwen-tokenplan', 'qwen3.6-flash');
+    let v = RealAiService.loadVoiceConfig();
+    assert.equal(v.providerId, 'qwen-tokenplan');
+    assert.equal(v.model, 'qwen3.6-flash');
+    assert.equal(v.baseUrl, 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1');
+    assert.equal(v.hasKey, false);
+    assert.equal(RealAiService.loadVoiceProviderId(), 'qwen-tokenplan');
+    RealAiService.saveVoiceConfig('qwen-tokenplan', '');
+    assert.equal(RealAiService.loadVoiceConfig().model, 'qwen3.6-flash', 'model 空回落服务商默认');
+    deps.state.store.set('s:ai_api_key_qwen-tokenplan', 'sk-tp');
+    assert.equal(RealAiService.loadVoiceConfig().hasKey, true);
+    // ③ 选了与全局相同的服务商 → 直接跟随全局值（忽略语音 model）
+    RealAiService.saveVoiceConfig('deepseek', 'other-model');
+    assert.equal(RealAiService.loadVoiceConfig().model, 'deepseek-chat');
+    // ④ complete 带 override：请求用语音配置的地址/模型/Key
+    RealAiService.saveVoiceConfig('opencode', 'voice-model');
+    deps.state.store.set('s:ai_api_key_opencode', 'sk-oc');
+    deps.state.rcpResponse = { statusCode: 200,
+      body: enc(JSON.stringify({ choices: [{ message: { content: '好的' } }] })) };
+    assert.equal(await RealAiService.complete([{ role: 'user', content: 'hi' }], 512,
+      RealAiService.loadVoiceConfig()), '好的');
+    const req = deps.state.lastRequest;
+    assert.ok(req.url.startsWith('https://opencode.ai/zen/go/v1'), req.url);
+    assert.equal(JSON.parse(req.content).model, 'voice-model');
+    assert.equal(req.headers['Authorization'], 'Bearer sk-oc');
+    // ⑤ 恢复跟随全局
+    RealAiService.saveVoiceConfig('', '');
+    assert.equal(RealAiService.hasVoiceProvider(), false);
+    assert.equal(RealAiService.loadVoiceConfig().providerId, 'deepseek');
+    deps.state.rcpResponse = null;
+    deps.state.store.delete('s:ai_api_key_qwen-tokenplan');
+    deps.state.store.delete('s:ai_api_key_opencode');
+    deps.state.store.delete('s:ai_base_url');
+  });
+
+  test('设置页语音通话模型：进入读取、切换即存、跟随恢复、模型列表', async () => {
+    resetSettings();
+    let page = settingsPage();
+    assert.equal(page.voiceFollow, true);
+    assert.equal(page.voiceProviderSelectedIndex(), 0);
+    assert.equal(page.voiceProviderItems().length, 3, '跟随全局 + 2 个服务商');
+    // 选服务商（index 2 = opencode）→ 立即持久化、重置模型
+    page.selectVoiceProvider(2);
+    assert.equal(page.voiceFollow, false);
+    assert.equal(state.settings.voiceProviderId, 'opencode');
+    assert.equal(state.settings.voiceModel, '');
+    // 模型列表：未拉取时给服务商默认；手动值也会补进列表
+    assert.ok(page.voiceModelItems().some((it) => it.value === 'big-pickle'));
+    state.settings.models = ['voice-m'];
+    await page.fetchVoiceModels();
+    assert.deepEqual(page.voiceModelOptions, ['voice-m']);
+    // 切回跟随全局 → 清空配置
+    page.selectVoiceProvider(0);
+    assert.equal(page.voiceFollow, true);
+    assert.equal(state.settings.voiceProviderId, '');
+    // 重进页面读回已存配置
+    state.settings.voiceProviderId = 'opencode';
+    state.settings.voiceModel = 'voice-m';
+    page = settingsPage();
+    assert.equal(page.voiceFollow, false);
+    assert.equal(page.voiceModel, 'voice-m');
+    assert.equal(page.voiceProviderSelectedIndex(), 2);
+    assert.ok(page.voiceSummary().includes('OpenCode'));
+    resetSettings();
   });
 
   test('灵魂管理页：灵魂保存/恢复默认，手动补记与删除记忆', () => {

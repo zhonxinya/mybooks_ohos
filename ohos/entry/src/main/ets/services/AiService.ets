@@ -87,6 +87,9 @@ const KEY_BASE_URL: string = 'ai_base_url';
 const KEY_MODEL: string = 'ai_model';
 /** 对话页：AI 回复完成后自动用 Token Plan TTS 朗读（默认关）。 */
 const KEY_AUTO_SPEAK: string = 'ai_auto_speak';
+/** 语音通话的对话模型：独立服务商/模型；provider 键为空 = 跟随全局配置。 */
+const KEY_VOICE_PROVIDER: string = 'ai_voice_provider';
+const KEY_VOICE_MODEL: string = 'ai_voice_model';
 /** 旧版单 Key；首次读取时迁移到当前服务商后清空。 */
 const KEY_API_KEY: string = 'ai_api_key';
 const KEY_API_KEY_PREFIX: string = 'ai_api_key_';
@@ -196,6 +199,58 @@ export class AiService {
 
   static saveAutoSpeak(on: boolean): void {
     TalebookService.prefSet(KEY_AUTO_SPEAK, on ? '1' : '0');
+  }
+
+  /**
+   * 语音通话页用的对话模型配置。未单独配置（或配置的服务商已被删除）时跟随全局；
+   * TTS/ASR 载体仍走 Token Plan 网关（QwenAudioService 按全局配置派生），这里只换「思考的大脑」。
+   */
+  static loadVoiceConfig(): AiConfig {
+    const config: AiConfig = AiService.loadConfig();
+    const providerId: string = TalebookService.prefGet(KEY_VOICE_PROVIDER);
+    if (providerId.length === 0 || providerId === config.providerId) {
+      return config;
+    }
+    const preset: AiProviderPreset = AiService.presetOf(providerId);
+    const model: string = TalebookService.prefGet(KEY_VOICE_MODEL);
+    const finalModel: string = model.length > 0 ? model : preset.model;
+    return {
+      providerId: providerId,
+      // 自定义服务商的地址就存在预设里；预设服务商被改过全局地址时无法区分，按预设走
+      baseUrl: preset.baseUrl,
+      model: finalModel,
+      hasKey: TalebookService.secureGet(AiService.apiKeyKey(providerId)).length > 0,
+      temperature: config.temperature,
+      vision: AiService.detectVision(finalModel),
+      visionOverride: '',
+      contextLength: config.contextLength,
+    };
+  }
+
+  /** 语音通话是否已独立配置了服务商。 */
+  static hasVoiceProvider(): boolean {
+    return TalebookService.prefGet(KEY_VOICE_PROVIDER).length > 0;
+  }
+
+  /** `providerId` 传空串 = 恢复跟随全局。`model` 空 = 用该服务商默认模型。 */
+  static saveVoiceConfig(providerId: string, model: string): void {
+    if (providerId.length === 0) {
+      TalebookService.prefSet(KEY_VOICE_PROVIDER, '');
+      TalebookService.prefSet(KEY_VOICE_MODEL, '');
+      return;
+    }
+    TalebookService.prefSet(KEY_VOICE_PROVIDER, providerId);
+    TalebookService.prefSet(KEY_VOICE_MODEL, model.trim());
+  }
+
+  /** 已保存的语音通话服务商 id（''=跟随全局）。 */
+  static loadVoiceProviderId(): string {
+    return TalebookService.prefGet(KEY_VOICE_PROVIDER);
+  }
+
+  /** 已保存的语音通话模型名（''=用服务商默认）。 */
+  static loadVoiceModel(): string {
+    return TalebookService.prefGet(KEY_VOICE_MODEL);
   }
 
   /** 各服务商 Key 的存储键；自定义服务商 id 带时间戳，不与前缀冲突。 */
@@ -560,8 +615,12 @@ export class AiService {
   }
 
   /** 非流式的单轮问答，用于结构化结果（如推荐书单 JSON）。 */
-  static async complete(messages: AiMessage[], maxTokens: number = 2048): Promise<string> {
-    const config: AiConfig = AiService.loadConfig();
+  /**
+   * 一次性补全（非流式）。`config` 缺省用全局配置；语音通话页传
+   * `loadVoiceConfig()` 以走独立选择的对话模型。
+   */
+  static async complete(messages: AiMessage[], maxTokens: number = 2048, override?: AiConfig): Promise<string> {
+    const config: AiConfig = override !== undefined ? override : AiService.loadConfig();
     const apiKey: string = AiService.apiKeyFor(config.providerId);
     if (config.baseUrl.length === 0 || config.model.length === 0) {
       throw new Error('请先配置 AI 接口地址与模型');
