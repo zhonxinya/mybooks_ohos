@@ -3188,13 +3188,13 @@ try {
     deps.state.rcpError = null;
   });
 
-  test('search_web：百度 SERP organic 解析（mu 直链/s-text 标题/summary-text 摘要）、推广位排除与容错', async () => {
+  test('search_web：三引擎聚合（百度/Bing/360 解析、跨引擎去重、单通道失败降级）与容错', async () => {
     const { EncyclopediaService } = await load('RealEncyclopedia');
     deps.state.rcpThrowQueue.length = 0;
     deps.state.rcpError = null;
-    // 结构取自 2026-11-21 真实 SERP 样本：organic 容器 class="result c-container"、
-    // 标题在 <!--s-text--> 标记、摘要在 summary-text_<hash> span（class 值带前导空格）
-    const serpHtml = '<html><body>' +
+    // 百度结构取自 2026-11-21 真实 SERP 样本（c-container/mu/s-text/summary-text_<hash>）；
+    // Bing=b_algo+h2 直链+b_lineclamp；360=res-list+h3 直链+res-list-summary
+    const baiduHtml = '<html><body>' +
       '<div class="result c-container" mu="http://28616.recommend_list.baidu.com"' +
       '><h3><a><!--s-text-->榜单推广位<!--/s-text--></a></h3></div>' +
       '<div class="result c-container xpath-log new-pmd" mu="https://www.qidian.com/book/123">' +
@@ -3206,34 +3206,65 @@ try {
       '<h3><a>三体（长篇小说）</a></h3>' +
       '<span class="summary-text_9AbCd">《三体》是刘慈欣创作的长篇科幻小说。</span></div>' +
       '</body></html>';
-    deps.state.rcpResponses = [{ statusCode: 200, body: enc(serpHtml) }];
+    const bingHtml = '<ol id="b_results">' +
+      '<li class="b_algo"><h2><a href="https://weread.qq.com/web/reader/ce03">三体全集免费阅读_番茄小说官网</a></h2>' +
+      '<div class="b_caption"><p class="b_lineclamp2">2021年10月16日&#183;《三体》系列长篇。</p></div></li>' +
+      '<li class="b_algo"><h2><a href="https://baike.baidu.com/item/%E4%B8%89%E4%BD%93/5739303">三体（刘慈欣创作的系列小说）_百度百科</a></h2>' +
+      '<div class="b_caption"><p class="b_lineclamp2">雨果奖获奖作品。<a href="#">阅读更多</a>阅读更多</p></div></li>' +
+      '</ol>';
+    const so360Html = '<ul>' +
+      '<li class="res-list"><h3><a href="https://www.so.com/link?m=abc">三体txt下载-青果书库</a></h3>' +
+      '<p class="res-desc"><span class="res-list-summary" data-result-summary>《三体》<em>系列</em>作品介绍。</span></p></li>' +
+      '<li class="res-list"><h3><a href="https://baike.so.com/doc/5330779">三体_360百科</a></h3></li>' +
+      '</ul>';
+    // 并发发起顺序 baidu→bing→360，rcpResponses 按序消费
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(baiduHtml) },
+      { statusCode: 200, body: enc(bingHtml) },
+      { statusCode: 200, body: enc(so360Html) },
+    ];
     const r = await EncyclopediaService.searchWeb('三体 小说');
     assert.ok(r.ok, r.error);
-    assert.equal(r.items.length, 3, 'recommend_list 推广容器须排除');
+    assert.equal(r.items.length, 6, '3+2+1（Bing 首条与百度同名题去重）');
+    assert.equal(r.items[0].source, '百度');
     assert.equal(r.items[0].title, '三体全集在线阅读-起点中文网', 'stripHtml 去标签不补空格（项目语义）');
     assert.equal(r.items[0].url, 'https://www.qidian.com/book/123');
     assert.ok(r.items[0].summary.includes('敬畏') && !r.items[0].summary.includes('<em>'), r.items[0].summary);
     assert.equal(r.items[1].summary, '', '纯标题卡片保留、摘要为空');
     assert.equal(r.items[2].title, '三体（长篇小说）', '无 s-text 时 h3 兜底');
-    // 反爬/改版空页 → 解析失败文案，不抛错
-    deps.state.rcpResponses = [{ statusCode: 200, body: enc('<html>waf check</html>') }];
+    assert.equal(r.items[3].source, 'Bing', '去重后 Bing 第二条顶上');
+    assert.ok(r.items[3].summary.includes('雨果奖') && !r.items[3].summary.endsWith('阅读更多'), r.items[3].summary);
+    assert.equal(r.items[4].source, '360');
+    assert.ok(r.items[4].summary.includes('系列'), r.items[4].summary);
+    // 单通道非 2xx：跳过该引擎，其余照常
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(baiduHtml) },
+      { statusCode: 567, body: enc('rate limit') },
+      { statusCode: 200, body: enc(so360Html) },
+    ];
+    const partial = await EncyclopediaService.searchWeb('三体');
+    assert.ok(partial.ok && partial.items.every((x) => x.source !== 'Bing'), 'Bing 失败不影响整体');
+    // 三通道全空 → 统一失败文案，不抛错
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc('<html>waf</html>') },
+      { statusCode: 200, body: enc('<html>waf</html>') },
+      { statusCode: 200, body: enc('<html>waf</html>') },
+    ];
     const empty = await EncyclopediaService.searchWeb('不存在的东西');
-    assert.ok(!empty.ok && empty.error.includes('普通结果'), empty.error);
-    // 非 2xx 转 error 文案
-    deps.state.rcpResponses = [{ statusCode: 567, body: enc('rate limit') }];
-    const bad = await EncyclopediaService.searchWeb('x');
-    assert.ok(!bad.ok && bad.error.includes('567'), bad.error);
-    // 工具层：编号文案 + 链接逐条，摘要缺省不占行
-    deps.state.rcpResponses = [{ statusCode: 200, body: enc(serpHtml) }];
+    assert.ok(!empty.ok && empty.error.includes('均无结果'), empty.error);
+    // 工具层：编号文案带来源标签，摘要缺省不占行
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(baiduHtml) },
+      { statusCode: 200, body: enc(bingHtml) },
+      { statusCode: 200, body: enc(so360Html) },
+    ];
     const out = await RealAiTools.execute('search_web', '{"query":"三体"}');
-    assert.ok(out.includes('1. 三体全集在线阅读-起点中文网') &&
+    assert.ok(out.includes('1. [百度] 三体全集在线阅读-起点中文网') &&
       out.includes('链接：https://www.qidian.com/book/123') &&
-      out.includes('2. 三体全集免费阅读_番茄小说官网') &&
-      out.includes('3. 三体（长篇小说）'), out);
-    assert.ok(out.indexOf('2. 三体全集免费阅读_番茄小说官网\n链接：https://fanqienovel.com/page/698\n\n3') > 0,
+      out.includes('2. [百度] 三体全集免费阅读_番茄小说官网') &&
+      out.includes('4. [Bing] 三体（刘慈欣创作的系列小说）_百度百科'), out);
+    assert.ok(out.indexOf('2. [百度] 三体全集免费阅读_番茄小说官网\n链接：https://fanqienovel.com/page/698\n\n3') > 0,
       '第二条无摘要：链接行后空行接第三条');
-    assert.ok(out.includes('3. 三体（长篇小说）\n链接：https://baike.baidu.com/item/三体\n《三体》是刘慈欣创作的长篇科幻小说。'),
-      '第三条含摘要行');
     // 空 query 直接回文案
     const none = await RealAiTools.execute('search_web', '{"query":"  "}');
     assert.ok(none.includes('query 为空'), none);

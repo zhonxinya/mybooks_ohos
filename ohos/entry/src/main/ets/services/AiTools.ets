@@ -317,9 +317,9 @@ const WEB_SEARCH_PROPS: Record<string, AiToolProperty> = {
   'query': prop('string', '搜索关键词（书名、人名、事件、规格参数等任意信息），尽量精炼，不要整句问话'),
 };
 const TOOL_SEARCH_WEB: AiToolDefinition = defineTool('search_web',
-  '通用网页搜索（百度）：查书籍之外的任意信息——作者近况、作品改编、价格评测、新闻事件、名词解释等。' +
-    '返回若干条结果的标题、原站链接与摘要。百科类词条优先用 search_encyclopedia；' +
-    '摘要不够时可把候选链接讲给用户自行查看。',
+  '通用网页搜索（百度/Bing/360 三引擎并行聚合）：查书籍之外的任意信息——作者近况、作品改编、价格评测、' +
+    '新闻事件、名词解释等。返回若干条结果的来源、标题、链接与摘要（已跨引擎去重）。' +
+    '百科类词条优先用 search_encyclopedia；摘要不够时可把候选链接讲给用户自行查看。',
   WEB_SEARCH_PROPS, ['query']);
 
 const ASK_USER_PROPS: Record<string, AiToolProperty> = {
@@ -960,7 +960,7 @@ export class AiTools {
     const parts: string[] = [];
     for (let i = 0; i < res.items.length; i++) {
       const it: WebSearchHit = res.items[i];
-      let line: string = `${i + 1}. ${it.title}\n链接：${it.url}`;
+      let line: string = `${i + 1}. [${it.source}] ${it.title}\n链接：${it.url}`;
       if (it.summary.length > 0) {
         line = `${line}\n${it.summary}`;
       }
