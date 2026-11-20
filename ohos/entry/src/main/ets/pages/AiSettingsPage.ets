@@ -1,6 +1,7 @@
 import { PageScaffold, PrimaryButton, SecondaryButton, SectionTitle, FilterChips, FilterChipItem,
   ChipButton } from '../components';
 import { AiService, AiConfig, AiProviderPreset, AiMessage, CONTEXT_LENGTH_OPTIONS } from '../services/AiService';
+import { QwenAudioService } from '../services/QwenAudioService';
 import { AppRouter } from '../utils/AppRouter';
 
 /** @Builder 只有传单个对象字面量才是引用传递；标量参数不随 @State 更新，切服务商时输入框会停在旧值。 */
@@ -42,8 +43,11 @@ struct AiSettingsPage {
   @State testing: boolean = false;
   @State testResult: string = '';
   @State testOk: boolean = false;
+  @State probingVoice: boolean = false;
+  @State autoSpeakOn: boolean = false;
 
   aboutToAppear(): void {
+    this.autoSpeakOn = AiService.loadAutoSpeak();
     this.providers = AiService.listProviders();
     const config: AiConfig = AiService.loadConfig();
     this.providerId = config.providerId;
@@ -262,6 +266,26 @@ struct AiSettingsPage {
       this.testResult = error instanceof Error ? error.message : String(error);
     } finally {
       this.testing = false;
+    }
+  }
+
+  /** 语音链路探测：走 Token Plan TTS 合成一句并播放（不依赖麦克风；系统引擎模拟器不可用，见探测档案）。 */
+  private async probeVoice(): Promise<void> {
+    if (this.probingVoice) {
+      return;
+    }
+    this.probingVoice = true;
+    this.testResult = '';
+    try {
+      const path: string = await QwenAudioService.synthesize('语音链路探测：合成与播放测试。');
+      const completed: boolean = await QwenAudioService.playFile(path);
+      this.testOk = true;
+      this.testResult = completed ? 'TTS 链路正常（合成+播放完成）' : 'TTS 链路结束（播报被打断或提前停止）';
+    } catch (error) {
+      this.testOk = false;
+      this.testResult = `TTS 链路失败：${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      this.probingVoice = false;
     }
   }
 
@@ -506,6 +530,35 @@ struct AiSettingsPage {
               this.save();
             },
           }).layoutWeight(1);
+        }
+        .width('100%');
+
+        Row({ space: 12 }) {
+          Text('语音能力探测（合成+播放，验证 Token Plan 链路）')
+            .fontSize(13)
+            .fontColor($r('app.color.brand_primary'))
+            .onClick(() => {
+              void this.probeVoice();
+            });
+          Blank();
+          if (this.probingVoice) {
+            Text('探测中…')
+              .fontSize(12)
+              .fontColor($r('app.color.text_secondary'));
+          }
+        }
+        .width('100%');
+
+        Row() {
+          Text('回复自动播报（对话页）')
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'));
+          Blank();
+          Toggle({ type: ToggleType.Switch, isOn: this.autoSpeakOn })
+            .onChange((on: boolean) => {
+              this.autoSpeakOn = on;
+              AiService.saveAutoSpeak(on);
+            });
         }
         .width('100%');
 

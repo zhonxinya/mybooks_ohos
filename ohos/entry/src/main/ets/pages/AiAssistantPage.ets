@@ -9,6 +9,7 @@ import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { ToolResultList } from '../components/ToolResultList';
 import { AiChatStore, ChatActivity, ChatBubble } from '../services/AiChatStore';
 import { AiService } from '../services/AiService';
+import { QwenAudioService } from '../services/QwenAudioService';
 import { AiPermissionMode } from '../services/AiTools';
 import { AppRouter } from '../utils/AppRouter';
 
@@ -31,6 +32,11 @@ struct AiAssistantPage {
   @State permission: AiPermissionMode = 'confirm';
   /** 流式输出用：整段重建列表的代价高，这里只改最后一条气泡的内容。 */
   @State streamingText: string = '';
+  /** Token Plan TTS 可用性与自动播报（进页/回页刷新，避免渲染中读磁盘）。 */
+  @State ttsAvailable: boolean = false;
+  @State autoSpeak: boolean = false;
+  /** 正在播报的消息下标；-1 无。 */
+  @State speakingIndex: number = -1;
   /** 工具回路实时活动时间线；finishBubble 时快照进气泡成为历史。 */
   @State liveActivities: ChatActivity[] = [];
   /** 流式中的思考过程（store.streamingReasoning 镜像）。 */
@@ -52,7 +58,14 @@ struct AiAssistantPage {
 
   onPageShow(): void {
     this.store.refreshSettings();
+    this.loadVoiceState();
     this.syncFromStore();
+  }
+
+  /** 播报相关配置：仅 Token Plan 服务商可用（其他服务商无 TTS 端点）。 */
+  private loadVoiceState(): void {
+    this.autoSpeak = AiService.loadAutoSpeak();
+    this.ttsAvailable = AiService.loadConfig().providerId === 'qwen-tokenplan';
   }
 
   aboutToDisappear(): void {
@@ -185,6 +198,10 @@ struct AiAssistantPage {
       this.input = '';
     }
     await this.store.send(text, images);
+    // store.send 在流结束落盘后才返回，末条即 AI 回复；开关打开则自动播报
+    if (this.autoSpeak && this.ttsAvailable) {
+      void this.speakBubble(this.messages.length - 1);
+    }
   }
 
   private scrollToEnd(): void {
@@ -225,6 +242,30 @@ struct AiAssistantPage {
     }
   }
 
+  /** 播报/停止播报某条回复；再点当前播报项=打断。 */
+  private async speakBubble(index: number): Promise<void> {
+    if (index < 0 || index >= this.messages.length) {
+      return;
+    }
+    if (this.speakingIndex === index) {
+      QwenAudioService.stopPlayback();
+      this.speakingIndex = -1;
+      return;
+    }
+    QwenAudioService.stopPlayback();
+    this.speakingIndex = index;
+    try {
+      const path: string = await QwenAudioService.synthesize(this.messages[index].content);
+      await QwenAudioService.playFile(path);
+    } catch (error) {
+      this.toast(`播报失败：${error}`);
+    } finally {
+      if (this.speakingIndex === index) {
+        this.speakingIndex = -1;
+      }
+    }
+  }
+
   private toast(message: string): void {
     try {
       this.getUIContext().getPromptAction().showToast({ message: message });
@@ -253,6 +294,10 @@ struct AiAssistantPage {
   @Builder
   headerAction() {
     Row({ space: 4 }) {
+      TextButton({
+        label: '语音',
+        onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiVoiceCallPage' }),
+      });
       // 权限模式徽标：点击弹三档菜单，当前项带勾
       Text(`权限·${this.permissionLabel()}`)
         .fontSize(12)
@@ -462,6 +507,14 @@ struct AiAssistantPage {
       if (bubble.role === 'assistant' && !bubble.streaming && !bubble.error && bubble.content.length > 0) {
         Row({ space: 12 }) {
           TextButton({ label: '复制', onTap: () => { void this.copyBubble(index); } });
+          if (this.ttsAvailable) {
+            TextButton({
+              label: this.speakingIndex === index ? '停止播报' : '播报',
+              onTap: () => {
+                void this.speakBubble(index);
+              },
+            });
+          }
         }
         .width('100%');
       }
