@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
-import { PageScaffold, LoadingState, EmptyState, PrimaryButton, SecondaryButton, IconCircleButton } from '../components';
+import { PageScaffold, LoadingState, EmptyState, PrimaryButton, SecondaryButton, IconCircleButton, ChipButton } from '../components';
 import { TalebookApi } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { BookUploadService } from '../services/BookUploadService';
@@ -324,6 +324,12 @@ struct AdminSettingsPage {
   @State categoryEntries: CategoryEntry[] = [];
   @State newCategoryName: string = '';
   @State newCategoryTags: string = '';
+  /** 分类标签绑定编辑态：展开的分类名 + 草稿（'/' 分隔）；候选池懒加载一次。 */
+  @State editingCategoryName: string = '';
+  @State editingTagsDraft: string = '';
+  @State newTagInput: string = '';
+  @State tagPool: string[] = [];
+  private tagPoolLoaded: boolean = false;
   @State selectedSourceNames: string[] = [];
   private settings: Record<string, Object> = {};
   private snsItems: SnsItem[] = [];
@@ -747,7 +753,7 @@ struct AdminSettingsPage {
 
   private addCategory(): void {
     const name = this.newCategoryName.trim();
-    const tags = this.newCategoryTags.trim();
+    const tags = this.splitTags(this.newCategoryTags).join('/');
     if (name.length === 0) {
       this.toast('请填写分类名称');
       return;
@@ -764,7 +770,119 @@ struct AdminSettingsPage {
 
   private removeCategory(name: string): void {
     this.categoryEntries = this.categoryEntries.filter((entry: CategoryEntry) => entry.name !== name);
+    if (this.editingCategoryName === name) {
+      this.editingCategoryName = '';
+    }
     this.syncCategories();
+  }
+
+  /** 标签串归一：空格/逗号/顿号/斜杠混用输入 → 去重去空、统一 '/' 分隔（BOOK_NAV 存储格式）。 */
+  private splitTags(raw: string): string[] {
+    const parts: string[] = raw.split(/[,，、/\s]+/);
+    const seen: Set<string> = new Set();
+    const result: string[] = [];
+    for (let i = 0; i < parts.length; i++) {
+      const t: string = parts[i];
+      if (t.length > 0 && !seen.has(t)) {
+        seen.add(t);
+        result.push(t);
+      }
+    }
+    return result;
+  }
+
+  private beginEditTags(entry: CategoryEntry): void {
+    if (this.editingCategoryName === entry.name) {
+      this.editingCategoryName = '';
+      return;
+    }
+    this.editingCategoryName = entry.name;
+    this.editingTagsDraft = this.splitTags(entry.tags).join('/');
+    this.newTagInput = '';
+    void this.loadTagPool();
+  }
+
+  private toggleBoundTag(tag: string): void {
+    this.editingTagsDraft = this.splitTags(this.editingTagsDraft)
+      .filter((t: string) => t !== tag)
+      .join('/');
+  }
+
+  private togglePoolTag(tag: string): void {
+    const list: string[] = this.splitTags(this.editingTagsDraft);
+    const at: number = list.indexOf(tag);
+    if (at >= 0) {
+      list.splice(at, 1);
+    } else {
+      list.push(tag);
+    }
+    this.editingTagsDraft = list.join('/');
+  }
+
+  /** 自定义输入支持一次贴多个（空格/逗号分隔均可）。 */
+  private addCustomTags(): void {
+    const extra: string[] = this.splitTags(this.newTagInput);
+    if (extra.length === 0) {
+      this.toast('请填写要添加的标签');
+      return;
+    }
+    const list: string[] = this.splitTags(this.editingTagsDraft);
+    for (let i = 0; i < extra.length; i++) {
+      if (!list.includes(extra[i])) {
+        list.push(extra[i]);
+      }
+    }
+    this.editingTagsDraft = list.join('/');
+    this.newTagInput = '';
+  }
+
+  private finishEditTags(): void {
+    const tags: string = this.splitTags(this.editingTagsDraft).join('/');
+    const name: string = this.editingCategoryName;
+    this.categoryEntries = this.categoryEntries.map((entry: CategoryEntry): CategoryEntry => {
+      if (entry.name !== name) {
+        return entry;
+      }
+      const next: CategoryEntry = { name: entry.name, tags: tags };
+      return next;
+    });
+    this.syncCategories();
+    this.editingCategoryName = '';
+  }
+
+  /** 候选标签池：书库里实际在用（/api/book/nav 各分类 tags 并集，按出现序去重，封顶 60 防爆炸）。 */
+  private async loadTagPool(): Promise<void> {
+    if (this.tagPoolLoaded) {
+      return;
+    }
+    try {
+      const envelope = await TalebookService.getBookNavCachedAsync();
+      const body: Record<string, Object> = envelope.body ?? {};
+      const navs: Object | undefined = body['navs'];
+      const seen: Set<string> = new Set();
+      const pool: string[] = [];
+      if (Array.isArray(navs)) {
+        for (let i = 0; i < navs.length; i++) {
+          const nav = navs[i] as Record<string, Object>;
+          const tags: Object | undefined = nav['tags'];
+          if (!Array.isArray(tags)) {
+            continue;
+          }
+          for (let j = 0; j < tags.length; j++) {
+            const tag = tags[j] as Record<string, Object>;
+            const tagName: string = String(tag['name'] ?? '');
+            if (tagName.length > 0 && !seen.has(tagName)) {
+              seen.add(tagName);
+              pool.push(tagName);
+            }
+          }
+        }
+      }
+      this.tagPool = pool.slice(0, 60);
+      this.tagPoolLoaded = true;
+    } catch (error) {
+      this.tagPool = [];
+    }
   }
 
   private numStr(key: string): string {
@@ -1034,36 +1152,53 @@ struct AdminSettingsPage {
       } else {
         Column({ space: 8 }) {
           ForEach(this.categoryEntries, (entry: CategoryEntry) => {
-            Row({ space: 10 }) {
-              Column({ space: 2 }) {
-                Text(entry.name)
-                  .fontSize(15)
-                  .fontColor($r('app.color.text_primary'))
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis });
-                if (entry.tags.length > 0) {
-                  Text(`标签：${entry.tags}`)
-                    .fontSize(12)
-                    .fontColor($r('app.color.text_tertiary'))
+            Column({ space: 8 }) {
+              Row({ space: 10 }) {
+                Column({ space: 2 }) {
+                  Text(entry.name)
+                    .fontSize(15)
+                    .fontColor($r('app.color.text_primary'))
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis });
+                  if (entry.tags.length > 0) {
+                    Text(`标签：${entry.tags}`)
+                      .fontSize(12)
+                      .fontColor($r('app.color.text_tertiary'))
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis });
+                  } else {
+                    Text('未绑定标签')
+                      .fontSize(12)
+                      .fontColor($r('app.color.text_tertiary'));
+                  }
                 }
+                .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1);
+                SecondaryButton({
+                  label: this.editingCategoryName === entry.name ? '收起' : '设置标签',
+                  compact: true,
+                  fullWidth: false,
+                  onTap: () => this.beginEditTags(entry),
+                });
+                IconCircleButton({
+                  icon: $r('sys.symbol.trash'),
+                  variant: 'soft',
+                  iconSize: 14,
+                  buttonSize: 30,
+                  onTap: () => this.removeCategory(entry.name),
+                });
               }
-              .alignItems(HorizontalAlign.Start)
-              .layoutWeight(1);
-              IconCircleButton({
-                icon: $r('sys.symbol.trash'),
-                variant: 'soft',
-                iconSize: 14,
-                buttonSize: 30,
-                onTap: () => this.removeCategory(entry.name),
-              });
+              .width('100%');
+              // key 里带上展开态：否则同 name+tags 的 key 不变，编辑器不渲染（共享模拟器渲染坑）
+              if (this.editingCategoryName === entry.name) {
+                this.tagBindEditor();
+              }
             }
             .width('100%')
             .padding({ left: 12, right: 12, top: 10, bottom: 10 })
             .borderRadius($r('app.float.card_radius'))
             .backgroundColor($r('app.color.page_background'));
-          }, (entry: CategoryEntry) => entry.name);
+          }, (entry: CategoryEntry) => `${entry.name}#${entry.tags}#${this.editingCategoryName === entry.name ? 'e' : 'c'}`);
         }
         .width('100%');
       }
@@ -1098,6 +1233,77 @@ struct AdminSettingsPage {
       .padding({ top: 4 });
     }
     .width('100%');
+  }
+
+  /** 分类行内标签绑定编辑器：已绑点掉解绑、候选点选绑定、支持自由输入；「完成」落到草稿再统一保存。 */
+  @Builder
+  tagBindEditor() {
+    Column({ space: 8 }) {
+      Text('已绑定（点击移除）')
+        .fontSize(12)
+        .fontColor($r('app.color.text_tertiary'));
+      if (this.splitTags(this.editingTagsDraft).length > 0) {
+        Flex({ wrap: FlexWrap.Wrap }) {
+          ForEach(this.splitTags(this.editingTagsDraft), (tag: string) => {
+            ChipButton({
+              label: tag,
+              selected: true,
+              onTap: () => this.toggleBoundTag(tag),
+            });
+          }, (tag: string) => `b${tag}`);
+        }
+        .width('100%');
+      } else {
+        Text('（暂无绑定）')
+          .fontSize(12)
+          .fontColor($r('app.color.text_tertiary'));
+      }
+      Text(`书库在用的标签（点击绑定，共 ${this.tagPool.length} 个）`)
+        .fontSize(12)
+        .fontColor($r('app.color.text_tertiary'));
+      if (this.tagPool.length > 0) {
+        Flex({ wrap: FlexWrap.Wrap }) {
+          ForEach(this.tagPool, (tag: string) => {
+            ChipButton({
+              label: tag,
+              selected: this.splitTags(this.editingTagsDraft).includes(tag),
+              onTap: () => this.togglePoolTag(tag),
+            });
+          }, (tag: string) => `p${tag}`);
+        }
+        .width('100%');
+      }
+      Row({ space: 8 }) {
+        TextInput({ text: this.newTagInput, placeholder: '自定义标签，可多个（空格/逗号分隔）' })
+          .layoutWeight(1)
+          .height(36)
+          .onChange((value: string) => {
+            this.newTagInput = value;
+          });
+        SecondaryButton({
+          label: '添加',
+          compact: true,
+          fullWidth: false,
+          onTap: () => this.addCustomTags(),
+        });
+      }
+      .width('100%');
+      Row() {
+        Blank();
+        SecondaryButton({
+          label: '完成',
+          compact: true,
+          fullWidth: false,
+          onTap: () => this.finishEditTags(),
+        });
+      }
+      .width('100%');
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+    .borderRadius($r('app.float.card_radius'))
+    .backgroundColor($r('app.color.card_background'));
   }
 
   /** 服务端更新说明与致谢名单（无数据时不渲染）。 */
