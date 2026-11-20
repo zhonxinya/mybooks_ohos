@@ -113,10 +113,13 @@ writeFileSync(join(dir, 'shim.ts'), shim);
 writeFileSync(join(dir, 'aiServiceDeps.ts'), `
 // Buffer.from(x).buffer 带池化填充，必须 slice 出精确字节（模拟 rcp 的紧凑 ArrayBuffer）
 const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
-export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [] };
+export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [], sourceJson: null };
 export const util = {
   // 透传 encoding（gbk/gb2312 走 Node 内置 TextDecoder），utf-8 用法不受影响
   TextDecoder: { create: (encoding) => ({ decodeToString: (u8) => new TextDecoder(encoding ?? 'utf-8').decode(u8) }) },
+  // Reader3Native http 桥用：utf-8 文本→字节→base64（与 ArkTS 语义一致）
+  TextEncoder: class { encodeInto(s) { return new Uint8Array(Buffer.from(s ?? '', 'utf8')); } },
+  Base64Helper: class { encodeToStringSync(u8) { return Buffer.from(u8).toString('base64'); } },
   generateRandomUUID: () => 'test-uuid-fixed-0001',
 };
 export class OpenAI {
@@ -143,12 +146,47 @@ export const rcp = {
     close: () => {},
   }),
 };
+// Reader3Native 书源库文件桩：state.sourceJson 非空即视为沙箱 files 目录存在 bookmeta_sources.json
+export const fs = {
+  accessSync: (p) => state.sourceJson !== null && p.endsWith('bookmeta_sources.json'),
+  statSync: () => ({ size: state.sourceJson === null ? 0 : Buffer.byteLength(state.sourceJson, 'utf8') }),
+  openSync: () => ({ fd: 7 }),
+  readSync: (fd, buf) => { const b = Buffer.from(state.sourceJson ?? '', 'utf8'); b.copy(Buffer.from(buf)); return b.length; },
+  closeSync: () => {},
+  OpenMode: { READ_ONLY: 0 },
+};
+export { fs as fileIo };
+export const hilog = { info: () => {}, warn: () => {}, error: () => {} };
 export const TalebookService = {
   prefGet: (key, fallback = '') => state.store.has('p:' + key) ? state.store.get('p:' + key) : fallback,
   prefSet: (key, value) => { state.store.set('p:' + key, value); },
   secureGet: (key) => state.store.has('s:' + key) ? state.store.get('s:' + key) : '',
   secureSet: (key, value) => { if (value === '') { state.store.delete('s:' + key); } else { state.store.set('s:' + key, value); } },
 };
+`);
+
+// libentry.so 桩：reader3 四函数经 globalThis 可编程（真实 Reader3Native 入检用）
+writeFileSync(join(dir, 'reader3Entry.ts'), `
+export default {
+  reader3Available: () => globalThis.__r3Available ?? false,
+  reader3SetHttpCallback: (cb) => { globalThis.__r3Cb = cb; return true; },
+  reader3Deliver: (resp) => { globalThis.__r3Delivered = resp; return true; },
+  reader3BookInfo: (srcJson, url) => {
+    globalThis.__r3SourceArg = srcJson;
+    globalThis.__r3UrlArg = url;
+    return Promise.resolve(globalThis.__r3Payload ?? '{"status":"error","message":"stub"}');
+  },
+};
+`);
+
+// NovelMetaService 分派测试用的 Reader3Native 替身（meta 结果可编程；默认 null=不接管）
+writeFileSync(join(dir, 'reader3Stub.ts'), `
+export class Reader3Meta {}
+export class Reader3Native {
+  static result = null;
+  static lastUrl = '';
+  static async meta(url) { Reader3Native.lastUrl = url; return Reader3Native.result; }
+}
 `);
 
 /** 把真实 AiService 落进临时目录：SDK / rcp 类型转 import type，运行时依赖换成桩。 */
@@ -305,13 +343,27 @@ function stageMetaSearch() {
   writeFileSync(join(dir, 'RealMetaSearch.ts'), source);
 }
 
-/** NovelMetaService 真实入检：同样复用 rcp 桩。 */
+/** NovelMetaService 真实入检：同样复用 rcp 桩；引擎分派点用 Reader3Native 替身。 */
 function stageNovelMeta() {
   let source = read('services/NovelMetaService.ets');
   source = source
     .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
-    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`);
+    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
+    .replace(`from './Reader3Native'`, `from './reader3Stub.ts'`);
   writeFileSync(join(dir, 'RealNovelMeta.ts'), source);
+}
+
+/** Reader3Native 真实入检：libentry/getContext 换桩，rcp/util 复用 aiServiceDeps。 */
+function stageReader3() {
+  let source = read('services/Reader3Native.ets');
+  source = source
+    .replace(`import entry from 'libentry.so';`, `import entry from './reader3Entry.ts';`)
+    .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.CoreFileKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.PerformanceAnalysisKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`getContext().filesDir`, `(globalThis.__r3Ctx).filesDir`);
+  writeFileSync(join(dir, 'RealReader3.ts'), source);
 }
 
 function stageAiTools() {
@@ -411,6 +463,7 @@ try {
   stageChatStore();
   stageMetaSearch();
   stageNovelMeta();
+  stageReader3();
   stageAiTools();
   const load = async (name) => import(pathToFileURL(join(dir, `${name}.ts`)).href);
   const { AiAssistantPage } = await load('AiAssistantPage');
@@ -1740,6 +1793,142 @@ try {
     const padBuf = pad.buffer.slice(pad.byteOffset, pad.byteOffset + pad.byteLength);
     assert.ok(NovelMetaService.decodeBody(padBuf).includes('charset=gb2312'),
       'charset 声明落在 2KB~4KB 窗口也必须被嗅到');
+  });
+
+  test('NovelMeta 分派：书源引擎命中即优先，不再走站点规则重抓', async () => {
+    const { NovelMetaService } = await load('RealNovelMeta');
+    const { Reader3Native } = await load('reader3Stub');
+    Reader3Native.result = { ok: true, error: '', rule: '测试书源', name: '引擎书', author: '作者甲',
+      kind: '都市·完结', intro: '引擎简介', coverUrl: 'https://cdn.example/c.jpg',
+      tocUrl: 'https://s.example/book/1/', lastChapter: '第2章' };
+    const prev = deps.state.requests.length;
+    const meta = await NovelMetaService.fetchDetail('https://www.17k.com/book/123.html');
+    Reader3Native.result = null;
+    assert.strictEqual(meta.ok, true);
+    assert.strictEqual(meta.rule, '书源:测试书源');
+    assert.strictEqual(meta.title, '引擎书');
+    assert.strictEqual(meta.status, '已完本', 'kind 里的完结词归一为状态');
+    assert.strictEqual(meta.intro, '引擎简介');
+    assert.strictEqual(meta.cover, 'https://cdn.example/c.jpg');
+    assert.strictEqual(deps.state.requests.length, prev, '引擎命中不得再 rcp 抓页');
+  });
+
+  test('NovelMeta 分派：引擎提取失败→现有站点规则兜底（再抓一次）', async () => {
+    const { NovelMetaService } = await load('RealNovelMeta');
+    const { Reader3Native } = await load('reader3Stub');
+    Reader3Native.result = { ok: false, error: '书源规则未提取到书名/简介/封面', rule: '失效源',
+      name: '', author: '', kind: '', intro: '', coverUrl: '', tocUrl: '', lastChapter: '' };
+    deps.state.rcpResponse = { statusCode: 200,
+      body: enc('<meta property="og:description" content="兜底简介"/>') };
+    const meta = await NovelMetaService.fetchDetail('https://example.com/book/9/');
+    Reader3Native.result = null;
+    deps.state.rcpResponse = null;
+    assert.strictEqual(meta.ok, true);
+    assert.strictEqual(meta.rule, '通用og');
+    assert.strictEqual(meta.intro, '兜底简介');
+  });
+
+  const R3_SOURCES = JSON.stringify([
+    { bookSourceUrl: 'https://bad.example@.*', bookSourceName: '禁用源', enabled: false,
+      bookUrlPattern: '.*bad\\.example/book/.*', ruleBookInfo: { name: 'h1@text' } },
+    { bookSourceUrl: 'https://pat.example', bookSourceName: '模式源', enabled: true,
+      bookUrlPattern: '.*pat\\.example/book/\\d+', ruleBookInfo: { name: 'h1@text' } },
+    { bookSourceUrl: '全本小说5@https://at.example', bookSourceName: 'at源', enabled: true,
+      bookUrlPattern: '', ruleBookInfo: { name: 'h1@text' } },
+    { bookSourceUrl: 'https://url.example/a/b', bookSourceName: 'url源', enabled: true,
+      bookUrlPattern: '', ruleBookInfo: { name: 'h1@text' } },
+  ]);
+
+  test('Reader3.matchSource：pattern 优先；@ 约定取右侧 baseUrl 匹配；禁用源跳过', async () => {
+    const { Reader3Native } = await load('RealReader3');
+    const sources = JSON.parse(R3_SOURCES);
+    assert.strictEqual(Reader3Native.matchSource(sources, 'https://pat.example/book/123.html').bookSourceName, '模式源');
+    assert.strictEqual(Reader3Native.matchSource(sources, 'https://at.example/xs-1/du-2.html').bookSourceName, 'at源',
+      'legado「源名@baseUrl」必须按右侧站点地址匹配（左侧是中文源名，永不命中）');
+    assert.strictEqual(Reader3Native.matchSource(sources, '全本小说5@https://at.example').bookSourceName, 'at源');
+    assert.strictEqual(Reader3Native.matchSource(sources, 'https://url.example/a/b/x/1').bookSourceName, 'url源');
+    assert.strictEqual(Reader3Native.matchSource(sources, 'https://bad.example/book/1'), null,
+      'enabled=false 的书源 pattern/url 两条通道都不得命中');
+  });
+
+  test('Reader3.meta 全链路：rawfile 装载→匹配书源→引擎外层协议→字段映射', async () => {
+    const { Reader3Native } = await load('RealReader3');
+    globalThis.__r3Available = true;
+    globalThis.__r3Ctx = { filesDir: '/data/app' };
+    deps.state.sourceJson = R3_SOURCES;
+    globalThis.__r3Payload = '{"status":"ok","result":{"field":"ruleBookInfo","data":' +
+      '"{\\"name\\":\\"书甲\\",\\"author\\":\\"作者乙\\",\\"kind\\":\\"连载中\\",\\"intro\\":\\"简介丙\\",' +
+      '\\"coverUrl\\":\\"https://pat.example/c.jpg\\"}"}}';
+    const m = await Reader3Native.meta('https://pat.example/book/123.html');
+    assert.strictEqual(m.ok, true);
+    assert.strictEqual(m.name, '书甲');
+    assert.strictEqual(m.kind, '连载中');
+    assert.strictEqual(m.coverUrl, 'https://pat.example/c.jpg');
+    assert.strictEqual(m.rule, '模式源');
+    assert.strictEqual(JSON.parse(globalThis.__r3SourceArg).bookSourceName, '模式源',
+      '传给引擎的必须是命中的整条书源规则');
+  });
+
+  test('Reader3.meta：无匹配书源返回 null（调用方走站点规则）；引擎 error 带原文', async () => {
+    const { Reader3Native } = await load('RealReader3');
+    assert.strictEqual(await Reader3Native.meta('https://none.example/book/1'), null);
+    globalThis.__r3Payload = '{"status":"error","message":"引擎错误 -6"}';
+    const m = await Reader3Native.meta('https://pat.example/book/9.html');
+    assert.strictEqual(m.ok, false);
+    assert.strictEqual(m.error, '引擎错误 -6');
+    globalThis.__r3Available = false;
+  });
+
+  test('Reader3 http 桥：rcp 抓取→utf-8 base64 按协议回填，书源 headers 透传', async () => {
+    const { Reader3Native } = await load('RealReader3');
+    globalThis.__r3Available = true;
+    globalThis.__r3Payload = '{"status":"ok","result":{"data":"{\\"name\\":\\"x\\"}"}}';
+    await Reader3Native.meta('https://pat.example/book/123.html'); // 建立回调注册
+    deps.state.rcpResponse = { statusCode: 200,
+      headers: { 'content-type': 'text/html; charset=utf-8' }, body: enc('<h1>标题页</h1>') };
+    globalThis.__r3Delivered = null;
+    globalThis.__r3Cb(JSON.stringify({ kind: 'http', method: 'GET',
+      url: 'https://pat.example/book/123.html', headers: { 'User-Agent': 'SrcUA/1.0' } }));
+    await flush();
+    const d = JSON.parse(globalThis.__r3Delivered);
+    assert.strictEqual(d.status_code, 200);
+    assert.strictEqual(d.body_b64, Buffer.from('<h1>标题页</h1>', 'utf8').toString('base64'),
+      'body_b64 必须是 UTF-8 字节的 base64');
+    assert.deepStrictEqual(d.headers['content-type'], ['text/html; charset=utf-8']);
+    assert.strictEqual(d.transport_error, undefined);
+    assert.strictEqual(deps.state.lastRequest.headers['User-Agent'], 'SrcUA/1.0', '书源自带 UA 必须透传');
+    deps.state.rcpResponse = null;
+  });
+
+  test('Reader3 http 桥：抓取异常也必须 deliver transport_error（引擎线程不能挂等）', async () => {
+    const { Reader3Native } = await load('RealReader3');
+    deps.state.rcpError = new Error('connection reset');
+    globalThis.__r3Delivered = null;
+    globalThis.__r3Cb(JSON.stringify({ kind: 'http', method: 'GET', url: 'https://x.example/', headers: {} }));
+    await flush();
+    const d = JSON.parse(globalThis.__r3Delivered);
+    assert.strictEqual(d.status_code, 0);
+    assert.strictEqual(d.transport_error, 'connection reset');
+    deps.state.rcpError = null;
+  });
+
+  test('Reader3 书源库不随包分发：两处候选路径都无文件时 meta 返回 null（全走兜底）', async () => {
+    const { Reader3Native } = await load('RealReader3');
+    Reader3Native.loaded = false; // 清类缓存（strip-types 擦除 private，测试可重置）
+    deps.state.sourceJson = null;
+    assert.strictEqual(await Reader3Native.meta('https://pat.example/book/123.html'), null,
+      '未导入书源时不得误接管 url');
+  });
+
+  test('Reader3 书源导入通道：沙箱 files 读不到时从 /data/local/tmp 候选位装载', async () => {
+    const { Reader3Native } = await load('RealReader3');
+    Reader3Native.loaded = false;
+    deps.state.sourceJson = R3_SOURCES;
+    globalThis.__r3Ctx = { filesDir: '/no/such/dir' }; // 模拟 SELinux 挡住的沙箱位
+    globalThis.__r3Payload = '{"status":"ok","result":{"data":"{\\"name\\":\\"tmp书\\"}"}}';
+    const m = await Reader3Native.meta('https://pat.example/book/123.html');
+    assert.strictEqual(m !== null && m.ok, true, 'tmp 候选位命中即接管');
+    assert.strictEqual(m.name, 'tmp书');
   });
 
   test('get_novel_meta：17K url 走工具输出简介/封面，读工具不过闸门，行模板带类别/状态/字数', async () => {
