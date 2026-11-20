@@ -7,6 +7,7 @@ import { QwenAudioService } from '../services/QwenAudioService';
 import { SpeakService } from '../services/SpeakService';
 import { RealtimeCallService, RealtimeCallCallbacks } from '../services/RealtimeCallService';
 import { AiService, AiMessage } from '../services/AiService';
+import { AiTools } from '../services/AiTools';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG: string = 'AiVoiceCall';
@@ -242,9 +243,15 @@ struct AiVoiceCallPage {
           this.tip = '连接已中断，可重新拨打';
         }
       },
+      onFunctionCall: (name: string, args: string, callId: string): void => {
+        void this.runTool(name, args, callId);
+      },
     };
     try {
-      await RealtimeCallService.connect(VOICE_SYSTEM_PROMPT, cb);
+      const prompt: string = VOICE_SYSTEM_PROMPT +
+        '\n图书相关请求（找书、看书评、下载、加书单等）必须先调用工具查询再回答；' +
+        '拿到工具结果后用一两句口语概括，不要逐条念 JSON，寒暄不要调用工具。';
+      await RealtimeCallService.connect(prompt, cb, AiTools.definitions(AiService.loadPermission()));
       this.rtMode = true;
       this.muted = false;
       this.st = ST_LISTENING;
@@ -258,6 +265,43 @@ struct AiVoiceCallPage {
   private toggleMute(): void {
     this.muted = !this.muted;
     RealtimeCallService.setMuted(this.muted);
+  }
+
+  /** 执行模型请求的工具（含确认闸门，与文字对话页同语义），结果回填 realtime 会话。 */
+  private async runTool(name: string, args: string, callId: string): Promise<void> {
+    let output: string;
+    try {
+      if (AiTools.needsConfirm(name)) {
+        const permission: string = AiService.loadPermission();
+        if (permission === 'readonly') {
+          output = '当前为只读权限模式，写操作不可执行。';
+        } else if (permission === 'confirm') {
+          const label: string = AiTools.toolLabel(name);
+          let allow: boolean = false;
+          try {
+            const dialog = await this.getUIContext().getPromptAction().showDialog({
+              title: '确认执行',
+              message: `语音通话中，AI 请求执行：${label}\n${args.length > 200 ? `${args.substring(0, 200)}…` : args}`,
+              buttons: [
+                { text: '拒绝', color: '#F44336' },
+                { text: '允许', color: '#4CAF50' },
+              ],
+            });
+            allow = dialog.index === 1;
+          } catch (_error) {
+            allow = false;
+          }
+          output = allow ? await AiTools.execute(name, args, callId) : '用户拒绝了该操作。';
+        } else {
+          output = await AiTools.execute(name, args, callId);
+        }
+      } else {
+        output = await AiTools.execute(name, args, callId);
+      }
+    } catch (error) {
+      output = `工具执行失败：${error}`;
+    }
+    RealtimeCallService.sendToolResult(callId, output);
   }
 
   // ————————————————— 轮转模式（fallback，可用自选对话模型） —————————————————

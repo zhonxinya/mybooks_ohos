@@ -37,3 +37,11 @@ WebSocket：`wss://token-plan.maas.qianwenaiapi.com/api-ws/v1/realtime?model=qwe
 - 服务商登记：AI_PROVIDERS 加预设（compatible-mode/v1 基址）；文字即可用。
 - App 内音频对话不依赖系统 CoreSpeechKit（模拟器空壳结论作废为无关项）：ASR=上传 wav/mp3 base64 到 multimodal-generation；TTS=SpeechSynthesizer 拿 OSS url 再下载播放（rcp GET + AudioRenderer/AudioPlaybackService）；realtime 需要 WebSocket——rcp 有 WebSocket 支持（rcp.WebSocket）待验证，或降级「按住说话→ASR→chat→TTS」非全双工模式先行。
 - 音频规格契合：录音侧 AudioCapturer 16k 单声道 PCM→包 wav→base64 即可。
+
+## 7. realtime function calling 实测（2026-11-20 深夜，宿主机 websockets 探针）
+
+- `session.update` 接受 `tools`（chat-completions 嵌套形态 `{type:"function",function:{name,description,parameters}}` 原样可用），回 `session.updated` 无报错。
+- 触发链：用户消息 → `response.output_item.added` → `response.function_call_arguments.delta`×N → `response.function_call_arguments.done`（含 `call_id`/`name`/`arguments`），随后 `response.done`（本轮响应**因工具调用即结束**，不自动续）。
+- 回填链：`conversation.item.create`（`item.type=function_call_output`, `call_id`, `output`）+ **手动 `response.create`** → 模型基于工具结果继续回答（实测第二轮文本引用了回填内容「找到 1 本：《三体》（刘慈欣）」）。
+- 探针脚本 /tmp/probe_rt_tools.py：`modalities:["text"]` 可用 input_text 免音频触发，适合协议级验证。
+- app 侧竞态守卫：工具执行期间用户开口（speech_started）→ 只回填 output 不发 response.create，新轮交服务端 VAD（RealtimeCallService.toolWaitResponse）。

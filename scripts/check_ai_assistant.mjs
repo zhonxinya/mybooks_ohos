@@ -2825,10 +2825,13 @@ try {
       onSpeechStopped: () => ev.push('stopped'),
       onResponding: () => ev.push('responding'),
       onResponseDone: () => ev.push('resp_done'),
+      onFunctionCall: (n, a, c) => ev.push('call:' + n + ':' + c),
       onError: (m) => ev.push('err:' + m),
       onClosed: () => ev.push('closed'),
     };
-    const connecting = Rt.connect('人设指令', cb);
+    const connecting = Rt.connect('人设指令', cb, [
+      { type: 'function', function: { name: 'search_books', parameters: { type: 'object', properties: {} } } },
+    ]);
     await flush();
     assert.equal(rtState.lastUrl, 'wss://token-plan.maas.qianwenaiapi.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus');
     assert.equal(rtState.lastOptions.header.Authorization, 'Bearer sk-tp');
@@ -2844,6 +2847,7 @@ try {
     assert.equal(update.session.input_audio_format, 'pcm');
     assert.equal(update.session.output_audio_format, 'pcm');
     assert.equal(update.session.instructions, '人设指令');
+    assert.equal(update.session.tools[0].function.name, 'search_books');
     // 麦克风帧 → base64 append
     const mic = new Uint8Array(3200);
     mic[0] = 42;
@@ -2884,6 +2888,31 @@ try {
     assert.ok(ev.includes('done:Hello'));
     assert.ok(ev.includes('resp_done'));
     assert.ok(ev.includes('err:示例错误'));
+    // 工具回路：function_call → 回调执行 → output 回填 + response.create 续流
+    const sendsBeforeCall = rtState.sends.length;
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.function_call_arguments.done',
+      call_id: 'c1', name: 'search_books', arguments: '{"query":"三体"}' }));
+    await flush();
+    assert.ok(ev.includes('call:search_books:c1'));
+    Rt.sendToolResult('c1', '找到《三体》');
+    await flush();
+    assert.equal(rtState.sends.length, sendsBeforeCall + 2);
+    const toolOut = JSON.parse(rtState.sends[sendsBeforeCall]);
+    assert.equal(toolOut.item.type, 'function_call_output');
+    assert.equal(toolOut.item.call_id, 'c1');
+    assert.equal(toolOut.item.output, '找到《三体》');
+    assert.equal(JSON.parse(rtState.sends[sendsBeforeCall + 1]).type, 'response.create');
+    // 工具执行期间用户开口：结果仍回填，但不再抢 response.create（VAD 自动起新轮）
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.function_call_arguments.done',
+      call_id: 'c2', name: 'search_books', arguments: '{}' }));
+    await flush();
+    rtState.socket.emitEvent(JSON.stringify({ type: 'input_audio_buffer.speech_started' }));
+    await flush();
+    const sendsBefore2 = rtState.sends.length;
+    Rt.sendToolResult('c2', '结果');
+    await flush();
+    assert.equal(rtState.sends.length, sendsBefore2 + 1);
+    assert.equal(JSON.parse(rtState.sends[sendsBefore2]).item.call_id, 'c2');
     // 静音=停上行帧（不断采集），取消静音恢复 append
     const sendsBefore = rtState.sends.length;
     Rt.setMuted(true);
@@ -2899,7 +2928,7 @@ try {
     await connecting;
     // 缺 Key：连接即抛（页面提示配置）
     deps.state.store.delete('s:ai_api_key_qwen-tokenplan');
-    await assert.rejects(() => Rt.connect('x', cb), /Token Plan API Key/);
+    await assert.rejects(() => Rt.connect('x', cb, []), /Token Plan API Key/);
     deps.state.store.clear();
   });
 
