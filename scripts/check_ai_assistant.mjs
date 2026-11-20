@@ -24,6 +24,7 @@ const settingsDefaults = () => ({
   ],
   keys: new Set(['deepseek']), saved: null, models: [], fetchError: '', completeReply: 'ok',
   voiceProviderId: '', voiceModel: '', voiceConfig: null, lastCompleteConfig: null,
+  speakEngine: 'system', speakCalls: [], speakStops: 0,
 });
 const state = {
   ready: true, handlers: null, copied: '', cancel: null,
@@ -88,6 +89,8 @@ export const AiService = {
     state.settings.voiceProviderId = providerId;
     state.settings.voiceModel = model;
   },
+  loadSpeakEngine: () => state.settings.speakEngine ?? 'system',
+  saveSpeakEngine: (e) => { state.settings.speakEngine = e === 'cloud' ? 'cloud' : 'system'; },
   loadVoiceConfig: () => {
     if (state.settings.voiceProviderId.length > 0) {
       const p = state.settings.providers.find((x) => x.id === state.settings.voiceProviderId);
@@ -105,6 +108,10 @@ export const AiService = {
 export const QwenAudioService = {
   startRecording: async () => {}, stopRecording: async () => '', stopRecordingCleanup: () => {},
   transcribe: async () => '', synthesize: async () => '/tmp/tts_test.mp3', playFile: async () => true, stopPlayback: () => {},
+};
+export const SpeakService = {
+  speak: async (text) => { state.settings.speakCalls.push(text); return true; },
+  stop: () => { state.settings.speakStops++; },
 };
 // bindMenu 当前项勾选用的符号修饰器桩（页面测试不渲染 UI，仅保证符号可解析）
 export const SymbolGlyphModifier = class {
@@ -446,6 +453,30 @@ function stageQwenAudio() {
     .replace(`from './TalebookService'`, `from './aiServiceDeps.ts'`)
     .replace(`from './AiService'`, `from './RealAiService.ts'`);
   writeFileSync(join(dir, 'RealQwenAudio.ts'), source);
+  // SpeakService 真实入检：ReaderTtsService 用可编程桩（失败注入/完成回调手动触发）
+  writeFileSync(join(dir, 'readerTtsDeps.ts'), [
+    'export const ttsState = { starts: [], stops: 0, failEngine: false };',
+    'export class ReaderTtsService {',
+    '  err = null;',
+    '  setCallbacks(_a, b, _c) { this.err = b; }',
+    '  async start(chunks, speed, onDone) {',
+    '    ttsState.starts.push({ chunks: chunks, onDone: onDone });',
+    '    if (ttsState.failEngine) {',
+    "      if (this.err !== null) { this.err('Creating the engine timed out'); }",
+    '      return false;',
+    '    }',
+    '    return true;',
+    '  }',
+    '  stop() { ttsState.stops++; }',
+    '}',
+    '',
+  ].join('\n'));
+  let speak = read('services/SpeakService.ets');
+  speak = speak
+    .replace(`from './AiService'`, `from './RealAiService.ts'`)
+    .replace(`from './QwenAudioService'`, `from './RealQwenAudio.ts'`)
+    .replace(`from './ReaderTtsService'`, `from './readerTtsDeps.ts'`);
+  writeFileSync(join(dir, 'RealSpeakService.ts'), speak);
 }
 
 /** NovelMetaService 真实入检：同样复用 rcp 桩；引擎分派点用 Reader3Native 替身。 */
@@ -530,7 +561,7 @@ function stagePage(name) {
     for (const name of clause.split(',').map((part) => part.trim())) {
       if (['AiService', 'AiBookService', 'ShelfApi', 'TalebookService', 'pasteboard', 'AppRouter', 'AI_PROVIDERS',
         'CONTEXT_LENGTH_OPTIONS', 'fileIo as fs', 'photoAccessHelper', 'image', 'util', 'common',
-        'promptAction', 'SymbolGlyphModifier', 'QwenAudioService'].includes(name)) {
+        'promptAction', 'SymbolGlyphModifier', 'QwenAudioService', 'SpeakService'].includes(name)) {
         shims.add(name);
       }
     }
@@ -2677,6 +2708,41 @@ try {
     assert.equal(page.voiceProviderSelectedIndex(), 2);
     assert.ok(page.voiceSummary().includes('OpenCode'));
     resetSettings();
+  });
+
+  test('SpeakService 播报引擎：默认系统、播完/打断/无引擎三态与开关持久化', async () => {
+    const { SpeakService: RealSpeakService } = await load('RealSpeakService');
+    const { ttsState } = await load('readerTtsDeps');
+    deps.state.store.clear();
+    // ① 默认走系统引擎
+    assert.equal(RealAiService.loadSpeakEngine(), 'system');
+    ttsState.starts.length = 0;
+    ttsState.stops = 0;
+    ttsState.failEngine = false;
+    const p1 = RealSpeakService.speak('第一句');
+    await flush();
+    assert.equal(ttsState.starts.length, 1);
+    assert.deepEqual(ttsState.starts[0].chunks, ['第一句']);
+    ttsState.starts[0].onDone();
+    assert.equal(await p1, true);
+    // ② stop 打断：未播完的 speak 以 false 结束，系统引擎被停
+    const p2 = RealSpeakService.speak('第二句');
+    await flush();
+    RealSpeakService.stop();
+    assert.equal(await p2, false);
+    assert.ok(ttsState.stops >= 1);
+    // ③ 引擎不可用（模拟器 50008 场景）：抛人话错误供页面 toast
+    ttsState.failEngine = true;
+    await assert.rejects(() => RealSpeakService.speak('第三句'), /Creating the engine timed out/);
+    // ④ 引擎开关持久化：非法值回落 system
+    RealAiService.saveSpeakEngine('cloud');
+    assert.equal(RealAiService.loadSpeakEngine(), 'cloud');
+    RealAiService.saveSpeakEngine('bogus');
+    assert.equal(RealAiService.loadSpeakEngine(), 'system');
+    deps.state.store.delete('p:ai_speak_engine');
+    ttsState.starts.length = 0;
+    ttsState.stops = 0;
+    ttsState.failEngine = false;
   });
 
   test('灵魂管理页：灵魂保存/恢复默认，手动补记与删除记忆', () => {

@@ -1,7 +1,7 @@
 import { PageScaffold, PrimaryButton, SecondaryButton, SectionTitle, FilterChips, FilterChipItem,
   ChipButton } from '../components';
 import { AiService, AiConfig, AiProviderPreset, AiMessage, CONTEXT_LENGTH_OPTIONS } from '../services/AiService';
-import { QwenAudioService } from '../services/QwenAudioService';
+import { SpeakService } from '../services/SpeakService';
 import { AppRouter } from '../utils/AppRouter';
 
 /** @Builder 只有传单个对象字面量才是引用传递；标量参数不随 @State 更新，切服务商时输入框会停在旧值。 */
@@ -45,6 +45,7 @@ struct AiSettingsPage {
   @State testOk: boolean = false;
   @State probingVoice: boolean = false;
   @State autoSpeakOn: boolean = false;
+  @State speakEngine: string = 'system';
   /** 语音通话对话模型：false=跟随全局；provider 0=跟随，其余=providers[index-1]。 */
   @State voiceFollow: boolean = true;
   @State voiceProviderId: string = '';
@@ -54,6 +55,7 @@ struct AiSettingsPage {
 
   aboutToAppear(): void {
     this.autoSpeakOn = AiService.loadAutoSpeak();
+    this.speakEngine = AiService.loadSpeakEngine();
     this.voiceProviderId = AiService.loadVoiceProviderId();
     this.voiceFollow = this.voiceProviderId.length === 0;
     this.voiceModel = AiService.loadVoiceModel();
@@ -278,21 +280,21 @@ struct AiSettingsPage {
     }
   }
 
-  /** 语音链路探测：走 Token Plan TTS 合成一句并播放（不依赖麦克风；系统引擎模拟器不可用，见探测档案）。 */
+  /** 语音链路探测：按当前播报引擎合成一句并播放（系统引擎在模拟器会报无引擎，可切云端档复测）。 */
   private async probeVoice(): Promise<void> {
     if (this.probingVoice) {
       return;
     }
     this.probingVoice = true;
     this.testResult = '';
+    const engineName: string = AiService.loadSpeakEngine() === 'cloud' ? 'Token Plan 云端' : '系统语音';
     try {
-      const path: string = await QwenAudioService.synthesize('语音链路探测：合成与播放测试。');
-      const completed: boolean = await QwenAudioService.playFile(path);
+      const completed: boolean = await SpeakService.speak('语音链路探测：合成与播放测试。');
       this.testOk = true;
-      this.testResult = completed ? 'TTS 链路正常（合成+播放完成）' : 'TTS 链路结束（播报被打断或提前停止）';
+      this.testResult = completed ? `${engineName}链路正常（播放完成）` : `${engineName}链路结束（被打断或提前停止）`;
     } catch (error) {
       this.testOk = false;
-      this.testResult = `TTS 链路失败：${error instanceof Error ? error.message : String(error)}`;
+      this.testResult = `${engineName}链路失败：${error instanceof Error ? error.message : String(error)}`;
     } finally {
       this.probingVoice = false;
     }
@@ -638,8 +640,29 @@ struct AiSettingsPage {
         }
         .width('100%');
 
+        Row() {
+          Text('播报引擎')
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'));
+          Blank();
+          Select([{ value: '系统语音' }, { value: 'Token Plan 云端语音' }])
+            .selected(this.speakEngine === 'cloud' ? 1 : 0)
+            .value(this.speakEngine === 'cloud' ? 'Token Plan 云端语音' : '系统语音')
+            .font({ size: 13 })
+            .onSelect((index: number, value: string) => {
+              this.speakEngine = index === 1 ? 'cloud' : 'system';
+              AiService.saveSpeakEngine(this.speakEngine);
+            });
+        }
+        .width('100%');
+
+        Text('系统语音免流量、离线可播；模拟器没有系统语音引擎，播报报错时请切「Token Plan 云端语音」（需服务商为 Token Plan）。')
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%');
+
         Row({ space: 12 }) {
-          Text('语音能力探测（合成+播放，验证 Token Plan 链路）')
+          Text('语音能力探测（按当前播报引擎合成+播放）')
             .fontSize(13)
             .fontColor($r('app.color.brand_primary'))
             .onClick(() => {

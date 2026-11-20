@@ -4,6 +4,7 @@ import { abilityAccessCtrl, common } from '@kit.AbilityKit';
 import { PageScaffold, PrimaryButton, SecondaryButton } from '../components';
 import { AppRouter } from '../utils/AppRouter';
 import { QwenAudioService } from '../services/QwenAudioService';
+import { SpeakService } from '../services/SpeakService';
 import { AiService, AiMessage } from '../services/AiService';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
@@ -155,9 +156,9 @@ struct AiVoiceCallPage {
       return;
     }
     if (this.st === ST_SPEAKING) {
-      // 打断播报：stopPlayback 让 playFile 返回，轮转自然回到聆听
+      // 打断播报：stop 让 speak 以 false 返回，轮转自然回到聆听
       this.tip = '';
-      QwenAudioService.stopPlayback();
+      SpeakService.stop();
     }
   }
 
@@ -211,11 +212,7 @@ struct AiVoiceCallPage {
       this.aiLine = answer;
       this.history.push({ role: 'assistant', content: answer });
       this.st = ST_SPEAKING;
-      const path: string = await QwenAudioService.synthesize(answer);
-      if (!alive()) {
-        return;
-      }
-      await QwenAudioService.playFile(path);
+      await SpeakService.speak(answer);
       if (!alive()) {
         return;
       }
@@ -233,7 +230,7 @@ struct AiVoiceCallPage {
   private hangup(): void {
     this.turnSeq++;
     this.st = ST_IDLE;
-    QwenAudioService.stopPlayback();
+    SpeakService.stop();
     QwenAudioService.stopRecordingCleanup();
   }
 
