@@ -113,7 +113,7 @@ writeFileSync(join(dir, 'shim.ts'), shim);
 writeFileSync(join(dir, 'aiServiceDeps.ts'), `
 // Buffer.from(x).buffer 带池化填充，必须 slice 出精确字节（模拟 rcp 的紧凑 ArrayBuffer）
 const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
-export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [], sourceJson: null };
+export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [], sourceJson: null, written: [] };
 export const util = {
   // 透传 encoding（gbk/gb2312 走 Node 内置 TextDecoder），utf-8 用法不受影响
   TextDecoder: { create: (encoding) => ({ decodeToString: (u8) => new TextDecoder(encoding ?? 'utf-8').decode(u8) }) },
@@ -152,8 +152,9 @@ export const fs = {
   statSync: () => ({ size: state.sourceJson === null ? 0 : Buffer.byteLength(state.sourceJson, 'utf8') }),
   openSync: () => ({ fd: 7 }),
   readSync: (fd, buf) => { const b = Buffer.from(state.sourceJson ?? '', 'utf8'); b.copy(Buffer.from(buf)); return b.length; },
+  writeSync: (fd, text) => { state.written.push(text); state.sourceJson = text; },
   closeSync: () => {},
-  OpenMode: { READ_ONLY: 0 },
+  OpenMode: { READ_ONLY: 0, READ_WRITE: 2, CREATE: 64, TRUNC: 512 },
 };
 export { fs as fileIo };
 export const hilog = { info: () => {}, warn: () => {}, error: () => {} };
@@ -1929,6 +1930,48 @@ try {
     const m = await Reader3Native.meta('https://pat.example/book/123.html');
     assert.strictEqual(m !== null && m.ok, true, 'tmp 候选位命中即接管');
     assert.strictEqual(m.name, 'tmp书');
+  });
+
+  test('Reader3 导入：Legado 数组校验（无效条目过滤）→ 写沙箱并即时刷新缓存', async () => {
+    const { Reader3Native } = await load('RealReader3');
+    Reader3Native.loaded = false;
+    deps.state.sourceJson = null;
+    globalThis.__r3Ctx = { filesDir: '/data/app' };
+    globalThis.__r3Available = true;
+    const text = JSON.stringify([
+      { bookSourceUrl: '全本小说9@https://imp.example', bookSourceName: '导入源', ruleBookInfo: { name: 'h1@text' } },
+      { bookSourceName: '无URL条目' },
+    ]);
+    const n = await Reader3Native.importFromText(text);
+    assert.strictEqual(n, 1, '无 bookSourceUrl 的条目被过滤');
+    assert.strictEqual(JSON.parse(deps.state.written[deps.state.written.length - 1]).length, 1,
+      '落盘文本必须也是过滤后的');
+    assert.strictEqual(await Reader3Native.count(), 1);
+    // 导入后 meta() 立即用新缓存（无需重读文件）
+    globalThis.__r3Payload = '{"status":"ok","result":{"data":"{\\"name\\":\\"导入书\\"}"}}';
+    const m = await Reader3Native.meta('https://imp.example/book/1.html');
+    assert.strictEqual(m.rule, '导入源');
+    assert.strictEqual(m.name, '导入书');
+  });
+
+  test('Reader3 导入校验：坏 JSON / 非数组 / 全无效条目 → 抛错且不落盘', async () => {
+    const { Reader3Native } = await load('RealReader3');
+    const before = deps.state.written.length;
+    await assert.rejects(() => Reader3Native.importFromText('这不是JSON'), /不是有效的 JSON/);
+    await assert.rejects(() => Reader3Native.importFromText('{"bookSourceUrl":"x"}'), /JSON 数组/);
+    await assert.rejects(() => Reader3Native.importFromText('[]'), /未解析到有效书源/);
+    assert.strictEqual(deps.state.written.length, before, '失败导入不得写盘');
+  });
+
+  test('Reader3 导入：URL 通道 rcp 抓取（非 200 报错）走同一校验落盘', async () => {
+    const { Reader3Native } = await load('RealReader3');
+    Reader3Native.loaded = false;
+    const good = JSON.stringify([{ bookSourceUrl: 'https://u.example', bookSourceName: 'URL源' }]);
+    deps.state.rcpResponse = { statusCode: 200, headers: { 'content-type': 'application/json' }, body: enc(good) };
+    assert.strictEqual(await Reader3Native.importFromUrl('https://host/bookmeta_sources.json'), 1);
+    deps.state.rcpResponse = { statusCode: 404, headers: {}, body: enc('') };
+    await assert.rejects(() => Reader3Native.importFromUrl('https://host/none.json'), /HTTP 404/);
+    deps.state.rcpResponse = null;
   });
 
   test('get_novel_meta：17K url 走工具输出简介/封面，读工具不过闸门，行模板带类别/状态/字数', async () => {
