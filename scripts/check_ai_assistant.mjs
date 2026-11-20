@@ -23,7 +23,7 @@ const settingsDefaults = () => ({
     { id: 'opencode', name: 'OpenCode (Go)', baseUrl: 'https://opencode.ai/inference/openai/v1', model: 'big-pickle', vision: false },
   ],
   keys: new Set(['deepseek']), saved: null, models: [], fetchError: '', completeReply: 'ok',
-  voiceProviderId: '', voiceModel: '', voiceConfig: null, lastCompleteConfig: null,
+  voiceProviderId: '', voiceModel: '', voiceConfig: null, lastCompleteConfig: null, lastCompleteMessages: null,
   speakEngine: 'system', speakCalls: [], speakStops: 0, callMode: 'realtime',
 });
 const state = {
@@ -79,6 +79,7 @@ export const AiService = {
   savePermission: (mode) => { state.settings.permission = mode; },
   complete: async (messages, maxTokens, config) => {
     state.settings.lastCompleteConfig = config === undefined ? state.settings.config : config;
+    state.settings.lastCompleteMessages = messages;
     return state.settings.completeReply;
   },
   loadAutoSpeak: () => state.settings.autoSpeak === true,
@@ -2314,6 +2315,79 @@ try {
     assert.equal(store.sessions.length, 1);
     assert.equal(store.sessions[0].title, '新对话');
     assert.equal(store.currentTitle(), '新对话');
+  });
+
+  test('上下文压缩：截断旧轮超阈值生成摘要→注入上下文→增量更新，重新生成清摘要', async () => {
+    const page = chat();
+    const store = page.store;
+    store.contextK = 4; // 档 4 → 携带 8 条，其余进摘要
+    const pushChat = (n) => {
+      for (let i = 0; i < n; i++) {
+        store.messages.push({ role: i % 2 === 0 ? 'user' : 'assistant',
+          content: `聊${i}`, streaming: false, error: false, activities: [] });
+      }
+    };
+    const sumPref = () => JSON.parse(state.prefs.get('ai_chat_summaries'));
+    // 阶段一：17 条已完成 + 1 条在途收尾 → 窗口 8 条、截断 10 ≥ 8 → 触发首次摘要
+    pushChat(17);
+    store.messages.push({ role: 'assistant', content: '', streaming: true, error: false, activities: [] });
+    state.settings.completeReply = '摘要V1：已聊书与偏好';
+    store.finishBubble('收尾', false);
+    await flush();
+    let sums = sumPref();
+    assert.equal(sums.length, 1);
+    assert.equal(sums[0].id, store.currentId);
+    assert.equal(sums[0].text, '摘要V1：已聊书与偏好');
+    assert.equal(sums[0].count, 10, '18 条筛后 - 窗口 8 = 截断 10');
+    // 摘要注入上下文：档 system + 摘要 system 行 + 仅窗口 8 条
+    const ctx = await store.buildContext();
+    assert.equal(ctx[1].role, 'system');
+    assert.ok(ctx[1].content.startsWith('早前对话摘要（已压缩 10 条）'), ctx[1].content.slice(0, 30));
+    assert.ok(ctx[1].content.includes('摘要V1'));
+    const historyMsgs = ctx.slice(2);
+    assert.equal(historyMsgs.length, 8, '窗口仍严格 8 条，摘要不占窗口');
+    assert.equal(store.summaryNote(), '已摘要 10 条');
+    // 阶段二：只加 2 条+收尾（截断 13-10=3 < 8）→ 不叠火，摘要保持 V1
+    pushChat(2);
+    store.messages.push({ role: 'assistant', content: '', streaming: true, error: false, activities: [] });
+    store.finishBubble('B', false);
+    await flush();
+    assert.equal(sumPref()[0].count, 10, '未达阈值不更新摘要');
+    // 阶段三：加 8 条+收尾（截断 22-10=12 ≥ 8）→ 二次摘要吃「旧摘要+新片段」重写
+    pushChat(8);
+    store.messages.push({ role: 'assistant', content: '', streaming: true, error: false, activities: [] });
+    state.settings.completeReply = '摘要V2';
+    store.finishBubble('C', false);
+    await flush();
+    assert.equal(sumPref()[0].count, 22, '增量推进');
+    assert.equal(sumPref()[0].text, '摘要V2');
+    const sumUser = state.settings.lastCompleteMessages.find((m) => m.role === 'user');
+    assert.ok(sumUser.content.includes('已有摘要：') && sumUser.content.includes('摘要V1')
+      && sumUser.content.includes('新增片段'), '增量请求须带旧摘要与新片段');
+    state.settings.completeReply = 'ok';
+    // 重新生成：坐标系失效，摘要清除且不注入
+    assert.equal(store.regenerate(), true);
+    assert.equal(sumPref().length, 0);
+    assert.equal(store.summaryNote(), '');
+    assert.equal((await store.buildContext()).filter((m) => m.role === 'system').length, 1,
+      '清摘要后只剩档 system 行');
+    await flush();
+  });
+
+  test('上下文指示器：只计实际携带的窗口正文，错误与在途气泡排除', () => {
+    const page = chat();
+    const store = page.store;
+    store.contextK = 4; // 窗口 8 条
+    for (let i = 0; i < 10; i++) {
+      store.messages.push({ role: i % 2 === 0 ? 'user' : 'assistant',
+        content: 'x'.repeat(100), streaming: false, error: false, activities: [] });
+    }
+    assert.equal(store.contextUsageK(), 8, '8 条 x100 字 = 800/100');
+    store.messages[0].content = 'x'.repeat(5000); // 窗口外不计
+    assert.equal(store.contextUsageK(), 8);
+    store.messages.push({ role: 'assistant', content: '生成中', streaming: true, error: false, activities: [] });
+    store.messages.push({ role: 'assistant', content: 'x'.repeat(100), streaming: false, error: true, activities: [] });
+    assert.equal(store.contextUsageK(), 8, '在途与错误气泡不进指示器');
   });
 
   test('网关工具回路：超过轮数上限报错收场，最后一轮不挂 tools', async () => {

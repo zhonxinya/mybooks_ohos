@@ -96,6 +96,27 @@ const CHAT_HISTORY_MAX: number = 60;
 const CHAT_SESSIONS_KEY: string = 'ai_chat_sessions';
 /** 存档会话数上限：超出按 updatedAt 从旧到新丢弃。 */
 const CHAT_SESSIONS_MAX: number = 12;
+/** 历史摘要键：按会话 id 存「被窗口截断的旧轮」的压缩摘要。 */
+const CHAT_SUMMARIES_KEY: string = 'ai_chat_summaries';
+/** 未摘数量达到该阈值才触发一次摘要请求：压缩自身也要省 token。 */
+const COMPRESS_MIN_DROPPED: number = 8;
+/** 摘要生成请求的系统提示词：面向「续聊携带」，只留事实不复议论。 */
+const SUMMARY_SYSTEM_PROMPT: string =
+  '把对话片段压缩成供后续对话使用的交接摘要：保留书名/id、用户偏好、已完成与未完成事项等关键事实，' +
+    '要点式短句，总量不超过 200 字。只输出摘要正文。';
+
+/** 单会话的历史摘要：text=摘要正文，count=已折叠进摘要的筛后气泡前缀条数。 */
+export interface HistorySummary {
+  text: string;
+  count: number;
+}
+
+/** 摘要落盘条目：HistorySummary 加会话 id，仅用于 JSON 持久化。 */
+interface SummaryRecord {
+  id: string;
+  text: string;
+  count: number;
+}
 
 /**
  * AI 对话全局会话仓库（单例）：流式状态机与历史都挂在这里，脱离页面实例存活。
@@ -131,6 +152,9 @@ export class AiChatStore {
   private askResolve: ((answer: string) => void) | null = null;
   /** 存档会话列表（时间戳 id 去重、updatedAt 排序截顶）；当前会话不在其中。 */
   sessions: ChatSession[] = [];
+  /** 各会话历史摘要（键=会话 id）：窗口外旧轮压缩后随会话携带，不再静默丢弃。 */
+  private summaries: Map<string, HistorySummary> = new Map();
+  private compressing: boolean = false;
   private static idSeq: number = 0;
 
   /** 会话 id：毫秒+进程内递增，杜绝同毫秒新建/切换撞 id。 */
@@ -197,6 +221,7 @@ export class AiChatStore {
       this.currentId = this.nextId();
       this.loadHistory();
       this.loadSessions();
+      this.loadSummaries();
     }
   }
 
@@ -381,6 +406,12 @@ export class AiChatStore {
     const bubbles: ChatBubble[] = this.messages.filter((m: ChatBubble) =>
       !m.error && (m.content.length > 0 || (m.images ?? []).length > 0));
     const start: number = Math.max(0, bubbles.length - AiService.contextRounds(this.contextK) * 2);
+    // 窗口外旧轮的历史摘要随会话携带：count 超过当前截断点说明消息被重排
+    // （重新生成/清空过），摘要脱节，宁缺毋滥地不注入
+    const summary: HistorySummary | undefined = this.summaries.get(this.currentId);
+    if (summary !== undefined && summary.text.length > 0 && summary.count <= start) {
+      context.push({ role: 'system', content: `早前对话摘要（已压缩 ${summary.count} 条）：\n${summary.text}` });
+    }
     for (let i = start; i < bubbles.length; i++) {
       const msg: AiMessage = { role: bubbles[i].role, content: bubbles[i].content };
       const imgs: string[] = this.visionEnabled ? (bubbles[i].images ?? []) : [];
@@ -399,6 +430,118 @@ export class AiChatStore {
       context.push(msg);
     }
     return context;
+  }
+
+  /** 参与携带统计的气泡（排除错误与在途）；与 buildContext 过滤口径一致处仅在排除 streaming。 */
+  private filteredBubbles(): ChatBubble[] {
+    return this.messages.filter((m: ChatBubble) =>
+      !m.error && !m.streaming && (m.content.length > 0 || (m.images ?? []).length > 0));
+  }
+
+  /**
+   * 估算下次请求随附的历史 token（k）：窗口内正文 + 在用的历史摘要。
+   * 粗算中文约 1 字 = 1 token、英文约 4 字 = 1 token，取折中 100 字/k 只用于指示不用于计费。
+   * system 提示与图片 base64 开销不计（与档位设置对照的意义在于历史增长趋势）。
+   */
+  contextUsageK(): number {
+    const bubbles: ChatBubble[] = this.filteredBubbles();
+    const start: number = Math.max(0, bubbles.length - AiService.contextRounds(this.contextK) * 2);
+    const summary: HistorySummary | undefined = this.summaries.get(this.currentId);
+    let chars: number = summary !== undefined && summary.text.length > 0 && summary.count <= start
+      ? summary.text.length : 0;
+    for (let i = start; i < bubbles.length; i++) {
+      chars += bubbles[i].content.length;
+    }
+    return Math.ceil(chars / 100);
+  }
+
+  /** 会话面板/指示器的摘要状态；''=无在用摘要。 */
+  summaryNote(): string {
+    const bubbles: ChatBubble[] = this.filteredBubbles();
+    const start: number = Math.max(0, bubbles.length - AiService.contextRounds(this.contextK) * 2);
+    const summary: HistorySummary | undefined = this.summaries.get(this.currentId);
+    if (summary === undefined || summary.text.length === 0 || summary.count > start) {
+      return '';
+    }
+    return `已摘要 ${summary.count} 条`;
+  }
+
+  /**
+   * 增量历史压缩：窗口截断掉的消息比已有摘要多覆盖出 COMPRESS_MIN_DROPPED 条时，
+   * 把旧摘要 + 新增被截断片段一次交给 complete() 重写（≤200 字）。
+   * fire-and-forget：失败静默（旧摘要继续用），compressing 守卫防叠火；
+   * 摘要是唯一「窗口外信息」的去处，触发偏保守比频繁多一次小请求更划算。
+   */
+  private async compressHistory(): Promise<void> {
+    if (this.compressing) {
+      return;
+    }
+    const sessionId: string = this.currentId;
+    const bubbles: ChatBubble[] = this.filteredBubbles();
+    const start: number = Math.max(0, bubbles.length - AiService.contextRounds(this.contextK) * 2);
+    const old: HistorySummary | undefined = this.summaries.get(sessionId);
+    const covered: number = old === undefined || old.text.length === 0 ? 0 : old.count;
+    if (start - covered < COMPRESS_MIN_DROPPED) {
+      return;
+    }
+    const parts: string[] = [];
+    for (let i = covered; i < start; i++) {
+      parts.push(`${bubbles[i].role === 'user' ? '用户' : 'AI'}: ${bubbles[i].content}`);
+    }
+    const prompt: string = old !== undefined && old.text.length > 0
+      ? `已有摘要：\n${old.text}\n\n新增片段：\n${parts.join('\n')}`
+      : parts.join('\n');
+    this.compressing = true;
+    try {
+      const text: string = (await AiService.complete([
+        { role: 'system', content: SUMMARY_SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ], 512)).trim();
+      if (text.length > 0) {
+        // 期间用户可能已切会话：摘要归属发起时的 sessionId，不跟随 currentId 漂移
+        this.summaries.set(sessionId, { text: text, count: start });
+        this.saveSummaries();
+        this.notify();
+      }
+    } catch (_error) {
+      // 摘要失败不打扰用户：下轮超过阈值自然重试
+    } finally {
+      this.compressing = false;
+    }
+  }
+
+  private saveSummaries(): void {
+    const arr: SummaryRecord[] = [];
+    this.summaries.forEach((v: HistorySummary, k: string): void => {
+      arr.push({ id: k, text: v.text, count: v.count });
+    });
+    TalebookService.prefSet(CHAT_SUMMARIES_KEY, JSON.stringify(arr));
+  }
+
+  private loadSummaries(): void {
+    const raw: string = TalebookService.prefGet(CHAT_SUMMARIES_KEY, '');
+    if (raw.length === 0) {
+      return;
+    }
+    try {
+      const arr: Object = JSON.parse(raw);
+      if (!Array.isArray(arr)) {
+        return;
+      }
+      for (const entry of arr as Object[]) {
+        if (entry === null || typeof entry !== 'object') {
+          continue;
+        }
+        const rec: Record<string, Object> = entry as Record<string, Object>;
+        if (typeof rec['id'] !== 'string' || typeof rec['text'] !== 'string'
+          || typeof rec['count'] !== 'number') {
+          continue;
+        }
+        this.summaries.set(rec['id'], { text: rec['text'], count: rec['count'] });
+      }
+    } catch (_error) {
+      // 摘要档损坏：视为无摘要
+    }
   }
 
   /** 页面清草稿用的同步预检；权威判定仍在 send 内（两处条件必须一致）。 */
@@ -516,6 +659,10 @@ export class AiChatStore {
     }
     this.saveHistory();
     this.notify();
+    // 轮次收尾顺带压缩窗口外旧轮（内部阈值+compressing 守卫，不阻塞界面）
+    if (!isError) {
+      void this.compressHistory();
+    }
   }
 
   /** 工具开始执行：活动区加一条 doing。整组换数组赋值，保证视图刷新。 */
@@ -696,6 +843,10 @@ export class AiChatStore {
     }
     this.sessions.splice(index, 1);
     this.saveSessions();
+    // 摘要跟随会话生命周期：档删了摘要就是孤儿，一并清
+    if (this.summaries.delete(id)) {
+      this.saveSummaries();
+    }
     this.notify();
   }
 
@@ -708,6 +859,10 @@ export class AiChatStore {
       if (this.messages[i].role === 'user') {
         const question: ChatBubble = this.messages[i];
         this.messages = this.messages.slice(0, i);
+        // 截断重排后摘要的「前 count 条」坐标系失效且无法回退，宁可丢掉待重建
+        if (this.summaries.delete(this.currentId)) {
+          this.saveSummaries();
+        }
         this.saveHistory();
         void this.send(question.content, question.images ?? []);
         return true;
@@ -732,7 +887,10 @@ export class AiChatStore {
     this.loaded = true;
     this.sessions = [];
     this.currentId = this.nextId();
+    this.summaries.clear();
+    this.compressing = false;
     TalebookService.prefSet(CHAT_HISTORY_KEY, '[]');
     TalebookService.prefSet(CHAT_SESSIONS_KEY, '[]');
+    TalebookService.prefSet(CHAT_SUMMARIES_KEY, '[]');
   }
 }
