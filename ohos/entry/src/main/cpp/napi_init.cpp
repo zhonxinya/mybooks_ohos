@@ -7,6 +7,9 @@
 #include <string>
 #include <vector>
 
+// reader_core 书源引擎桥（reader3_meta.cpp）；未链接预编译 .so 时为同形状空实现
+namespace reader3_meta { napi_value RegisterModule(napi_env env, napi_value exports); }
+
 namespace {
 
 struct AsyncStringContext {
@@ -823,6 +826,7 @@ napi_value RegisterFn(napi_env env, napi_value exports)
         {"apiOpenExternalUrl", nullptr, ApiOpenExternalUrl, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
+    reader3_meta::RegisterModule(env, exports);
     return exports;
 }
 

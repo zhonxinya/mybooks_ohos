@@ -108,6 +108,7 @@ include_directories(
     ${NATIVERENDER_ROOT_PATH}
     ${SHARED_THIRD_PARTY}
     ${ENTRY_CURL_INCLUDE}
+    ${SHARED_THIRD_PARTY}/reader3/include
 )
 
 add_library(entry SHARED
@@ -120,6 +121,7 @@ add_library(entry SHARED
     download_store.cpp
     talebook_api.cpp
     sonovel_api.cpp
+    reader3_meta.cpp
     apk_installer.cpp
     ${SHARED_THIRD_PARTY}/cjson/cJSON.c
 )
@@ -141,4 +143,14 @@ else()
     target_link_libraries(entry PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/../../../libs/${OHOS_ARCH}/libcurl.so
     )
+endif()
+
+# reader_core 书源引擎（book_info 详情元数据）：仿 libcurl 预编译模式，
+# libs/${OHOS_ARCH}/libreader3_native.so 存在才链接（arm64-v8a/x86_64 均为鸿蒙 musl 产物）。
+# Android 装不上 musl 产物，不链接；reader3_meta.cpp 在宏未定义时退化为空实现，
+# ArkTS 侧经 reader3Available() 探测后走现有 parse 兜底路径。
+set(ENTRY_READER3_PREBUILT ${CMAKE_CURRENT_SOURCE_DIR}/../../../libs/${OHOS_ARCH}/libreader3_native.so)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND EXISTS ${ENTRY_READER3_PREBUILT})
+    target_link_libraries(entry PUBLIC ${ENTRY_READER3_PREBUILT})
+    target_compile_definitions(entry PRIVATE READER3_META_ENABLED=1)
 endif()

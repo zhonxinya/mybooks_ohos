@@ -1,5 +1,6 @@
 import { rcp } from '@kit.RemoteCommunicationKit';
 import { util } from '@kit.ArkTS';
+import { Reader3Meta, Reader3Native } from './Reader3Native';
 
 /**
  * 网文详情页元数据补全：输入书源站详情页 url（来自 so-novel 聚合搜索的 url 字段），
@@ -123,6 +124,16 @@ export class NovelMetaService {
       empty.error = 'url 需为 http(s) 详情页地址（来自 search_sonovel 结果）';
       return empty;
     }
+    // 书源规则引擎优先（reader_core 预编译库 + legado 语料，url 命中书源即按规则提取）；
+    // 引擎不可用/无匹配书源/提取失败时落到下面现有站点规则（会再抓一次，属兜底代价）
+    const r3: Reader3Meta | null = await Reader3Native.meta(trimmed);
+    if (r3 !== null && r3.ok) {
+      const bySource: NovelMeta = { ok: true, error: '', title: r3.name, author: r3.author,
+        category: r3.kind, status: NovelMetaService.normalizeStatus(r3.kind),
+        intro: NovelMetaService.clean(r3.intro, INTRO_MAX), cover: r3.coverUrl,
+        rule: `书源:${r3.rule}` };
+      return bySource;
+    }
     let html: string = '';
     try {
       html = await NovelMetaService.fetchText(trimmed);
@@ -220,6 +231,17 @@ export class NovelMetaService {
       return `https://yunqi.qq.com/detail/${yunqi[1]}`;
     }
     return ujxsw;
+  }
+
+  /** 连载状态归一（各站点原始词不同）：完结/完本/全本→已完本，连载→连载中，其余留空不猜。 */
+  static normalizeStatus(raw: string): string {
+    if (raw.indexOf('完结') >= 0 || raw.indexOf('完本') >= 0 || raw.indexOf('全本') >= 0) {
+      return '已完本';
+    }
+    if (raw.indexOf('连载') >= 0) {
+      return '连载中';
+    }
+    return '';
   }
 
   /**
