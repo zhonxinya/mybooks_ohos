@@ -151,8 +151,9 @@ const TOOL_SEARCH_SONOVEL: AiToolDefinition = defineTool('search_sonovel',
     '也是 get_novel_meta 取简介/封面的入参。',
   QUERY_PROPS, ['query']);
 const TOOL_ADD_SONOVEL_TASK: AiToolDefinition = defineTool('add_sonovel_task',
-  '把一本 so-novel 网络小说加入下载任务队列（参数来自 search_sonovel 的返回）。' +
-    '服务器转换完成后成品会自动拉进本地书架可供阅读。',
+  '把一本 so-novel 网络小说加入服务器下载任务队列（参数来自 search_sonovel 的返回）。' +
+    '下载在服务器（云端）进行：完成后成品入库到在线书库（Talebook），不是存到用户手机；' +
+    '用户想离线阅读需之后从在线书库把成品下载到本地书架。',
   SONOVEL_TASK_PROPS, SONOVEL_TASK_REQUIRED);
 const TOOL_LIST_DOWNLOAD_TASKS: AiToolDefinition = defineTool('list_download_tasks',
   '查看当前下载任务队列：每条任务的状态（等待/下载中/完成/失败）、进度与错误原因。无需参数。',
@@ -964,8 +965,8 @@ export class AiTools {
     }
     DownloadTaskService.enqueue(payload);
     DownloadTaskService.processQueue();
-    return `已加入下载任务：《${bookName}》（书源：${payload.sourceName.length > 0 ? payload.sourceName : '未知'}，` +
-      `格式 ${format}）。服务器转换完成后成品会自动拉进本地书架；进度可随时让我用 list_download_tasks 查。`;
+    return `已加入云端下载任务：《${bookName}》（书源：${payload.sourceName.length > 0 ? payload.sourceName : '未知'}，` +
+      `格式 ${format}）。完成后成品入库到在线书库（Talebook），要离线阅读可再让我或你在书架里下载到本地；进度可随时让我用 list_download_tasks 查。`;
   }
 
   private static listDownloadTasks(): string {
