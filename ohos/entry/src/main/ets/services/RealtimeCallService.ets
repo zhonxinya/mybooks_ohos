@@ -29,6 +29,11 @@ export interface RealtimeCallCallbacks {
   onResponding: () => void;
   /** 本轮回复结束。 */
   onResponseDone: () => void;
+  /**
+   * 模型请求调用工具（已在 session 里注册）。页面执行（含确认闸门）后
+   * 调 sendToolResult 回填结果并续流；期间可显示「查询中」。
+   */
+  onFunctionCall: (name: string, args: string, callId: string) => void;
   onError: (message: string) => void;
   onClosed: () => void;
 }
@@ -55,14 +60,35 @@ export class RealtimeCallService {
   }
 
   private static muted: boolean = false;
+  /** 有工具结果待回填续流；用户在此期间开口则交给 VAD 自动起轮，不再抢 response.create。 */
+  private static toolWaitResponse: boolean = false;
+
+  /** 回填工具执行结果（output 为人话摘要或原始 JSON 均可，模型自行消化）。 */
+  static sendToolResult(callId: string, output: string): void {
+    if (RealtimeCallService.ws === null || RealtimeCallService.closed) {
+      return;
+    }
+    const item: Record<string, Object> = {
+      'type': 'function_call_output', 'call_id': callId, 'output': output,
+    };
+    const create: Record<string, Object> = { 'type': 'conversation.item.create', 'item': item };
+    RealtimeCallService.sendJson(create);
+    if (RealtimeCallService.toolWaitResponse) {
+      RealtimeCallService.toolWaitResponse = false;
+      RealtimeCallService.sendJson({ 'type': 'response.create' } as Record<string, Object>);
+    }
+  }
 
   /** 静音：停止上行麦克风帧（VAD 收不到我，但对方讲话与播放不受影响）。 */
   static setMuted(on: boolean): void {
     RealtimeCallService.muted = on;
   }
 
-  /** 连接并进入可对话状态；失败经 onError 汇报并抛错（页面提示回退）。 */
-  static async connect(instructions: string, callbacks: RealtimeCallCallbacks): Promise<void> {
+  /**
+   * 连接并进入可对话状态；失败经 onError 汇报并抛错（页面提示回退）。
+   * `tools` 传 AiTools.definitions()（OpenAI function 形态，网关实测接受）；空数组=不带工具。
+   */
+  static async connect(instructions: string, callbacks: RealtimeCallCallbacks, tools: Object[]): Promise<void> {
     RealtimeCallService.disconnect();
     RealtimeCallService.callbacks = callbacks;
     RealtimeCallService.closed = false;
@@ -71,6 +97,7 @@ export class RealtimeCallService {
     RealtimeCallService.responding = false;
     RealtimeCallService.aiTranscript = '';
     RealtimeCallService.muted = false;
+    RealtimeCallService.toolWaitResponse = false;
 
     const ws: webSocket.WebSocket = webSocket.createWebSocket();
     RealtimeCallService.ws = ws;
@@ -118,6 +145,9 @@ export class RealtimeCallService {
       'output_audio_format': 'pcm',
       'turn_detection': turn,
     };
+    if (tools.length > 0) {
+      session['tools'] = tools;
+    }
     const update: Record<string, Object> = { 'type': 'session.update', 'session': session };
     RealtimeCallService.sendJson(update);
     await RealtimeCallService.startMic();
@@ -182,6 +212,7 @@ export class RealtimeCallService {
     } else if (type === 'input_audio_buffer.speech_started') {
       // 打断：立刻丢队列，之后到达的本轮 audio.delta 也随 responding=false 丢弃入队但会被下次清空
       RealtimeCallService.bargeIn();
+      RealtimeCallService.toolWaitResponse = false;
       RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onSpeechStarted());
     } else if (type === 'input_audio_buffer.speech_stopped') {
       RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onSpeechStopped());
@@ -204,6 +235,13 @@ export class RealtimeCallService {
       if (delta.length > 0) {
         RealtimeCallService.enqueueAudio(delta);
       }
+    } else if (type === 'response.function_call_arguments.done') {
+      const name: string = String(event['name'] ?? '');
+      const callId: string = String(event['call_id'] ?? '');
+      const args: string = String(event['arguments'] ?? '{}');
+      // 本轮响应已因 function_call 结束（response.done）；回填后需手动续一轮
+      RealtimeCallService.toolWaitResponse = true;
+      RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onFunctionCall(name, args, callId));
     } else if (type === 'response.done') {
       RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onResponseDone());
     } else if (type === 'error') {
