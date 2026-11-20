@@ -820,6 +820,21 @@ struct AiAssistantPage {
         .width('100%')
         .padding({ bottom: 8 });
       }
+      // 上下文占用指示：下次请求实际携带的历史量对照档位；摘要生效时一并标注
+      if (this.store.contextUsageK() > 0) {
+        Row({ space: 6 }) {
+          Text(`上下文 ≈${(this.store.contextUsageK() / 10).toFixed(1)}k / ${this.contextK}k`)
+            .fontSize(11)
+            .fontColor($r('app.color.text_tertiary'));
+          if (this.store.summaryNote().length > 0) {
+            Text(`· ${this.store.summaryNote()}`)
+              .fontSize(11)
+              .fontColor($r('app.color.brand_primary'));
+          }
+        }
+        .width('100%')
+        .padding({ left: 4, bottom: 4 });
+      }
       Row({ space: 10 }) {
         if (this.visionEnabled) {
           Stack() {
