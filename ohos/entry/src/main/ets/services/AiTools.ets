@@ -9,6 +9,10 @@ import { AiPersona } from './AiPersona';
 import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';
 import { NovelMeta, NovelMetaService } from './NovelMetaService';
 import { EncyclopediaHit, EncyclopediaService } from './EncyclopediaService';
+import { BookDetail } from './BookModels';
+import { ServerFeature, ServerRegistry } from './ServerProfile';
+import { AccountManager } from './AccountManager';
+import { fileIo as fs } from '@kit.CoreFileKit';
 
 /** 工具结果里的一本书（供对话页做结构化列表渲染）。 */
 export interface ToolBookLine {
@@ -158,6 +162,15 @@ const TOOL_ADD_SONOVEL_TASK: AiToolDefinition = defineTool('add_sonovel_task',
 const TOOL_LIST_DOWNLOAD_TASKS: AiToolDefinition = defineTool('list_download_tasks',
   '查看当前下载任务队列：每条任务的状态（等待/下载中/完成/失败）、进度与错误原因。无需参数。',
   EMPTY_PROPS, NO_REQUIRED);
+const ADD_TO_SHELF_PROPS: Record<string, AiToolProperty> = {
+  'book_id': BOOK_ID_PROP,
+  'format': prop('string', '下载格式（如 epub/azw3/mobi/pdf，取自 book_detail 返回的可下载格式）；留空默认 epub'),
+};
+const TOOL_ADD_TO_SHELF: AiToolDefinition = defineTool('add_to_shelf',
+  '把在线书库里的一本书（书籍 id 来自 search_books）下载到本机书架：先查可下载格式，' +
+    '再加入本机下载队列并立即开始，完成后出现在书架。用户说「把某本书加到书架/存到本机」时使用。' +
+    '与 add_sonovel_task 不同：这本是服务器上已有的成品书。',
+  ADD_TO_SHELF_PROPS, ['book_id']);
 const TOOL_CREATE_BOOKLIST: AiToolDefinition = defineTool('create_booklist',
   '在 MyBooks 服务器上创建一个新书单。返回新书单 id，可用于 add_books_to_booklist。',
   BOOKLIST_CREATE_PROPS, BOOKLIST_CREATE_REQUIRED);
@@ -261,7 +274,7 @@ const TOOL_SEARCH_ENCYCLOPEDIA: AiToolDefinition = defineTool('search_encycloped
 // 新增工具一律插在中间，别放最后。
 const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SEARCH_BOOKS, TOOL_BOOK_DETAIL, TOOL_BOOK_NOTES, TOOL_READING_HISTORY,
-  TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS,
+  TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS, TOOL_ADD_TO_SHELF,
   TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_UPDATE_BOOK_META, TOOL_LIST_CATEGORIES,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
   TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_SEARCH_ENCYCLOPEDIA,
@@ -292,8 +305,8 @@ export class AiTools {
    * 名字与 TOOL_DEFS 里的写工具对应；新加写工具忘记登记 = 无确认直接执行，务必同步。
    */
   private static readonly WRITE_TOOLS: string[] =
-    ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task', 'update_book_meta', 'set_cover',
-      'forget_memory'];
+    ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task', 'add_to_shelf',
+      'update_book_meta', 'set_cover', 'forget_memory'];
 
   static needsConfirm(name: string): boolean {
     return AiTools.WRITE_TOOLS.indexOf(name) >= 0;
@@ -359,6 +372,9 @@ export class AiTools {
     }
     if (name === 'list_download_tasks') {
       return '查看下载任务';
+    }
+    if (name === 'add_to_shelf') {
+      return '加入书架';
     }
     if (name === 'create_booklist') {
       return '创建书单';
@@ -475,6 +491,9 @@ export class AiTools {
       }
       if (name === 'list_download_tasks') {
         return AiTools.listDownloadTasks();
+      }
+      if (name === 'add_to_shelf') {
+        return await AiTools.addToShelf(args);
       }
       if (name === 'create_booklist') {
         return await AiTools.createBooklist(args);
@@ -1046,6 +1065,82 @@ export class AiTools {
     }
     const more: string = tasks.length > cap ? `\n（共 ${tasks.length} 条，仅列最近 ${cap} 条）` : '';
     return `下载任务：\n${lines.join('\n')}${more}`;
+  }
+
+  /**
+   * 书库书加入本机书架：与书籍详情页下载按钮同链路
+   * （登录 → 队列去重 → 选格式 → 配额检查 → 建目录 → 入队 → 立即调度）。
+   */
+  private static async addToShelf(args: Record<string, Object>): Promise<string> {
+    const bookId: number = AiTools.argNumber(args, 'book_id');
+    if (bookId <= 0) {
+      return '参数 book_id 无效，请先用 search_books 拿到书籍 id。';
+    }
+    const authenticated: boolean = await TalebookService.ensureAuthenticated();
+    if (!authenticated) {
+      return '尚未登录 MyBooks 服务器，无法加入书架。请先登录后再让我重试。';
+    }
+    const pending: DownloadTask | undefined = DownloadTaskService.getTasks().find((t: DownloadTask) =>
+      t.kind === 'talebook' && t.talebookPayload !== undefined && t.talebookPayload.bookId === bookId &&
+        (t.status === 'pending' || t.status === 'downloading'));
+    if (pending !== undefined) {
+      return `《${pending.title}》已在下载队列中（状态：${DownloadTaskService.statusLabel(pending.status)}），无需重复入队。`;
+    }
+    const done: DownloadTask | undefined = DownloadTaskService.getTasks().find((t: DownloadTask) =>
+      t.kind === 'talebook' && t.talebookPayload !== undefined && t.talebookPayload.bookId === bookId &&
+        t.status === 'completed');
+    if (done !== undefined) {
+      return `《${done.title}》之前已下载到本机书架，无需重复添加。`;
+    }
+    const detail: BookDetail | null = await TalebookApi.getBookDetail(bookId);
+    if (detail === null) {
+      return `书库里找不到 id=${bookId} 的书，请确认 id 来自 search_books 的结果。`;
+    }
+    const formats: string[] = [];
+    for (let i = 0; i < detail.files.length; i++) {
+      formats.push(detail.files[i].format.toLowerCase());
+    }
+    if (formats.length === 0) {
+      return `《${detail.title}》在服务器上没有任何可下载文件。`;
+    }
+    const want: string = AiTools.argString(args, 'format').toLowerCase();
+    let format: string = '';
+    if (want.length === 0) {
+      format = formats.indexOf('epub') >= 0 ? 'epub' : formats[0];
+    } else if (formats.indexOf(want) >= 0) {
+      format = want;
+    } else {
+      return `《${detail.title}》没有 ${want} 格式，可下载格式：${formats.join('、')}。`;
+    }
+    if (ServerRegistry.supports(ServerFeature.DOWNLOAD_QUOTA)) {
+      // 与页面同语义：配额查询本身失败不拦入队（fail-open），只拦明确的「配额用完」
+      try {
+        const quota = await TalebookApi.getDownloadQuota();
+        if (quota.allowed === false) {
+          return `今日下载配额已用完（${quota.used ?? 0}/${quota.quota ?? 0}），明天再试吧`;
+        }
+      } catch (_error) {
+      }
+    }
+    const booksDir = AccountManager.booksDir(TalebookService.dataDir());
+    try {
+      if (!fs.accessSync(booksDir)) {
+        fs.mkdirSync(booksDir, true);
+      }
+    } catch (_error) {
+      fs.mkdirSync(booksDir, true);
+    }
+    DownloadTaskService.enqueueTalebook({
+      bookId: bookId,
+      bookName: detail.title,
+      author: detail.authors.length > 0 ? detail.authors.join(', ') : '',
+      cover: TalebookService.resolveCoverUrl(detail.coverUrl),
+      format: format,
+      destPath: `${booksDir}/${bookId}.${format}`,
+    });
+    DownloadTaskService.processQueue();
+    return `《${detail.title}》已加入下载队列（格式 ${format}），下载完成后会自动出现在书架；` +
+      '进度可随时调 list_download_tasks 查看。';
   }
 
   private static async createBooklist(args: Record<string, Object>): Promise<string> {

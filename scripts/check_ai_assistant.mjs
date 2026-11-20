@@ -292,9 +292,22 @@ export const toolsState = {
   booklistCreateResult: null, booklistAddResult: null, booklistCreateCalls: [], booklistAddCalls: [],
   bookDetailAsync: null, editCalls: [], editResult: null, bookNavAsync: null,
   referBooks: null, referSearchCalls: [], applyReferCalls: [], applyReferResult: null,
+  // add_to_shelf 用：登录态、配额检查可用性/结果、内存目录、talebook 入队记录
+  authOk: true, quotaSupported: true, quotaResult: null, dirs: new Set(), talebookEnqueues: [],
   // 一次性抛错开关：非空则下一次调用抛该消息并自动复位（工具失败处理用例用）
   searchThrowOnce: '', createThrowOnce: '',
 };
+export const BookDetail = undefined;
+export const ServerFeature = { DOWNLOAD_QUOTA: 'download_quota' };
+export const ServerRegistry = {
+  supports: (f) => (f === 'download_quota' ? toolsState.quotaSupported : true),
+};
+export const AccountManager = { booksDir: (dir) => dir + '/books' };
+export const fs = {
+  accessSync: (p) => toolsState.dirs.has(p),
+  mkdirSync: (p) => { toolsState.dirs.add(p); },
+};
+export const fileIo = fs;
 // 仅作类型标注用的名字（strip-types 后仍走值 import），占位防命名导出缺失
 export const SoNovelBookPayload = undefined;
 export const DownloadTask = undefined;
@@ -325,6 +338,21 @@ export const DownloadTaskService = {
   },
   processQueue: () => { toolsState.processed += 1; },
   statusLabel: (s) => ({ pending: '等待中', downloading: '下载中', completed: '已完成', failed: '失败' }[s] ?? s),
+  // 与真实实现同语义：同 bookId+format 的 pending/downloading 任务原样返回，不重复入队
+  enqueueTalebook: (payload) => {
+    toolsState.talebookEnqueues.push(payload);
+    const dup = toolsState.tasks.find((t) => t.kind === 'talebook' && t.talebookPayload !== undefined &&
+      t.talebookPayload.bookId === payload.bookId &&
+      t.talebookPayload.format.toLowerCase() === payload.format.toLowerCase() &&
+      (t.status === 'pending' || t.status === 'downloading'));
+    if (dup !== undefined) { return dup; }
+    const task = { id: 'tb' + (toolsState.tasks.length + 1), kind: 'talebook', title: payload.bookName,
+      author: payload.author, sourceName: 'Talebook', status: 'pending', error: '', filePath: '',
+      format: payload.format.toUpperCase(), bookId: String(payload.bookId), progress: 0, message: '等待中',
+      createdAt: 0, updatedAt: 0, talebookPayload: payload };
+    toolsState.tasks.push(task);
+    return task;
+  },
 };
 export const BookListApi = {
   createBooklist: async (name, description, color, isPublic) => {
@@ -355,12 +383,16 @@ export const TalebookApi = {
     toolsState.applyReferCalls.push({ id, entry, onlyMeta, onlyCover });
     return toolsState.applyReferResult ?? { err: 'ok' };
   },
+  getDownloadQuota: async () => toolsState.quotaResult ?? {},
 };
 export const ReferBook = undefined;
 export const ReferSearchOpts = undefined;
 export const ReferSearchResponse = undefined;
 export const TalebookService = {
   getReadingHistory: () => toolsState.history.slice(),
+  ensureAuthenticated: async () => toolsState.authOk,
+  resolveCoverUrl: (c) => (c.startsWith('http') ? c : 'https://stub.example/' + c),
+  dataDir: () => '/stub-files',
   getBookDetailAsync: async (id) => (toolsState.bookDetailAsync
     ? await toolsState.bookDetailAsync(id) : { status: 404, body: null, error: 'stub: 未设置' }),
   editBookAsync: async (id, payload) => {
@@ -584,7 +616,11 @@ function stageAiTools() {
     .replace(`from './SoNovelService'`, `from './aiToolsDeps.ts'`)
     .replace(`from '../utils/SoNovelMerge'`, `from './aiToolsDeps.ts'`)
     .replace(`from './DownloadTaskService'`, `from './aiToolsDeps.ts'`)
-    .replace(`from './BookListApi'`, `from './aiToolsDeps.ts'`);
+    .replace(`from './BookListApi'`, `from './aiToolsDeps.ts'`)
+    .replace(`from './BookModels'`, `from './aiToolsDeps.ts'`)
+    .replace(`from './ServerProfile'`, `from './aiToolsDeps.ts'`)
+    .replace(`from './AccountManager'`, `from './aiToolsDeps.ts'`)
+    .replace(`from '@kit.CoreFileKit'`, `from './aiToolsDeps.ts'`);
   writeFileSync(join(dir, 'RealAiTools.ts'), source);
 }
 
@@ -1131,6 +1167,61 @@ try {
     toolsState.booklistAddCalls.length = 0;
   });
 
+  test('AiTools：add_to_shelf——书库书下载到本机书架（登录/去重/格式/配额/入队）', async () => {
+    toolsState.tasks = [];
+    toolsState.talebookEnqueues.length = 0;
+    toolsState.processed = 0;
+    toolsState.dirs.clear();
+    toolsState.detail = async (id) => (id === 12
+      ? { id: 12, title: '三体', authors: ['刘慈欣'], rating: 9.2, tags: [],
+        files: [{ format: 'EPUB', size: 1 }, { format: 'MOBI', size: 2 }],
+        comments: '', coverUrl: '/cover/12.png', downloadUrl: '',
+        publisher: '', isbn: '', series: '' }
+      : null);
+    toolsState.authOk = false;
+    assert.ok((await RealAiTools.execute('add_to_shelf', '{"book_id":12}')).includes('尚未登录'));
+    toolsState.authOk = true;
+    assert.ok((await RealAiTools.execute('add_to_shelf', '{}')).includes('book_id 无效'));
+    assert.ok((await RealAiTools.execute('add_to_shelf', '{"book_id":99}')).includes('找不到 id=99'));
+    assert.ok((await RealAiTools.execute('add_to_shelf', '{"book_id":12,"format":"pdf"}')).includes('没有 pdf 格式'));
+    // 成功入队：默认 epub、destPath 与页面链路一致、立即调度
+    toolsState.tasks = [];
+    const ok = await RealAiTools.execute('add_to_shelf', '{"book_id":12}');
+    assert.ok(ok.includes('已加入下载队列') && ok.includes('格式 epub') && ok.includes('list_download_tasks'), ok);
+    assert.equal(toolsState.talebookEnqueues.length, 1);
+    const p = toolsState.talebookEnqueues[0];
+    assert.equal(p.bookId, 12);
+    assert.equal(p.format, 'epub');
+    assert.ok(p.destPath.endsWith('/books/12.epub'), p.destPath);
+    assert.equal(toolsState.processed, 1);
+    // 队列已有 pending → 去重文案，不重复入队
+    const dup = await RealAiTools.execute('add_to_shelf', '{"book_id":12}');
+    assert.ok(dup.includes('已在下载队列'), dup);
+    assert.equal(toolsState.talebookEnqueues.length, 1);
+    // 已完成 → 提示已在架
+    toolsState.tasks[0].status = 'completed';
+    assert.ok((await RealAiTools.execute('add_to_shelf', '{"book_id":12}')).includes('已下载到本机书架'));
+    // 配额用完 → 拦下且不入队
+    toolsState.tasks = [];
+    toolsState.quotaResult = { allowed: false, used: 10, quota: 10 };
+    const q = await RealAiTools.execute('add_to_shelf', '{"book_id":12}');
+    assert.ok(q.includes('配额已用完') && q.includes('10/10'), q);
+    assert.equal(toolsState.talebookEnqueues.length, 1);
+    // 配额查询无字段（服务器未给 allowed）→ fail-open 继续入队，指定 mobi 生效
+    toolsState.quotaResult = null;
+    assert.ok((await RealAiTools.execute('add_to_shelf', '{"book_id":12,"format":"MOBI"}'))
+      .includes('已加入下载队列'));
+    assert.equal(toolsState.talebookEnqueues.length, 2);
+    assert.equal(toolsState.talebookEnqueues[1].format, 'mobi');
+    // 闸门与标签
+    assert.equal(RealAiTools.needsConfirm('add_to_shelf'), true);
+    assert.equal(RealAiTools.toolLabel('add_to_shelf'), '加入书架');
+    toolsState.tasks = [];
+    toolsState.talebookEnqueues.length = 0;
+    toolsState.dirs.clear();
+    toolsState.detail = null;
+  });
+
   test('网关工具回路：执行 tool_calls 回填结果，第二轮拿到最终回答', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
@@ -1162,7 +1253,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 18 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 19 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -1431,11 +1522,11 @@ try {
   });
 
   test('权限模式：definitions(mode) 三档过滤——readonly 去写工具，其余全量', () => {
-    const WRITE = ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task',
+    const WRITE = ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task', 'add_to_shelf',
       'update_book_meta', 'set_cover', 'forget_memory'];
-    assert.equal(RealAiTools.definitions().length, 18);
-    assert.equal(RealAiTools.definitions('confirm').length, 18);
-    assert.equal(RealAiTools.definitions('auto').length, 18);
+    assert.equal(RealAiTools.definitions().length, 19);
+    assert.equal(RealAiTools.definitions('confirm').length, 19);
+    assert.equal(RealAiTools.definitions('auto').length, 19);
     const ro = RealAiTools.definitions('readonly');
     assert.equal(ro.length, 12);
     assert.ok(ro.some((d) => d.function.name === 'list_categories'), 'list_categories 是只读工具须保留');
@@ -1498,7 +1589,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 18, 'auto 模式写工具须在 tools 里');
+    assert.equal(b1.tools.length, 19, 'auto 模式写工具须在 tools 里');
     assert.equal(asked, 0, 'auto 模式不该弹确认');
     assert.deepEqual(labels, [['create_booklist', '创建书单（自动执行）']]);
     assert.deepEqual(toolsState.booklistCreateCalls.map((c) => c.name), ['科幻入门']);
