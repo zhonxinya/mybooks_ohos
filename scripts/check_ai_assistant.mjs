@@ -650,7 +650,7 @@ function stageAiTools() {
       `import { MetaSearchService } from './RealMetaSearch.ts';`)
     .replace(`import { NovelMeta, NovelMetaService } from './NovelMetaService';`,
       `import { NovelMetaService } from './RealNovelMeta.ts';`)
-    .replace(`import { EncyclopediaHit, EncyclopediaService } from './EncyclopediaService';`,
+    .replace(`import { EncyclopediaHit, EncyclopediaService, WebSearchHit, WebSearchResult } from './EncyclopediaService';`,
       `import { EncyclopediaService } from './RealEncyclopedia.ts';`)
     .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
     .replace(`from './TalebookApi'`, `from './aiToolsDeps.ts'`)
@@ -1075,7 +1075,7 @@ try {
     assert.equal(deps.state.chatCalls.length, 2, 'errs=' + JSON.stringify(errs));
     assert.equal(deps.state.chatCalls[0].body.stream, true);
     assert.ok(Array.isArray(deps.state.chatCalls[0].body.tools) &&
-      deps.state.chatCalls[0].body.tools.length === 26, 'SDK 通道请求体须挂全量 tools');
+      deps.state.chatCalls[0].body.tools.length === 27, 'SDK 通道请求体须挂全量 tools');
     // 第二轮：assistant tool_calls + tool 结果回填，终轮回答
     const msgs = deps.state.chatCalls[1].body.messages;
     const asst = msgs.find((m) => m.role === 'assistant' && m.tool_calls !== undefined);
@@ -1482,7 +1482,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 26 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 27 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -1816,11 +1816,11 @@ try {
     const WRITE = ['create_booklist', 'add_books_to_booklist', 'update_booklist', 'delete_booklist',
       'remove_book_from_booklist', 'add_sonovel_task', 'add_to_shelf', 'push_to_device',
       'update_book_meta', 'set_cover', 'forget_memory'];
-    assert.equal(RealAiTools.definitions().length, 26);
-    assert.equal(RealAiTools.definitions('confirm').length, 26);
-    assert.equal(RealAiTools.definitions('auto').length, 26);
+    assert.equal(RealAiTools.definitions().length, 27);
+    assert.equal(RealAiTools.definitions('confirm').length, 27);
+    assert.equal(RealAiTools.definitions('auto').length, 27);
     const ro = RealAiTools.definitions('readonly');
-    assert.equal(ro.length, 14);
+    assert.equal(ro.length, 15);
     assert.ok(ro.some((d) => d.function.name === 'list_categories'), 'list_categories 是只读工具须保留');
     for (const name of WRITE) {
       assert.ok(!ro.some((d) => d.function.name === name), `readonly 泄漏写工具 ${name}`);
@@ -1850,7 +1850,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 14);
+    assert.equal(b1.tools.length, 15);
     assert.ok(!b1.tools.some((d) => d.function.name === 'create_booklist'));
     assert.ok(b1.tools.some((d) => d.function.name === 'ask_user'), 'ask_user 是只读交互工具，只读档须保留');
     const b2 = JSON.parse(deps.state.requests[1].content);
@@ -1882,7 +1882,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 26, 'auto 模式写工具须在 tools 里');
+    assert.equal(b1.tools.length, 27, 'auto 模式写工具须在 tools 里');
     assert.equal(asked, 0, 'auto 模式不该弹确认');
     assert.deepEqual(labels, [['create_booklist', '创建书单（自动执行）']]);
     assert.deepEqual(toolsState.booklistCreateCalls.map((c) => c.name), ['科幻入门']);
@@ -3183,6 +3183,58 @@ try {
     deps.state.rcpResponses = [{ statusCode: 200, body: enc(serpFar) }];
     bk = await EncyclopediaService.searchBaike('y');
     assert.ok(!bk.ok && bk.error.includes('没有百科词条'), bk.error);
+    deps.state.rcpError = null;
+  });
+
+  test('search_web：百度 SERP organic 解析（mu 直链/s-text 标题/summary-text 摘要）、推广位排除与容错', async () => {
+    const { EncyclopediaService } = await load('RealEncyclopedia');
+    deps.state.rcpThrowQueue.length = 0;
+    deps.state.rcpError = null;
+    // 结构取自 2026-11-21 真实 SERP 样本：organic 容器 class="result c-container"、
+    // 标题在 <!--s-text--> 标记、摘要在 summary-text_<hash> span（class 值带前导空格）
+    const serpHtml = '<html><body>' +
+      '<div class="result c-container" mu="http://28616.recommend_list.baidu.com"' +
+      '><h3><a><!--s-text-->榜单推广位<!--/s-text--></a></h3></div>' +
+      '<div class="result c-container xpath-log new-pmd" mu="https://www.qidian.com/book/123">' +
+      '<h3 class="cosc-title"><a><!--s-text--><em>三体</em>全集在线阅读-起点中文网<!--/s-text--></a></h3>' +
+      '<span class="    summary-text_15QGa">《三体》表达了对宇宙的<em>敬畏</em>与想象。</span></div>' +
+      '<div class="result c-container" mu="https://fanqienovel.com/page/698">' +
+      '<h3><a><!--s-text-->三体全集免费阅读_番茄小说官网<!--/s-text--></a></h3></div>' +
+      '<div class="result c-container" mu="https://baike.baidu.com/item/三体">' +
+      '<h3><a>三体（长篇小说）</a></h3>' +
+      '<span class="summary-text_9AbCd">《三体》是刘慈欣创作的长篇科幻小说。</span></div>' +
+      '</body></html>';
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(serpHtml) }];
+    const r = await EncyclopediaService.searchWeb('三体 小说');
+    assert.ok(r.ok, r.error);
+    assert.equal(r.items.length, 3, 'recommend_list 推广容器须排除');
+    assert.equal(r.items[0].title, '三体全集在线阅读-起点中文网', 'stripHtml 去标签不补空格（项目语义）');
+    assert.equal(r.items[0].url, 'https://www.qidian.com/book/123');
+    assert.ok(r.items[0].summary.includes('敬畏') && !r.items[0].summary.includes('<em>'), r.items[0].summary);
+    assert.equal(r.items[1].summary, '', '纯标题卡片保留、摘要为空');
+    assert.equal(r.items[2].title, '三体（长篇小说）', '无 s-text 时 h3 兜底');
+    // 反爬/改版空页 → 解析失败文案，不抛错
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc('<html>waf check</html>') }];
+    const empty = await EncyclopediaService.searchWeb('不存在的东西');
+    assert.ok(!empty.ok && empty.error.includes('普通结果'), empty.error);
+    // 非 2xx 转 error 文案
+    deps.state.rcpResponses = [{ statusCode: 567, body: enc('rate limit') }];
+    const bad = await EncyclopediaService.searchWeb('x');
+    assert.ok(!bad.ok && bad.error.includes('567'), bad.error);
+    // 工具层：编号文案 + 链接逐条，摘要缺省不占行
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(serpHtml) }];
+    const out = await RealAiTools.execute('search_web', '{"query":"三体"}');
+    assert.ok(out.includes('1. 三体全集在线阅读-起点中文网') &&
+      out.includes('链接：https://www.qidian.com/book/123') &&
+      out.includes('2. 三体全集免费阅读_番茄小说官网') &&
+      out.includes('3. 三体（长篇小说）'), out);
+    assert.ok(out.indexOf('2. 三体全集免费阅读_番茄小说官网\n链接：https://fanqienovel.com/page/698\n\n3') > 0,
+      '第二条无摘要：链接行后空行接第三条');
+    assert.ok(out.includes('3. 三体（长篇小说）\n链接：https://baike.baidu.com/item/三体\n《三体》是刘慈欣创作的长篇科幻小说。'),
+      '第三条含摘要行');
+    // 空 query 直接回文案
+    const none = await RealAiTools.execute('search_web', '{"query":"  "}');
+    assert.ok(none.includes('query 为空'), none);
     deps.state.rcpError = null;
   });
 

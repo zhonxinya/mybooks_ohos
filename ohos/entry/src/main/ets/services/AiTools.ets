@@ -12,7 +12,7 @@ import { HomeBook, ReadingStatsSummary } from '../models/HomeModels';
 import { AiPersona } from './AiPersona';
 import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';
 import { NovelMeta, NovelMetaService } from './NovelMetaService';
-import { EncyclopediaHit, EncyclopediaService } from './EncyclopediaService';
+import { EncyclopediaHit, EncyclopediaService, WebSearchHit, WebSearchResult } from './EncyclopediaService';
 import { BookDetail } from './BookModels';
 import { ServerFeature, ServerRegistry } from './ServerProfile';
 import { AccountManager } from './AccountManager';
@@ -313,6 +313,15 @@ const TOOL_SEARCH_ENCYCLOPEDIA: AiToolDefinition = defineTool('search_encycloped
     '返回词条标题、摘要与链接。query 传词条名而非整句问话。一个通道不可达会如实标注并仍给另一通道结果。',
   ENCYCLOPEDIA_PROPS, ['query']);
 
+const WEB_SEARCH_PROPS: Record<string, AiToolProperty> = {
+  'query': prop('string', '搜索关键词（书名、人名、事件、规格参数等任意信息），尽量精炼，不要整句问话'),
+};
+const TOOL_SEARCH_WEB: AiToolDefinition = defineTool('search_web',
+  '通用网页搜索（百度）：查书籍之外的任意信息——作者近况、作品改编、价格评测、新闻事件、名词解释等。' +
+    '返回若干条结果的标题、原站链接与摘要。百科类词条优先用 search_encyclopedia；' +
+    '摘要不够时可把候选链接讲给用户自行查看。',
+  WEB_SEARCH_PROPS, ['query']);
+
 const ASK_USER_PROPS: Record<string, AiToolProperty> = {
   'question': prop('string', '要向用户确认的问题，一句话'),
   'options': prop('string', '候选项，用顿号「、」分隔，2-6 个，每项尽量短'),
@@ -334,7 +343,7 @@ const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_UPDATE_BOOK_META, TOOL_LIST_CATEGORIES,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
   TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_SEARCH_ENCYCLOPEDIA,
-  TOOL_ASK_USER, TOOL_FORGET_MEMORY,
+  TOOL_SEARCH_WEB, TOOL_ASK_USER, TOOL_FORGET_MEMORY,
 ];
 
 /**
@@ -481,6 +490,9 @@ export class AiTools {
     if (name === 'search_encyclopedia') {
       return '搜百科词条';
     }
+    if (name === 'search_web') {
+      return '搜索网页';
+    }
     if (name === 'save_memory') {
       return '记住用户的事';
     }
@@ -605,6 +617,9 @@ export class AiTools {
       }
       if (name === 'search_encyclopedia') {
         return await AiTools.searchEncyclopedia(AiTools.argString(args, 'query'));
+      }
+      if (name === 'search_web') {
+        return await AiTools.searchWeb(AiTools.argString(args, 'query'));
       }
       if (name === 'save_memory') {
         return AiPersona.appendMemory(AiTools.argString(args, 'content'));
@@ -928,6 +943,28 @@ export class AiTools {
       parts.push(`【维基百科】${wk.title}\n${wk.abstract}\n链接：${wk.url}`);
     } else {
       parts.push(`【维基百科】未获取到：${wk.error}`);
+    }
+    return parts.join('\n\n');
+  }
+
+  /** 通用网页搜索：编号列出标题/链接/摘要；失败如实回文案（同百科通道风格，不抛错）。 */
+  private static async searchWeb(query: string): Promise<string> {
+    const trimmed: string = query.trim();
+    if (trimmed.length === 0) {
+      return '参数 query 为空，请提供搜索关键词。';
+    }
+    const res: WebSearchResult = await EncyclopediaService.searchWeb(trimmed);
+    if (!res.ok) {
+      return `网页搜索失败：${res.error}`;
+    }
+    const parts: string[] = [];
+    for (let i = 0; i < res.items.length; i++) {
+      const it: WebSearchHit = res.items[i];
+      let line: string = `${i + 1}. ${it.title}\n链接：${it.url}`;
+      if (it.summary.length > 0) {
+        line = `${line}\n${it.summary}`;
+      }
+      parts.push(line);
     }
     return parts.join('\n\n');
   }
