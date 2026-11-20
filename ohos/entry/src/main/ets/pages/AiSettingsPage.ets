@@ -46,6 +46,7 @@ struct AiSettingsPage {
   @State probingVoice: boolean = false;
   @State autoSpeakOn: boolean = false;
   @State speakEngine: string = 'system';
+  @State callMode: string = 'realtime';
   /** 语音通话对话模型：false=跟随全局；provider 0=跟随，其余=providers[index-1]。 */
   @State voiceFollow: boolean = true;
   @State voiceProviderId: string = '';
@@ -56,6 +57,7 @@ struct AiSettingsPage {
   aboutToAppear(): void {
     this.autoSpeakOn = AiService.loadAutoSpeak();
     this.speakEngine = AiService.loadSpeakEngine();
+    this.callMode = AiService.loadCallMode();
     this.voiceProviderId = AiService.loadVoiceProviderId();
     this.voiceFollow = this.voiceProviderId.length === 0;
     this.voiceModel = AiService.loadVoiceModel();
@@ -690,8 +692,29 @@ struct AiSettingsPage {
         }
         .width('100%');
 
+        Row() {
+          Text('通话模式')
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'));
+          Blank();
+          Select([{ value: '实时全双工（可打断）' }, { value: '轮转（一问一答）' }])
+            .selected(this.callMode === 'turn' ? 1 : 0)
+            .value(this.callMode === 'turn' ? '轮转（一问一答）' : '实时全双工（可打断）')
+            .font({ size: 13 })
+            .onSelect((index: number, value: string) => {
+              this.callMode = index === 1 ? 'turn' : 'realtime';
+              AiService.saveCallMode(this.callMode);
+            });
+        }
+        .width('100%');
+
+        Text('实时模式走 qwen-audio 实时服务（VAD 自动断句、开口即打断，需 Token Plan 服务商）；轮转模式按下方自选的对话模型+播报引擎逐轮对话。')
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%');
+
         Column({ space: 6 }) {
-          Text('语音通话对话模型')
+          Text('语音通话对话模型（轮转模式）')
             .fontSize(13)
             .fontColor($r('app.color.text_secondary'))
             .width('100%');

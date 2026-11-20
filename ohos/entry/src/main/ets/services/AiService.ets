@@ -92,6 +92,8 @@ const KEY_VOICE_PROVIDER: string = 'ai_voice_provider';
 const KEY_VOICE_MODEL: string = 'ai_voice_model';
 /** AI 回复播报引擎：'system'（默认）/'cloud'（Token Plan TTS）。 */
 const KEY_SPEAK_ENGINE: string = 'ai_speak_engine';
+/** 语音通话模式：'realtime'（默认，WS 全双工）/'turn'（轮转）。 */
+const KEY_CALL_MODE: string = 'ai_call_mode';
 /** 旧版单 Key；首次读取时迁移到当前服务商后清空。 */
 const KEY_API_KEY: string = 'ai_api_key';
 const KEY_API_KEY_PREFIX: string = 'ai_api_key_';
@@ -262,6 +264,15 @@ export class AiService {
 
   static saveSpeakEngine(engine: string): void {
     TalebookService.prefSet(KEY_SPEAK_ENGINE, engine === 'cloud' ? 'cloud' : 'system');
+  }
+
+  /** 通话模式：'realtime'=WS 全双工（默认，打断式）、'turn'=轮转（可用自选对话模型）。 */
+  static loadCallMode(): string {
+    return TalebookService.prefGet(KEY_CALL_MODE, 'realtime') === 'turn' ? 'turn' : 'realtime';
+  }
+
+  static saveCallMode(mode: string): void {
+    TalebookService.prefSet(KEY_CALL_MODE, mode === 'turn' ? 'turn' : 'realtime');
   }
 
   /** 各服务商 Key 的存储键；自定义服务商 id 带时间戳，不与前缀冲突。 */

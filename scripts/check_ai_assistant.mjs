@@ -24,7 +24,7 @@ const settingsDefaults = () => ({
   ],
   keys: new Set(['deepseek']), saved: null, models: [], fetchError: '', completeReply: 'ok',
   voiceProviderId: '', voiceModel: '', voiceConfig: null, lastCompleteConfig: null,
-  speakEngine: 'system', speakCalls: [], speakStops: 0,
+  speakEngine: 'system', speakCalls: [], speakStops: 0, callMode: 'realtime',
 });
 const state = {
   ready: true, handlers: null, copied: '', cancel: null,
@@ -91,6 +91,8 @@ export const AiService = {
   },
   loadSpeakEngine: () => state.settings.speakEngine ?? 'system',
   saveSpeakEngine: (e) => { state.settings.speakEngine = e === 'cloud' ? 'cloud' : 'system'; },
+  loadCallMode: () => state.settings.callMode ?? 'realtime',
+  saveCallMode: (m) => { state.settings.callMode = m === 'turn' ? 'turn' : 'realtime'; },
   loadVoiceConfig: () => {
     if (state.settings.voiceProviderId.length > 0) {
       const p = state.settings.providers.find((x) => x.id === state.settings.voiceProviderId);
@@ -477,6 +479,68 @@ function stageQwenAudio() {
     .replace(`from './QwenAudioService'`, `from './RealQwenAudio.ts'`)
     .replace(`from './ReaderTtsService'`, `from './readerTtsDeps.ts'`);
   writeFileSync(join(dir, 'RealSpeakService.ts'), speak);
+  // RealtimeCallService 真实入检：webSocket/capturer/renderer/base64 全可编程桩
+  writeFileSync(join(dir, 'realtimeDeps.ts'), [
+    'export const rtState = { sends: [], lastUrl: "", lastOptions: null, socket: null, capturer: null, renderer: null };',
+    'class FakeSocket {',
+    '  constructor() { rtState.socket = this; this.handlers = {}; }',
+    '  on(type, cb) { this.handlers[type] = cb; }',
+    '  off(type) { delete this.handlers[type]; }',
+    '  connect(url, options, cb) { rtState.lastUrl = url; rtState.lastOptions = options; this.connectCb = cb; }',
+    '  send(data, cb) { rtState.sends.push(data); if (cb !== undefined) { cb(null); } }',
+    '  close(cb) { this.closedFlag = true; if (cb !== undefined) { cb(null); } }',
+    '  fireOpen() { if (this.connectCb !== undefined) { this.connectCb(null); } }',
+    '  emitEvent(text) { if (this.handlers.message !== undefined) { this.handlers.message(null, text); } }',
+    '}',
+    'export const webSocket = { createWebSocket: () => new FakeSocket() };',
+    'class FakeCapturer {',
+    '  constructor() { rtState.capturer = this; this.events = {}; this.starts = 0; this.pauses = 0; }',
+    '  on(type, cb) { this.events[type] = cb; }',
+    '  async start() { this.starts++; return; }',
+    '  async pause() { this.pauses++; return; }',
+    '  async stop() { return; }',
+    '  async release() { return; }',
+    '  feedMic(bytes) { if (this.events.readData !== undefined) { this.events.readData(bytes.buffer); } }',
+    '}',
+    'class FakeRenderer {',
+    '  constructor() { rtState.renderer = this; this.events = {}; }',
+    '  on(type, cb) { this.events[type] = cb; }',
+    '  async start() { return; }',
+    '  async stop() { return; }',
+    '  async release() { return; }',
+    '  pull(arrayBuffer) { if (this.events.writeData !== undefined) { this.events.writeData(arrayBuffer); } }',
+    '}',
+    'export const audio = {',
+    '  AudioSamplingRate: { SAMPLE_RATE_16000: 16000, SAMPLE_RATE_24000: 24000 },',
+    '  AudioChannel: { CHANNEL_1: 1 },',
+    '  AudioSampleFormat: { SAMPLE_FORMAT_S16LE: 1 },',
+    '  AudioEncodingType: { ENCODING_TYPE_RAW: 0 },',
+    '  SourceType: { SOURCE_TYPE_VOICE_COMMUNICATION: 5 },',
+    '  StreamUsage: { STREAM_USAGE_VOICE_COMMUNICATION: 7 },',
+    '  createAudioCapturer: async () => new FakeCapturer(),',
+    '  createAudioRenderer: async () => new FakeRenderer(),',
+    '};',
+    'export const util = {',
+    '  Base64Helper: class {',
+    '    encodeToStringSync(u8) { return btoa(String.fromCharCode.apply(null, Array.from(u8))); }',
+    '    decodeSync(s) { const bin = atob(s); const out = new Uint8Array(bin.length);',
+    '      for (let i = 0; i < bin.length; i++) { out[i] = bin.charCodeAt(i); } return out; }',
+    '  },',
+    '  TextDecoder: { create: () => ({ decodeToString: (u8) => new TextDecoder().decode(u8) }) },',
+    '};',
+    'export const hilog = { info: () => {}, warn: () => {}, error: () => {} };',
+    'export class BusinessError extends Error {}',
+    '',
+  ].join('\n'));
+  let rt = read('services/RealtimeCallService.ets');
+  rt = rt
+    .replace(`from '@kit.NetworkKit'`, `from './realtimeDeps.ts'`)
+    .replace(`from '@kit.ArkTS'`, `from './realtimeDeps.ts'`)
+    .replace(`from '@kit.AudioKit'`, `from './realtimeDeps.ts'`)
+    .replace(`from '@kit.PerformanceAnalysisKit'`, `from './realtimeDeps.ts'`)
+    .replace(`from '@kit.BasicServicesKit'`, `from './realtimeDeps.ts'`)
+    .replace(`from './AiService'`, `from './RealAiService.ts'`);
+  writeFileSync(join(dir, 'RealtimeCall.ts'), rt);
 }
 
 /** NovelMetaService 真实入检：同样复用 rcp 桩；引擎分派点用 Reader3Native 替身。 */
@@ -586,6 +650,7 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 // 工具回路是多轮 await，微任务队列跑干净需要连续 tick
 const flush = async () => { for (let i = 0; i < 24; i++) await tick(); };
 const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
+const rtB64 = (bytes) => Buffer.from(bytes).toString('base64');
 
 try {
   stagePure('BookModels', 'services/BookModels.ets', []);
@@ -2743,6 +2808,99 @@ try {
     ttsState.starts.length = 0;
     ttsState.stops = 0;
     ttsState.failEngine = false;
+  });
+
+  test('RealtimeCallService 全双工：握手形态、append 上行、VAD 打断清队列、拉流消费与字幕事件', async () => {
+    const { RealtimeCallService: Rt } = await load('RealtimeCall');
+    const { rtState } = await load('realtimeDeps');
+    deps.state.store.clear();
+    RealAiService.saveConfig('qwen-tokenplan', 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1', 'qwen3.6-flash', 'sk-tp', 0.5);
+    rtState.sends.length = 0;
+    const ev = [];
+    const cb = {
+      onUserText: (t) => ev.push('user:' + t),
+      onAiTextDelta: (d) => ev.push('delta:' + d),
+      onAiTextDone: (t) => ev.push('done:' + t),
+      onSpeechStarted: () => ev.push('barge'),
+      onSpeechStopped: () => ev.push('stopped'),
+      onResponding: () => ev.push('responding'),
+      onResponseDone: () => ev.push('resp_done'),
+      onError: (m) => ev.push('err:' + m),
+      onClosed: () => ev.push('closed'),
+    };
+    const connecting = Rt.connect('人设指令', cb);
+    await flush();
+    assert.equal(rtState.lastUrl, 'wss://token-plan.maas.qianwenaiapi.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus');
+    assert.equal(rtState.lastOptions.header.Authorization, 'Bearer sk-tp');
+    rtState.socket.fireOpen();
+    await flush();
+    rtState.socket.emitEvent(JSON.stringify({ type: 'session.created' }));
+    await flush();
+    // session.update 时序与字段（docs §4 实测协议）
+    const update = JSON.parse(rtState.sends[0]);
+    assert.equal(update.type, 'session.update');
+    assert.equal(update.session.voice, 'longanqian');
+    assert.equal(update.session.turn_detection.type, 'server_vad');
+    assert.equal(update.session.input_audio_format, 'pcm');
+    assert.equal(update.session.output_audio_format, 'pcm');
+    assert.equal(update.session.instructions, '人设指令');
+    // 麦克风帧 → base64 append
+    const mic = new Uint8Array(3200);
+    mic[0] = 42;
+    rtState.capturer.feedMic(mic);
+    await flush();
+    const append = JSON.parse(rtState.sends[1]);
+    assert.equal(append.type, 'input_audio_buffer.append');
+    assert.equal(Buffer.from(append.audio, 'base64').length, 3200);
+    assert.equal(Buffer.from(append.audio, 'base64')[0], 42);
+    // 下行音频入队并触发 speaking
+    const pcm = new Uint8Array(4800).fill(7);
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.audio.delta', delta: rtB64(pcm) }));
+    await flush();
+    assert.ok(ev.includes('responding'));
+    assert.equal(Rt.getPlayBytes(), 4800);
+    // 拉模式消费 1600B
+    const buf = new ArrayBuffer(1600);
+    rtState.renderer.pull(buf);
+    assert.equal(Rt.getPlayBytes(), 3200);
+    assert.equal(new Uint8Array(buf)[0], 7);
+    // speech_started 打断：队列清零
+    rtState.socket.emitEvent(JSON.stringify({ type: 'input_audio_buffer.speech_started' }));
+    await flush();
+    assert.equal(Rt.getPlayBytes(), 0);
+    assert.ok(ev.includes('barge'));
+    rtState.socket.emitEvent(JSON.stringify({ type: 'input_audio_buffer.speech_stopped' }));
+    // 字幕与错误事件链
+    rtState.socket.emitEvent(JSON.stringify({ type: 'conversation.item.input_audio_transcription.completed', transcript: '你好呀' }));
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.audio_transcript.delta', delta: 'He' }));
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.audio_transcript.delta', delta: 'llo' }));
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.audio_transcript.done', transcript: 'Hello' }));
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.done' }));
+    rtState.socket.emitEvent(JSON.stringify({ type: 'error', error: { message: '示例错误' } }));
+    await flush();
+    assert.ok(ev.includes('stopped'));
+    assert.ok(ev.includes('user:你好呀'));
+    assert.ok(ev.includes('delta:He'));
+    assert.ok(ev.includes('done:Hello'));
+    assert.ok(ev.includes('resp_done'));
+    assert.ok(ev.includes('err:示例错误'));
+    // 静音=停上行帧（不断采集），取消静音恢复 append
+    const sendsBefore = rtState.sends.length;
+    Rt.setMuted(true);
+    rtState.capturer.feedMic(mic);
+    await flush();
+    assert.equal(rtState.sends.length, sendsBefore);
+    Rt.setMuted(false);
+    rtState.capturer.feedMic(mic);
+    await flush();
+    assert.equal(rtState.sends.length, sendsBefore + 1);
+    Rt.disconnect();
+    await flush();
+    await connecting;
+    // 缺 Key：连接即抛（页面提示配置）
+    deps.state.store.delete('s:ai_api_key_qwen-tokenplan');
+    await assert.rejects(() => Rt.connect('x', cb), /Token Plan API Key/);
+    deps.state.store.clear();
   });
 
   test('灵魂管理页：灵魂保存/恢复默认，手动补记与删除记忆', () => {
