@@ -170,6 +170,8 @@ const BOOK_META_PROPS: Record<string, AiToolProperty> = {
   'title': prop('string', '新书名；留空不改'),
   'authors': prop('string', '作者，多个用逗号分隔；留空不改'),
   'tags': prop('string', '标签，逗号分隔；留空不改'),
+  'category': prop('string', '分类（单值）；留空不改。优先从 list_categories 返回的现有分类中选；' +
+    '写新名字服务器会自动创建该分类，但需管理员加入分类设置才在网站导航显示'),
   'publisher': prop('string', '出版社；留空不改'),
   'isbn': prop('string', 'ISBN；留空不改'),
   'series': prop('string', '丛书名；留空不改'),
@@ -180,8 +182,14 @@ const BOOK_META_REQUIRED: string[] = ['book_id'];
 
 const TOOL_UPDATE_BOOK_META: AiToolDefinition = defineTool('update_book_meta',
   '更新服务器上某本书的元数据（书籍 id 来自 search_books）。只传要修改的字段，未传字段保持原值。' +
-    '改前先 book_detail 核对现值并向用户复述目标改动。更换封面图片用 search_cover + set_cover。',
+    '改前先 book_detail 核对现值并向用户复述目标改动。更换封面图片用 search_cover + set_cover。' +
+    '分类(category)与标签(tags)是两套体系：分类单选、标签可多个，动分类前先用 list_categories 看现有分类。',
   BOOK_META_PROPS, BOOK_META_REQUIRED);
+
+const TOOL_LIST_CATEGORIES: AiToolDefinition = defineTool('list_categories',
+  '列出在线书库（Talebook）的分类体系：每个分类及其子标签。' +
+    '给书籍设置/归类、向用户推荐分类之前先查它，避免凭空发明分类名。',
+  {}, []);
 
 const COVER_SEARCH_PROPS: Record<string, AiToolProperty> = {
   'book_id': BOOK_ID_PROP,
@@ -254,7 +262,7 @@ const TOOL_SEARCH_ENCYCLOPEDIA: AiToolDefinition = defineTool('search_encycloped
 const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SEARCH_BOOKS, TOOL_BOOK_DETAIL, TOOL_BOOK_NOTES, TOOL_READING_HISTORY,
   TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS,
-  TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_UPDATE_BOOK_META,
+  TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_UPDATE_BOOK_META, TOOL_LIST_CATEGORIES,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
   TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_SEARCH_ENCYCLOPEDIA,
   TOOL_FORGET_MEMORY,
@@ -364,6 +372,9 @@ export class AiTools {
     if (name === 'update_book_meta') {
       return '更新书籍元数据';
     }
+    if (name === 'list_categories') {
+      return '查询书库分类';
+    }
     if (name === 'search_cover') {
       return '检索封面候选';
     }
@@ -453,6 +464,9 @@ export class AiTools {
       if (name === 'update_book_meta') {
         return await AiTools.updateBookMeta(args);
       }
+      if (name === 'list_categories') {
+        return await AiTools.listCategories();
+      }
       if (name === 'search_cover') {
         return await AiTools.searchCover(args);
       }
@@ -490,6 +504,37 @@ export class AiTools {
    * 更新书籍元数据。服务端 /api/book/:id/edit 是全量表单提交（BookEditPage 同款 payload），
    * 因此先读现值、只覆盖用户点名要改的字段，再整体提交，避免未传字段被清空。
    */
+  /** 书库分类体系（/api/book/nav 的 legend+tags），update_book_meta 归类前的查询依据。 */
+  private static async listCategories(): Promise<string> {
+    const envelope = await TalebookService.getBookNavCachedAsync();
+    const body: Record<string, Object> = envelope.body ?? {};
+    const navs: Object | undefined = body['navs'];
+    if (!Array.isArray(navs) || navs.length === 0) {
+      return '没有读到分类列表（服务器可能尚未配置分类，或书库接口不可用）。';
+    }
+    const lines: string[] = [];
+    for (let i = 0; i < navs.length; i++) {
+      const nav = navs[i] as Record<string, Object>;
+      const legend: string = String(nav['legend'] ?? '');
+      if (legend.length === 0) {
+        continue;
+      }
+      const tags: Object | undefined = nav['tags'];
+      const tagNames: string[] = [];
+      if (Array.isArray(tags)) {
+        for (let j = 0; j < tags.length; j++) {
+          const tag = tags[j] as Record<string, Object>;
+          const tagName: string = String(tag['name'] ?? '');
+          if (tagName.length > 0) {
+            tagNames.push(tagName);
+          }
+        }
+      }
+      lines.push(tagNames.length > 0 ? `· ${legend}：${tagNames.join('/')}` : `· ${legend}`);
+    }
+    return `在线书库现有 ${lines.length} 个分类（给书设 category 时优先从中选择；也可用其中的子标签作为 tags）：\n${lines.join('\n')}`;
+  }
+
   private static async updateBookMeta(args: Record<string, Object>): Promise<string> {
     const bookId: number = AiTools.argNumber(args, 'book_id');
     if (bookId <= 0) {
@@ -504,6 +549,7 @@ export class AiTools {
     }
     const oldAuthors: string[] = Array.isArray(book['authors']) ? (book['authors'] as string[]) : [];
     const oldTags: string[] = Array.isArray(book['tags']) ? (book['tags'] as string[]) : [];
+    const oldCategory: string = String(book['category'] ?? '');
     const changes: string[] = [];
     const newTitle: string = AiTools.argString(args, 'title').length > 0
       ? AiTools.argString(args, 'title').trim() : oldTitle;
@@ -519,6 +565,12 @@ export class AiTools {
     if (AiTools.argString(args, 'tags').length > 0) {
       tags = AiTools.argString(args, 'tags').split(',').map((s: string) => s.trim()).filter((s: string) => s.length > 0);
       changes.push(`标签 →「${tags.join('、')}」`);
+    }
+    // 分类：单值字符串（edit 接口实测字段名 category；categories 会被服务端忽略）
+    let category: string = oldCategory;
+    if (AiTools.argString(args, 'category').length > 0 && AiTools.argString(args, 'category').trim() !== oldCategory) {
+      category = AiTools.argString(args, 'category').trim();
+      changes.push(oldCategory.length > 0 ? `分类「${oldCategory}」→「${category}」` : `分类 →「${category}」`);
     }
     const publisher: string = AiTools.argString(args, 'publisher').length > 0
       ? AiTools.argString(args, 'publisher').trim() : String(book['publisher'] ?? '');
@@ -550,6 +602,7 @@ export class AiTools {
       'publisher': publisher,
       'comments': comments,
       'tags': tags,
+      'category': category,
       'isbn': isbn,
       'series': series,
       'languages': Array.isArray(book['languages']) ? (book['languages'] as string[]) : [],

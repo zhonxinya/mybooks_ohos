@@ -257,7 +257,7 @@ export const toolsState = {
   search: null, detail: null, notes: [], notesError: '', history: [],
   sonovelEnvelope: null, tasks: [], processed: 0,
   booklistCreateResult: null, booklistAddResult: null, booklistCreateCalls: [], booklistAddCalls: [],
-  bookDetailAsync: null, editCalls: [], editResult: null,
+  bookDetailAsync: null, editCalls: [], editResult: null, bookNavAsync: null,
   referBooks: null, referSearchCalls: [], applyReferCalls: [], applyReferResult: null,
   // 一次性抛错开关：非空则下一次调用抛该消息并自动复位（工具失败处理用例用）
   searchThrowOnce: '', createThrowOnce: '',
@@ -334,6 +334,8 @@ export const TalebookService = {
     toolsState.editCalls.push({ id, payload });
     return toolsState.editResult ?? { status: 200, body: { err: 'ok' }, error: '' };
   },
+  getBookNavCachedAsync: async () => (toolsState.bookNavAsync
+    ? await toolsState.bookNavAsync() : { status: 200, body: null, error: 'stub: 未设置' }),
 };
 export const AnnotationApi = {
   listBookAnnotations: async (_id, _scope) => {
@@ -1040,7 +1042,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 17 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 18 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -1311,11 +1313,12 @@ try {
   test('权限模式：definitions(mode) 三档过滤——readonly 去写工具，其余全量', () => {
     const WRITE = ['create_booklist', 'add_books_to_booklist', 'add_sonovel_task',
       'update_book_meta', 'set_cover', 'forget_memory'];
-    assert.equal(RealAiTools.definitions().length, 17);
-    assert.equal(RealAiTools.definitions('confirm').length, 17);
-    assert.equal(RealAiTools.definitions('auto').length, 17);
+    assert.equal(RealAiTools.definitions().length, 18);
+    assert.equal(RealAiTools.definitions('confirm').length, 18);
+    assert.equal(RealAiTools.definitions('auto').length, 18);
     const ro = RealAiTools.definitions('readonly');
-    assert.equal(ro.length, 11);
+    assert.equal(ro.length, 12);
+    assert.ok(ro.some((d) => d.function.name === 'list_categories'), 'list_categories 是只读工具须保留');
     for (const name of WRITE) {
       assert.ok(!ro.some((d) => d.function.name === name), `readonly 泄漏写工具 ${name}`);
     }
@@ -1344,7 +1347,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 11);
+    assert.equal(b1.tools.length, 12);
     assert.ok(!b1.tools.some((d) => d.function.name === 'create_booklist'));
     const b2 = JSON.parse(deps.state.requests[1].content);
     assert.equal(b2.messages.find((m) => m.role === 'tool').content,
@@ -1375,7 +1378,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 17, 'auto 模式写工具须在 tools 里');
+    assert.equal(b1.tools.length, 18, 'auto 模式写工具须在 tools 里');
     assert.equal(asked, 0, 'auto 模式不该弹确认');
     assert.deepEqual(labels, [['create_booklist', '创建书单（自动执行）']]);
     assert.deepEqual(toolsState.booklistCreateCalls.map((c) => c.name), ['科幻入门']);
@@ -1498,9 +1501,25 @@ try {
     assert.equal(RealAiTools.takeLastBooks().length, 0, '无结果时不留旧缓存');
   });
 
+  test('list_categories：解析 nav 分类与子标签，空数据给兜底提示', async () => {
+    toolsState.bookNavAsync = async () => ({ status: 200, body: { navs: [
+      { legend: '科幻时空', tags: [{ name: '科幻', count: 12 }, { name: '', count: 1 }] },
+      { legend: '文化', tags: [] },
+      { legend: '', tags: [{ name: '幽灵分类' }] },
+    ] } });
+    const out = await RealAiTools.execute('list_categories', '{}');
+    assert.ok(out.includes('现有 2 个分类'), out);
+    assert.ok(out.includes('· 科幻时空：科幻') && out.includes('· 文化'), out);
+    assert.ok(!out.includes('幽灵分类') && !out.includes('undefined'), '空 legend 跳过、名字段过滤空串');
+    toolsState.bookNavAsync = async () => ({ status: 200, body: { navs: [] } });
+    assert.ok((await RealAiTools.execute('list_categories', '{}')).includes('没有读到分类列表'));
+    toolsState.bookNavAsync = null;
+  });
+
   test('update_book_meta：读-合并-写，只覆盖点名字段；空改动与失败路径', async () => {
     toolsState.bookDetailAsync = async () => ({ status: 200, body: { book: {
       title: '三体', authors: ['刘慈欣'], tags: ['科幻'], publisher: 'so-novel', comments: '旧简介',
+      category: '科幻时空',
       isbn: '', series: '', languages: ['zh'], translators: [], series_index: 1, rating: null } } });
     toolsState.editCalls.length = 0;
     const out = await RealAiTools.execute('update_book_meta', '{"book_id":1481,"title":"三体（新版）"}');
@@ -1510,13 +1529,21 @@ try {
     assert.equal(p.title, '三体（新版）');
     assert.deepEqual(p.authors, ['刘慈欣'], '未传 authors 保持原值');
     assert.deepEqual(p.tags, ['科幻']);
+    assert.equal(p.category, '科幻时空', '未传 category 必须保持原值（edit 接口全量覆盖）');
     assert.equal(p.publisher, 'so-novel');
     assert.equal(p.series_index, 1);
     assert.ok(!('rating' in p), '原值 null 且未传时不发 rating');
-    // 逗号分隔多值
-    const multi = await RealAiTools.execute('update_book_meta', '{"book_id":1481,"authors":"刘慈欣, 某某","tags":"科幻, 经典"}');
+    // 逗号分隔多值 + 分类改名（edit 字段名实测为 category 单数字符串；categories 会被服务端忽略）
+    const multi = await RealAiTools.execute('update_book_meta',
+      '{"book_id":1481,"authors":"刘慈欣, 某某","tags":"科幻, 经典","category":"科学"}');
     assert.ok(multi.includes('作者 →「刘慈欣、某某」') && multi.includes('标签 →「科幻、经典」'));
+    assert.ok(multi.includes('分类「科幻时空」→「科学」'), multi);
+    assert.equal(toolsState.editCalls[1].payload.category, '科学');
     assert.deepEqual(toolsState.editCalls[1].payload.authors, ['刘慈欣', '某某']);
+    // 分类与原值相同：不算改动（防无意义全量写）
+    const sameCat = await RealAiTools.execute('update_book_meta', '{"book_id":1481,"category":"科幻时空"}');
+    assert.ok(sameCat.includes('没有要修改'), sameCat);
+    assert.equal(toolsState.editCalls.length, 2);
     // 全空参数：不发请求
     const noop = await RealAiTools.execute('update_book_meta', '{"book_id":1481}');
     assert.ok(noop.includes('没有要修改'), noop);
