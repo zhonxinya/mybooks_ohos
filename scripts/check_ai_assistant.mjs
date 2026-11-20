@@ -1144,6 +1144,118 @@ try {
     assert.equal(full, '6 本都查完了。');
   });
 
+  test('工具回路并行：同轮全只读并发执行（先齐 T 后齐 R），tool 消息保序、卡片按 callId 配对', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    toolsState.search = async (q) => [{ id: q.length, title: q, authors: [`${q}作者`] }];
+    const events = [];
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '', tool_calls: [
+        { id: 'c1', type: 'function', function: { name: 'search_books', arguments: '{"query":"三体"}' } },
+        { id: 'c2', type: 'function', function: { name: 'search_books', arguments: '{"query":"球状闪电"}' } },
+        { id: 'c3', type: 'function', function: { name: 'search_books', arguments: '{"query":"乡村教师"}' } },
+      ] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '三本都在。' } }] })) },
+    ];
+    let full = '';
+    let error = '';
+    RealAiService.chatStream([{ role: 'user', content: '三本都查一下' }], {
+      onDelta: (t) => { full += t; }, onDone: () => {}, onError: (m) => { error = m; },
+      onTool: (l, name) => { events.push('T'); },
+      onToolResult: (name, l, text, cid) => { events.push('R' + cid); },
+    }, 256);
+    await flush();
+    assert.equal(error, '');
+    // 并行分支特征：三个 onTool 先行（活动区同时亮三条 doing），结果按原序回填
+    assert.deepEqual(events, ['T', 'T', 'T', 'Rc1', 'Rc2', 'Rc3']);
+    const b2 = JSON.parse(deps.state.requests[1].content);
+    const toolMsgs = b2.messages.filter((m) => m.role === 'tool');
+    assert.deepEqual(toolMsgs.map((m) => m.tool_call_id), ['c1', 'c2', 'c3']);
+    assert.ok(toolMsgs[0].content.includes('《三体》') && !toolMsgs[0].content.includes('球状闪电'),
+      '第一条 tool 结果不得混入后完成的查询');
+    assert.ok(full.includes('三本都在。'));
+    // AiTools 层配对契约：并行 execute 两笔，takeLastBooksFor 各归各（静态槽会被后完成者覆盖）
+    const p1 = RealAiTools.execute('search_books', '{"query":"甲书"}', 'k1');
+    const p2 = RealAiTools.execute('search_books', '{"query":"乙书"}', 'k2');
+    await Promise.all([p1, p2]);
+    assert.equal(RealAiTools.takeLastBooksFor('k1')[0].title, '《甲书》');
+    assert.equal(RealAiTools.takeLastBooksFor('k2')[0].title, '《乙书》');
+  });
+
+  test('工具回路并行边界：含写工具轮保持串行（T/R 交替），闸门语义不变', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    RealAiService.savePermission('auto');
+    toolsState.search = async (q) => [{ id: 12, title: q, authors: ['刘慈欣'] }];
+    const events = [];
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '', tool_calls: [
+        { id: 'm1', type: 'function', function: { name: 'search_books', arguments: '{"query":"三体"}' } },
+        { id: 'm2', type: 'function', function: { name: 'create_booklist', arguments: '{"name":"混轮"}' } },
+      ] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: ' done' } }] })) },
+    ];
+    RealAiService.chatStream([{ role: 'user', content: '查完顺手建书单' }], {
+      onDelta: () => {}, onDone: () => {}, onError: () => {},
+      onTool: (l, name) => { events.push('T' + name); },
+      onToolResult: (name, l, text, cid) => { events.push('R' + cid); },
+    }, 256);
+    await flush();
+    assert.deepEqual(events, ['Tsearch_books', 'Rm1', 'Tcreate_booklist', 'Rm2'],
+      '写工具不得与只读并发跑（顺序与确认语义依赖串行）');
+    assert.equal(toolsState.booklistCreateCalls.length, 1);
+    toolsState.booklistCreateCalls.length = 0;
+    RealAiService.savePermission('confirm');
+  });
+
+  test('工具回路收尾：剩 3 轮注入收敛提示；上限轮有正文软着陆、无正文才报错', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    toolsState.search = async (q) => [{ id: 1, title: q, authors: [] }];
+    const mk = () => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+      tool_calls: [{ id: 'x', type: 'function', function: { name: 'search_books', arguments: '{"query":"q"}' } }] } }] })) });
+    const final = (t) => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: t } }] })) });
+    // ① 第 9 轮请求带内部提示、第 8 轮不带，模型随即收尾 → 提示只注入一次
+    deps.state.rcpResponses = [...Array(9).fill(0).map(mk), final('查完了。')];
+    let error = '';
+    let full = '';
+    RealAiService.chatStream([{ role: 'user', content: '慢慢查' }], {
+      onDelta: (t) => { full += t; }, onDone: () => {}, onError: (m) => { error = m; },
+    }, 256);
+    await flush();
+    assert.equal(error, '');
+    const b9 = JSON.parse(deps.state.requests[9].content);
+    const b8 = JSON.parse(deps.state.requests[8].content);
+    const hinted = (msgs) => msgs.filter((m) => m.role === 'user' && `${m.content}`.includes('仅剩 3 轮')).length;
+    assert.equal(hinted(b8.messages), 0, '前 9 轮不得注入');
+    assert.equal(hinted(b9.messages), 1, 'round==MAX-3 注入一次收敛提示');
+    // ② 上限轮模型带正文+幻觉 tool_calls → 软着陆返回部分成果，不报废整条回复
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses = [...Array(12).fill(0).map(mk),
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '已查到部分内容。',
+        tool_calls: [{ id: 'y', type: 'function', function: { name: 'search_books', arguments: '{"query":"q"}' } }] } }] })) }];
+    error = '';
+    full = '';
+    RealAiService.chatStream([{ role: 'user', content: '无限查' }], {
+      onDelta: (t) => { full += t; }, onDone: () => {}, onError: (m) => { error = m; },
+    }, 256);
+    await flush();
+    assert.equal(error, '', '上限轮有正文不得报错');
+    assert.ok(full.includes('已查到部分内容。') && full.includes('12 轮上限'), full);
+    // ③ 上限轮纯工具无正文 → 仍按旧语义报错（没有可交付内容）
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses = [...Array(13).fill(0).map(mk)];
+    error = '';
+    RealAiService.chatStream([{ role: 'user', content: '光查不说' }], {
+      onDelta: () => {}, onDone: () => {}, onError: (m) => { error = m; },
+    }, 256);
+    await flush();
+    assert.match(error, /达到上限/, '无正文时仍提示达到上限');
+  });
+
   test('写工具确认闸门：拒绝/无确认方不执行，批准才执行', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;

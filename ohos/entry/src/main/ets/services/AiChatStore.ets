@@ -386,9 +386,9 @@ export class AiChatStore {
           this.beginActivity(name, label);
         }
       },
-      onToolResult: (name: string, label: string, text: string) => {
+      onToolResult: (name: string, label: string, text: string, callId: string) => {
         if (requestId === this.requestId && this.thinking) {
-          this.endActivity(name, label, text);
+          this.endActivity(name, label, text, callId);
         }
       },
       onConfirm: (label: string, args: string): Promise<boolean> => {
@@ -448,17 +448,23 @@ export class AiChatStore {
     this.notify();
   }
 
-  /** 工具执行完：把最后一条同名 doing 翻成 done/rejected，书目结果转结构化条目。 */
-  endActivity(name: string, label: string, text: string): void {
-    // 结构化缓存带封面（search_books），文本解析仅兜底（书源/任务等无图工具）
-    const cached: ToolBookLine[] = AiTools.takeLastBooks();
+  /** 工具执行完：把最早的同名 doing 翻成 done/rejected，书目结果转结构化条目。 */
+  endActivity(name: string, label: string, text: string, callId: string = ''): void {
+    // 结构化缓存带封面（search_books），文本解析仅兜底（书源/任务等无图工具）；
+    // 同轮并行执行时按 callId 配对取，避免静态槽被后完成者覆盖而串台
+    const cached: ToolBookLine[] = AiTools.takeLastBooksFor(callId);
     const books: ToolBookLine[] = cached.length > 0 ? cached : parseToolBookLines(text);
     const firstLine: string = text.length > 0 ? text.split('\n')[0] : '';
     const summary: string = books.length > 0 || firstLine.length === 0 ? '' :
       (firstLine.length > 48 ? `${firstLine.substring(0, 48)}…` : firstLine);
     const acts: ChatActivity[] = this.liveActivities.slice();
     let flipped: boolean = false;
-    for (let i = acts.length - 1; i >= 0; i--) {
+    // 网关回路带 callId：正序翻最早同名 doing（并行轮结果按调用原序回填）；
+    // 页面直调（无 callId）保留旧语义「只翻最后一条」
+    const flipFrom: number = callId.length === 0 ? acts.length - 1 : 0;
+    const flipTo: number = callId.length === 0 ? -1 : acts.length;
+    const flipStep: number = callId.length === 0 ? -1 : 1;
+    for (let i = flipFrom; i !== flipTo; i += flipStep) {
       if (acts[i].name === name && acts[i].state === 'doing') {
         acts[i] = {
           name: name,

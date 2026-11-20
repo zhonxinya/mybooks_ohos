@@ -292,14 +292,36 @@ export class AiTools {
 
   /**
    * 最近一次书目型工具的结构化结果（含封面），供对话页渲染卡片。
-   * 工具回路串行执行，读后即清即可避免与下一次结果串台。
+   * 串行回路读后即清即可；同轮并行执行时本槽会被后完成者覆盖，
+   * 配对走 booksByCall（见 takeLastBooksFor）。
    */
   private static lastBooks: ToolBookLine[] = [];
+
+  /**
+   * 并行回路专用配对槽：同轮多个 search_books 并发时静态槽会被后完成者覆盖，
+   * 结果按 tool_call_id 登记于此，UI 回填时逐条取回（写入与工具产出同在同步段，无竞态）。
+   */
+  private static booksByCall: Map<string, ToolBookLine[]> = new Map();
 
   static takeLastBooks(): ToolBookLine[] {
     const books: ToolBookLine[] = AiTools.lastBooks;
     AiTools.lastBooks = [];
     return books;
+  }
+
+  /** 按 callId 取并行执行的结构化结果；无登记则回退静态槽（串行路径）。 */
+  static takeLastBooksFor(callId: string): ToolBookLine[] {
+    if (callId.length > 0 && AiTools.booksByCall.has(callId)) {
+      const books: ToolBookLine[] = AiTools.booksByCall.get(callId) ?? [];
+      AiTools.booksByCall.delete(callId);
+      return books;
+    }
+    return AiTools.takeLastBooks();
+  }
+
+  /** 回路收尾清理：中断/异常路径可能残留未取的条目。 */
+  static clearPendingBooks(): void {
+    AiTools.booksByCall.clear();
   }
 
   /**
@@ -373,10 +395,10 @@ export class AiTools {
    * - **写工具永不自动重试**：部分成功可能已落在服务端，盲目重试会重复执行；
    *   只回传分类文案，由模型（和用户确认闸门）决定下一步。
    */
-  static async execute(name: string, argsJson: string): Promise<string> {
+  static async execute(name: string, argsJson: string, callId: string = ''): Promise<string> {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        return await AiTools.dispatch(name, argsJson);
+        return await AiTools.dispatch(name, argsJson, callId);
       } catch (error) {
         const msg: string = error instanceof Error ? error.message : `${error}`;
         const transient: boolean = AiTools.isTransientError(msg);
@@ -406,11 +428,11 @@ export class AiTools {
     return false;
   }
 
-  private static async dispatch(name: string, argsJson: string): Promise<string> {
+  private static async dispatch(name: string, argsJson: string, callId: string = ''): Promise<string> {
     AiTools.lastBooks = [];
     const args: Record<string, Object> = AiTools.parseArgs(argsJson);
       if (name === 'search_books') {
-        return await AiTools.searchBooks(AiTools.argString(args, 'query'));
+        return await AiTools.searchBooks(AiTools.argString(args, 'query'), callId);
       }
       if (name === 'book_detail') {
         return await AiTools.bookDetail(AiTools.argNumber(args, 'book_id'));
@@ -759,7 +781,7 @@ export class AiTools {
     return `已将 id=${bookId} 的封面换成候选${index}（来源 ${entry.source}），其余元数据未动。`;
   }
 
-  private static async searchBooks(query: string): Promise<string> {
+  private static async searchBooks(query: string, callId: string = ''): Promise<string> {
     if (query.length === 0) {
       return '参数 query 为空，请提供书名或关键词。';
     }
@@ -778,6 +800,10 @@ export class AiTools {
       });
     }
     AiTools.lastBooks = structured;
+    if (callId.length > 0) {
+      // 并行路径：同同步段登记进配对槽，UI 按 callId 取回（静态槽会被后完成者覆盖）
+      AiTools.booksByCall.set(callId, structured);
+    }
     return `找到 ${books.length} 本：\n${lines.join('\n')}`;
   }
 
