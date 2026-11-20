@@ -223,6 +223,8 @@ export const toolsState = {
   booklistCreateResult: null, booklistAddResult: null, booklistCreateCalls: [], booklistAddCalls: [],
   bookDetailAsync: null, editCalls: [], editResult: null,
   referBooks: null, referSearchCalls: [], applyReferCalls: [], applyReferResult: null,
+  // 一次性抛错开关：非空则下一次调用抛该消息并自动复位（工具失败处理用例用）
+  searchThrowOnce: '', createThrowOnce: '',
 };
 // 仅作类型标注用的名字（strip-types 后仍走值 import），占位防命名导出缺失
 export const SoNovelBookPayload = undefined;
@@ -258,6 +260,9 @@ export const DownloadTaskService = {
 export const BookListApi = {
   createBooklist: async (name, description, color, isPublic) => {
     toolsState.booklistCreateCalls.push({ name, description, color, isPublic });
+    if (toolsState.createThrowOnce.length > 0) {
+      const e = toolsState.createThrowOnce; toolsState.createThrowOnce = ''; throw new Error(e);
+    }
     return toolsState.booklistCreateResult ?? { err: 'ok', booklist: { id: 77 } };
   },
   addBooks: async (id, ids) => {
@@ -266,7 +271,12 @@ export const BookListApi = {
   },
 };
 export const TalebookApi = {
-  search: async (q) => (toolsState.search ? await toolsState.search(q) : []),
+  search: async (q) => {
+    if (toolsState.searchThrowOnce.length > 0) {
+      const e = toolsState.searchThrowOnce; toolsState.searchThrowOnce = ''; throw new Error(e);
+    }
+    return toolsState.search ? await toolsState.search(q) : [];
+  },
   getBookDetail: async (id) => (toolsState.detail ? await toolsState.detail(id) : null),
   searchRefer: async (id, opts) => {
     toolsState.referSearchCalls.push({ id, opts });
@@ -1017,6 +1027,34 @@ try {
     assert.equal(deps.state.requests.length, 3);
   });
 
+  test('工具失败处理：只读瞬时失败自动重试一次，写工具永不自动重试，确定性失败给修正指引', async () => {
+    // 1 只读工具瞬时失败：第一次抛「连接超时」，代码层重试后拿到正常结果
+    let okCalls = 0;
+    toolsState.searchThrowOnce = '连接超时';
+    toolsState.search = async () => { okCalls += 1; return [{ id: 12, title: '三体', authors: ['刘慈欣'] }]; };
+    let out = await RealAiTools.execute('search_books', '{"query":"三体"}');
+    assert.ok(out.includes('《三体》'), out);
+    assert.equal(okCalls, 1, '重试那次应走正常通道（首次由 throwOnce 抛出）');
+    // 2 只读工具重试后仍瞬时失败：文案带「已自动重试一次」，且恰好尝试 2 次
+    let attempts = 0;
+    toolsState.search = async () => { attempts += 1; throw new Error('HTTP 502 bad gateway'); };
+    out = await RealAiTools.execute('search_books', '{"query":"三体"}');
+    assert.ok(out.includes('暂时失败') && out.includes('已自动重试一次'), out);
+    assert.equal(attempts, 2, '只读瞬时失败应恰好尝试 2 次');
+    // 3 写工具瞬时失败：永不自动重试（部分成功可能已落服务端），文案不声称重试过
+    toolsState.booklistCreateCalls.length = 0;
+    toolsState.createThrowOnce = '连接超时';
+    out = await RealAiTools.execute('create_booklist', '{"name":"重试测试"}');
+    assert.ok(out.includes('暂时失败') && !out.includes('已自动重试'), out);
+    assert.equal(toolsState.booklistCreateCalls.length, 1, '写工具不得自动重试');
+    // 4 确定性失败：非瞬时，回「执行失败」+ 修正指引
+    toolsState.search = async () => { throw new Error('参数非法'); };
+    out = await RealAiTools.execute('search_books', '{"query":"x"}');
+    assert.ok(out.includes('执行失败') && out.includes('不要原样重试'), out);
+    toolsState.search = null;
+    toolsState.booklistCreateCalls.length = 0;
+  });
+
   test('长任务：连续 6 轮 tool_calls 在新上限（12）内正常完成——旧上限 4 会在第 5 轮报错截断', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
@@ -1193,7 +1231,8 @@ try {
     assert.ok(!sys.includes('（书籍详情，需 id）'), '旧版逐工具枚举未删净（与 tools payload 重复）');
     assert.ok(!sys.includes('写操作工具：create_booklist'), '写工具清单枚举未删净');
     assert.ok(sys.includes('回答与思考过程一律使用中文'), '缺中文约束');
-    assert.ok(sys.includes('工具返回「执行失败」时不要立刻放弃'), '缺工具失败重试引导');
+    assert.ok(sys.includes('工具返回「暂时失败」时可稍后原样重试一次'), '缺工具失败重试引导');
+    assert.ok(sys.includes('返回「执行失败」时按错误提示修正参数或方案再试'), '缺确定性失败修正指引');
     assert.ok(sys.includes('当前为「逐笔确认」权限模式'), 'confirm 档缺补注');
     state.settings.permission = 'readonly';
     const ro = (await store.buildContext())[0].content;

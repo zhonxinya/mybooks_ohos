@@ -353,10 +353,49 @@ export class AiTools {
   }
 
   /** 执行一次工具调用；永不抛出，返回给模型的文本结果。 */
+  /**
+   * 工具执行入口（失败处理见 dispatch 外层循环）：
+   * - 只读工具的**瞬时失败**（网络/限流/5xx）在代码层自动重试一次——模型层重试
+   *   要整趟网关往返（秒级+token），这类失败无副作用，本地重试最快最省。
+   * - **写工具永不自动重试**：部分成功可能已落在服务端，盲目重试会重复执行；
+   *   只回传分类文案，由模型（和用户确认闸门）决定下一步。
+   */
   static async execute(name: string, argsJson: string): Promise<string> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await AiTools.dispatch(name, argsJson);
+      } catch (error) {
+        const msg: string = error instanceof Error ? error.message : `${error}`;
+        const transient: boolean = AiTools.isTransientError(msg);
+        if (transient && attempt === 0 && !AiTools.needsConfirm(name)) {
+          continue;
+        }
+        if (transient) {
+          const note: string = AiTools.needsConfirm(name) ? '' : '（已自动重试一次）';
+          return `工具 ${name} 暂时失败${note}：${msg}。可稍后原样重试一次，或换个说法。`;
+        }
+        return `工具 ${name} 执行失败：${msg}。请按错误原因修正参数或方案，不要原样重试。`;
+      }
+    }
+    return '';
+  }
+
+  /** 网络/限流/服务端不可用类错误判为瞬时（可重试），其余为确定性错误。 */
+  private static isTransientError(message: string): boolean {
+    const keys: string[] = ['超时', 'timeout', 'Timeout', '连接', 'connection', 'Connection',
+      'network', 'Network', 'unavailable', 'Unavailable', 'reset', 'ECONN', 'econn',
+      '429', '500', '502', '503', '504', '暂时不可用'];
+    for (let i = 0; i < keys.length; i++) {
+      if (message.indexOf(keys[i]) >= 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static async dispatch(name: string, argsJson: string): Promise<string> {
     AiTools.lastBooks = [];
-    try {
-      const args: Record<string, Object> = AiTools.parseArgs(argsJson);
+    const args: Record<string, Object> = AiTools.parseArgs(argsJson);
       if (name === 'search_books') {
         return await AiTools.searchBooks(AiTools.argString(args, 'query'));
       }
@@ -406,9 +445,6 @@ export class AiTools {
         return AiPersona.removeMemory(AiTools.argNumber(args, 'index'));
       }
       return `未知工具：${name}`;
-    } catch (error) {
-      return `工具 ${name} 执行失败：${error instanceof Error ? error.message : `${error}`}`;
-    }
   }
 
   /**
