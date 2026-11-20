@@ -1,15 +1,18 @@
-// 语音通话页（轮转模式）：听→识别→AI→播报→听 循环，Token Plan 音频链路。
-// 打断=播报中点「打断」停止朗读直接回到聆听；realtime WS 全双工是后续升级项。
+// 语音通话页：默认 realtime WS 全双工（VAD 自动断句、开口即打断、可静音）；
+// 设置页可切「轮转模式」（听→识→想→说循环，用独立自选的对话模型与播报引擎）。
 import { abilityAccessCtrl, common } from '@kit.AbilityKit';
 import { PageScaffold, PrimaryButton, SecondaryButton } from '../components';
 import { AppRouter } from '../utils/AppRouter';
 import { QwenAudioService } from '../services/QwenAudioService';
+import { SpeakService } from '../services/SpeakService';
+import { RealtimeCallService, RealtimeCallCallbacks } from '../services/RealtimeCallService';
 import { AiService, AiMessage } from '../services/AiService';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG: string = 'AiVoiceCall';
 
 const ST_IDLE: string = 'idle';
+const ST_CONNECTING: string = 'connecting';
 const ST_LISTENING: string = 'listening';
 const ST_TRANSCRIBING: string = 'transcribing';
 const ST_THINKING: string = 'thinking';
@@ -28,17 +31,23 @@ struct AiVoiceCallPage {
   @State userLine: string = '';
   @State aiLine: string = '';
   @State tip: string = '';
+  @State muted: boolean = false;
   private history: AiMessage[] = [];
   /** 轮次序号：挂断/重开后旧异步链凭序号失效（多处 await 后检查）。 */
   private turnSeq: number = 0;
+  /** 当前在通话的是 realtime 全双工模式（按钮布局与挂断逻辑分叉）。 */
+  private rtMode: boolean = false;
 
   aboutToDisappear(): void {
     this.hangup();
   }
 
   private stateShort(): string {
+    if (this.st === ST_CONNECTING) {
+      return '呼叫中';
+    }
     if (this.st === ST_LISTENING) {
-      return '聆听中';
+      return this.rtMode && this.muted ? '已静音' : '聆听中';
     }
     if (this.st === ST_TRANSCRIBING) {
       return '识别中';
@@ -115,25 +124,48 @@ struct AiVoiceCallPage {
           .padding({ left: 28, right: 28 });
       }
       Blank().layoutWeight(1);
-      Row({ space: 12 }) {
-        SecondaryButton({
-          label: '挂断',
-          fullWidth: false,
-          onTap: () => {
-            this.hangup();
-            AppRouter.back(this.getUIContext());
-          },
-        }).layoutWeight(1);
-        PrimaryButton({
-          label: this.mainLabel(),
-          buttonEnabled: this.st !== ST_TRANSCRIBING && this.st !== ST_THINKING,
-          onTap: () => {
-            void this.onMain();
-          },
-        }).layoutWeight(1.6);
+      if (this.rtMode) {
+        // 全双工通话中：VAD 自动轮转与打断，人工只需静音/挂断
+        Row({ space: 12 }) {
+          SecondaryButton({
+            label: this.muted ? '取消静音' : '静音',
+            fullWidth: false,
+            onTap: () => {
+              this.toggleMute();
+            },
+          }).layoutWeight(1);
+          PrimaryButton({
+            label: '挂断',
+            fullWidth: false,
+            onTap: () => {
+              this.hangup();
+              AppRouter.back(this.getUIContext());
+            },
+          }).layoutWeight(1);
+        }
+        .width('100%')
+        .padding({ left: 20, right: 20, bottom: 24 });
+      } else {
+        Row({ space: 12 }) {
+          SecondaryButton({
+            label: '挂断',
+            fullWidth: false,
+            onTap: () => {
+              this.hangup();
+              AppRouter.back(this.getUIContext());
+            },
+          }).layoutWeight(1);
+          PrimaryButton({
+            label: this.mainLabel(),
+            buttonEnabled: this.st !== ST_TRANSCRIBING && this.st !== ST_THINKING && this.st !== ST_CONNECTING,
+            onTap: () => {
+              void this.onMain();
+            },
+          }).layoutWeight(1.6);
+        }
+        .width('100%')
+        .padding({ left: 20, right: 20, bottom: 24 });
       }
-      .width('100%')
-      .padding({ left: 20, right: 20, bottom: 24 });
     }
     .width('100%')
     .height('100%');
@@ -147,7 +179,14 @@ struct AiVoiceCallPage {
         return;
       }
       this.tip = '';
-      await this.beginListening();
+      if (AiService.loadCallMode() === 'realtime') {
+        await this.startRealtime();
+      } else {
+        await this.beginListening();
+      }
+      return;
+    }
+    if (this.rtMode) {
       return;
     }
     if (this.st === ST_LISTENING) {
@@ -155,11 +194,73 @@ struct AiVoiceCallPage {
       return;
     }
     if (this.st === ST_SPEAKING) {
-      // 打断播报：stopPlayback 让 playFile 返回，轮转自然回到聆听
+      // 打断播报：stop 让 speak 以 false 返回，轮转自然回到聆听
       this.tip = '';
-      QwenAudioService.stopPlayback();
+      SpeakService.stop();
     }
   }
+
+  // ————————————————— realtime 全双工 —————————————————
+
+  private async startRealtime(): Promise<void> {
+    this.st = ST_CONNECTING;
+    const cb: RealtimeCallCallbacks = {
+      onUserText: (t: string): void => {
+        this.userLine = t;
+      },
+      onAiTextDelta: (d: string): void => {
+        this.aiLine += d;
+      },
+      onAiTextDone: (t: string): void => {
+        this.aiLine = t;
+      },
+      onSpeechStarted: (): void => {
+        // 开口即打断（服务已清播放队列），回到聆听
+        this.tip = '';
+        this.st = ST_LISTENING;
+      },
+      onSpeechStopped: (): void => {
+        this.aiLine = '';
+        this.st = ST_THINKING;
+      },
+      onResponding: (): void => {
+        this.st = ST_SPEAKING;
+      },
+      onResponseDone: (): void => {
+        if (this.rtMode && this.st === ST_SPEAKING) {
+          this.st = ST_LISTENING;
+        }
+      },
+      onError: (m: string): void => {
+        this.tip = m;
+      },
+      onClosed: (): void => {
+        if (this.rtMode) {
+          this.rtMode = false;
+          this.muted = false;
+          this.st = ST_IDLE;
+          this.tip = '连接已中断，可重新拨打';
+        }
+      },
+    };
+    try {
+      await RealtimeCallService.connect(VOICE_SYSTEM_PROMPT, cb);
+      this.rtMode = true;
+      this.muted = false;
+      this.st = ST_LISTENING;
+    } catch (error) {
+      hilog.error(0x0000, TAG, 'realtime connect: %{public}s', `${error}`);
+      this.st = ST_IDLE;
+      this.tip = error instanceof Error ? error.message : `连接失败：${error}`;
+    }
+  }
+
+  private toggleMute(): void {
+    this.muted = !this.muted;
+    RealtimeCallService.setMuted(this.muted);
+  }
+
+  // ————————————————— 轮转模式（fallback，可用自选对话模型） —————————————————
 
   private async beginListening(): Promise<void> {
     const my: number = this.turnSeq;
@@ -204,18 +305,14 @@ struct AiVoiceCallPage {
       for (let i = keepFrom; i < this.history.length; i++) {
         messages.push(this.history[i]);
       }
-      const answer: string = await AiService.complete(messages, 512);
+      const answer: string = await AiService.complete(messages, 512, AiService.loadVoiceConfig());
       if (!alive()) {
         return;
       }
       this.aiLine = answer;
       this.history.push({ role: 'assistant', content: answer });
       this.st = ST_SPEAKING;
-      const path: string = await QwenAudioService.synthesize(answer);
-      if (!alive()) {
-        return;
-      }
-      await QwenAudioService.playFile(path);
+      await SpeakService.speak(answer);
       if (!alive()) {
         return;
       }
@@ -232,8 +329,11 @@ struct AiVoiceCallPage {
 
   private hangup(): void {
     this.turnSeq++;
+    this.rtMode = false;
+    this.muted = false;
     this.st = ST_IDLE;
-    QwenAudioService.stopPlayback();
+    RealtimeCallService.disconnect();
+    SpeakService.stop();
     QwenAudioService.stopRecordingCleanup();
   }
 

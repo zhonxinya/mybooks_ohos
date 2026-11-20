@@ -9,7 +9,7 @@ import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { ToolResultList } from '../components/ToolResultList';
 import { AiChatStore, ChatActivity, ChatBubble } from '../services/AiChatStore';
 import { AiService } from '../services/AiService';
-import { QwenAudioService } from '../services/QwenAudioService';
+import { SpeakService } from '../services/SpeakService';
 import { AiPermissionMode } from '../services/AiTools';
 import { AppRouter } from '../utils/AppRouter';
 
@@ -62,10 +62,11 @@ struct AiAssistantPage {
     this.syncFromStore();
   }
 
-  /** 播报相关配置：仅 Token Plan 服务商可用（其他服务商无 TTS 端点）。 */
+  /** 播报可用性：系统引擎档始终可用（失败时按钮里报错）；云端档仅 Token Plan 服务商。 */
   private loadVoiceState(): void {
     this.autoSpeak = AiService.loadAutoSpeak();
-    this.ttsAvailable = AiService.loadConfig().providerId === 'qwen-tokenplan';
+    this.ttsAvailable = AiService.loadSpeakEngine() === 'system' ||
+      AiService.loadConfig().providerId === 'qwen-tokenplan';
   }
 
   aboutToDisappear(): void {
@@ -248,15 +249,14 @@ struct AiAssistantPage {
       return;
     }
     if (this.speakingIndex === index) {
-      QwenAudioService.stopPlayback();
+      SpeakService.stop();
       this.speakingIndex = -1;
       return;
     }
-    QwenAudioService.stopPlayback();
+    SpeakService.stop();
     this.speakingIndex = index;
     try {
-      const path: string = await QwenAudioService.synthesize(this.messages[index].content);
-      await QwenAudioService.playFile(path);
+      await SpeakService.speak(this.messages[index].content);
     } catch (error) {
       this.toast(`播报失败：${error}`);
     } finally {
