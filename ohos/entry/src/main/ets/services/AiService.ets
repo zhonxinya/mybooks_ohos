@@ -71,6 +71,16 @@ export interface LlmSearchResult {
   error: string;
 }
 
+/** 模型库条目：一个「服务商 + 模型 id」的自由组合，可被任意功能复用。 */
+export interface AiModelEntry {
+  id: string;
+  /** 用户可读名称（空则按「服务商 · 模型」兜底）。 */
+  name: string;
+  providerId: string;
+  /** 模型 id；'' = 用该服务商默认模型。 */
+  model: string;
+}
+
 /** 运行时配置。 */
 export interface AiConfig {
   providerId: string;
@@ -443,6 +453,29 @@ export class AiService {
   }
   static loadFeatureModel(feature: string): string {
     return AiServiceConfig.loadFeatureModel(feature);
+  }
+  // ———— 模型库：模型条目 = 名称 + 服务商 + 模型 id 的自由组合 ————
+  static listModelEntries(): AiModelEntry[] {
+    return AiServiceConfig.listModelEntries();
+  }
+  static addModelEntry(name: string, providerId: string, model: string): AiModelEntry {
+    return AiServiceConfig.addModelEntry(name, providerId, model);
+  }
+  static updateModelEntry(id: string, name: string, providerId: string, model: string): boolean {
+    return AiServiceConfig.updateModelEntry(id, name, providerId, model);
+  }
+  static removeModelEntry(id: string): boolean {
+    return AiServiceConfig.removeModelEntry(id);
+  }
+  static modelEntryOf(id: string): AiModelEntry | null {
+    return AiServiceConfig.modelEntryOf(id);
+  }
+  /** 功能绑定库条目（''=恢复跟随）。 */
+  static bindFeatureEntry(feature: string, entryId: string): void {
+    AiServiceConfig.bindFeatureEntry(feature, entryId);
+  }
+  static loadFeatureEntry(feature: string): string {
+    return AiServiceConfig.loadFeatureEntry(feature);
   }
   /** 功能槽目录（功能模型页数据源）。 */
   static featureIds(): string[] {

@@ -528,9 +528,16 @@ export struct SettingsPage {
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
                 title: '功能模型',
-                subtitle: '为看图/摘要/语音等功能单独绑定服务商与模型',
+                subtitle: '为看图/摘要/语音等功能从模型库挑模型',
                 showChevron: true,
                 onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiFeatureModelsPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
+                title: '模型库',
+                subtitle: '服务商与模型自由组合，供各功能复用',
+                showChevron: true,
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiModelLibraryPage' }),
               });
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
