@@ -196,13 +196,12 @@ export class AiServiceHttp {
    * 才连接百炼三家 MCP；其余情形/任何失败都回空集，聊天走内置工具。
    */
   static async mcpToolset(): Promise<AiToolDefinition[]> {
-    const config: AiConfig = AiServiceConfig.loadConfig();
-    const key: string = AiServiceConfig.apiKeyFor(config.providerId);
-    if (!McpService.enabledFor(config.providerId, key)) {
+    if (!McpService.enabledFor()) {
       return [];
     }
     try {
-      return await McpService.ensureToolset(key);
+      // 缓存归属用当前服务商（切服务商后重新握手）；Key 由各家自取，不再复用服务商 Key
+      return await McpService.ensureToolset(AiServiceConfig.loadConfig().providerId);
     } catch (_error) {
       return [];
     }
@@ -216,8 +215,7 @@ export class AiServiceHttp {
   /** 执行路由：mcp_ 前缀走 MCP（自带容错），其余走内置执行器。 */
   static toolRunFor(name: string, args: string, callId: string): Promise<string> {
     if (McpService.isMcpTool(name)) {
-      const config: AiConfig = AiServiceConfig.loadConfig();
-      return McpService.callTool(name, args, AiServiceConfig.apiKeyFor(config.providerId));
+      return McpService.callTool(name, args);
     }
     return AiTools.execute(name, args, callId);
   }

@@ -646,13 +646,13 @@ export class AiService {
   static mcpSummary(): string {
     return McpService.summaryBrief();
   }
-  /** 该家是否已有可用 Key（内置家看当前服务商 Key，自定义家看自己的槽）。 */
+  /** 该家是否已配 Key（内置与自定义家一视同仁，各用各的槽）。 */
   static mcpHasKey(server: McpServer): boolean {
-    return McpService.hasApiKey(server, AiServiceConfig.apiKeyFor(AiServiceConfig.loadConfig().providerId));
+    return McpService.hasApiKey(server);
   }
-  /** 该家是否自带 Key 槽（自定义家 UI 才显示 Key 输入框）。 */
-  static mcpOwnsKey(server: McpServer): boolean {
-    return McpService.ownsKey(server);
+  /** 该家是否已启用（UI 开关回显）。 */
+  static mcpEnabled(tag: string): boolean {
+    return McpService.isServerEnabled(tag);
   }
   /** 新增自定义 MCP server（含可选 Key）。 */
   static mcpAddServer(label: string, url: string, apiKey: string): McpServer {

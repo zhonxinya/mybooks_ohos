@@ -62,16 +62,11 @@ export class McpService {
   private static cacheAt: number = 0;
   private static states: McpServerState[] = [];
 
-  /** 当前服务商是否启用 MCP。 */
-  static enabledFor(providerId: string, apiKey: string): boolean {
-    if (providerId === MCP_PROVIDER_ID && apiKey.length > 0) {
-      return true;
-    }
-    // 自定义 server 自带 Key 时，任何服务商都能用 MCP
+  /** 当前是否至少有一家启用且配了 Key（MCP 门控）。 */
+  static enabledFor(): boolean {
     const all: McpServer[] = McpService.servers();
     for (let i = 0; i < all.length; i++) {
-      if (!all[i].builtin && McpService.isServerEnabled(all[i].tag) &&
-        TalebookService.secureGet(MCP_KEY_PREFIX + all[i].tag).length > 0) {
+      if (McpService.isServerEnabled(all[i].tag) && McpService.apiKeyFor(all[i]).length > 0) {
         return true;
       }
     }
@@ -113,31 +108,22 @@ export class McpService {
   }
 
   /**
-   * 单家鉴权 Key：自定义家用自己槽位；内置家回落调用方传入的 Token Plan Key。
+   * 单家鉴权 Key：一律用该家自己的槽位（内置家也需单独填写，不复用服务商 Key）。
    * 不反向 import AiServiceConfig（Config 已 import McpService，会成环）。
    */
-  static apiKeyFor(server: McpServer, fallbackKey: string): string {
-    if (server.builtin === true) {
-      return fallbackKey;
-    }
-    const own: string = TalebookService.secureGet(MCP_KEY_PREFIX + server.tag);
-    return own.length > 0 ? own : fallbackKey;
+  static apiKeyFor(server: McpServer): string {
+    return TalebookService.secureGet(MCP_KEY_PREFIX + server.tag);
   }
 
-  /** 设置某家 Key（自定义家专有；内置家走 Token Plan 服务商 Key）。 */
+  /** 设置某家 Key（内置与自定义家一视同仁）。 */
   static setApiKey(tag: string, apiKey: string): void {
     TalebookService.secureSet(MCP_KEY_PREFIX + tag, apiKey.trim());
     McpService.reset();
   }
 
-  /** 该家是否已有可用 Key（UI 展示「已配置/未配置」）；内置家由 fallbackKey 决定。 */
-  static hasApiKey(server: McpServer, fallbackKey: string): boolean {
-    return McpService.apiKeyFor(server, fallbackKey).length > 0;
-  }
-
-  /** 该家是否使用自己槽位的 Key（自定义家 UI 才显示 Key 输入框）。 */
-  static ownsKey(server: McpServer): boolean {
-    return server.builtin !== true;
+  /** 该家是否已有 Key（UI 展示「已配置/未配置」）。 */
+  static hasApiKey(server: McpServer): boolean {
+    return McpService.apiKeyFor(server).length > 0;
   }
 
   /** 新增自定义 MCP server：tag 由 label 归一化（去重加序号），返回落库后的条目。 */
@@ -222,16 +208,17 @@ export class McpService {
   }
 
   /**
-   * 取全量 MCP 工具定义（合并各家）：命中缓存零请求；设置页禁用的家不握手，
+   * 取全量 MCP 工具定义（合并各家）：命中缓存零请求；设置页禁用的家与未配 Key 的家不握手，
    * 单家失败静默跳过，全挂返回空数组——聊天照常走内置工具。
+   * Key 由各家自取（内置家也需单独填写），参数仅用于缓存归属（服务商切换后重新握手）。
    */
-  static async ensureToolset(apiKey: string): Promise<AiToolDefinition[]> {
+  static async ensureToolset(cacheOwner: string): Promise<AiToolDefinition[]> {
     const all: McpServer[] = McpService.servers();
     const now: number = Date.now();
-    if (McpService.cacheKey !== apiKey || now - McpService.cacheAt >= MCP_CACHE_TTL_MS) {
+    if (McpService.cacheKey !== cacheOwner || now - McpService.cacheAt >= MCP_CACHE_TTL_MS) {
       const fresh: (McpServerState | null)[] = await Promise.all(
         all.map((s: McpServer): Promise<McpServerState | null> => {
-          const key: string = McpService.apiKeyFor(s, apiKey);
+          const key: string = McpService.apiKeyFor(s);
           return McpService.isServerEnabled(s.tag) && key.length > 0 ?
             McpService.handshake(s, key) : Promise.resolve(null);
         }));
@@ -243,7 +230,7 @@ export class McpService {
         }
       }
       McpService.states = states;
-      McpService.cacheKey = apiKey;
+      McpService.cacheKey = cacheOwner;
       McpService.cacheAt = now;
     }
     const out: AiToolDefinition[] = [];
@@ -289,7 +276,7 @@ export class McpService {
   }
 
   /** 执行一个 MCP 工具。契约同 AiTools.execute：永不抛异常，失败返回说明文本。 */
-  static async callTool(fullName: string, argsJson: string, apiKey: string): Promise<string> {
+  static async callTool(fullName: string, argsJson: string): Promise<string> {
     const server: McpServer | null = McpService.serverOf(fullName);
     if (server === null) {
       return `未知的 MCP 工具：${fullName}`;
@@ -297,7 +284,7 @@ export class McpService {
     if (!McpService.isServerEnabled(server.tag)) {
       return `${server.label}已在设置页的 MCP 档中禁用`;
     }
-    const key: string = McpService.apiKeyFor(server, apiKey);
+    const key: string = McpService.apiKeyFor(server);
     if (key.length === 0) {
       return `${server.label} 不可用：未配置 API Key`;
     }

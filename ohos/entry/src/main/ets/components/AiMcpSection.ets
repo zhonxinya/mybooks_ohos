@@ -1,12 +1,12 @@
-import { AiService, AiConfig } from '../services/AiService';
+import { AiService } from '../services/AiService';
 import { McpServer } from '../services/McpService';
 import { AiToolDefinition } from '../services/AiToolsDefs';
 
 /**
  * MCP 设置区（AiSettingsPage「MCP」档）。
  *
- * 内置四家（百炼）复用 Token Plan 的 Key；用户可新增任意 MCP server 并各填各的 Key。
- * 每行：启用开关 / 名称 / URL / Key 状态；自定义家可编辑与删除。
+ * 每一家（含内置四家百炼）都用自己填写的 Key，互不复用；用户还可新增任意 MCP server。
+ * 每行：启用开关 / 名称 / URL / Key 状态；内置家可填/改 Key，自定义家可编辑与删除。
  * 改动即存并失效工具集缓存，下一轮对话生效。
  */
 @Component
@@ -16,8 +16,8 @@ export struct AiMcpSection {
   @State hasKeyArr: boolean[] = [];
   @State probing: boolean = false;
   @State probeText: string = '';
-  /** 门控提示：当前服务商是否 Token Plan（内置四家的 Key 来源）。 */
-  @State gateOk: boolean = false;
+  /** 是否至少一家已配 Key（未配时提示去填）。 */
+  @State anyKey: boolean = false;
   /** 编辑态：'' 无；'add' 新增；否则为被编辑家的 tag。 */
   @State editTag: string = '';
   @State editLabel: string = '';
@@ -26,8 +26,6 @@ export struct AiMcpSection {
 
   aboutToAppear(): void {
     this.reload();
-    const config: AiConfig = AiService.loadConfig();
-    this.gateOk = config.providerId === 'qwen-tokenplan';
   }
 
   private reload(): void {
@@ -41,6 +39,7 @@ export struct AiMcpSection {
     this.servers = list;
     this.onArr = onArr;
     this.hasKeyArr = keyArr;
+    this.anyKey = keyArr.some((k: boolean) => k);
   }
 
   private setEnabled(index: number, on: boolean): void {
@@ -72,8 +71,20 @@ export struct AiMcpSection {
         AiService.mcpAddServer(this.editLabel, this.editUrl, this.editKey);
         this.toast('已添加 MCP 服务');
       } else {
-        AiService.mcpUpdateServer(this.editTag, this.editLabel, this.editUrl, this.editKey);
-        this.toast('已保存');
+        // 内置家的名称/URL 固定，只更新 Key；自定义家三者都可改
+        const target: McpServer | undefined = this.servers.find((s: McpServer) => s.tag === this.editTag);
+        const builtin: boolean = target !== undefined && target.builtin === true;
+        if (builtin) {
+          if (this.editKey.trim().length === 0) {
+            this.toast('请填写该服务的 API Key');
+            return;
+          }
+          AiService.mcpSetKey(this.editTag, this.editKey);
+          this.toast('Key 已保存');
+        } else {
+          AiService.mcpUpdateServer(this.editTag, this.editLabel, this.editUrl, this.editKey);
+          this.toast('已保存');
+        }
       }
       this.editTag = '';
       this.reload();
@@ -106,7 +117,7 @@ export struct AiMcpSection {
     try {
       const tools: AiToolDefinition[] = await AiService.mcpToolset();
       this.probeText = tools.length === 0
-        ? '没有挂载任何工具：内置家需服务商为 Token Plan 且已配 Key；自定义家需填自己的 Key。仍为空则是网络/服务端握手失败'
+        ? '没有挂载任何工具：请先在下面给要用的服务填上各自的 Key；仍为空则是网络/服务端握手失败'
         : `已挂载共 ${tools.length} 个工具（${AiService.mcpSummary()}）`;
     } finally {
       this.probing = false;
@@ -123,12 +134,12 @@ export struct AiMcpSection {
 
   build() {
     Column({ space: 12 }) {
-      Text('MCP 服务会把其工具挂进对话。内置四家百炼服务复用 Token Plan 的 Key；也可新增任意 MCP 服务（Streamable HTTP）并各填各的 Key。关掉哪家，哪家的工具就不出现，下一轮对话生效。')
+      Text('MCP 服务会把其工具挂进对话。每家都用自己填写的 Key（内置四家百炼也需单独填写，不复用服务商 Key）；也可新增任意 MCP 服务（Streamable HTTP）。关掉哪家，哪家的工具就不出现，下一轮对话生效。')
         .fontSize(12)
         .fontColor($r('app.color.text_secondary'))
         .width('100%');
-      if (!this.gateOk) {
-        Text('当前服务商不是 Token Plan：内置四家不会挂载；新增的自定义服务只要填了自己的 Key 仍可用。')
+      if (!this.anyKey) {
+        Text('还没有任何一家配置 Key：点下面的「填 Key」逐家填写后才会挂载。')
           .fontSize(12)
           .fontColor($r('app.color.error'))
           .width('100%');
@@ -166,17 +177,17 @@ export struct AiMcpSection {
             Text(this.hasKeyArr[index] ? 'Key 已配置' : '未配 Key')
               .fontSize(11)
               .fontColor(this.hasKeyArr[index] ? $r('app.color.success') : $r('app.color.error'));
-            if (AiService.mcpOwnsKey(server)) {
-              Text(this.editTag === server.tag ? '收起' : '编辑')
-                .fontSize(12)
-                .fontColor($r('app.color.brand_primary'))
-                .onClick(() => {
-                  if (this.editTag === server.tag) {
-                    this.cancelEdit();
-                  } else {
-                    this.startEdit(server);
-                  }
-                });
+            Text(this.editTag === server.tag ? '收起' : (this.hasKeyArr[index] ? '编辑' : '填 Key'))
+              .fontSize(12)
+              .fontColor($r('app.color.brand_primary'))
+              .onClick(() => {
+                if (this.editTag === server.tag) {
+                  this.cancelEdit();
+                } else {
+                  this.startEdit(server);
+                }
+              });
+            if (server.builtin !== true) {
               Text('删除')
                 .fontSize(12)
                 .fontColor($r('app.color.error'))
@@ -186,7 +197,7 @@ export struct AiMcpSection {
           .width('100%');
 
           if (this.editTag === server.tag) {
-            this.editFields(false);
+            this.editFields(false, server.builtin === true);
           }
         }
         .width('100%')
@@ -204,7 +215,7 @@ export struct AiMcpSection {
             .fontSize(13)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'));
-          this.editFields(true);
+          this.editFields(true, false);
         }
         .width('100%')
         .padding(8)
@@ -240,18 +251,26 @@ export struct AiMcpSection {
   }
 
   @Builder
-  editFields(isAdd: boolean) {
-    TextInput({ placeholder: '名称，如 我的搜索服务', text: this.editLabel })
-      .fontSize(13)
-      .onChange((v: string) => {
-        this.editLabel = v;
-      });
-    TextInput({ placeholder: 'MCP 端点 URL（Streamable HTTP）', text: this.editUrl })
-      .fontSize(13)
-      .onChange((v: string) => {
-        this.editUrl = v;
-      });
-    TextInput({ placeholder: isAdd ? 'API Key（可选）' : 'API Key（留空不修改）', text: this.editKey })
+  editFields(isAdd: boolean, builtin: boolean) {
+    if (builtin) {
+      // 内置家名称/端点固定，只允许填 Key
+      Text(`${this.editLabel} · ${this.editUrl}`)
+        .fontSize(11)
+        .fontColor($r('app.color.text_tertiary'))
+        .maxLines(2);
+    } else {
+      TextInput({ placeholder: '名称，如 我的搜索服务', text: this.editLabel })
+        .fontSize(13)
+        .onChange((v: string) => {
+          this.editLabel = v;
+        });
+      TextInput({ placeholder: 'MCP 端点 URL（Streamable HTTP）', text: this.editUrl })
+        .fontSize(13)
+        .onChange((v: string) => {
+          this.editUrl = v;
+        });
+    }
+    TextInput({ placeholder: isAdd ? 'API Key（可选）' : 'API Key（填写后保存）', text: this.editKey })
       .fontSize(13)
       .onChange((v: string) => {
         this.editKey = v;
