@@ -69,18 +69,18 @@ export function parseToolBookLines(text: string): ToolBookLine[] {
  */
 
 /** 工具参数的单个属性 schema（OpenAI JSON Schema 子集）。 */
-interface AiToolProperty {
+export interface AiToolProperty {
   type: string;
   description: string;
 }
 
-interface AiToolParameters {
+export interface AiToolParameters {
   type: string;
   properties: Record<string, AiToolProperty>;
   required?: string[];
 }
 
-interface AiToolFunctionBody {
+export interface AiToolFunctionBody {
   name: string;
   description: string;
   parameters: AiToolParameters;

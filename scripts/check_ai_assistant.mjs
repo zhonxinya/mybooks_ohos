@@ -22,7 +22,7 @@ const settingsDefaults = () => ({
     { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', vision: false },
     { id: 'opencode', name: 'OpenCode (Go)', baseUrl: 'https://opencode.ai/inference/openai/v1', model: 'big-pickle', vision: false },
   ],
-  keys: new Set(['deepseek']), saved: null, models: [], fetchError: '', completeReply: 'ok',
+  keys: new Set(['deepseek']), saved: null, models: [], fetchError: '', completeReply: 'ok', mcpTools: [],
   providerModels: {},
   voiceProviderId: '', voiceModel: '', voiceConfig: null, lastCompleteConfig: null, lastCompleteMessages: null,
   speakEngine: 'system', speakCalls: [], speakStops: 0, callMode: 'realtime',
@@ -68,6 +68,7 @@ export const AiService = {
   },
   loadProviderModels: (id) => (state.settings.providerModels[id] ?? []).slice(),
   saveProviderModels: (id, models) => { state.settings.providerModels[id] = models.slice(); },
+  mcpToolset: async () => state.settings.mcpTools.slice(),
   saveConfig: (providerId, baseUrl, model, apiKey, temperature, visionOverride, contextLength) => {
     state.settings.saved = { providerId, baseUrl, model, apiKey, temperature, visionOverride, contextLength };
     if (apiKey.length > 0) { state.settings.keys.add(providerId); }
@@ -296,6 +297,7 @@ function stageAiService() {
   source = source
     .replace(`import { AiTools, AiPermissionMode, AiToolDefinition } from './AiTools';`,
       `import { AiTools } from './RealAiTools.ts';\nimport type { AiPermissionMode, AiToolDefinition } from './RealAiTools.ts';`)
+    .replace(`import { McpService } from './McpService';`, `import { McpService } from './RealMcp.ts';`)
     .replace(`from '@iuroc/openai'`, `from './aiServiceDeps.ts'`)
     .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
     .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
@@ -485,8 +487,8 @@ export const TalebookService = { dataDir: () => personaState.dir };
 function stageChatStore() {
   let source = read('services/AiChatStore.ets');
   source = source
-    .replace(`import { AiTools, AiPermissionMode, parseToolBookLines, ToolBookLine } from './AiTools';`,
-      `import { AiTools, parseToolBookLines } from './RealAiTools.ts';\nimport type { AiPermissionMode, ToolBookLine } from './RealAiTools.ts';`)
+    .replace(`import { AiTools, AiPermissionMode, AiToolDefinition, parseToolBookLines, ToolBookLine } from './AiTools';`,
+      `import { AiTools, parseToolBookLines } from './RealAiTools.ts';\nimport type { AiPermissionMode, AiToolDefinition, ToolBookLine } from './RealAiTools.ts';`)
     .replace(`import { AiService, AiConfig, AiMessage, AiStreamHandlers, AiAbortHandle } from './AiService';`,
       `import { AiService } from './shim.ts';`)
     .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
@@ -521,6 +523,16 @@ function stageEncyclopedia() {
     .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
     .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`);
   writeFileSync(join(dir, 'RealEncyclopedia.ts'), source);
+}
+
+/** McpService 真实入检：rcp/util 复用 aiServiceDeps 桩；AiTools 纯类型 import 擦除。 */
+function stageMcp() {
+  let source = read('services/McpService.ets');
+  source = source
+    .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
+    .replace(`import { AiToolDefinition, AiToolFunctionBody, AiToolParameters } from './AiTools';\n`, '');
+  writeFileSync(join(dir, 'RealMcp.ts'), source);
 }
 
 /** QwenAudioService 真实入检：rcp/fs/存储复用 aiServiceDeps 桩；audio/media 空壳（不测录音/播放）。 */
@@ -764,6 +776,7 @@ try {
   stageMetaSearch();
   stageNovelMeta();
   stageEncyclopedia();
+  stageMcp();
   stageQwenAudio();
   stageReader3();
   stageAiTools();
@@ -3773,6 +3786,160 @@ try {
     deps.state.store.delete('s:ai_api_key_qwen-tokenplan');
     await assert.rejects(() => Rt.connect('x', cb, []), /Token Plan API Key/);
     deps.state.store.clear();
+  });
+
+  test('MCP 客户端：三家握手合并、SSE 解析、单家降级与会话缓存', async () => {
+    const { McpService } = await load('RealMcp');
+    McpService.reset();
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    const ok = (sid) => ({ statusCode: 200, headers: { 'mcp-session-id': sid },
+      body: enc(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-03-26' } })) });
+    const notify = { statusCode: 202, headers: {}, body: enc('') };
+    const esList = { statusCode: 200, headers: {}, body: enc(
+      'event: message\ndata: ' + JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: [
+        { name: 'bailian_web_search', description: '联网搜索', inputSchema: { properties: { query: { type: 'string' } }, required: ['query'] } },
+      ] } }) + '\n\n') };
+    const wfList = { statusCode: 200, headers: {}, body: enc(JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: [
+      { name: 'web_extractor', description: '网页抽取', inputSchema: { type: 'object', properties: { url: { type: 'string' } } } },
+    ] } })) };
+    const badKey = { statusCode: 401, headers: {}, body: enc('{"code":"InvalidApiKey","message":"Invalid API-key provided."}') };
+    // 并行发起顺序：init×3 → notify×2（sg 已死）→ list×2；sg 401 降级
+    deps.state.rcpResponses.push(ok('sid-es'), ok('sid-wf'), badKey, notify, notify, esList, wfList);
+    const tools = await McpService.ensureToolset('sk-sp-test');
+    assert.equal(tools.length, 2, '单家失败静默跳过，其余保留');
+    assert.equal(tools[0].function.name, 'mcp_es_bailian_web_search');
+    assert.equal(tools[1].function.name, 'mcp_wf_web_extractor');
+    assert.equal(tools[0].function.parameters.type, 'object', 'inputSchema 缺 type 时强制补齐');
+    const req0 = deps.state.requests[0];
+    assert.ok(req0.url.includes('/mcps/EnhancedSearch/mcp'));
+    assert.equal(req0.headers['Authorization'], 'Bearer sk-sp-test');
+    assert.ok(req0.headers['Accept'].includes('text/event-stream'));
+    // list 请求带 initialize 响应的会话头
+    const listEs = deps.state.requests.find((r) => r.content.includes('tools/list') && r.url.includes('EnhancedSearch'));
+    assert.equal(listEs.headers['mcp-session-id'], 'sid-es');
+    const before = deps.state.requests.length;
+    const again = await McpService.ensureToolset('sk-sp-test');
+    assert.equal(again.length, 2);
+    assert.equal(deps.state.requests.length, before, '缓存命中零请求');
+    // Key 变化 + reset 都要重新握手
+    deps.state.rcpResponses.push(ok('a'), ok('b'), badKey, notify, notify, esList, wfList);
+    await McpService.ensureToolset('sk-sp-other');
+    assert.ok(deps.state.requests.length > before, '换 Key 强制重握手');
+    McpService.reset();
+    assert.equal(McpService.enabledFor('deepseek', 'sk-d'), false, '非 Token Plan 不启用');
+    assert.equal(McpService.enabledFor('qwen-tokenplan', ''), false, '无 Key 不启用');
+    assert.equal(McpService.enabledFor('qwen-tokenplan', 'sk-sp-x'), true);
+    assert.equal(McpService.isMcpTool('mcp_es_x'), true);
+    assert.equal(McpService.isMcpTool('search_books'), false);
+    assert.equal(McpService.labelOf('mcp_wf_x'), '百炼网页解析');
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+  });
+
+  test('MCP 执行：tools/call 内容拼接、isError、非法参数与坏会话重试', async () => {
+    const { McpService } = await load('RealMcp');
+    McpService.reset();
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    const init = { statusCode: 200, headers: { 'mcp-session-id': 'sid1' },
+      body: enc('{"jsonrpc":"2.0","id":1,"result":{}}') };
+    const notify = { statusCode: 202, headers: {}, body: enc('') };
+    const list = { statusCode: 200, headers: {}, body: enc(JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: [
+      { name: 'search', description: 's', inputSchema: { type: 'object', properties: {} } },
+    ] } })) };
+    const bad = { statusCode: 401, headers: {}, body: enc('{"code":"InvalidApiKey","message":"nope"}') };
+    // 三家并行：init-es, init-wf, init-sg, notify-es, list-es（wf/sg 在 init 即败）
+    deps.state.rcpResponses.push(init, bad, bad, notify, list);
+    await McpService.ensureToolset('k');
+    assert.equal(deps.state.requests.length, 5, 'es 全握手、wf/sg init 即败');
+    // 正常调用：多段 text 拼接
+    deps.state.rcpResponses.push({ statusCode: 200, headers: {}, body: enc(JSON.stringify({
+      jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: '第一段' }, { type: 'image' }, { type: 'text', text: '第二段' }] } })) });
+    const text = await McpService.callTool('mcp_es_search', '{"q":"三体"}', 'k');
+    assert.equal(text, '第一段\n第二段');
+    const call = deps.state.requests[deps.state.requests.length - 1];
+    assert.ok(call.content.includes('"name":"search"'), '剥前缀还原服务端原名');
+    assert.ok(call.content.includes('{"q":"三体"}'), 'arguments JSON 原样透传');
+    assert.equal(call.headers['mcp-session-id'], 'sid1', '会话头续用');
+    // isError 前缀
+    deps.state.rcpResponses.push({ statusCode: 200, headers: {}, body: enc(JSON.stringify({
+      jsonrpc: '2.0', id: 3, result: { isError: true, content: [{ type: 'text', text: '配额用尽' }] } })) });
+    assert.ok((await McpService.callTool('mcp_es_search', '{}', 'k')).startsWith('MCP 工具返回错误：'));
+    // 非法参数 JSON：不发请求
+    assert.ok((await McpService.callTool('mcp_es_search', '{bad', 'k')).includes('合法 JSON'));
+    // 未知工具/空 Key 容错
+    assert.ok((await McpService.callTool('mcp_zz_x', '{}', 'k')).includes('未知'));
+    assert.ok((await McpService.callTool('mcp_es_search', '{}', '')).includes('未配置'));
+    // 会话失效：error → 重新握手 → 重试成功（es 无 sg：init/notify/list + call）
+    deps.state.rcpResponses.push(
+      { statusCode: 200, headers: {}, body: enc('{"jsonrpc":"2.0","id":3,"error":{"code":-32001,"message":"session expired"}}') },
+      { statusCode: 200, headers: { 'mcp-session-id': 'sid2' }, body: enc('{"jsonrpc":"2.0","id":1,"result":{}}') },
+      notify, list,
+      { statusCode: 200, headers: {}, body: enc(JSON.stringify({ jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: '重试成功' }] } })) });
+    assert.equal(await McpService.callTool('mcp_es_search', '{}', 'k'), '重试成功');
+    const retry = deps.state.requests[deps.state.requests.length - 1];
+    assert.equal(retry.headers['mcp-session-id'], 'sid2', '重握手后用新会话');
+    McpService.reset();
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+  });
+
+  test('MCP 集成：chatStream 第四参并入 tools，回路 mcp_ 路由执行并回填', async () => {
+    const RealAiService = (await load('RealAiService')).AiService;
+    deps.state.store.clear();
+    deps.state.chatCalls.length = 0;
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    deps.state.chatStreamRounds = null;
+    RealAiService.saveConfig('deepseek', 'https://api.deepseek.com/v1', 'deepseek-chat', 'sk-d', 0.5);
+    const fake = { type: 'function', function: { name: 'mcp_es_probe', description: 'd',
+      parameters: { type: 'object', properties: {} } } };
+    const handlers = { onDelta: () => {}, onDone: () => {}, onError: () => {},
+      onTool: () => {}, onToolResult: () => {} };
+    // 1) 不传 mcp：只挂内置工具（计数取实际值做基线，工具增删不破坏本用例）
+    RealAiService.chatStream([{ role: 'user', content: 'x' }], handlers, 2048);
+    const baseN = deps.state.chatCalls[0].body.tools.length;
+    assert.ok(baseN >= 27, '内置工具集基线');
+    // 2) 传 mcp：基线+1 且末位为 mcp 工具
+    deps.state.chatCalls.length = 0;
+    RealAiService.chatStream([{ role: 'user', content: 'x' }], handlers, 2048, [fake]);
+    const tools2 = deps.state.chatCalls[0].body.tools;
+    assert.equal(tools2.length, baseN + 1);
+    assert.equal(tools2[baseN].function.name, 'mcp_es_probe');
+    // 3) 回路路由：模型调 mcp_es_probe → 走 McpService（rcp mock 握手+执行），结果回填 tool 消息
+    deps.state.chatCalls.length = 0;
+    deps.state.chatStreamRounds = [
+      [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c9',
+        function: { name: 'mcp_es_probe', arguments: '{"q":"x"}' } }] } }] }],
+      [{ choices: [{ delta: { content: '整合完毕' } }] }],
+    ];
+    const init = { statusCode: 200, headers: { 'mcp-session-id': 'sidm' }, body: enc('{"jsonrpc":"2.0","id":1,"result":{}}') };
+    const notify = { statusCode: 202, headers: {}, body: enc('') };
+    const list = { statusCode: 200, headers: {}, body: enc(JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: [
+      { name: 'probe', description: 'd', inputSchema: { type: 'object', properties: {} } },
+    ] } })) };
+    // callTool 单家串行：init→notify→list→tools/call
+    deps.state.rcpResponses.push(init, notify, list,
+      { statusCode: 200, headers: {}, body: enc(JSON.stringify({ jsonrpc: '2.0', id: 3,
+        result: { content: [{ type: 'text', text: 'MCP 返回内容' }] } })) });
+    const done = [];
+    RealAiService.chatStream([{ role: 'user', content: '查一下' }],
+      { onDelta: () => {}, onDone: (t) => done.push(t), onError: (e) => done.push('ERR ' + e),
+        onTool: () => {}, onToolResult: () => {} }, 2048, [fake]);
+    await flush();
+    assert.deepEqual(done, ['整合完毕']);
+    const msgs = deps.state.chatCalls[1].body.messages;
+    const toolMsg = msgs.find((m) => m.role === 'tool');
+    assert.ok(toolMsg !== undefined, '须回填 tool 结果消息');
+    assert.equal(toolMsg.content, 'MCP 返回内容');
+    assert.equal(toolMsg.tool_call_id, 'c9');
+    const called = deps.state.requests.filter((r) => r.content && r.content.includes('tools/call'));
+    assert.equal(called.length, 1, '恰发一次 tools/call');
+    deps.state.chatStreamRounds = null;
+    deps.state.chatCalls.length = 0;
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
   });
 
   test('灵魂管理页：灵魂保存/恢复默认，手动补记与删除记忆', () => {

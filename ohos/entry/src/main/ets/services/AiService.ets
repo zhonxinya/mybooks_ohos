@@ -9,6 +9,7 @@ import { ChatCompletionContentPartText } from '@iuroc/openai/src/main/ets/openai
 import { ChatCompletionContentPartImage } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { TalebookService } from './TalebookService';
 import { AiTools, AiPermissionMode, AiToolDefinition } from './AiTools';
+import { McpService } from './McpService';
 
 /**
  * AI 能力统一走 **OpenAI 兼容 API 调用**（架构约束：不在应用内集成端侧小模型）；
@@ -456,6 +457,8 @@ export class AiService {
     if (apiKey.length > 0) {
       TalebookService.secureSet(AiService.apiKeyKey(providerId), apiKey.trim());
     }
+    // 服务商/Key 变了：MCP 工具集与会话缓存作废，下次发送前重新握手
+    McpService.reset();
   }
 
   static clearKey(): void {
@@ -640,7 +643,51 @@ export class AiService {
    * SDK 的 `onData` 已经是逐 chunk 回调（内部完成 SSE 拆行与 UTF-8 解码），
    * 这里只把 chunk 拼成文本转发给 UI。
    */
-  static chatStream(messages: AiMessage[], handlers: AiStreamHandlers, maxTokens: number = 2048): AiAbortHandle {
+  /** 内置工具 + MCP 动态工具合并（MCP 全只读，任何权限档都保留）。 */
+  private static toolset(mode: AiPermissionMode, mcpTools: AiToolDefinition[] | null): AiToolDefinition[] {
+    const base: AiToolDefinition[] = AiTools.definitions(mode);
+    if (mcpTools === null || mcpTools.length === 0) {
+      return base;
+    }
+    return base.concat(mcpTools);
+  }
+
+  /**
+   * MCP 工具集门面（聊天页发送前 await）：仅当前服务商=Token Plan 且已配 Key
+   * 才连接百炼三家 MCP；其余情形/任何失败都回空集，聊天走内置工具。
+   */
+  static async mcpToolset(): Promise<AiToolDefinition[]> {
+    const config: AiConfig = AiService.loadConfig();
+    const key: string = AiService.apiKeyFor(config.providerId);
+    if (!McpService.enabledFor(config.providerId, key)) {
+      return [];
+    }
+    try {
+      return await McpService.ensureToolset(key);
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  /** 活动标签：MCP 工具显 server 中文名，内置工具走 AiTools 映射。 */
+  private static toolLabelFor(name: string): string {
+    return McpService.isMcpTool(name) ? McpService.labelOf(name) : AiTools.toolLabel(name);
+  }
+
+  /** 执行路由：mcp_ 前缀走 MCP（自带容错），其余走内置执行器。 */
+  private static toolRunFor(name: string, args: string, callId: string): Promise<string> {
+    if (McpService.isMcpTool(name)) {
+      const config: AiConfig = AiService.loadConfig();
+      return McpService.callTool(name, args, AiService.apiKeyFor(config.providerId));
+    }
+    return AiTools.execute(name, args, callId);
+  }
+  /**
+   * mcpTools：MCP 动态工具集（发送前经 AiService.mcpToolset() 预热取得），
+   * 与内置工具合并挂载；null/空 = 只挂内置工具（非 Token Plan 或握手失败）。
+   */
+  static chatStream(messages: AiMessage[], handlers: AiStreamHandlers, maxTokens: number = 2048,
+    mcpTools: AiToolDefinition[] | null = null): AiAbortHandle {
     const handle: AiAbortHandle = { aborted: false };
     const config: AiConfig = AiService.loadConfig();
     const apiKey: string = AiService.apiKeyFor(config.providerId);
@@ -685,7 +732,7 @@ export class AiService {
       const think: ((text: string) => void) | undefined = handlers.onReasoning;
       const permission: AiPermissionMode = AiService.loadPermission();
       AiService.chatViaGateway(config, apiKey, messages, maxTokens, gatewaySession,
-        AiTools.definitions(permission), permission, (): boolean => handle.aborted,
+        AiService.toolset(permission, mcpTools), permission, (): boolean => handle.aborted,
         notice === undefined ? null : notice,
         ask === undefined ? null : ask,
         done === undefined ? null : done,
@@ -707,7 +754,7 @@ export class AiService {
 
     const client: OpenAI = AiService.client(config.baseUrl, apiKey);
     const sdkPermission: AiPermissionMode = AiService.loadPermission();
-    const sdkTools: AiToolDefinition[] = AiTools.definitions(sdkPermission);
+    const sdkTools: AiToolDefinition[] = AiService.toolset(sdkPermission, mcpTools);
     if (sdkTools.length > 0) {
       // 非网关通道同样走 function calling 回路：传输换成 SDK 流式
       // （sdkStreamRound 打字机保留 + 运行时累积 tool_calls），回路主体与网关共用。
@@ -1142,12 +1189,12 @@ export class AiService {
           const tasks: Promise<string>[] = [];
           for (let i = 0; i < reply.calls.length; i++) {
             const c: GatewayToolCall = reply.calls[i];
-            const l: string = AiTools.toolLabel(c.name);
+            const l: string = AiService.toolLabelFor(c.name);
             labels.push(l);
             if (onTool !== null) {
               onTool(l, c.name);
             }
-            tasks.push(AiTools.execute(c.name, c.arguments, c.id));
+            tasks.push(AiService.toolRunFor(c.name, c.arguments, c.id));
           }
           const results: string[] = await Promise.all(tasks);
           for (let i = 0; i < results.length; i++) {
@@ -1163,7 +1210,7 @@ export class AiService {
         }
         for (let i = 0; i < reply.calls.length; i++) {
           const c: GatewayToolCall = reply.calls[i];
-          let label: string = AiTools.toolLabel(c.name);
+          let label: string = AiService.toolLabelFor(c.name);
           if (c.name === 'ask_user') {
             // 反问工具不落执行器：把问题与选项抛给界面等待点选，答复作为工具结果回填。
             // 没人能答（无卡片渠道/异常）按跳过处理，模型据此收敛而不是反复追问。
@@ -1222,7 +1269,7 @@ export class AiService {
           if (onTool !== null) {
             onTool(label, c.name);
           }
-          const result: string = await AiTools.execute(c.name, c.arguments);
+          const result: string = await AiService.toolRunFor(c.name, c.arguments, '');
           gwMessages.push({ role: 'tool', content: result, tool_call_id: c.id });
           if (onResult !== null) {
             onResult(c.name, label, result, c.id);
