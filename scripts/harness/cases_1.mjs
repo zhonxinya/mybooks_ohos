@@ -466,4 +466,50 @@ export function register(ctx) {
     assert.equal(page.fetchingModels, false);
   });
 
+  test('流式气泡自订阅：store 变化扇出 StreamBubble 回调，detach 后停发', async () => {
+    const page = chat();
+    const store = AiChatStore.instance();
+    let h1 = 0;
+    let h2 = 0;
+    let text1 = '';
+    const t1 = store.attachStreamView(() => { h1++; text1 = store.streamingText; });
+    const t2 = store.attachStreamView(() => { h2++; });
+    await page.send('问题');
+    const b1 = h1;
+    const b2 = h2;
+    state.handlers.onDelta('一');
+    assert.equal(h1, b1 + 1, '增量首帧扇出到自订阅回调');
+    assert.equal(h2, b2 + 1, '多个 StreamBubble 同帧齐动');
+    assert.equal(text1, '一', '回调读到的是已累积的增量内容');
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(h1, b1 + 2, '尾帧同样扇出');
+    store.detachStreamView(t2);
+    const frozen = h2;
+    state.handlers.onDelta('二');
+    state.handlers.onDone('一二');
+    assert.equal(h2, frozen, 'detach 后不再派发（离场组件不泄漏）');
+    assert.ok(h1 > b1 + 2, '在订阅者照常收到后续通知');
+    store.detachStreamView(t1);
+  });
+
+  test('文字流式气泡 key 整轮恒定；固化/语音/错误回归覆盖式 key', () => {
+    const page = new AiAssistantPage();
+    const streaming = { role: 'assistant', content: '', streaming: true, error: false, activities: [] };
+    const k0 = page.bubbleKey(streaming, 2);
+    assert.equal(k0, 'bubble-2-assistant-s');
+    streaming.content = '打字机字';
+    streaming.activities.push({ name: 'search_web', label: '搜索', state: 'done' });
+    assert.equal(page.bubbleKey(streaming, 2), k0, '流式增量不得改 key，否则整泡销毁重挂');
+    streaming.streaming = false;
+    assert.notEqual(page.bubbleKey(streaming, 2), k0, '固化后换 key，触发一次重建显示固化数据');
+    const voice = { role: 'assistant', content: '字幕', streaming: true, error: false, activities: [], voice: true };
+    assert.notEqual(page.bubbleKey(voice, 2), 'bubble-2-assistant-s', '语音字幕气泡仍走内容长度 key');
+    const err = { role: 'assistant', content: '挂', streaming: true, error: true, activities: [] };
+    assert.notEqual(page.bubbleKey(err, 2), 'bubble-2-assistant-s', '错误气泡不进恒定分支');
+    err.content = '挂了更长的错误文案';
+    assert.notEqual(page.bubbleKey(err, 2), page.bubbleKey({ ...err, content: '短' }, 2), '错误气泡 key 仍覆盖内容长度');
+    const user = { role: 'user', content: '问', streaming: false, error: false, activities: [] };
+    assert.equal(page.bubbleKey(user, 3), 'bubble-3-user-d-0-1-0-0');
+  });
+
 }
