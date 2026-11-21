@@ -163,7 +163,7 @@ writeFileSync(join(dir, 'shim.ts'), shim);
 writeFileSync(join(dir, 'aiServiceDeps.ts'), `
 // Buffer.from(x).buffer 带池化填充，必须 slice 出精确字节（模拟 rcp 的紧凑 ArrayBuffer）
 const enc = (s) => { const b = Buffer.from(s, 'utf8'); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
-export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpThrowQueue: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [], chatStreamRounds: null, chatResponse: null, chatResponses: [], sourceJson: null, written: [], ttsFiles: [], lastOpenedPath: '' };
+export const state = { store: new Map(), models: [], rcpResponse: null, rcpResponses: [], rcpThrowQueue: [], rcpError: null, lastRequest: null, requests: [], chatCalls: [], chatStreamRounds: null, chatResponse: null, chatResponses: [], sourceJson: null, written: [], ttsFiles: [], lastOpenedPath: '', feedErrors: [] };
 export const util = {
   // 透传 encoding（gbk/gb2312 走 Node 内置 TextDecoder），utf-8 用法不受影响；
   // QwenAudioService 用 new util.TextDecoder()，AiService 用 create()，class 双形态兼容
@@ -191,7 +191,8 @@ export class OpenAI {
       const chunks = state.chatStreamRounds.shift();
       Promise.resolve().then(() => {
         // 真实 SDK onData 一次收一批 chunks[]，喂单元素会因缺 length 静默空转
-        try { options.onData(chunks); } catch (e) { console.log('FEEDERR', e.message); }
+        // feedErrors 收集逃逸到回调外的异常——真机上这就等于 napi 栈崩溃、应用退出
+        try { options.onData(chunks); } catch (e) { state.feedErrors.push(e.message); }
       });
     }
     return { session: { cancel: () => { state.chatCancelled = true; } }, response: Promise.resolve(resp) };
@@ -1095,6 +1096,53 @@ try {
     deps.state.chatResponses = [];
     deps.state.chatCalls.length = 0;
     toolsState.search = null;
+  });
+
+  test('流式回路防崩：缺 delta/负 index/巨 index/null chunk 不得逃逸异常（napi 回调=崩溃退出）', async () => {
+    deps.state.store.clear();
+    RealAiService.saveConfig('deepseek', 'https://api.deepseek.com/v1', 'deepseek-chat', 'sk-d', 0.5);
+    deps.state.chatCalls.length = 0;
+    deps.state.feedErrors.length = 0;
+    deps.state.chatStreamRounds = [
+      [
+        { choices: [{}] },
+        { choices: [{ finish_reason: 'stop' }] },
+        { choices: [{ delta: { content: 'A' } }] },
+        { choices: [{ delta: { tool_calls: [{ index: -1, id: 'call_x', function: { name: 'list_categories', arguments: '{}' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 100001, function: { arguments: '{}' } }] } }] },
+        null,
+        { choices: [] },
+      ],
+      [
+        { choices: [{ delta: { content: 'done' } }] },
+      ],
+    ];
+    deps.state.chatResponses = [{ statusCode: 200, body: enc('{}') }, { statusCode: 200, body: enc('{}') }];
+    const deltas = [];
+    const errs = [];
+    const handlers = {
+      onDelta: (t) => { deltas.push(t); },
+      onDone: () => {},
+      onError: (e) => { errs.push(e); },
+      onTool: () => {},
+      onToolResult: () => {},
+    };
+    RealAiService.chatStream([{ role: 'user', content: '崩溃测试' }], handlers);
+    await flush();
+    assert.deepEqual(deps.state.feedErrors, [], '回调异常逃逸=真机应用退出');
+    assert.deepEqual(errs, [], '回路不得报错');
+    // 非法 index 收编：负数入 0 槽、巨值并入末槽——slot 唯一且执行继续
+    const msgs = deps.state.chatCalls[1].body.messages;
+    const asst = msgs.find((m) => m.role === 'assistant' && m.tool_calls !== undefined);
+    assert.ok(asst !== undefined, '须回填 assistant(tool_calls)');
+    assert.equal(asst.tool_calls.length, 1, '槽位有界不膨胀');
+    assert.equal(asst.tool_calls[0].id, 'call_x');
+    assert.equal(asst.tool_calls[0].function.name, 'list_categories');
+    assert.equal(deltas.join(''), 'Adone', '打字机不中断');
+    deps.state.chatStreamRounds = null;
+    deps.state.chatResponses = [];
+    deps.state.chatCalls.length = 0;
+    deps.state.feedErrors.length = 0;
   });
 
   test('OpenCode 网关：fetchModels 携带同一会话 id，非 opencode 不带', async () => {

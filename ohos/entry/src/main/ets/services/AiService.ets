@@ -119,6 +119,8 @@ const TIMEOUT_MS: number = 180000;
 const MAX_TOOL_ROUNDS: number = 12;
 /** 网关单轮请求最多尝试次数（1 次原始 + 2 次重试）：网络抖动/429/5xx 不该报废整条回复。 */
 const MAX_GATEWAY_ATTEMPTS: number = 3;
+/** 单轮流式 tool_calls 槽位上限（OpenAI 标准 index 从 0 连续）：异常 index 钳制于此，防无界扩容。 */
+const MAX_TOOL_SLOTS: number = 64;
 
 /** 流式回调：`delta` 为本次增量文本，`done` 表示结束。 */
 export interface AiStreamHandlers {
@@ -629,20 +631,39 @@ export class AiService {
           }
           let piece: string = '';
           let think: string = '';
-          for (let i = 0; i < chunks.length; i++) {
-            const choices = chunks[i].choices;
-            if (choices !== undefined && choices.length > 0) {
-              const delta = choices[0].delta.content;
-              if (delta !== undefined && delta !== null) {
+          // 同 sdkStreamRound：napi 回调里未捕获异常会直接终止应用，解析必须包底
+          try {
+            for (let i = 0; i < chunks.length; i++) {
+              const chunk: Object | undefined = chunks[i] as Object;
+              if (chunk === undefined || chunk === null || typeof chunk !== 'object') {
+                continue;
+              }
+              const choices: Object | undefined = (chunk as Record<string, Object>)['choices'];
+              if (!Array.isArray(choices) || (choices as Object[]).length === 0) {
+                continue;
+              }
+              const first: Object = (choices as Object[])[0];
+              if (first === undefined || first === null || typeof first !== 'object') {
+                continue;
+              }
+              const deltaObj: Object | undefined = (first as Record<string, Object>)['delta'];
+              if (deltaObj === undefined || deltaObj === null || typeof deltaObj !== 'object') {
+                // 尾包常见形态：只有 finish_reason 没有 delta
+                continue;
+              }
+              const rec: Record<string, Object> = deltaObj as Record<string, Object>;
+              const delta: Object | undefined = rec['content'];
+              if (typeof delta === 'string') {
                 piece += delta;
               }
               // SDK 类型没声明 reasoning_content，但运行时是 JSON 透传，按 Record 取
-              const deltaObj: Record<string, Object> = choices[0].delta as Object as Record<string, Object>;
-              const reasoning = deltaObj['reasoning_content'];
+              const reasoning = rec['reasoning_content'];
               if (typeof reasoning === 'string') {
                 think += reasoning;
               }
             }
+          } catch (_error) {
+            // 畸形分片静默跳过
           }
           if (think.length > 0 && handlers.onReasoning !== undefined) {
             handlers.onReasoning(think);
@@ -1131,6 +1152,88 @@ export class AiService {
    * 分片按 OpenAI 标准：首片带 id/name，后续片按 index 续 arguments。
    * 返回 null 表示用户中断。
    */
+  /**
+   * 解析一批流式 chunk：正文/思考累积回调，tool_calls 按 index 归槽。
+   * 全部访问前判空、index 钳制——服务商畸形分片（缺 delta、负/巨 index）
+   * 在这里抛异常等于原生回调栈崩溃，绝不允许外逃。
+   */
+  private static consumeStreamChunks(chunks: ChatCompletionChunk[], slots: GatewayToolCall[],
+    reply: GatewayReply, onDelta: (text: string) => void,
+    onReasoning: ((text: string) => void) | null): void {
+    let piece: string = '';
+    let think: string = '';
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk: Object | undefined = chunks[i] as Object;
+      if (chunk === undefined || chunk === null || typeof chunk !== 'object') {
+        continue;
+      }
+      const choices: Object | undefined = (chunk as Record<string, Object>)['choices'];
+      if (!Array.isArray(choices) || (choices as Object[]).length === 0) {
+        continue;
+      }
+      const first: Object = (choices as Object[])[0];
+      if (first === undefined || first === null || typeof first !== 'object') {
+        continue;
+      }
+      const deltaRaw: Object | undefined = (first as Record<string, Object>)['delta'];
+      if (deltaRaw === undefined || deltaRaw === null || typeof deltaRaw !== 'object') {
+        // 尾包常见形态：只有 finish_reason 没有 delta
+        continue;
+      }
+      const deltaObj: Record<string, Object> = deltaRaw as Record<string, Object>;
+      const content: Object | undefined = deltaObj['content'];
+      if (typeof content === 'string') {
+        piece += content;
+      }
+      const reasoning: Object | undefined = deltaObj['reasoning_content'];
+      if (typeof reasoning === 'string') {
+        think += reasoning;
+      }
+      const tcs: Object | undefined = deltaObj['tool_calls'];
+      if (Array.isArray(tcs)) {
+        const list: Object[] = tcs as Object[];
+        for (let j = 0; j < list.length; j++) {
+          const tc: Object = list[j];
+          if (tc === null || typeof tc !== 'object') {
+            continue;
+          }
+          const rec: Record<string, Object> = tc as Record<string, Object>;
+          const idxRaw: Object | undefined = rec['index'];
+          let idx: number = typeof idxRaw === 'number' ? idxRaw : slots.length;
+          if (idx < 0 || idx >= MAX_TOOL_SLOTS) {
+            // 非法 index（异常流/乱码）：并入末槽，slots 绝不无界扩容
+            idx = slots.length > 0 ? slots.length - 1 : 0;
+          }
+          const fn: Object | undefined = rec['function'];
+          const fnRec: Record<string, Object> | null =
+            fn !== undefined && fn !== null && typeof fn === 'object' ? fn as Record<string, Object> : null;
+          const idPiece: string = typeof rec['id'] === 'string' ? rec['id'] as string : '';
+          const namePiece: string = fnRec !== null && typeof fnRec['name'] === 'string' ?
+            fnRec['name'] as string : '';
+          const argPiece: string = fnRec !== null && typeof fnRec['arguments'] === 'string' ?
+            fnRec['arguments'] as string : '';
+          while (slots.length <= idx) {
+            slots.push({ id: '', name: '', arguments: '' });
+          }
+          if (idPiece.length > 0) {
+            slots[idx].id = idPiece;
+          }
+          if (namePiece.length > 0) {
+            slots[idx].name += namePiece;
+          }
+          slots[idx].arguments += argPiece;
+        }
+      }
+    }
+    if (think.length > 0 && onReasoning !== null) {
+      onReasoning(think);
+    }
+    if (piece.length > 0) {
+      reply.content += piece;
+      onDelta(piece);
+    }
+  }
+
   private static sdkStreamRound(client: OpenAI, config: AiConfig, gwMessages: GatewayMessage[],
     maxTokens: number, attach: AiToolDefinition[] | null, handle: AiAbortHandle,
     onDelta: (text: string) => void, onReasoning: ((text: string) => void) | null,
@@ -1155,55 +1258,13 @@ export class AiService {
             if (handle.aborted || settled) {
               return;
             }
-            let piece: string = '';
-            let think: string = '';
-            for (let i = 0; i < chunks.length; i++) {
-              const choices = chunks[i].choices;
-              if (choices === undefined || choices.length === 0) {
-                continue;
-              }
-              const deltaObj: Record<string, Object> = choices[0].delta as Object as Record<string, Object>;
-              const content: Object | undefined = deltaObj['content'];
-              if (typeof content === 'string') {
-                piece += content;
-              }
-              const reasoning: Object | undefined = deltaObj['reasoning_content'];
-              if (typeof reasoning === 'string') {
-                think += reasoning;
-              }
-              const tcs: Object | undefined = deltaObj['tool_calls'];
-              if (Array.isArray(tcs)) {
-                const list: Object[] = tcs as Object[];
-                for (let j = 0; j < list.length; j++) {
-                  const tc: Record<string, Object> = list[j] as Record<string, Object>;
-                  const idxRaw: Object | undefined = tc['index'];
-                  const idx: number = typeof idxRaw === 'number' ? idxRaw : slots.length;
-                  const fn: Record<string, Object> | undefined =
-                    tc['function'] as Record<string, Object>;
-                  const idPiece: string = typeof tc['id'] === 'string' ? tc['id'] as string : '';
-                  const namePiece: string = fn !== undefined && typeof fn['name'] === 'string' ?
-                    fn['name'] as string : '';
-                  const argPiece: string = fn !== undefined && typeof fn['arguments'] === 'string' ?
-                    fn['arguments'] as string : '';
-                  while (slots.length <= idx) {
-                    slots.push({ id: '', name: '', arguments: '' });
-                  }
-                  if (idPiece.length > 0) {
-                    slots[idx].id = idPiece;
-                  }
-                  if (namePiece.length > 0) {
-                    slots[idx].name += namePiece;
-                  }
-                  slots[idx].arguments += argPiece;
-                }
-              }
-            }
-            if (think.length > 0 && onReasoning !== null) {
-              onReasoning(think);
-            }
-            if (piece.length > 0) {
-              reply.content += piece;
-              onDelta(piece);
+            // 本回调是 SDK（napi）→JS 的落点：这里抛出的未捕获异常不会进
+            // Promise 链，而是沿原生栈直接终止应用（用户侧=聊天崩溃退出）。
+            // 故解析整体包底：畸形 chunk 只丢当条，宁可少一段打字机。
+            try {
+              AiService.consumeStreamChunks(chunks, slots, reply, onDelta, onReasoning);
+            } catch (_error) {
+              // 服务商畸形分片静默跳过
             }
           },
           onError: (error: Error): void => {
