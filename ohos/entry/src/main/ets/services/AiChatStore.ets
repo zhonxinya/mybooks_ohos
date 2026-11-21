@@ -537,9 +537,10 @@ export class AiChatStore {
     const requestId: number = ++this.requestId;
 
     const bubbleImages: string[] = this.visionEnabled ? images : [];
+    const now: number = Date.now();
     this.messages.push({ role: 'user', content: question, streaming: false, error: false,
-      activities: [], images: bubbleImages });
-    this.messages.push({ role: 'assistant', content: '', streaming: true, error: false, activities: [] });
+      activities: [], images: bubbleImages, ts: now });
+    this.messages.push({ role: 'assistant', content: '', streaming: true, error: false, activities: [], ts: now });
     this.saveHistory();
     this.streamingText = '';
     this.streamingReasoning = '';
@@ -663,7 +664,8 @@ export class AiChatStore {
       this.messages.pop();
     }
     if (text.length > 0) {
-      this.messages.push({ role: 'user', content: text, streaming: !final, error: false, activities: [], voice: true });
+      this.messages.push({ role: 'user', content: text, streaming: !final, error: false, activities: [], voice: true,
+        ts: Date.now() });
     }
     this.messages = this.messages.slice();
     if (final) {
@@ -689,7 +691,7 @@ export class AiChatStore {
     }
     if (content.length > 0) {
       this.messages.push({ role: 'assistant', content: content, streaming: !final, error: false,
-        activities: [], voice: true });
+        activities: [], voice: true, ts: Date.now() });
     }
     this.messages = this.messages.slice();
     if (final) {

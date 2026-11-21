@@ -29,6 +29,42 @@ export interface ChatBubble {
   reasoning?: string;
   /** 语音轮次气泡（realtime 内嵌会话产生）：渲染时带 mic/播报角标，与文字轮区分。 */
   voice?: boolean;
+  /** 创建时刻（毫秒）；旧存档无此字段=undefined，时间分隔条自动跳过不显示。 */
+  ts?: number;
+}
+
+/** 时间分隔条阈值：与上一条间隔 ≥5 分钟才值得打断阅读节奏插一行时间。 */
+const DIVIDER_GAP_MS: number = 5 * 60 * 1000;
+
+/**
+ * 是否在该气泡上方插时间分隔条：自身无 ts 不显示；首条（prevTs≤0）显示；
+ * 其余按与上一条的间隔 ≥5min。纯函数供页面渲染与离线回归共用。
+ */
+export function shouldShowTimeDivider(prevTs: number, ts: number): boolean {
+  if (ts <= 0) {
+    return false;
+  }
+  if (prevTs <= 0) {
+    return true;
+  }
+  return ts - prevTs >= DIVIDER_GAP_MS;
+}
+
+/** 分隔条文案：当天只到时分，跨天补月日（跨年同理，一年前翻旧会话可见）。 */
+export function formatDividerTime(ts: number): string {
+  const d: Date = new Date(ts);
+  const now: Date = new Date();
+  const hh: string = d.getHours().toString().padStart(2, '0');
+  const mm: string = d.getMinutes().toString().padStart(2, '0');
+  if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
+    return `${hh}:${mm}`;
+  }
+  const Mo: string = (d.getMonth() + 1).toString().padStart(2, '0');
+  const dd: string = d.getDate().toString().padStart(2, '0');
+  if (d.getFullYear() === now.getFullYear()) {
+    return `${Mo}-${dd} ${hh}:${mm}`;
+  }
+  return `${d.getFullYear()}-${Mo}-${dd} ${hh}:${mm}`;
 }
 
 /** 解析气泡数组（当前会话与存档会话共用）；坏条目（缺字段/类型不符）逐条丢弃。 */
@@ -102,6 +138,7 @@ export function parseBubbles(parsed: Object): ChatBubble[] {
       images: images,
       reasoning: typeof reasoningRaw === 'string' ? reasoningRaw : '',
       voice: m['voice'] === true,
+      ts: typeof m['ts'] === 'number' ? m['ts'] : 0,
     });
   }
   return bubbles;

@@ -8,7 +8,7 @@ import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { ToolResultList } from '../components/ToolResultList';
 import { AiChatStore, AskRequest, ChatActivity, ChatBubble, ChatSession } from '../services/AiChatStore';
-import { ActivityGroup, groupActivities } from '../services/AiChatModel';
+import { ActivityGroup, formatDividerTime, groupActivities, shouldShowTimeDivider } from '../services/AiChatModel';
 import { AiConfig, AiMessage, AiService } from '../services/AiService';
 import { SpeakService } from '../services/SpeakService';
 import { AiPermissionMode, AiTools } from '../services/AiTools';
@@ -585,7 +585,19 @@ struct AiAssistantPage {
     if (bubble.role === 'assistant' && bubble.streaming && !bubble.error && bubble.voice !== true) {
       return `bubble-${index}-assistant-s`;
     }
-    return `bubble-${index}-${bubble.role}-${bubble.streaming ? 's' : 'd'}-${bubble.activities.length}-${bubble.content.length}-${(bubble.images ?? []).length}-${(bubble.reasoning ?? '').length}`;
+    // 分隔条并入 key：上一条被删后本条的分隔状态会变，复用项必须重建才重算
+    const divider: string = this.showsTimeDivider(index) ? 't' : '';
+    return `bubble-${index}-${bubble.role}-${bubble.streaming ? 's' : 'd'}-${bubble.activities.length}-${bubble.content.length}-${(bubble.images ?? []).length}-${(bubble.reasoning ?? '').length}-${divider}`;
+  }
+
+  /** 该气泡上方是否需要时间分隔条（#1509）。 */
+  private showsTimeDivider(index: number): boolean {
+    const b = this.messages[index];
+    if (b === undefined) {
+      return false;
+    }
+    const prev = index > 0 ? this.messages[index - 1] : undefined;
+    return shouldShowTimeDivider(prev?.ts ?? 0, b.ts ?? 0);
   }
 
   /**
@@ -940,7 +952,19 @@ struct AiAssistantPage {
     List({ space: 12, scroller: this.scroller }) {
       ForEach(this.messages, (bubble: ChatBubble, index: number) => {
         ListItem() {
-          this.bubbleView(bubble, index);
+          Column() {
+            // 时间分隔条（#1509）：间隔 ≥5min 或首条时显示
+            if (this.showsTimeDivider(index)) {
+              Text(formatDividerTime(bubble.ts ?? 0))
+                .fontSize(11)
+                .fontColor($r('app.color.text_tertiary'))
+                .width('100%')
+                .textAlign(TextAlign.Center)
+                .margin({ bottom: 2 });
+            }
+            this.bubbleView(bubble, index);
+          }
+          .alignItems(HorizontalAlign.Start);
         }
       }, (bubble: ChatBubble, index: number): string => this.bubbleKey(bubble, index));
     }

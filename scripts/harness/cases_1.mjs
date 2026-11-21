@@ -509,7 +509,7 @@ export function register(ctx) {
     err.content = '挂了更长的错误文案';
     assert.notEqual(page.bubbleKey(err, 2), page.bubbleKey({ ...err, content: '短' }, 2), '错误气泡 key 仍覆盖内容长度');
     const user = { role: 'user', content: '问', streaming: false, error: false, activities: [] };
-    assert.equal(page.bubbleKey(user, 3), 'bubble-3-user-d-0-1-0-0');
+    assert.equal(page.bubbleKey(user, 3), 'bubble-3-user-d-0-1-0-0-');
   });
 
   test('智能跟滚：上滑离底暂停自动滚动；回底/浮钮/新消息恢复；微小滑动不误判', async () => {
@@ -626,6 +626,41 @@ export function register(ctx) {
     const page3 = chat();
     assert.equal(page3.bookTag, '讨论《三体》', '无章节也可注入');
     delete state.routerParams;
+  });
+
+  test('时间分隔条：阈值/首条/旧数据 + ts 落盘往返 + 页面判定', async () => {
+    const model = await load('AiChatModel');
+    const MIN = 60000;
+    assert.equal(model.shouldShowTimeDivider(0, 1000), true, '首条/上条无时间显示');
+    assert.equal(model.shouldShowTimeDivider(1000, 0), false, '旧数据无 ts 不显示');
+    assert.equal(model.shouldShowTimeDivider(1000, 1000 + 4 * MIN), false, '4 分钟不插条');
+    assert.equal(model.shouldShowTimeDivider(1000, 1000 + 5 * MIN), true, '5 分钟插条');
+    const today = new Date();
+    today.setHours(9, 5, 0, 0);
+    assert.equal(model.formatDividerTime(today.getTime()), '09:05', '当天只显示时分');
+    const lastYear = new Date();
+    lastYear.setFullYear(lastYear.getFullYear() - 1);
+    assert.match(model.formatDividerTime(lastYear.getTime()), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/, '跨年显示全日期');
+    const parsed = model.parseBubbles([{ role: 'user', content: 'x', activities: [], ts: 123 }]);
+    assert.equal(parsed[0].ts, 123, 'ts 进白名单');
+    assert.equal(model.parseBubbles([{ role: 'user', content: 'x', activities: [] }])[0].ts, 0, '缺 ts 视为 0');
+    // 落盘：同轮 user/assistant 同戳
+    const page = chat();
+    await page.send('q');
+    state.handlers.onDone('a');
+    const saved = JSON.parse(state.prefs.get('ai_chat_history'));
+    assert.ok(saved[0].ts > 0 && saved[1].ts === saved[0].ts, '轮次时间戳随历史持久化');
+    // 页面判定：间隔与删除场景
+    page.messages = [
+      { role: 'user', content: 'a', streaming: false, error: false, activities: [], ts: 1000 },
+      { role: 'assistant', content: 'b', streaming: false, error: false, activities: [], ts: 1000 },
+    ];
+    assert.equal(page.showsTimeDivider(0), true);
+    assert.equal(page.showsTimeDivider(1), false);
+    // key 覆盖分隔态：同内容下 prev 无 ts vs 有 ts，key 必须不同（复用项才会重算）
+    const kWith = page.bubbleKey(page.messages[1], 1);
+    page.messages[0].ts = 0;
+    assert.notEqual(page.bubbleKey(page.messages[1], 1), kWith, '分隔态变化必须换 key');
   });
 
 }

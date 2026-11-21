@@ -552,7 +552,7 @@ export function stagePage(name) {
         "import type { ChatActivity, ChatBubble } from './RealAiChatStore.ts';\n";
     }
     if (path === '../services/AiChatModel') {
-      return "import { groupActivities } from './AiChatModel.ts';\n" +
+      return "import { groupActivities, shouldShowTimeDivider, formatDividerTime } from './AiChatModel.ts';\n" +
         "import type { ActivityGroup } from './AiChatModel.ts';\n";
     }
     if (path === '../services/AiSkills') {
