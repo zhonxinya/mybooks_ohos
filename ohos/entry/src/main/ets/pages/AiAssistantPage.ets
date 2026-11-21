@@ -336,9 +336,14 @@ struct AiAssistantPage {
     this.voiceActive = true;
     this.voiceStatus = '连接中…';
     this.voiceMuted = false;
+    // set_voice 生效通道：AI 换音色后存配置→挂断重开（历史从消息流重建，新音色进首包）
+    AiVoiceKit.voiceSwitcher = (): void => {
+      this.endVoiceSession();
+      void this.startVoiceSession();
+    };
     try {
       await RealtimeCallService.connect(VOICE_SYSTEM_PROMPT + VOICE_TOOL_NOTE, cb,
-        AiTools.definitions(AiService.loadPermission()), history);
+        AiTools.realtimeDefinitions(AiService.loadPermission()), history);
       if (gen === this.voiceGen && this.voiceActive) {
         this.voiceStatus = '聆听中';
       }
@@ -354,6 +359,7 @@ struct AiAssistantPage {
   /** 挂断：主动断开（disconnect 不再触发 onClosed），态就地复位，旧连接失败回调作废。 */
   private endVoiceSession(): void {
     this.voiceGen++;
+    AiVoiceKit.voiceSwitcher = null;
     RealtimeCallService.disconnect();
     this.voiceActive = false;
     this.voiceStatus = '';

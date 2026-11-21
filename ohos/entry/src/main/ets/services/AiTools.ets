@@ -17,7 +17,7 @@ import { AiPersona } from './AiPersona';
 import { AiToolsCore } from './AiToolsCore';
 import { AiToolsExecMeta } from './AiToolsExecMeta';
 import { AiToolsExecShelf } from './AiToolsExecShelf';
-import { TOOL_DEFS, ToolBookLine, AiToolDefinition } from './AiToolsDefs';
+import { TOOL_DEFS, TOOL_SET_VOICE, ToolBookLine, AiToolDefinition } from './AiToolsDefs';
 
 /**
  * AI 助手的本地工具集（OpenAI function calling 协议）。
@@ -46,6 +46,16 @@ export class AiTools {
       AiTools.WRITE_TOOLS.indexOf(d.function.name) < 0);
     }
     return TOOL_DEFS;
+  }
+
+  /**
+   * realtime 语音通话工具面 = 文字全集 + set_voice。
+   * 音色切换只在通话会话有意义，不进 TOOL_DEFS（文字回路不暴露）。
+   */
+  static realtimeDefinitions(mode: AiPermissionMode = 'confirm'): AiToolDefinition[] {
+    const defs: AiToolDefinition[] = AiTools.definitions(mode).slice();
+    defs.splice(defs.length - 1, 0, TOOL_SET_VOICE);
+    return defs;
   }
 
   /**
@@ -169,6 +179,9 @@ export class AiTools {
     }
     if (name === 'ask_user') {
       return '向用户提问';
+    }
+    if (name === 'set_voice') {
+      return '更换通话音色';
     }
     return name;
   }
@@ -302,6 +315,10 @@ export class AiTools {
         // 文字对话页由回路层（AiService.runToolLoop）拦截执行反问交互；
         // 能走到这里说明是无卡片的渠道（如语音通话），引导模型改用正文直接提问
         return '当前渠道不支持交互式反问，请把问题写在正文里直接问用户，然后停下等待回复';
+      }
+      if (name === 'set_voice') {
+        // 正常路径在 AiVoiceKit.runTool 特判执行（含会话重建）；走到这里=文字回路误调
+        return 'set_voice 仅在实时语音通话中可用；文字对话无需换音色';
       }
       return `未知工具：${name}`;
   }

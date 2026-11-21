@@ -12,7 +12,7 @@ import type { AiMessage } from './AiService';
 
 const TAG: string = 'RealtimeCall';
 const REALTIME_MODEL: string = 'qwen-audio-3.0-realtime-plus';
-const REALTIME_VOICE: string = 'longanqian';
+// 音色可在设置页或 AI set_voice 更换（池见 AiVoiceKit.REALTIME_TIMBRES）
 /** 下行播放采样率：realtime 输出固定 24k s16le mono。 */
 const PLAY_RATE: number = 24000;
 
@@ -157,7 +157,7 @@ export class RealtimeCallService {
     };
     const session: Record<string, Object> = {
       'modalities': ['audio', 'text'],
-      'voice': REALTIME_VOICE,
+      'voice': AiService.loadRealtimeTimbre(),
       'instructions': instructions,
       'input_audio_format': 'pcm',
       'output_audio_format': 'pcm',

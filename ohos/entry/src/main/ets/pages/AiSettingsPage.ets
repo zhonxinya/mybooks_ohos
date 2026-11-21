@@ -3,6 +3,7 @@ import { PageScaffold, PrimaryButton, SecondaryButton, SectionTitle, FilterChips
 import { AiService, AiConfig, AiProviderPreset, AiMessage, CONTEXT_LENGTH_OPTIONS } from '../services/AiService';
 import { SpeakService } from '../services/SpeakService';
 import { AppRouter } from '../utils/AppRouter';
+import { REALTIME_TIMBRES, TTS_TIMBRES, timbreLabel, AiVoiceTimbre } from '../services/AiVoiceKit';
 
 /** @Builder 只有传单个对象字面量才是引用传递；标量参数不随 @State 更新，切服务商时输入框会停在旧值。 */
 interface AiFieldParams {
@@ -47,6 +48,9 @@ struct AiSettingsPage {
   @State autoSpeakOn: boolean = false;
   @State speakEngine: string = 'system';
   @State callMode: string = 'realtime';
+  /** 音色：realtime 通话 / 播报 TTS 各一槽（池见 AiVoiceKit）。 */
+  @State rtTimbre: string = 'longanqian';
+  @State ttsTimbre: string = 'longanhuan_v3.6';
   /** 语音通话对话模型：false=跟随全局；provider 0=跟随，其余=providers[index-1]。 */
   @State voiceFollow: boolean = true;
   @State voiceProviderId: string = '';
@@ -66,6 +70,8 @@ struct AiSettingsPage {
     this.autoSpeakOn = AiService.loadAutoSpeak();
     this.speakEngine = AiService.loadSpeakEngine();
     this.callMode = AiService.loadCallMode();
+    this.rtTimbre = AiService.loadRealtimeTimbre();
+    this.ttsTimbre = AiService.loadTtsTimbre();
     this.voiceProviderId = AiService.loadVoiceProviderId();
     this.voiceFollow = this.voiceProviderId.length === 0;
     this.voiceModel = AiService.loadVoiceModel();
@@ -466,6 +472,24 @@ struct AiSettingsPage {
     const voice: AiConfig = AiService.loadVoiceConfig();
     const name: string = AiService.presetOf(voice.providerId).name;
     return `当前使用：${name} · ${voice.model}`;
+  }
+
+  /** 音色 Select 条目：label 展示、按序对应池下标。 */
+  private timbreItems(pool: AiVoiceTimbre[]): SelectOption[] {
+    const items: SelectOption[] = [];
+    for (let i = 0; i < pool.length; i++) {
+      items.push({ value: pool[i].label });
+    }
+    return items;
+  }
+
+  private indexOfTimbre(pool: AiVoiceTimbre[], id: string): number {
+    for (let i = 0; i < pool.length; i++) {
+      if (pool[i].id === id) {
+        return i;
+      }
+    }
+    return 0;
   }
 
   private toast(message: string): void {
@@ -930,6 +954,48 @@ struct AiSettingsPage {
                 AiService.saveVoiceConfig(this.voiceProviderId, value);
               });
           }
+        }
+        .width('100%');
+
+        Column({ space: 6 }) {
+          Text('音色')
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%');
+          Text('实时通话中 AI 也可调用 set_voice 自主更换音色（会话会短暂重连）。')
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%');
+          Row() {
+            Text('实时通话音色')
+              .fontSize(13)
+              .fontColor($r('app.color.text_secondary'));
+            Blank();
+            Select(this.timbreItems(REALTIME_TIMBRES))
+              .selected(this.indexOfTimbre(REALTIME_TIMBRES, this.rtTimbre))
+              .value(timbreLabel(REALTIME_TIMBRES, this.rtTimbre))
+              .font({ size: 13 })
+              .onSelect((index: number, value: string) => {
+                this.rtTimbre = REALTIME_TIMBRES[index].id;
+                AiService.saveRealtimeTimbre(this.rtTimbre);
+              });
+          }
+          .width('100%');
+          Row() {
+            Text('播报音色')
+              .fontSize(13)
+              .fontColor($r('app.color.text_secondary'));
+            Blank();
+            Select(this.timbreItems(TTS_TIMBRES))
+              .selected(this.indexOfTimbre(TTS_TIMBRES, this.ttsTimbre))
+              .value(timbreLabel(TTS_TIMBRES, this.ttsTimbre))
+              .font({ size: 13 })
+              .onSelect((index: number, value: string) => {
+                this.ttsTimbre = TTS_TIMBRES[index].id;
+                AiService.saveTtsTimbre(this.ttsTimbre);
+              });
+          }
+          .width('100%');
         }
         .width('100%');
       }

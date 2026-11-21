@@ -457,4 +457,41 @@ export function register(ctx) {
     deps.state.store.clear();
   });
 
+  test('AiVoiceKit set_voice：合法音色存配置并触发重建，非法/坏 JSON 不保存；realtimeDefinitions 加 set_voice 且不在末位', async () => {
+    const Kit = await load('RealAiVoiceKit');
+    resetSettings();
+    assert.equal(RealAiService.loadRealtimeTimbre(), 'longanqian', '未配置时默认 longanqian');
+    // 合法：文案 + 持久化
+    const out = Kit.AiVoiceKit.applySetVoice('{"voice":"longanlufeng"}');
+    assert.ok(out.startsWith('已切换到音色'), out);
+    assert.equal(RealAiService.loadRealtimeTimbre(), 'longanlufeng');
+    // 非法：不保存，回文带候选清单
+    const bad = Kit.AiVoiceKit.applySetVoice('{"voice":"Cherry"}');
+    assert.ok(bad.indexOf('不可用') >= 0 && bad.indexOf('longanqian') >= 0, bad);
+    assert.equal(RealAiService.loadRealtimeTimbre(), 'longanlufeng');
+    // 坏 JSON：引导文案
+    assert.ok(Kit.AiVoiceKit.applySetVoice('nope').indexOf('合法 JSON') >= 0);
+    // runTool：成功才触发重建（ws 空 sendToolResult no-op，set_voice 分支不用 uiContext）
+    let switched = 0;
+    Kit.AiVoiceKit.voiceSwitcher = () => { switched++; };
+    await Kit.AiVoiceKit.runTool('set_voice', '{"voice":"longanxiaoxin"}', 'c1', null);
+    assert.equal(switched, 1);
+    assert.equal(RealAiService.loadRealtimeTimbre(), 'longanxiaoxin');
+    switched = 0;
+    await Kit.AiVoiceKit.runTool('set_voice', '{"voice":"bogus"}', 'c2', null);
+    assert.equal(switched, 0, '非法音色不得触发会话重建');
+    Kit.AiVoiceKit.voiceSwitcher = null;
+    // realtimeDefinitions：全集+1，set_voice 不占末位（OpenCode 丢末项护栏）
+    const defs = RealAiTools.realtimeDefinitions('confirm');
+    assert.equal(defs.length, 29);
+    assert.equal(defs[defs.length - 1].function.name, 'forget_memory');
+    assert.ok(defs.some((d) => d.function.name === 'set_voice'));
+    const ro = RealAiTools.realtimeDefinitions('readonly');
+    assert.equal(ro.length, 17, 'set_voice 非写工具，只读模式保留');
+    assert.ok(ro[ro.length - 1].function.name !== 'set_voice', '末位护栏：set_voice 不得占尾');
+    // 文字回路 dispatch 兜底：误调给出引导而非未知工具
+    const guide = await RealAiTools.execute('set_voice', '{"voice":"longanqian"}');
+    assert.ok(guide.indexOf('仅在实时语音通话中可用') >= 0, guide);
+  });
+
 }

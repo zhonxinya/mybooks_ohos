@@ -242,9 +242,14 @@ struct AiVoiceCallPage {
         void AiVoiceKit.runTool(name, args, callId, this.getUIContext());
       },
     };
+    // set_voice 生效通道：存配置后重开 realtime 会话（新音色进首包 session.update）
+    AiVoiceKit.voiceSwitcher = (): void => {
+      this.hangup();
+      void this.startRealtime();
+    };
     try {
       const prompt: string = VOICE_SYSTEM_PROMPT + VOICE_TOOL_NOTE;
-      await RealtimeCallService.connect(prompt, cb, AiTools.definitions(AiService.loadPermission()));
+      await RealtimeCallService.connect(prompt, cb, AiTools.realtimeDefinitions(AiService.loadPermission()));
       this.rtMode = true;
       this.muted = false;
       this.st = ST_LISTENING;
@@ -332,6 +337,7 @@ struct AiVoiceCallPage {
     this.rtMode = false;
     this.muted = false;
     this.st = ST_IDLE;
+    AiVoiceKit.voiceSwitcher = null;
     RealtimeCallService.disconnect();
     SpeakService.stop();
     QwenAudioService.stopRecordingCleanup();

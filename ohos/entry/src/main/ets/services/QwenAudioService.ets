@@ -15,8 +15,7 @@ const TAG: string = 'QwenAudio';
 const SAMPLE_RATE: number = 16000;
 /** 单次录音上限：ASR 规格 ≤5 分钟，但通话轮转语义下 60s 足够且防内存膨胀（16k*2B*60s≈1.9MB）。 */
 const MAX_RECORD_MS: number = 60000;
-/** Token Plan qwen-audio-3.0-tts-plus 系音色（Cherry/Tina 等旧名会被拒）。 */
-const TTS_VOICE: string = 'longanhuan_v3.6';
+// 播报音色可在设置页更换（池见 AiVoiceKit.TTS_TIMBRES；Cherry/Tina 等旧名会被拒）。
 const TTS_FORMAT: string = 'mp3';
 const TTS_SAMPLE_RATE: number = 22050;
 
@@ -210,7 +209,7 @@ export class QwenAudioService {
   /** 文本 → 语音：合成后下载 OSS 临时文件到 dataDir/tts，返回本地 mp3 路径。 */
   static async synthesize(text: string): Promise<string> {
     const ttsInput: Record<string, Object> =
-      { 'text': text, 'voice': TTS_VOICE, 'format': TTS_FORMAT, 'sample_rate': TTS_SAMPLE_RATE };
+      { 'text': text, 'voice': AiService.loadTtsTimbre(), 'format': TTS_FORMAT, 'sample_rate': TTS_SAMPLE_RATE };
     const payload: Record<string, Object> = {
       'model': 'qwen-audio-3.0-tts-plus',
       'input': ttsInput,
