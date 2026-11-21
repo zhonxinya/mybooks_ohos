@@ -1349,12 +1349,15 @@ struct AiAssistantPage {
             void this.pickImage();
           });
         }
-        TextInput({ placeholder: this.thinking ? '生成中…' : '输入问题', text: this.input })
+        // TextArea 随内容自动长高（#1510），44vp 单行起步、5 行封顶后内部滚动；键盘动作键=发送（板上实测语义）
+        TextArea({ placeholder: this.thinking ? '生成中…' : '输入问题', text: this.input })
           .layoutWeight(1)
-          .height(44)
+          .constraintSize({ minHeight: 44, maxHeight: 132 })
           .borderRadius(22)
           .backgroundColor($r('app.color.page_background'))
           .enabled(!this.thinking)
+          .fontSize(15)
+          .enterKeyType(EnterKeyType.Send)
           .onChange((value: string) => this.input = value)
           .onSubmit(() => { void this.send(this.input); });
 
