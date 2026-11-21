@@ -72,6 +72,7 @@
     "pages/AdminMaintenancePage",
     "pages/UpdatePage",
     "pages/AiSettingsPage",
+    "pages/AiFeatureModelsPage",
     "pages/AiVoiceCallPage",
     "pages/AiPersonaPage",
     "pages/AiAssistantPage",

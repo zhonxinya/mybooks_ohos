@@ -527,6 +527,13 @@ export struct SettingsPage {
               });
               Divider().color($r('app.color.divider')).strokeWidth(0.5);
               SettingCell({
+                title: '功能模型',
+                subtitle: '为看图/摘要/语音等功能单独绑定服务商与模型',
+                showChevron: true,
+                onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiFeatureModelsPage' }),
+              });
+              Divider().color($r('app.color.divider')).strokeWidth(0.5);
+              SettingCell({
                 title: '元数据源规则',
                 subtitle: '导入 Legado 书源，网文元数据按规则提取',
                 showChevron: true,

@@ -5,7 +5,7 @@ import { test, state, settingsDefaults, enc, rtB64, deferred, tick, flush } from
 import { dir, read, ETS, ROOT } from './paths.mjs';
 
 export function register(ctx) {
-  const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, chat, reappear } = ctx;
+  const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, featurePage, chat, reappear } = ctx;
   test('设置页模型清单：手动添加去重即存、删除、拉取勾选合并、切服务商重载', () => {
     resetSettings();
     const page = settingsPage();
@@ -209,34 +209,58 @@ export function register(ctx) {
     deps.state.store.delete('s:ai_base_url');
   });
 
-  test('设置页语音通话模型：进入读取、切换即存、跟随恢复、模型列表', async () => {
+  test('功能模型页：档位读取、绑定即存、模型列表、跟随恢复、音频档约束', async () => {
     resetSettings();
-    let page = settingsPage();
-    assert.equal(page.voiceFollow, true);
-    assert.equal(page.voiceProviderSelectedIndex(), 0);
-    assert.equal(page.voiceProviderItems().length, 3, '跟随全局 + 2 个服务商');
-    // 选服务商（index 2 = opencode）→ 立即持久化、重置模型
-    page.selectVoiceProvider(2);
-    assert.equal(page.voiceFollow, false);
-    assert.equal(state.settings.voiceProviderId, 'opencode');
-    assert.equal(state.settings.voiceModel, '');
-    // 模型列表：未拉取时给服务商默认；手动值也会补进列表
-    assert.ok(page.voiceModelItems().some((it) => it.value === 'big-pickle'));
-    state.settings.models = ['voice-m'];
-    await page.fetchVoiceModels();
-    assert.deepEqual(page.voiceModelOptions, ['voice-m']);
-    // 切回跟随全局 → 清空配置
-    page.selectVoiceProvider(0);
-    assert.equal(page.voiceFollow, true);
-    assert.equal(state.settings.voiceProviderId, '');
-    // 重进页面读回已存配置
-    state.settings.voiceProviderId = 'opencode';
-    state.settings.voiceModel = 'voice-m';
-    page = settingsPage();
-    assert.equal(page.voiceFollow, false);
-    assert.equal(page.voiceModel, 'voice-m');
-    assert.equal(page.voiceProviderSelectedIndex(), 2);
-    assert.ok(page.voiceSummary().includes('OpenCode'));
+    let page = featurePage();
+    assert.deepEqual(page.features, ['vision', 'summary', 'voice', 'tts', 'asr', 'realtime']);
+    assert.equal(page.editFeature, 'vision', '默认展开第一档');
+    assert.equal(page.editFollow, true);
+    assert.equal(page.providerSelectedIndex('vision'), 0);
+    assert.equal(page.providerItems('vision').length, 3, '跟随全局 + 2 个服务商');
+    // 看图档绑 opencode：立即写槽、模型清空
+    page.selectProvider('vision', 2);
+    assert.equal(page.editFollow, false);
+    assert.equal(page.providerSelectedIndex('vision'), 2);
+    assert.equal(state.settings.featureSlots.vision.providerId, 'opencode');
+    assert.equal(state.settings.featureSlots.vision.model, '');
+    // 模型列表：未拉取时给服务商默认；拉取后可点选、选中即存
+    assert.ok(page.modelItems('vision').some((it) => it.value === 'big-pickle'));
+    state.settings.models = ['vision-m'];
+    await page.fetchFeatureModels('vision');
+    assert.deepEqual(page.editModelOptions, ['vision-m']);
+    page.chooseModel('vision', 'vision-m');
+    assert.equal(state.settings.featureSlots.vision.model, 'vision-m');
+    assert.ok(page.featureSummary('vision').includes('vision-m'));
+    assert.ok(page.featureSummary('vision').includes('已绑定'));
+    // 恢复跟随：清空绑定槽
+    page.selectProvider('vision', 0);
+    assert.equal(page.editFollow, true);
+    assert.equal(state.settings.featureSlots.vision.providerId, '');
+    assert.ok(page.featureSummary('vision').includes('跟随全局'));
+    // 重进页面读回已存绑定
+    state.settings.featureSlots.summary = { providerId: 'opencode', model: 'sum-m' };
+    page = featurePage();
+    page.enterFeature('summary');
+    assert.equal(page.editFollow, false);
+    assert.equal(page.editModel, 'sum-m');
+    assert.equal(page.providerSelectedIndex('summary'), 2);
+    // 音频三档：首项「跟随语音档」，且仅 Token Plan 可绑（协议约束）
+    page.enterFeature('tts');
+    assert.equal(page.providerItems('asr').length, 1, 'providers 无 Token Plan → 仅剩跟随项');
+    assert.equal(page.followLabel('asr'), '跟随语音档');
+    state.settings.providers.push({ id: 'qwen-tokenplan', name: 'Token Plan',
+      baseUrl: 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1', model: 'qwen3.6-flash' });
+    // 服务商目录是进场快照（新增在设置页完成后才会出现在列表）→ 重进页面刷新
+    page = featurePage();
+    page.enterFeature('asr');
+    assert.equal(page.providerItems('asr').length, 2);
+    page.selectProvider('asr', 1);
+    assert.equal(state.settings.featureSlots.asr.providerId, 'qwen-tokenplan');
+    // 音频档模型列表以协议固定默认模型打头
+    assert.equal(page.modelItems('asr')[0].value, 'qwen-audio-3.0-asr-flash');
+    // 未绑的 tts 退语音档显示，摘要标注来源
+    page.enterFeature('tts');
+    assert.ok(page.featureSummary('tts').includes('跟随语音档'));
     resetSettings();
   });
 

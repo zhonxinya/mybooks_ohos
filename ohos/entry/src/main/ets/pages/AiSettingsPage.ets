@@ -20,8 +20,8 @@ interface AiFieldParams {
 /**
  * AI 模型设置：本地配置，不依赖服务端。
  *
- * 「服务商 / 模型 / 语音 / 说明」四档 TAB 分开，每档只装本类设置；
- * 模型档额外维护本地常用模型清单（对话页快切菜单优先用它）。
+ * 「服务商与模型 / 语音 / 说明」三档 TAB 分开，每档只装本类设置；
+ * 各功能单独绑定的服务商/模型在「功能模型」页（pages/AiFeatureModelsPage）。
  */
 @Entry
 @Component
@@ -57,13 +57,7 @@ struct AiSettingsPage {
   @State ttsTimbre: string = 'longanhuan_v3.6';
   /** 思考强度：'default'/'low'/'medium'/'high'（见请求体 reasoning_effort）。 */
   @State reasoningEffort: string = 'default';
-  /** 语音通话对话模型：false=跟随全局；provider 0=跟随，其余=providers[index-1]。 */
-  @State voiceFollow: boolean = true;
-  @State voiceProviderId: string = '';
-  @State voiceModel: string = '';
-  @State voiceModelOptions: string[] = [];
-  @State voiceFetchingModels: boolean = false;
-  /** TAB 档位：0 服务商 / 1 模型 / 2 语音 / 3 说明。变量名避讳 CustomComponent.tabIndex 属性方法。 */
+  /** TAB 档位：0 服务商与模型 / 1 语音 / 2 说明。变量名避讳 CustomComponent.tabIndex 属性方法。 */
   @State activeTab: number = 0;
   /** 当前服务商的本地常用模型清单（对话页快切菜单数据源）。 */
   @State providerModels: string[] = [];
@@ -79,9 +73,6 @@ struct AiSettingsPage {
     this.rtTimbre = AiService.loadRealtimeTimbre();
     this.ttsTimbre = AiService.loadTtsTimbre();
     this.reasoningEffort = AiService.loadReasoningEffort();
-    this.voiceProviderId = AiService.loadVoiceProviderId();
-    this.voiceFollow = this.voiceProviderId.length === 0;
-    this.voiceModel = AiService.loadVoiceModel();
     this.providers = AiService.listProviders();
     const config: AiConfig = AiService.loadConfig();
     this.providerId = config.providerId;
@@ -412,98 +403,6 @@ struct AiSettingsPage {
     return 0;
   }
 
-  // ———— 语音通话对话模型（改动即存，与自动播报开关同语义） ————
-
-  /** 下拉首项固定为「跟随全局」，其余是全部服务商（预设+自定义）。 */
-  private voiceProviderItems(): SelectOption[] {
-    const items: SelectOption[] = [];
-    const globalName: string = AiService.presetOf(AiService.loadConfig().providerId).name;
-    const first: SelectOption = { value: `跟随全局（${globalName}）` };
-    items.push(first);
-    for (let i = 0; i < this.providers.length; i++) {
-      const opt: SelectOption = { value: this.providers[i].name };
-      items.push(opt);
-    }
-    return items;
-  }
-
-  private voiceProviderSelectedIndex(): number {
-    if (this.voiceFollow) {
-      return 0;
-    }
-    const idx: number = this.indexOfProvider(this.voiceProviderId);
-    return idx >= 0 ? idx + 1 : 0;
-  }
-
-  private selectVoiceProvider(index: number): void {
-    if (index <= 0) {
-      this.voiceFollow = true;
-      this.voiceProviderId = '';
-      this.voiceModel = '';
-      this.voiceModelOptions = [];
-      AiService.saveVoiceConfig('', '');
-      return;
-    }
-    const preset: AiProviderPreset = this.providers[index - 1];
-    this.voiceFollow = false;
-    this.voiceProviderId = preset.id;
-    this.voiceModel = '';
-    this.voiceModelOptions = [];
-    AiService.saveVoiceConfig(preset.id, '');
-  }
-
-  private voiceModelItems(): SelectOption[] {
-    const ids: string[] = [];
-    for (let i = 0; i < this.voiceModelOptions.length; i++) {
-      ids.push(this.voiceModelOptions[i]);
-    }
-    const presetModel: string = AiService.presetOf(this.voiceProviderId).model;
-    if (ids.length === 0 && presetModel.length > 0) {
-      ids.push(presetModel);
-    }
-    if (this.voiceModel.length > 0 && ids.indexOf(this.voiceModel) < 0) {
-      ids.push(this.voiceModel);
-    }
-    const items: SelectOption[] = [];
-    for (let i = 0; i < ids.length; i++) {
-      const opt: SelectOption = { value: ids[i] };
-      items.push(opt);
-    }
-    return items;
-  }
-
-  /** 语音服务商的接口地址：按服务商分槽读取（本槽存过用本槽，否则回落预设）。 */
-  private voiceBaseUrl(): string {
-    return AiService.baseUrlFor(this.voiceProviderId);
-  }
-
-  private async fetchVoiceModels(): Promise<void> {
-    if (this.voiceFetchingModels || this.voiceProviderId.length === 0) {
-      return;
-    }
-    this.voiceFetchingModels = true;
-    try {
-      const ids: string[] = await AiService.fetchModels(this.voiceProviderId, this.voiceBaseUrl(), '');
-      if (ids.length === 0) {
-        this.toast('该服务未返回模型列表');
-      } else {
-        this.voiceModelOptions = ids;
-        this.toast(`获取到 ${ids.length} 个模型，可从下拉选择`);
-      }
-    } catch (error) {
-      this.toast(error instanceof Error ? error.message : String(error));
-    } finally {
-      this.voiceFetchingModels = false;
-    }
-  }
-
-  /** 当前生效的语音对话模型（一行人话，跟随全局时展示全局值）。 */
-  private voiceSummary(): string {
-    const voice: AiConfig = AiService.loadVoiceConfig();
-    const name: string = AiService.presetOf(voice.providerId).name;
-    return `当前使用：${name} · ${voice.model}`;
-  }
-
   /** 音色 Select 条目：label 展示、按序对应池下标。 */
   private timbreItems(pool: AiVoiceTimbre[]): SelectOption[] {
     const items: SelectOption[] = [];
@@ -550,12 +449,7 @@ struct AiSettingsPage {
       TabContent() {
         this.tabProvider();
       }
-      .tabBar('服务商')
-
-      TabContent() {
-        this.tabModel();
-      }
-      .tabBar('模型')
+      .tabBar('服务商与模型')
 
       TabContent() {
         this.tabVoice();
@@ -573,7 +467,7 @@ struct AiSettingsPage {
     .onChange((index: number) => this.activeTab = index);
   }
 
-  /** TAB 1 服务商：chips 选择/添加/删除 + 地址 + Key + 保存测试。 */
+  /** TAB 1 服务商与模型：chips 选择/添加/删除 + 地址 + Key + 模型区 + 保存测试。 */
   @Builder
   tabProvider() {
     Scroll() {
@@ -653,6 +547,8 @@ struct AiSettingsPage {
         .borderRadius($r('app.float.card_radius'))
         .backgroundColor($r('app.color.card_background'));
 
+        this.tabModelParts();
+
         this.testResultLine();
         this.saveRow();
       }
@@ -665,11 +561,9 @@ struct AiSettingsPage {
     .align(Alignment.Top);
   }
 
-  /** TAB 2 模型：当前模型 + 本地常用清单管理 + 随机性/上下文/vision。 */
+  /** 模型区内容（#1599 与服务商档合并为一页）：当前模型 + 常用清单管理 + 随机性/上下文/vision。 */
   @Builder
-  tabModel() {
-    Scroll() {
-      Column({ space: 16 }) {
+  tabModelParts() {
         SectionTitle({ title: '当前模型' });
         Column({ space: 12 }) {
           Column({ space: 6 }) {
@@ -876,20 +770,9 @@ struct AiSettingsPage {
         .padding($r('app.float.page_padding'))
         .borderRadius($r('app.float.card_radius'))
         .backgroundColor($r('app.color.card_background'));
-
-        this.testResultLine();
-        this.saveRow();
-      }
-      .width('100%')
-      .padding($r('app.float.page_padding'))
-      .alignItems(HorizontalAlign.Start);
-    }
-    .width('100%')
-    .height('100%')
-    .align(Alignment.Top);
   }
 
-  /** TAB 3 语音：播报引擎/探测/自动播报/通话模式/语音对话模型。 */
+  /** TAB 2 语音：播报引擎/探测/自动播报/通话模式/功能模型入口/音色。 */
   @Builder
   tabVoice() {
     Scroll() {
@@ -962,50 +845,26 @@ struct AiSettingsPage {
         }
         .width('100%');
 
-        Text('实时模式走 qwen-audio 实时服务（VAD 自动断句、开口即打断，需 Token Plan 服务商）；轮转模式按下方自选的对话模型+播报引擎逐轮对话。')
+        Text('实时模式走 qwen-audio 实时服务（VAD 自动断句、开口即打断，需 Token Plan 服务商）；轮转模式按「功能模型」页绑定的对话模型+下方播报引擎逐轮对话。')
           .fontSize(12)
           .fontColor($r('app.color.text_secondary'))
           .width('100%');
 
-        Column({ space: 6 }) {
-          Text('语音通话对话模型（轮转模式）')
+        Row() {
+          Text('功能模型')
             .fontSize(13)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%');
-          Text(this.voiceSummary())
-            .fontSize(12)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%');
-          Select(this.voiceProviderItems())
-            .selected(this.voiceProviderSelectedIndex())
-            .value(this.voiceFollow ? '跟随全局' : AiService.presetOf(this.voiceProviderId).name)
-            .width('100%')
-            .onSelect((index: number, value: string) => this.selectVoiceProvider(index));
-          if (!this.voiceFollow) {
-            Row() {
-              Text('模型')
-                .fontSize(13)
-                .fontColor($r('app.color.text_secondary'));
-              Blank();
-              Text(this.voiceFetchingModels ? '拉取中…' : '拉取模型列表')
-                .fontSize(13)
-                .fontColor($r('app.color.brand_primary'))
-                .onClick(() => {
-                  void this.fetchVoiceModels();
-                });
-            }
-            .width('100%');
-            Select(this.voiceModelItems())
-              .selected(Math.max(0, this.voiceModelOptions.indexOf(this.voiceModel)))
-              .value(this.voiceModel.length > 0 ? this.voiceModel : '使用该服务商默认模型')
-              .width('100%')
-              .onSelect((index: number, value: string) => {
-                this.voiceModel = value;
-                AiService.saveVoiceConfig(this.voiceProviderId, value);
-              });
-          }
+            .fontColor($r('app.color.text_secondary'));
+          Text('语音/TTS/ASR 等六档单独绑定服务商')
+            .fontSize(11)
+            .fontColor($r('app.color.text_tertiary'))
+            .margin({ left: 8 });
+          Blank();
+          Text('›')
+            .fontSize(16)
+            .fontColor($r('app.color.text_tertiary'));
         }
-        .width('100%');
+        .width('100%')
+        .onClick(() => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiFeatureModelsPage' }));
 
         Column({ space: 6 }) {
           Text('音色')
@@ -1058,7 +917,7 @@ struct AiSettingsPage {
     .align(Alignment.Top);
   }
 
-  /** TAB 4 说明：灵魂入口、使用说明、打开助手。 */
+  /** TAB 3 说明：灵魂入口、使用说明、打开助手。 */
   @Builder
   tabAbout() {
     Scroll() {
@@ -1108,7 +967,7 @@ struct AiSettingsPage {
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
             .width('100%');
-          Text('• 「模型」页的常用模型清单按服务商保存，对话页顶栏快切菜单优先用它。')
+          Text('• 「服务商与模型」档的常用模型清单按服务商保存，对话页顶栏快切菜单优先用它。')
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
             .width('100%');

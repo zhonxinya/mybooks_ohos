@@ -552,7 +552,7 @@ export async function setup() {
   stagePure('AiChatPrompts', 'services/AiChatPrompts.ets', ['AiPermissionMode']);
   stagePure('AiSkills', 'services/AiSkills.ets', []);
   for (const name of ['AiAssistantPage', 'AiBookPanelPage', 'AiRecommendPage', 'AiSettingsPage',
-    'AiPersonaPage']) {
+    'AiPersonaPage', 'AiFeatureModelsPage']) {
     stagePage(name);
   }
   stageAiService();
@@ -579,6 +579,7 @@ export async function setup() {
   const { AiBookPanelPage } = await load('AiBookPanelPage');
   const { AiRecommendPage } = await load('AiRecommendPage');
   const { AiSettingsPage } = await load('AiSettingsPage');
+  const { AiFeatureModelsPage } = await load('AiFeatureModelsPage');
   const { AiPersonaPage } = await load('AiPersonaPage');
   const { AiPersona, DEFAULT_SOUL } = await load('RealAiPersona');
   const { AiChatStore } = await load('RealAiChatStore');
@@ -597,6 +598,13 @@ export async function setup() {
   const resetSettings = () => { state.settings = settingsDefaults(); };
   const settingsPage = () => {
     const page = new AiSettingsPage();
+    page.toast = () => {};
+    page.aboutToAppear();
+    return page;
+  };
+  // #1599 功能模型页：编辑套件直测（featureSlots 为断言面）
+  const featurePage = () => {
+    const page = new AiFeatureModelsPage();
     page.toast = () => {};
     page.aboutToAppear();
     return page;
@@ -624,6 +632,6 @@ export async function setup() {
     page.aboutToAppear();
     return page;
   };
-  return { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, chat, reappear };
+  return { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiFeatureModelsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, featurePage, chat, reappear };
 }
 
