@@ -512,6 +512,16 @@ struct AiAssistantPage {
     }
   }
 
+  // key 必须覆盖所有影响该气泡渲染的状态：@State 换数组后 key 不变则 ListItem 被复用、UI 不刷新。
+  // 例外：文字流式气泡 key 恒定——它的内容由 StreamBubble 自订阅 store 增量更新（组件内 @State→@Prop
+  // 链路不依赖 key 重建）；旧写法把长度并进 key，等于把同一段文字反复销毁重挂（重复渲染/闪烁来源）。
+  private bubbleKey(bubble: ChatBubble, index: number): string {
+    if (bubble.role === 'assistant' && bubble.streaming && !bubble.error && bubble.voice !== true) {
+      return `bubble-${index}-assistant-s`;
+    }
+    return `bubble-${index}-${bubble.role}-${bubble.streaming ? 's' : 'd'}-${bubble.activities.length}-${bubble.content.length}-${(bubble.images ?? []).length}-${(bubble.reasoning ?? '').length}`;
+  }
+
   build() {
     Column() {
       PageScaffold({
@@ -801,17 +811,7 @@ struct AiAssistantPage {
         ListItem() {
           this.bubbleView(bubble, index);
         }
-      }, (bubble: ChatBubble, index: number) => {
-        // key 必须覆盖所有影响该气泡渲染的状态：@State 换数组后 key 不变则 ListItem 被复用、UI 不刷新
-        if (bubble.role === 'assistant' && bubble.streaming) {
-          let sig: string = '';
-          for (let i = 0; i < this.liveActivities.length; i++) {
-            sig += this.liveActivities[i].state;
-          }
-          return `bubble-${index}-assistant-s-${sig}-${this.streamingText.length}-${this.streamingReasoning.length}`;
-        }
-        return `bubble-${index}-${bubble.role}-${bubble.streaming ? 's' : 'd'}-${bubble.activities.length}-${bubble.content.length}-${(bubble.images ?? []).length}-${(bubble.reasoning ?? '').length}`;
-      });
+      }, (bubble: ChatBubble, index: number): string => this.bubbleKey(bubble, index));
     }
     .layoutWeight(1)
     .width('100%')
@@ -863,24 +863,14 @@ struct AiAssistantPage {
         // 语音 AI 气泡：字幕增量直接累计在 bubble.content，不走文字轮镜像/思考/活动时间线
         MarkdownText({ content: bubble.content });
       } else if (bubble.role === 'assistant' && !bubble.error) {
-        // 思考过程：流式挂 store 镜像实时显示，固化后挂气泡自身字段默认折叠
         if (bubble.streaming) {
-          ReasoningBlock({ reasoning: this.streamingReasoning, live: true });
-        } else if ((bubble.reasoning ?? '').length > 0) {
-          ReasoningBlock({ reasoning: bubble.reasoning ?? '', live: false });
-        }
-        // 活动时间线：流式气泡挂实时 liveActivities，完成后的气泡挂固化的历史快照
-        ActivityTimeline({ acts: bubble.streaming ? this.liveActivities : bubble.activities,
-          live: bubble.streaming });
-        if (bubble.streaming) {
-          if (this.streamingText.length > 0) {
-            MarkdownText({ content: this.streamingText });
-          } else if (this.liveActivities.length === 0) {
-            Text('思考中…')
-              .fontSize(15)
-              .fontColor($r('app.color.text_secondary'));
-          }
+          // 流式气泡：自订阅 store 增量的独立组件，key 恒定整轮零重建（见 StreamBubble）
+          StreamBubble();
         } else {
+          if ((bubble.reasoning ?? '').length > 0) {
+            ReasoningBlock({ reasoning: bubble.reasoning ?? '', live: false });
+          }
+          ActivityTimeline({ acts: bubble.activities, live: false });
           MarkdownText({ content: bubble.content });
         }
       } else {
@@ -1199,23 +1189,32 @@ struct AiAssistantPage {
 /** 思考过程块：流式（live）默认展开实时滚动，历史气泡默认折叠，点标题行切换。 */
 @Component
 struct ReasoningBlock {
-  reasoning: string = '';
+  @Prop @Watch('onReasoningChange') reasoning: string = '';
   live: boolean = false;
   @State expanded: boolean = false;
   private bodyScroller: Scroller = new Scroller();
 
   aboutToAppear(): void {
     this.expanded = this.live;
-    if (this.live) {
-      // 流式思考逐帧重建，贴底=始终露出最新一段；限高后不再把正文顶出屏幕
-      setTimeout((): void => {
-        try {
-          this.bodyScroller.scrollEdge(Edge.Bottom);
-        } catch (_error) {
-          // 组件已随气泡重建销毁时忽略
-        }
-      }, 60);
+    this.scrollLiveBottom();
+  }
+
+  onReasoningChange(): void {
+    this.scrollLiveBottom();
+  }
+
+  private scrollLiveBottom(): void {
+    if (!this.live) {
+      return;
     }
+    // 流式思考走 @Prop 增量更新（气泡不重建），每次变化下一拍贴底=始终露出最新一段
+    setTimeout((): void => {
+      try {
+        this.bodyScroller.scrollEdge(Edge.Bottom);
+      } catch (_error) {
+        // 组件已随气泡销毁时忽略
+      }
+    }, 60);
   }
 
   build() {
@@ -1261,7 +1260,7 @@ struct ReasoningBlock {
  */
 @Component
 struct ActivityTimeline {
-  acts: ChatActivity[] = [];
+  @Prop acts: ChatActivity[] = [];
   live: boolean = false;
   @State expanded: boolean = false;
 
@@ -1348,5 +1347,52 @@ struct ActivityTimeline {
       .borderRadius($r('app.float.chip_radius'))
       .backgroundColor($r('app.color.page_background'));
     }
+  }
+}
+
+/**
+ * 流式文字气泡：自己向 store 订阅增量，打字机期间只更新内容子树。
+ * ForEach 里它的 key 恒定（bubbleView 调用处），整轮不重建——避免每次增量
+ * 把 markdown 全文重挂、思考/活动区折叠态复位。子组件的流式字段必须 @Prop，
+ * 否则本组件 @State 变化传不进已挂载的子组件。
+ */
+@Component
+struct StreamBubble {
+  @State text: string = '';
+  @State reasoning: string = '';
+  @State acts: ChatActivity[] = [];
+  private viewToken: number = 0;
+
+  private pull(): void {
+    const store = AiChatStore.instance();
+    this.text = store.streamingText;
+    this.reasoning = store.streamingReasoning;
+    this.acts = store.liveActivities.slice();
+  }
+
+  aboutToAppear(): void {
+    this.viewToken = AiChatStore.instance().attachStreamView((): void => this.pull());
+    this.pull();
+  }
+
+  aboutToDisappear(): void {
+    AiChatStore.instance().detachStreamView(this.viewToken);
+  }
+
+  build() {
+    // space 与 bubbleView 外层一致（6），避免流式→固化瞬间子项间距跳动
+    Column({ space: 6 }) {
+      ReasoningBlock({ reasoning: this.reasoning, live: true });
+      ActivityTimeline({ acts: this.acts, live: true });
+      if (this.text.length > 0) {
+        MarkdownText({ content: this.text });
+      } else if (this.acts.length === 0) {
+        Text('思考中…')
+          .fontSize(15)
+          .fontColor($r('app.color.text_secondary'));
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start);
   }
 }

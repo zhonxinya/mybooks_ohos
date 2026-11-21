@@ -7,7 +7,8 @@ import { AuthImage } from './AuthImage';
  */
 @Component
 export struct ToolResultList {
-  items: ToolBookLine[] = [];
+  // @Prop：流式气泡整轮不重建（StreamBubble 自订阅），书目数据必须可同步进已挂载实例
+  @Prop items: ToolBookLine[] = [];
 
   build() {
     Column({ space: 6 }) {

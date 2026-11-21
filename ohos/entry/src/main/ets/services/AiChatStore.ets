@@ -163,6 +163,24 @@ export class AiChatStore {
     return AiChatStore.inst;
   }
 
+  /**
+   * 流式气泡自订阅槽（StreamBubble 用）：与页面镜像并行扇出。
+   * 气泡不再靠 ForEach key 携内容长度「重建式更新」——那会把同一段文字反复销毁重挂；
+   * 组件自拉增量后打字机只更新内容子树，key 流式期恒定。
+   */
+  private streamViews: Map<number, () => void> = new Map();
+  private streamToken: number = 0;
+
+  attachStreamView(sync: () => void): number {
+    this.streamToken++;
+    this.streamViews.set(this.streamToken, sync);
+    return this.streamToken;
+  }
+
+  detachStreamView(token: number): void {
+    this.streamViews.delete(token);
+  }
+
   /** 注册前台视图，返回凭据 token；detach 仅认最新 token，防旧页迟到的 disappear 误清新页。 */
   attachView(sync: () => void, confirmUi: ConfirmUi): number {
     this.viewSync = sync;
@@ -194,6 +212,11 @@ export class AiChatStore {
   private notify(): void {
     if (this.viewSync !== null) {
       this.viewSync();
+    }
+    if (this.streamViews.size > 0) {
+      this.streamViews.forEach((sync: () => void): void => {
+        sync();
+      });
     }
   }
 
