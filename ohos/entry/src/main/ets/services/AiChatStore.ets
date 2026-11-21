@@ -7,7 +7,7 @@ import { AiService, AiConfig, AiMessage, AiStreamHandlers, AiAbortHandle } from 
 import { AiPersona } from './AiPersona';
 import { TalebookService } from './TalebookService';
 
-import { AskRequest, buildSessionMd, ChatActivity, ChatBubble, ChatSession, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, COMPRESS_MIN_DROPPED, HistorySummary, parseBubbles, sessionMatches, sessionTitle } from './AiChatModel';
+import { AiTokenUsage, AskRequest, buildSessionMd, ChatActivity, ChatBubble, ChatSession, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, COMPRESS_MIN_DROPPED, HistorySummary, parseBubbles, sessionMatches, sessionTitle } from './AiChatModel';
 import { permissionPromptNote, SUMMARY_SYSTEM_PROMPT, SYSTEM_PROMPT, SYSTEM_PROMPT_LEARN, SYSTEM_PROMPT_TOOLS } from './AiChatPrompts';
 
 export { AskRequest, ChatActivity, ChatBubble, ChatSession, HistorySummary } from './AiChatModel';
@@ -514,9 +514,9 @@ export class AiChatStore {
           this.notify();
         });
       },
-      onDone: (full: string) => {
+      onDone: (full: string, usage?: AiTokenUsage) => {
         if (requestId === this.requestId && this.thinking) {
-          this.finishBubble(full, false);
+          this.finishBubble(full, false, usage);
         }
       },
       onError: (message: string) => {
@@ -543,13 +543,15 @@ export class AiChatStore {
     }
   }
 
-  finishBubble(text: string, isError: boolean): void {
+  finishBubble(text: string, isError: boolean, usage?: AiTokenUsage): void {
     const last: ChatBubble = this.messages[this.messages.length - 1];
     last.streaming = false;
     last.error = isError;
     last.content = isError ? (text.length > 0 ? text : '请求失败') : text;
     last.activities = this.liveActivities;
     last.reasoning = this.streamingReasoning;
+    // 复用泡显式覆盖：重试轮不带 usage 时清掉旧计量（#1514）
+    last.usage = usage;
     this.messages = this.messages.slice();
     this.thinking = false;
     this.streamingText = '';
@@ -753,9 +755,8 @@ export class AiChatStore {
     }
     const title: string = sessionTitle(items);
     const named: string = this.currentNamed;
-    this.sessions.push({ id: this.currentId,
+    this.sessions.push({ id: this.currentId, named: named, updatedAt: Date.now(),
       title: named.length > 0 ? named : (title.length > 0 ? title : '新对话'),
-      named: named, updatedAt: Date.now(),
       messages: items.slice(-CHAT_HISTORY_MAX) });
     if (this.sessions.length > CHAT_SESSIONS_MAX) {
       this.sessions.sort((a: ChatSession, b: ChatSession): number => a.updatedAt - b.updatedAt);
@@ -819,10 +820,7 @@ export class AiChatStore {
     this.notify();
   }
 
-  /**
-   * 会话改名（#1513）：trim 后超长截 30 字。当前会话落 currentNamed 槽
-   * （归档时随带，切回不丢）；存档会话直接改 title+named。空名拒绝。
-   */
+  /** 会话改名（#1513）：trim+超长截 30；当前会话落 currentNamed 槽（归档随带），存档直接改 title+named。 */
   renameSession(id: string, name: string): boolean {
     const t: string = name.trim();
     if (t.length === 0) {

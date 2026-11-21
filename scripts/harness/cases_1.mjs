@@ -759,4 +759,44 @@ export function register(ctx) {
     assert.equal(store.currentTitle().length, 31, '超长截 30+省略号');
   });
 
+  test('Token 用量（#1514）：parseUsage 校验、mergeUsage 累加、整包解析、落盘往返、气泡固化', async () => {
+    const model = await load('AiChatModel');
+    assert.equal(model.parseUsage(undefined), null, '缺字段=null');
+    assert.equal(model.parseUsage('x'), null, '非对象=null');
+    assert.equal(model.parseUsage({ completion_tokens: 5 }), null, '无 total=null');
+    const u = model.parseUsage({ prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 });
+    assert.deepEqual(u, { prompt: 10, completion: 4, total: 14 });
+    const acc = { prompt: 0, completion: 0, total: 0 };
+    model.mergeUsage(acc, u);
+    model.mergeUsage(acc, u);
+    assert.equal(acc.total, 28, '跨轮累加');
+    assert.equal(acc.prompt, 20);
+    // 整包通道：usage 顶层随 choices 一并解析
+    const r = RealAiService.parseGatewayReply(JSON.stringify({
+      choices: [{ message: { content: 'x' } }],
+      usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
+    }));
+    assert.equal(r.usage.total, 10, '整包 usage');
+    const rNo = RealAiService.parseGatewayReply(JSON.stringify({ choices: [{ message: { content: 'x' } }] }));
+    assert.equal(rNo.usage, null, '服务商不回传=null');
+    // 落盘往返：有 usage 恢复、无 usage 保持 undefined（不造零值假数据）
+    const back = model.parseBubbles([{ role: 'assistant', content: 'a',
+      usage: { prompt: 1, completion: 2, total: 3 } }]);
+    assert.equal(back[0].usage.total, 3);
+    const backOld = model.parseBubbles([{ role: 'assistant', content: 'a' }]);
+    assert.equal(backOld[0].usage, undefined);
+    // store 固化：onDone 第二参进气泡并落盘；错误轮无 usage
+    const page = chat();
+    const store = AiChatStore.instance();
+    await page.send('用量问题');
+    state.handlers.onDone('用量回答', { prompt: 100, completion: 20, total: 120 });
+    assert.equal(store.messages[1].usage.total, 120, 'usage 固化进气泡');
+    assert.ok(JSON.parse(state.prefs.get('ai_chat_history'))[1].usage.total === 120, 'usage 随历史落盘');
+    assert.equal(page.sessionTokens(), 120, '页面累计=会话总和');
+    await page.send('再来');
+    state.handlers.onError('网络错误');
+    assert.equal(store.messages[store.messages.length - 1].usage, undefined, '错误泡不带 usage');
+    assert.equal(page.sessionTokens(), 120, '累计不受错误轮影响');
+  });
+
 }

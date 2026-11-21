@@ -31,6 +31,8 @@ export interface ChatBubble {
   voice?: boolean;
   /** 创建时刻（毫秒）；旧存档无此字段=undefined，时间分隔条自动跳过不显示。 */
   ts?: number;
+  /** 本轮 token 用量（#1514）；旧存档/服务商不回传=undefined 不显示。 */
+  usage?: AiTokenUsage;
 }
 
 /** 时间分隔条阈值：与上一条间隔 ≥5 分钟才值得打断阅读节奏插一行时间。 */
@@ -129,7 +131,7 @@ export function parseBubbles(parsed: Object): ChatBubble[] {
       }
     }
     const reasoningRaw: Object = m['reasoning'];
-    bubbles.push({
+    const bubble: ChatBubble = {
       role: m['role'],
       content: m['content'],
       streaming: false,
@@ -139,7 +141,13 @@ export function parseBubbles(parsed: Object): ChatBubble[] {
       reasoning: typeof reasoningRaw === 'string' ? reasoningRaw : '',
       voice: m['voice'] === true,
       ts: typeof m['ts'] === 'number' ? m['ts'] : 0,
-    });
+    };
+    // usage 为可选键（#1514）：旧存档无此字段保持 undefined，不造零值假数据
+    const usage: AiTokenUsage | null = parseUsage(m['usage']);
+    if (usage !== null) {
+      bubble.usage = usage;
+    }
+    bubbles.push(bubble);
   }
   return bubbles;
 }
@@ -252,6 +260,43 @@ export interface ChatSession {
 export interface HistorySummary {
   text: string;
   count: number;
+}
+
+/** 一轮请求的 token 用量（OpenAI usage 字段，#1514）；多工具轮在传输层累加。 */
+export interface AiTokenUsage {
+  prompt: number;
+  completion: number;
+  total: number;
+}
+
+/** 用量累加（就地改 dst）：供传输层跨工具轮汇总。 */
+export function mergeUsage(dst: AiTokenUsage, src: AiTokenUsage): void {
+  dst.prompt += src.prompt;
+  dst.completion += src.completion;
+  dst.total += src.total;
+}
+
+/**
+ * 解析 usage 对象（#1514）：同时认服务商 wire 键（prompt_tokens/total_tokens）
+ * 与本地落盘键（prompt/total）；非对象或无 total 数字返回 null（缺字段静默降级）。
+ */
+export function parseUsage(raw: Object | undefined): AiTokenUsage | null {
+  if (raw === undefined || raw === null || typeof raw !== 'object') {
+    return null;
+  }
+  const rec: Record<string, Object> = raw as Record<string, Object>;
+  const total: Object | undefined = rec['total_tokens'] !== undefined ? rec['total_tokens'] : rec['total'];
+  if (typeof total !== 'number') {
+    return null;
+  }
+  const prompt: Object | undefined = rec['prompt_tokens'] !== undefined ? rec['prompt_tokens'] : rec['prompt'];
+  const completion: Object | undefined =
+    rec['completion_tokens'] !== undefined ? rec['completion_tokens'] : rec['completion'];
+  return {
+    prompt: typeof prompt === 'number' ? prompt : 0,
+    completion: typeof completion === 'number' ? completion : 0,
+    total: total,
+  };
 }
 
 // —— 对话持久化常量（preferences 明文 KV，与账号列表同层；存读逻辑在 AiChatStore）——

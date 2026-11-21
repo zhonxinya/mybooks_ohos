@@ -17,6 +17,8 @@ import { AiServiceGateway } from './AiServiceGateway';
 import { KEY_PROVIDER, KEY_BASE_URL, KEY_MODEL, KEY_AUTO_SPEAK, KEY_VOICE_PROVIDER, KEY_VOICE_MODEL, KEY_SPEAK_ENGINE, KEY_CALL_MODE, KEY_API_KEY, KEY_API_KEY_PREFIX, KEY_CUSTOM_PROVIDERS, KEY_TEMPERATURE, KEY_SESSION_ID, KEY_VISION, KEY_CONTEXT, KEY_PERMISSION, KEY_PROVIDER_MODELS_PREFIX, CONTEXT_LENGTH_OPTIONS, DEFAULT_CONTEXT_K, DEFAULT_TEMPERATURE, TIMEOUT_MS, MAX_TOOL_ROUNDS, MAX_GATEWAY_ATTEMPTS, MAX_TOOL_SLOTS } from './AiServiceConfig';
 import type { GatewayMessage, GatewayToolCall, GatewayReply, AskPayload } from './AiServiceGateway';
 import type { AiSessionHolder } from './AiServiceHttp';
+import { mergeUsage, parseUsage } from './AiChatModel';
+import type { AiTokenUsage } from './AiChatModel';
 export { CONTEXT_LENGTH_OPTIONS } from './AiServiceConfig';
 
 /**
@@ -87,7 +89,8 @@ export interface AiConfig {
 /** 流式回调：`delta` 为本次增量文本，`done` 表示结束。 */
 export interface AiStreamHandlers {
   onDelta: (delta: string) => void;
-  onDone: (fullText: string) => void;
+  /** usage=本轮全部请求的 token 用量合计（#1514）；服务商没回传时 undefined。 */
+  onDone: (fullText: string, usage?: AiTokenUsage) => void;
   onError: (message: string) => void;
   /** 可选：推理模型（qwen/deepseek 等）的思考过程增量，OpenAI 兼容字段 reasoning_content。 */
   onReasoning?: (delta: string) => void;
@@ -126,6 +129,16 @@ export class AiService {
 
     let full: string = '';
     let settled: boolean = false;
+    // 三通道共用的用量盒（#1514）：长度 0/1，传输层累加，finish 时带给 onDone
+    const usageBox: AiTokenUsage[] = [];
+    const noteUsage = (u: AiTokenUsage | null): void => {
+      if (u !== null) {
+        if (usageBox.length === 0) {
+          usageBox.push({ prompt: 0, completion: 0, total: 0 });
+        }
+        mergeUsage(usageBox[0], u);
+      }
+    };
     const finish = (errorText: string): void => {
       if (settled) {
         return;
@@ -134,7 +147,7 @@ export class AiService {
       if (errorText.length > 0) {
         handlers.onError(errorText);
       } else {
-        handlers.onDone(full);
+        handlers.onDone(full, usageBox.length > 0 ? usageBox[0] : undefined);
       }
     };
 
@@ -159,7 +172,8 @@ export class AiService {
         ask === undefined ? null : ask,
         done === undefined ? null : done,
         think === undefined ? null : think,
-        handlers.onAsk === undefined ? null : handlers.onAsk).then((content: string): void => {
+        handlers.onAsk === undefined ? null : handlers.onAsk,
+        usageBox).then((content: string): void => {
         if (handle.aborted) {
           return;
         }
@@ -198,9 +212,14 @@ export class AiService {
       const ask: ((label: string, args: string) => Promise<boolean>) | undefined = handlers.onConfirm;
       const done: ((name: string, label: string, text: string, callId: string) => void) | undefined = handlers.onToolResult;
       const think: ((text: string) => void) | undefined = handlers.onReasoning;
-      const transport = async (attach: AiToolDefinition[] | null): Promise<GatewayReply | null> =>
-        AiServiceGateway.sdkStreamRound(client, config, gwMessages, maxTokens, attach, handle,
-          handlers.onDelta, think === undefined ? null : think, sessionBox);
+      const transport = async (attach: AiToolDefinition[] | null): Promise<GatewayReply | null> => {
+        const round = await AiServiceGateway.sdkStreamRound(client, config, gwMessages, maxTokens,
+          attach, handle, handlers.onDelta, think === undefined ? null : think, sessionBox);
+        if (round !== null) {
+          noteUsage(round.usage);
+        }
+        return round;
+      };
       AiServiceGateway.runToolLoop(gwMessages, transport, sdkTools, sdkPermission,
         (): boolean => handle.aborted,
         notice === undefined ? null : notice,
@@ -229,6 +248,9 @@ export class AiService {
         temperature: config.temperature,
         max_tokens: maxTokens,
       };
+      // 要求 OpenAI 兼容端点在流尾附 usage 收尾包（#1514，SDK 类型未覆盖，索引注入）
+      const streamOptions: Record<string, Object> = { 'include_usage': true };
+      (params as Object as Record<string, Object>)['stream_options'] = streamOptions;
       const effort: string = AiServiceConfig.loadReasoningEffort();
       if (effort !== 'default') {
         // SDK 类型未覆盖该字段：params 即请求体对象，索引注入直达 wire（网关先例同款双 cast）
@@ -250,6 +272,8 @@ export class AiService {
               }
               const choices: Object | undefined = (chunk as Record<string, Object>)['choices'];
               if (!Array.isArray(choices) || (choices as Object[]).length === 0) {
+                // include_usage 尾包（#1514）：choices 为空、usage 在顶层
+                noteUsage(parseUsage((chunk as Record<string, Object>)['usage']));
                 continue;
               }
               const first: Object = (choices as Object[])[0];
@@ -333,7 +357,7 @@ export class AiService {
     if (AiServiceHttp.isOpenCodeGateway(config.baseUrl)) {
       // 结构化输出（书单 JSON 等）不需要工具，避免模型中途改去查数据
       return AiServiceGateway.chatViaGateway(config, apiKey, messages, maxTokens, rcp.createSession(),
-        null, AiServiceConfig.loadPermission(), null, null, null, null, null, null);
+        null, AiServiceConfig.loadPermission(), null, null, null, null, null, null, null);
     }
     const client: OpenAI = AiServiceHttp.client(config.baseUrl, apiKey);
     const params: ChatCompletionCreateParamsBase = {
@@ -609,8 +633,8 @@ export class AiService {
   }
 
   /** 委托 AiServiceGateway.chatViaGateway（拆分：见文件头说明）。 */
-  static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[], maxTokens: number, session: rcp.Session, tools: AiToolDefinition[] | null, permission: AiPermissionMode, isAborted: (() => boolean) | null, onTool: ((label: string, name: string) => void) | null, onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null, onResult: ((name: string, label: string, text: string, callId: string) => void) | null, onReasoning: ((text: string) => void) | null, onAsk: ((question: string, options: string[]) => Promise<string>) | null): Promise<string> {
-    return AiServiceGateway.chatViaGateway(config, apiKey, messages, maxTokens, session, tools, permission, isAborted, onTool, onConfirm, onResult, onReasoning, onAsk);
+  static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[], maxTokens: number, session: rcp.Session, tools: AiToolDefinition[] | null, permission: AiPermissionMode, isAborted: (() => boolean) | null, onTool: ((label: string, name: string) => void) | null, onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null, onResult: ((name: string, label: string, text: string, callId: string) => void) | null, onReasoning: ((text: string) => void) | null, onAsk: ((question: string, options: string[]) => Promise<string>) | null, usageBox: AiTokenUsage[] | null): Promise<string> {
+    return AiServiceGateway.chatViaGateway(config, apiKey, messages, maxTokens, session, tools, permission, isAborted, onTool, onConfirm, onResult, onReasoning, onAsk, usageBox);
   }
   /** 委托 AiServiceGateway.runToolLoop（拆分：见文件头说明）。 */
   static async runToolLoop(gwMessages: GatewayMessage[], transport: (attach: AiToolDefinition[] | null) => Promise<GatewayReply | null>, tools: AiToolDefinition[] | null, permission: AiPermissionMode, isAborted: (() => boolean) | null, onTool: ((label: string, name: string) => void) | null, onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null, onResult: ((name: string, label: string, text: string, callId: string) => void) | null, onReasoning: ((text: string) => void) | null, onAsk: ((question: string, options: string[]) => Promise<string>) | null): Promise<string> {

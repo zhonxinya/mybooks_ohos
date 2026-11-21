@@ -572,6 +572,15 @@ struct AiAssistantPage {
     }
   }
 
+  /** 本会话累计 token 用量（#1514）：无 usage 的气泡（旧存档/语音轮）按 0 计。 */
+  private sessionTokens(): number {
+    let n: number = 0;
+    for (const b of this.messages) {
+      n += b.usage?.total ?? 0;
+    }
+    return n;
+  }
+
   private toast(message: string): void {
     try {
       this.getUIContext().getPromptAction().showToast({ message: message });
@@ -1070,6 +1079,12 @@ struct AiAssistantPage {
           }
           ActivityTimeline({ acts: bubble.activities, live: false });
           MarkdownText({ content: bubble.content });
+          // token 用量脚注（#1514）：服务商回传 usage 才显示，旧存档/语音轮无感
+          if (bubble.usage !== undefined && bubble.usage.total > 0) {
+            Text(`已用 ${bubble.usage.total} tokens · 入 ${bubble.usage.prompt} / 出 ${bubble.usage.completion}`)
+              .fontSize(11)
+              .fontColor($r('app.color.text_tertiary'));
+          }
         }
       } else {
         // 语音用户气泡的 ASR 中间结果也在 bubble.content，不能走文字轮 streamingText 镜像
@@ -1291,6 +1306,11 @@ struct AiAssistantPage {
             Text(`· ${this.store.summaryNote()}`)
               .fontSize(11)
               .fontColor($r('app.color.brand_primary'));
+          }
+          if (this.sessionTokens() > 0) {
+            Text(`· 共耗 ${this.sessionTokens()} tokens`)
+              .fontSize(11)
+              .fontColor($r('app.color.text_tertiary'));
           }
         }
         .width('100%')
