@@ -7,34 +7,9 @@ import { AiService, AiConfig, AiMessage, AiStreamHandlers, AiAbortHandle } from 
 import { AiPersona } from './AiPersona';
 import { TalebookService } from './TalebookService';
 
-/** 工具调用活动：回路里每次工具执行产生一条，流式期间实时翻转状态。 */
-export interface ChatActivity {
-  name: string;
-  label: string;
-  /** doing 执行中 / done 完成 / rejected 用户拒绝 */
-  state: string;
-  /** 书目型结果的结构化条目（书架/小说源/下载任务） */
-  books: ToolBookLine[];
-  /** 非书目型结果的一行摘要 */
-  summary: string;
-}
+import { ChatActivity, ChatBubble, parseBubbles, sessionTitle } from './AiChatModel';
 
-/** 界面上的消息：与协议层 AiMessage 分开，因为要额外带状态。 */
-export interface ChatBubble {
-  role: string;
-  content: string;
-  /** 是否正在流式输出（末尾光标用）。 */
-  streaming: boolean;
-  error: boolean;
-  /** 完成后固化的活动快照（流式期间由 liveActivities 渲染）。 */
-  activities: ChatActivity[];
-  /** 用户消息附带的图片（沙箱绝对路径；发送时压缩编码为 data URL）。 */
-  images?: string[];
-  /** 推理模型的思考过程（reasoning_content）；完成固化后随历史持久化。 */
-  reasoning?: string;
-  /** 语音轮次气泡（realtime 内嵌会话产生）：渲染时带 mic/播报角标，与文字轮区分。 */
-  voice?: boolean;
-}
+export { ChatActivity, ChatBubble } from './AiChatModel';
 
 /** 写操作闸门确认弹窗；需要 UIContext，只有页面在场时可用。 */
 export type ConfirmUi = (label: string, args: string) => Promise<boolean>;
@@ -74,6 +49,16 @@ const SYSTEM_PROMPT_TOOLS: string =
     '得到答复前不要执行有后果的操作；用户跳过时基于现状谨慎收敛，不要反复追问。' +
   '换封面流程：先 search_cover 列出候选给用户看，用户选定后再 set_cover。' +
   '网文下载流程：search_sonovel 拿 url → add_sonovel_task 入队 → list_download_tasks 报进度，成品完成后自动进本地书架可读。';
+
+/**
+ * 自我学习规程：save_memory/forget_memory 工具早已就位，但模型没有触发时机与记录纪律，
+ * 记忆全靠用户点名——此段把「何时记、怎么记、何时更新」写进提示词。只在工具通道拼入。
+ */
+const SYSTEM_PROMPT_LEARN: string =
+  '\n\n自我学习：用 save_memory 主动把值得长期记住的事实沉淀进记忆，让后续对话不重复犯错、不重复询问。' +
+  '以下时机立即记录：用户表达偏好或习惯（「我喜欢…」「我只看…」）；用户纠正你（「别这样」「不对，其实是…」）；' +
+  '多步任务后出现可复用的路径、参数或 id。记录规矩：一条一个简短事实，不重复「用户记忆」列表现有条目；' +
+  '发现条目过时或矛盾，先用 forget_memory 删除再 save 新版。不要记录：工具随时可查的数据、单次闲聊、未证实的猜测。';
 
 /** 权限模式补注：追加在系统提示末尾，用顶栏徽标的准确档位名（模型曾瞎编「可写/编辑模式」）。 */
 function permissionPromptNote(mode: AiPermissionMode): string {
@@ -159,6 +144,9 @@ export class AiChatStore {
   private summaries: Map<string, HistorySummary> = new Map();
   private compressing: boolean = false;
   private static idSeq: number = 0;
+  /** 流式增量通知合并定时器（null=无在途；句柄类型不锁定，Node 计时器句柄同样适用 null 判定）。 */
+  private deltaTimer: number | null = null;
+  private static readonly DELTA_THROTTLE_MS: number = 80;
 
   /** 会话 id：毫秒+进程内递增，杜绝同毫秒新建/切换撞 id。 */
   private nextId(): string {
@@ -209,6 +197,31 @@ export class AiChatStore {
     }
   }
 
+  /**
+   * 流式增量通知节流：逐 token notify 会让页面每帧全量镜像+气泡整体重建（闪烁根因）。
+   * 首帧立即通知保持打字机跟手，其后每窗口至多一次尾帧。
+   * 终态（完成/停止/新轮开始）必须 cancelDeltaNotify() 后走立即 notify()，
+   * 否则残留在途定时器会把下一轮的首帧也并进旧窗口。
+   */
+  private notifyDelta(): void {
+    if (this.deltaTimer !== null) {
+      return;
+    }
+    this.notify();
+    this.deltaTimer = setTimeout((): void => {
+      this.deltaTimer = null;
+      this.notify();
+    }, AiChatStore.DELTA_THROTTLE_MS);
+  }
+
+  private cancelDeltaNotify(): void {
+    const timer: number | null = this.deltaTimer;
+    if (timer !== null) {
+      clearTimeout(timer);
+      this.deltaTimer = null;
+    }
+  }
+
   /** 设置页可能刚改过 vision/上下文档位，回页即刷新。 */
   refreshSettings(): void {
     this.configured = AiService.isReady();
@@ -252,6 +265,7 @@ export class AiChatStore {
     this.streamingReasoning = '';
     this.liveActivities = [];
     this.thinking = false;
+    this.cancelDeltaNotify();
     this.notify();
   }
 
@@ -268,87 +282,11 @@ export class AiChatStore {
       return;
     }
     try {
-      this.messages = this.parseBubbles(JSON.parse(raw)).slice(-CHAT_HISTORY_MAX);
+      this.messages = parseBubbles(JSON.parse(raw)).slice(-CHAT_HISTORY_MAX);
     } catch (_error) {
       // 历史损坏：保持空会话，下一次保存会覆盖
     }
     this.notify();
-  }
-
-  /** 解析气泡数组（当前会话与存档会话共用）；坏条目（缺字段/类型不符）逐条丢弃。 */
-  private parseBubbles(parsed: Object): ChatBubble[] {
-    const bubbles: ChatBubble[] = [];
-    if (!Array.isArray(parsed)) {
-      return bubbles;
-    }
-      for (const entry of parsed as Object[]) {
-        if (entry === null || typeof entry !== 'object') {
-          continue;
-        }
-        const m: Record<string, Object> = entry as Record<string, Object>;
-        if (typeof m['role'] !== 'string' || typeof m['content'] !== 'string') {
-          continue;
-        }
-        const actsRaw: Object = m['activities'];
-        const activities: ChatActivity[] = [];
-        if (Array.isArray(actsRaw)) {
-          for (const a of actsRaw as Object[]) {
-            if (a === null || typeof a !== 'object') {
-              continue;
-            }
-            const rec: Record<string, Object> = a as Record<string, Object>;
-            if (typeof rec['name'] !== 'string' || typeof rec['label'] !== 'string') {
-              continue;
-            }
-            const booksRaw: Object = rec['books'];
-            const books: ToolBookLine[] = [];
-            if (Array.isArray(booksRaw)) {
-              for (const b of booksRaw as Object[]) {
-                if (b === null || typeof b !== 'object') {
-                  continue;
-                }
-                const br: Record<string, Object> = b as Record<string, Object>;
-                if (typeof br['title'] !== 'string') {
-                  continue;
-                }
-                books.push({
-                  title: br['title'],
-                  subtitle: typeof br['subtitle'] === 'string' ? br['subtitle'] : '',
-                  cover: typeof br['cover'] === 'string' ? br['cover'] : '',
-                });
-              }
-            }
-            activities.push({
-              name: rec['name'],
-              label: rec['label'],
-              state: typeof rec['state'] === 'string' ? rec['state'] : 'done',
-              books: books,
-              summary: typeof rec['summary'] === 'string' ? rec['summary'] : '',
-            });
-          }
-        }
-        const imgsRaw: Object = m['images'];
-        const images: string[] = [];
-        if (Array.isArray(imgsRaw)) {
-          for (const p of imgsRaw as Object[]) {
-            if (typeof p === 'string' && p.length > 0) {
-              images.push(p);
-            }
-          }
-        }
-        const reasoningRaw: Object = m['reasoning'];
-        bubbles.push({
-          role: m['role'],
-          content: m['content'],
-          streaming: false,
-          error: m['error'] === true,
-          activities: activities,
-          images: images,
-          reasoning: typeof reasoningRaw === 'string' ? reasoningRaw : '',
-          voice: m['voice'] === true,
-        });
-      }
-    return bubbles;
   }
 
   /** 沙箱图片压缩成长边 1024 的 jpeg data URL；失败返回空串（该图不发送）。 */
@@ -399,7 +337,7 @@ export class AiChatStore {
     const toolsOn: boolean = AiService.supportsTools();
     let systemText: string = persona.length > 0 ? `${SYSTEM_PROMPT}\n\n${persona}` : SYSTEM_PROMPT;
     if (toolsOn) {
-      systemText = `${systemText}${SYSTEM_PROMPT_TOOLS}`;
+      systemText = `${systemText}${SYSTEM_PROMPT_TOOLS}${SYSTEM_PROMPT_LEARN}`;
       // 权限模式说明追加在最后，覆盖 SYSTEM_PROMPT 里「逐笔确认」的默认描述
       const modeNote: string = permissionPromptNote(AiService.loadPermission());
       if (modeNote.length > 0) {
@@ -577,6 +515,7 @@ export class AiChatStore {
     this.streamingReasoning = '';
     this.liveActivities = [];
     this.thinking = true;
+    this.cancelDeltaNotify();
     this.notify();
 
     const handlers: AiStreamHandlers = {
@@ -585,14 +524,14 @@ export class AiChatStore {
           return;
         }
         this.streamingText += delta;
-        this.notify();
+        this.notifyDelta();
       },
       onReasoning: (delta: string) => {
         if (requestId !== this.requestId || !this.thinking) {
           return;
         }
         this.streamingReasoning += delta;
-        this.notify();
+        this.notifyDelta();
       },
       onTool: (label: string, name: string) => {
         if (requestId === this.requestId && this.thinking) {
@@ -669,6 +608,7 @@ export class AiChatStore {
       this.errorTip = text;
     }
     this.saveHistory();
+    this.cancelDeltaNotify();
     this.notify();
     // 轮次收尾顺带压缩窗口外旧轮（内部阈值+compressing 守卫，不阻塞界面）
     if (!isError) {
@@ -807,23 +747,9 @@ export class AiChatStore {
 
   // —— 多会话：当前会话始终走 ai_chat_history，切换/新建时整条归档进 ai_chat_sessions ——
 
-  /** 会话标题：取首条用户消息前 20 字；没有则空串（调用侧兜底「新对话」）。 */
-  private sessionTitle(bubbles: ChatBubble[]): string {
-    for (const b of bubbles) {
-      if (b.role === 'user') {
-        const t: string = b.content.trim();
-        if (t.length === 0) {
-          continue;
-        }
-        return t.length > 20 ? `${t.slice(0, 20)}…` : t;
-      }
-    }
-    return '';
-  }
-
   /** 面板显示的当前会话标题。 */
   currentTitle(): string {
-    const t: string = this.sessionTitle(this.messages);
+    const t: string = sessionTitle(this.messages);
     return t.length > 0 ? t : '新对话';
   }
 
@@ -852,7 +778,7 @@ export class AiChatStore {
           continue;
         }
         list.push({ id: rec['id'], title: rec['title'], updatedAt: rec['updatedAt'],
-          messages: this.parseBubbles(rec['messages']) });
+          messages: parseBubbles(rec['messages']) });
       }
       list.sort((a: ChatSession, b: ChatSession): number => b.updatedAt - a.updatedAt);
       this.sessions = list.slice(0, CHAT_SESSIONS_MAX);
@@ -867,7 +793,7 @@ export class AiChatStore {
     if (items.length === 0) {
       return;
     }
-    const title: string = this.sessionTitle(items);
+    const title: string = sessionTitle(items);
     this.sessions.push({ id: this.currentId,
       title: title.length > 0 ? title : '新对话', updatedAt: Date.now(),
       messages: items.slice(-CHAT_HISTORY_MAX) });

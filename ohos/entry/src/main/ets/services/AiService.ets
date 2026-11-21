@@ -229,6 +229,11 @@ export class AiService {
         temperature: config.temperature,
         max_tokens: maxTokens,
       };
+      const effort: string = AiServiceConfig.loadReasoningEffort();
+      if (effort !== 'default') {
+        // SDK 类型未覆盖该字段：params 即请求体对象，索引注入直达 wire（网关先例同款双 cast）
+        (params as Object as Record<string, Object>)['reasoning_effort'] = effort;
+      }
       const result = client.chat.completions.create(params, {
         onData: (chunks: ChatCompletionChunk[]): void => {
           if (handle.aborted) {
@@ -338,6 +343,11 @@ export class AiService {
       temperature: config.temperature,
       max_tokens: maxTokens,
     };
+    const effort: string = AiServiceConfig.loadReasoningEffort();
+    if (effort !== 'default') {
+      // SDK 类型未覆盖该字段：params 即请求体对象，索引注入直达 wire（网关先例同款双 cast）
+      (params as Object as Record<string, Object>)['reasoning_effort'] = effort;
+    }
     const result = client.chat.completions.create(params);
     let statusCode: number = 0;
     let text: string = '';
@@ -423,6 +433,14 @@ export class AiService {
   /** 委托 AiServiceConfig.saveTtsTimbre（拆分：见文件头说明）。 */
   static saveTtsTimbre(voice: string): void {
     AiServiceConfig.saveTtsTimbre(voice);
+  }
+  /** 委托 AiServiceConfig.loadReasoningEffort（拆分：见文件头说明）。 */
+  static loadReasoningEffort(): string {
+    return AiServiceConfig.loadReasoningEffort();
+  }
+  /** 委托 AiServiceConfig.saveReasoningEffort（拆分：见文件头说明）。 */
+  static saveReasoningEffort(effort: string): void {
+    AiServiceConfig.saveReasoningEffort(effort);
   }
   /** 委托 AiServiceConfig.loadSpeakEngine（拆分：见文件头说明）。 */
   static loadSpeakEngine(): string {

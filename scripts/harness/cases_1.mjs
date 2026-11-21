@@ -39,6 +39,32 @@ export function register(ctx) {
     assert.equal(page.messages.at(-1).streaming, false);
     assert.equal(page.messages.at(-1).content, '部分回答');
   });
+  test('流式增量通知节流：首帧跟手、尾帧补齐；终态后迟到尾帧作废', async () => {
+    const page = chat();
+    const store = AiChatStore.instance();
+    let syncs = 0;
+    const orig = page.syncFromStore.bind(page);
+    page.syncFromStore = () => { syncs++; orig(); };
+    await page.send('问题');
+    const base = syncs;
+    for (let i = 0; i < 50; i++) {
+      state.handlers.onDelta('字');
+    }
+    assert.equal(syncs, base + 1, '50 个增量只允许首帧立即通知，其余并进窗口');
+    assert.equal(store.streamingText.length, 50, '合并只减通知次数，不减内容');
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(syncs, base + 2, '窗口结束补一次尾帧通知');
+    for (let i = 0; i < 20; i++) {
+      state.handlers.onDelta('字');
+    }
+    assert.equal(syncs, base + 3, '新一轮窗口再起首帧');
+    state.handlers.onDone('字'.repeat(70));
+    assert.equal(syncs, base + 4, '终态立即通知，不等窗口');
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(syncs, base + 4, '终态必须取消在途尾帧，不得迟到重建');
+    assert.equal(page.thinking, false);
+    assert.equal(page.messages.at(-1).content, '字'.repeat(70));
+  });
   test('退出对话页不中断流式：后台完成落盘，重进页面即见完整回复', async () => {
     const page = chat();
     await page.send('问题');

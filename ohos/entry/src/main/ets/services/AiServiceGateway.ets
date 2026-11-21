@@ -11,7 +11,7 @@ import type { AiPermissionMode } from './AiTools';
 import type { AiToolDefinition } from './AiToolsDefs';
 import type { AiMessage, AiConfig, AiAbortHandle } from './AiService';
 import type { AiSessionHolder } from './AiServiceHttp';
-import { MAX_TOOL_ROUNDS, MAX_GATEWAY_ATTEMPTS, MAX_TOOL_SLOTS } from './AiServiceConfig';
+import { AiServiceConfig, MAX_TOOL_ROUNDS, MAX_GATEWAY_ATTEMPTS, MAX_TOOL_SLOTS } from './AiServiceConfig';
 import { AiServiceHttp } from './AiServiceHttp';
 
 export class AiServiceGateway {
@@ -46,6 +46,10 @@ export class AiServiceGateway {
       };
       if (attach !== null && attach.length > 0) {
         payload['tools'] = attach;
+      }
+      const effort: string = AiServiceConfig.loadReasoningEffort();
+      if (effort !== 'default') {
+        payload['reasoning_effort'] = effort;
       }
       const request: rcp.Request = new rcp.Request(url, 'POST', headers, JSON.stringify(payload));
       // 单轮请求失败直接 throw 会让整条多轮回复报废——
@@ -403,6 +407,10 @@ export class AiServiceGateway {
       };
       if (attach !== null && attach.length > 0) {
         payload['tools'] = attach;
+      }
+      const effort: string = AiServiceConfig.loadReasoningEffort();
+      if (effort !== 'default') {
+        payload['reasoning_effort'] = effort;
       }
       const result = client.chat.completions.create(
         payload as Object as ChatCompletionCreateParamsBase, {

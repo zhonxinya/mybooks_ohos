@@ -246,10 +246,18 @@ export function stageChatStore() {
       `import { AiService } from './shim.ts';`)
     .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
     .replace(`from './TalebookService'`, `from './shim.ts'`)
+    .replace(`import { ChatActivity, ChatBubble, parseBubbles, sessionTitle } from './AiChatModel';`,
+      `import { parseBubbles, sessionTitle } from './AiChatModel.ts';\nimport type { ChatActivity, ChatBubble } from './AiChatModel.ts';`)
+    .replace(`export { ChatActivity, ChatBubble } from './AiChatModel';`,
+      `export type { ChatActivity, ChatBubble } from './AiChatModel.ts';`)
     .replace(`from '@kit.CoreFileKit'`, `from './shim.ts'`)
     .replace(`from '@kit.ImageKit'`, `from './shim.ts'`)
     .replace(`from '@kit.ArkTS'`, `from './shim.ts'`);
   writeFileSync(join(dir, 'RealAiChatStore.ts'), source);
+  // 纯模型层（气泡类型+持久化解析）：ToolBookLine 仅类型引用
+  writeFileSync(join(dir, 'AiChatModel.ts'), read('services/AiChatModel.ets')
+    .replace(`import { ToolBookLine } from './AiToolsDefs';`,
+      `import type { ToolBookLine } from './AiToolsDefs.ts';`));
 }
 
 export function stageAiPersona() {
@@ -542,6 +550,10 @@ export function stagePage(name) {
     if (path === '../services/AiChatStore') {
       return "import { AiChatStore } from './RealAiChatStore.ts';\n" +
         "import type { ChatActivity, ChatBubble } from './RealAiChatStore.ts';\n";
+    }
+    if (path === '../services/AiChatModel') {
+      return "import { groupActivities } from './AiChatModel.ts';\n" +
+        "import type { ActivityGroup } from './AiChatModel.ts';\n";
     }
     if (path === '../services/AiSkills') {
       const names = clause.split(',').map((part) => part.trim());

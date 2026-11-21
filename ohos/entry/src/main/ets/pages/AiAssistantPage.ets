@@ -8,6 +8,7 @@ import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { ToolResultList } from '../components/ToolResultList';
 import { AiChatStore, AskRequest, ChatActivity, ChatBubble, ChatSession } from '../services/AiChatStore';
+import { ActivityGroup, groupActivities } from '../services/AiChatModel';
 import { AiConfig, AiMessage, AiService } from '../services/AiService';
 import { SpeakService } from '../services/SpeakService';
 import { AiPermissionMode, AiTools } from '../services/AiTools';
@@ -68,6 +69,8 @@ struct AiAssistantPage {
   /** attachView 凭据：disappear 只解绑自己这一份视图。 */
   private viewToken: number = -1;
   private scroller: Scroller = new Scroller();
+  /** scrollToEnd 合并标记：在途未执行的滚动延后一个窗口，防流式期逐 token 抢滚。 */
+  private scrollPending: boolean = false;
 
   aboutToAppear(): void {
     this.store.refreshSettings();
@@ -347,8 +350,10 @@ struct AiAssistantPage {
       void this.startVoiceSession();
     };
     try {
+      // 与文字回路同源：MCP 动态工具一并注入语音工具面（非 Token Plan/失败=空集）
+      const mcpTools = await AiService.mcpToolset();
       await RealtimeCallService.connect(VOICE_SYSTEM_PROMPT + VOICE_TOOL_NOTE, cb,
-        AiTools.realtimeDefinitions(AiService.loadPermission()), history);
+        AiTools.realtimeDefinitions(AiService.loadPermission(), mcpTools), history);
       if (gen === this.voiceGen && this.voiceActive) {
         this.voiceStatus = '聆听中';
       }
@@ -433,8 +438,14 @@ struct AiAssistantPage {
   }
 
   private scrollToEnd(): void {
-    // 布局未完成时 scrollEdge 会静默失败，延后一帧即可
+    // 布局未完成时 scrollEdge 会静默失败，延后一帧即可；
+    // 流式期 syncFromStore 高频调用，此处合并定时器——一帧窗口内只滚一次，避免逐 token 抽动
+    if (this.scrollPending) {
+      return;
+    }
+    this.scrollPending = true;
     setTimeout(() => {
+      this.scrollPending = false;
       try {
         this.scroller.scrollEdge(Edge.Bottom);
       } catch (_error) {
@@ -859,7 +870,8 @@ struct AiAssistantPage {
           ReasoningBlock({ reasoning: bubble.reasoning ?? '', live: false });
         }
         // 活动时间线：流式气泡挂实时 liveActivities，完成后的气泡挂固化的历史快照
-        this.activityView(bubble.streaming ? this.liveActivities : bubble.activities);
+        ActivityTimeline({ acts: bubble.streaming ? this.liveActivities : bubble.activities,
+          live: bubble.streaming });
         if (bubble.streaming) {
           if (this.streamingText.length > 0) {
             MarkdownText({ content: this.streamingText });
@@ -914,55 +926,6 @@ struct AiAssistantPage {
     .borderRadius($r('app.float.card_radius'))
     .backgroundColor(bubble.role === 'user' ? $r('app.color.brand_primary_light') : $r('app.color.card_background'))
     .shadow({ radius: 10, type: ShadowType.COLOR, color: $r('app.color.button_shadow'), offsetX: 0, offsetY: 2 });
-  }
-
-  /** 工具调用活动区：状态行 + 书目型结果的结构化列表。 */
-  @Builder
-  activityView(acts: ChatActivity[]) {
-    if (acts.length > 0) {
-      Column({ space: 8 }) {
-        ForEach(acts, (act: ChatActivity, idx: number) => {
-          Column({ space: 6 }) {
-            Row({ space: 8 }) {
-              if (act.state === 'doing') {
-                LoadingProgress().width(16).height(16).color($r('app.color.brand_primary'));
-              } else {
-                Stack() {
-                  SymbolGlyph(act.state === 'rejected' ? $r('sys.symbol.xmark') : $r('sys.symbol.checkmark'))
-                    .fontSize(9)
-                    .fontWeight(FontWeight.Bold)
-                    .fontColor([$r('app.color.on_brand')]);
-                }
-                .width(16)
-                .height(16)
-                .borderRadius(8)
-                .backgroundColor(act.state === 'rejected' ?
-                  $r('app.color.error') : $r('app.color.brand_primary'));
-              }
-              Text(act.state === 'doing' ? `正在${act.label}…` :
-                (act.state === 'rejected' ? `已拒绝：${act.label}` :
-                  (act.summary.length > 0 ? `${act.label}：${act.summary}` : act.label)))
-                .fontSize(12)
-                .fontColor($r('app.color.text_secondary'))
-                .layoutWeight(1)
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis });
-            }
-            .width('100%');
-            if (act.books.length > 0) {
-              ToolResultList({ items: act.books });
-            }
-          }
-          .alignItems(HorizontalAlign.Start)
-          .width('100%');
-        }, (act: ChatActivity, idx: number) => `${idx}-${act.name}-${act.state}-${act.books.length}`);
-      }
-      .width('100%')
-      .alignItems(HorizontalAlign.Start)
-      .padding(10)
-      .borderRadius($r('app.float.chip_radius'))
-      .backgroundColor($r('app.color.page_background'));
-    }
   }
 
   /** 对话进行中的技能芯片：横向滚动，点击填入输入框（不自动发送）。 */
@@ -1239,9 +1202,20 @@ struct ReasoningBlock {
   reasoning: string = '';
   live: boolean = false;
   @State expanded: boolean = false;
+  private bodyScroller: Scroller = new Scroller();
 
   aboutToAppear(): void {
     this.expanded = this.live;
+    if (this.live) {
+      // 流式思考逐帧重建，贴底=始终露出最新一段；限高后不再把正文顶出屏幕
+      setTimeout((): void => {
+        try {
+          this.bodyScroller.scrollEdge(Edge.Bottom);
+        } catch (_error) {
+          // 组件已随气泡重建销毁时忽略
+        }
+      }, 60);
+    }
   }
 
   build() {
@@ -1256,18 +1230,123 @@ struct ReasoningBlock {
             .fontColor($r('app.color.text_tertiary'));
         }
         .onClick(() => {
-          this.expanded = !this.expanded;
+          // 流式期恒展开：气泡随增量重建会把折叠态强行复位，点了也白点，直接禁用避免观感闪烁
+          if (!this.live) {
+            this.expanded = !this.expanded;
+          }
         });
         if (this.expanded) {
-          Text(this.reasoning)
-            .fontSize(13)
-            .lineHeight(20)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%');
+          Scroll(this.bodyScroller) {
+            Text(this.reasoning)
+              .fontSize(13)
+              .lineHeight(20)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%');
+          }
+          .constraintSize({ maxHeight: 220 })
+          .scrollBar(BarState.Auto)
+          .width('100%');
         }
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start);
+    }
+  }
+}
+
+/**
+ * 工具调用活动区：摘要折叠行 + 展开明细；相邻同名调用合并为一条（×N）。
+ * 流式期固定展开且禁用折叠点击——气泡随增量重建，组件内折叠态必被复位（同 ReasoningBlock）。
+ * 单步活动默认展开：折叠只对多步有意义。
+ */
+@Component
+struct ActivityTimeline {
+  acts: ChatActivity[] = [];
+  live: boolean = false;
+  @State expanded: boolean = false;
+
+  aboutToAppear(): void {
+    this.expanded = this.live || this.acts.length <= 1;
+  }
+
+  private headText(groups: ActivityGroup[]): string {
+    for (const g of groups) {
+      if (g.state === 'doing') {
+        return `执行中：${g.label}…`;
+      }
+    }
+    return `已执行 ${this.acts.length} 步`;
+  }
+
+  build() {
+    if (this.acts.length > 0) {
+      Column({ space: 8 }) {
+        Row({ space: 4 }) {
+          SymbolGlyph(this.expanded ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
+            .fontSize(12)
+            .fontColor([$r('app.color.text_tertiary')]);
+          Text(this.headText(groupActivities(this.acts)))
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+            .layoutWeight(1)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        }
+        .width('100%')
+        .onClick(() => {
+          if (!this.live) {
+            this.expanded = !this.expanded;
+          }
+        });
+        if (this.expanded) {
+          ForEach(groupActivities(this.acts), (g: ActivityGroup, idx: number) => {
+            Column({ space: 6 }) {
+              Row({ space: 8 }) {
+                if (g.state === 'doing') {
+                  LoadingProgress().width(16).height(16).color($r('app.color.brand_primary'));
+                } else {
+                  Stack() {
+                    SymbolGlyph(g.state === 'rejected' ? $r('sys.symbol.xmark') : $r('sys.symbol.checkmark'))
+                      .fontSize(9)
+                      .fontWeight(FontWeight.Bold)
+                      .fontColor([$r('app.color.on_brand')]);
+                  }
+                  .width(16)
+                  .height(16)
+                  .borderRadius(8)
+                  .backgroundColor(g.state === 'rejected' ?
+                    $r('app.color.error') : $r('app.color.brand_primary'));
+                }
+                Text(g.state === 'doing' ? `正在${g.label}…` :
+                  (g.state === 'rejected' ? `已拒绝：${g.label}` :
+                    (g.summary.length > 0 ? `${g.label}：${g.summary}` : g.label)))
+                  .fontSize(12)
+                  .fontColor($r('app.color.text_secondary'))
+                  .layoutWeight(1)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis });
+                if (g.count > 1) {
+                  Text(`×${g.count}`)
+                    .fontSize(11)
+                    .fontColor($r('app.color.brand_primary'))
+                    .padding({ left: 6, right: 6, top: 1, bottom: 1 });
+                }
+              }
+              .width('100%');
+              if (g.books.length > 0) {
+                ToolResultList({ items: g.books });
+              }
+            }
+            .alignItems(HorizontalAlign.Start)
+            .width('100%');
+          }, (g: ActivityGroup, idx: number) => `${idx}-${g.name}-${g.state}-${g.count}-${g.books.length}`);
+        }
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .padding(10)
+      .borderRadius($r('app.float.chip_radius'))
+      .backgroundColor($r('app.color.page_background'));
     }
   }
 }

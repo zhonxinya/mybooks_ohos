@@ -269,6 +269,39 @@ export function register(ctx) {
     toolsState.detail = null;
   });
 
+  test('思考强度：网关 body 透传 reasoning_effort，default 档不发该字段', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    const reply = (t) => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: t } }] })) });
+    RealAiService.saveReasoningEffort('medium');
+    deps.state.rcpResponses = [reply('a')];
+    RealAiService.chatStream([{ role: 'user', content: 'q' }],
+      { onDelta: () => {}, onDone: () => {}, onError: () => {} }, 64);
+    await flush();
+    assert.ok(deps.state.requests.at(-1).content.includes('"reasoning_effort":"medium"'),
+      deps.state.requests.at(-1).content);
+    RealAiService.saveReasoningEffort('default');
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses = [reply('b')];
+    RealAiService.chatStream([{ role: 'user', content: 'q' }],
+      { onDelta: () => {}, onDone: () => {}, onError: () => {} }, 64);
+    await flush();
+    assert.ok(!deps.state.requests.at(-1).content.includes('reasoning_effort'), 'default 档不发强度字段');
+  });
+
+  test('思考强度：SDK 通道 params 注入 reasoning_effort，default 档不注入', async () => {
+    RealAiService.saveConfig('deepseek', 'https://api.deepseek.com', 'deepseek-chat', 'sk-d', 0.5);
+    RealAiService.saveReasoningEffort('high');
+    deps.state.chatCalls.length = 0;
+    await RealAiService.complete([{ role: 'user', content: 'q' }], 64);
+    assert.equal(deps.state.chatCalls.at(-1).body.reasoning_effort, 'high');
+    RealAiService.saveReasoningEffort('default');
+    deps.state.chatCalls.length = 0;
+    await RealAiService.complete([{ role: 'user', content: 'q' }], 64);
+    assert.equal(deps.state.chatCalls.at(-1).body.reasoning_effort, undefined, 'default 档不注入');
+  });
+
   test('网关工具回路：执行 tool_calls 回填结果，第二轮拿到最终回答', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
