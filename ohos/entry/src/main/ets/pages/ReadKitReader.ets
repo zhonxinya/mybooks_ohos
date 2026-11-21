@@ -1089,6 +1089,18 @@ struct ReadKitReader {
     this.showControlPanel = false;
   }
 
+  /** 讨论本书（#1508）：带书名与当前章节跳 AI 对话页，由对方 aboutToAppear 注入书籍上下文。 */
+  private askAiAboutBook(): void {
+    this.closeControlPanel();
+    AppRouter.pushUrl(this.getUIContext(), {
+      url: 'pages/AiAssistantPage',
+      params: {
+        bookTitle: this.bookTitle,
+        chapter: this.lastChapterName.length > 0 ? this.lastChapterName : this.chapterTitle,
+      },
+    });
+  }
+
   private openSubPanel(sheet: string): void {
     if (!this.showControlPanel) {
       this.openControlPanel();
@@ -1695,8 +1707,12 @@ struct ReadKitReader {
               activeNav: this.overlayNav,
               showSearch: true,
               showAloud: true,
+              showAskAi: true,
               onSearch: () => {
                 this.getUIContext().getPromptAction().showToast({ message: '正文搜索开发中' });
+              },
+              onAskAi: () => {
+                this.askAiAboutBook();
               },
               onReadAloud: () => {
                 this.toggleReadAloud();

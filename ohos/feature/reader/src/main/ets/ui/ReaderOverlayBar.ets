@@ -21,6 +21,9 @@ export struct ReaderOverlayBar {
   @Prop showAloud: boolean = false;
   @Prop showRefresh: boolean = true;
   @Prop showNight: boolean = true;
+  /** 「讨论本书」AI 入口（#1508）：宿主支持时才显示，避免点了没反应的入口 */
+  @Prop showAskAi: boolean = false;
+  onAskAi: () => void = () => {};
   onSearch: () => void = () => {};
   onReadAloud: () => void = () => {};
   onRefresh: () => void = () => {};
@@ -58,6 +61,9 @@ export struct ReaderOverlayBar {
     Row() {
       if (this.showSearch) {
         this.quickActionButton($r('sys.symbol.magnifyingglass'), () => this.onSearch());
+      }
+      if (this.showAskAi) {
+        this.quickActionButton($r('sys.symbol.wand_and_stars'), () => this.onAskAi());
       }
       if (this.showAloud) {
         this.quickActionButton($r('sys.symbol.doc_text'), () => this.onReadAloud());

@@ -74,10 +74,13 @@ struct AiAssistantPage {
   /** 智能跟滚（#1506）：用户上滑读历史时置 false，流式增量不再抢滚；回底/发新消息恢复。 */
   @State followBottom: boolean = true;
   private touchLastY: number = 0;
+  /** 「讨论本书」横幅文案（#1508）：阅读器跳转注入，空=无书籍上下文。 */
+  @State bookTag: string = '';
 
   aboutToAppear(): void {
     this.store.refreshSettings();
     this.store.ensureLoaded();
+    this.acceptBookParams();
     this.viewToken = this.store.attachView(
       (): void => this.syncFromStore(),
       (label: string, args: string): Promise<boolean> => this.requestConfirm(label, args));
@@ -500,6 +503,23 @@ struct AiAssistantPage {
     this.scrollToEnd();
   }
 
+  /** 讨论本书（#1508）：阅读器跳转带参时注入书籍上下文并亮横幅；普通进入无参=静默跳过。 */
+  private acceptBookParams(): void {
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object> | null;
+    const title: string = String(params?.['bookTitle'] ?? '');
+    if (title.length === 0) {
+      return;
+    }
+    this.store.setBookContext(title, String(params?.['bookAuthor'] ?? ''), String(params?.['chapter'] ?? ''));
+    this.bookTag = `讨论《${title}》`;
+  }
+
+  /** 横幅关闭：清除本轮书籍上下文（对话内容保留）。 */
+  private leaveBookContext(): void {
+    this.store.clearBookContext();
+    this.bookTag = '';
+  }
+
   private applySkill(skill: AiSkill): void {
     this.input = skill.prompt;
   }
@@ -806,6 +826,9 @@ struct AiAssistantPage {
   @Builder
   pageContent() {
     Column() {
+      if (this.bookTag.length > 0) {
+        this.bookBannerBar();
+      }
       if (!this.configured) {
         this.notConfigured();
       } else if (this.messages.length === 0) {
@@ -952,6 +975,31 @@ struct AiAssistantPage {
     .onClick((): void => {
       this.backToBottom();
     });
+  }
+
+  /** 「讨论本书」横幅（#1508）：提示 AI 已带书籍上下文，X 清除。 */
+  @Builder
+  bookBannerBar() {
+    Row({ space: 6 }) {
+      SymbolGlyph($r('sys.symbol.wand_and_stars'))
+        .fontSize(14)
+        .fontColor([$r('app.color.brand_primary')]);
+      Text(this.bookTag)
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1);
+      SymbolGlyph($r('sys.symbol.xmark_circle_fill'))
+        .fontSize(16)
+        .fontColor([$r('app.color.text_tertiary')])
+        .onClick((): void => {
+          this.leaveBookContext();
+        });
+    }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+    .backgroundColor($r('app.color.brand_primary_light'))
   }
 
   @Builder

@@ -160,7 +160,7 @@ export const pasteboard = {
   MIMETYPE_TEXT_PLAIN: 'text/plain', createData: (_type, text) => text,
   getSystemPasteboard: () => ({ setData: (text) => { state.copied = text; return Promise.resolve(); } }),
 };
-export const AppRouter = { getParams: () => ({}) };
+export const AppRouter = { getParams: () => (globalThis.__aiCheck.routerParams ?? {}) };
 export const promptAction = { showToast: (o) => { state.lastToast = o.message; } };
 export const AI_PROVIDERS = [];
 export const CONTEXT_LENGTH_OPTIONS = [4, 8, 32, 128, 200];
@@ -564,6 +564,8 @@ export async function setup() {
     const page = new AiAssistantPage();
     page.toast = () => {};
     page.scrollToEnd = () => {};
+    // #1508 acceptBookParams 直读路由参数：AppRouter shim 忽略 ui 实参，桩空对象即可
+    page.getUIContext = () => ({});
     state.ready = true;
     state.cancel = null;
     page.aboutToAppear();
@@ -574,6 +576,7 @@ export async function setup() {
     const page = new AiAssistantPage();
     page.toast = () => {};
     page.scrollToEnd = () => {};
+    page.getUIContext = () => ({});
     page.aboutToAppear();
     return page;
   };

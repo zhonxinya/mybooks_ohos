@@ -592,4 +592,40 @@ export function register(ctx) {
     assert.equal(JSON.parse(state.prefs.get('ai_chat_history')).length, userIdx, '截断落盘');
   });
 
+  test('讨论本书：buildContext 注入/可选字段省略/清除', async () => {
+    chat();
+    const store = AiChatStore.instance();
+    const notes = async () => (await store.buildContext()).filter((m) => `${m.content}`.includes('用户正在阅读'));
+    assert.equal((await notes()).length, 0, '无书不注入');
+    store.setBookContext('三体', '刘慈欣', '第 10 章');
+    let ctx = await store.buildContext();
+    assert.equal(ctx[1].role, 'system', '书籍上下文紧跟主 system');
+    assert.ok(`${ctx[1].content}`.includes('《三体》（刘慈欣），当前读到：第 10 章'), ctx[1].content);
+    assert.ok(`${ctx[1].content}`.includes('不要生拉硬扯'), '缺引导约束');
+    store.setBookContext('活着', '', '');
+    ctx = await store.buildContext();
+    const note2 = `${(await notes())[0].content}`;
+    assert.ok(note2.includes('《活着》') && !note2.includes('当前读到') && !note2.includes('（'), note2);
+    store.setBookContext('', 'x', 'y');
+    assert.equal((await notes()).length, 0, '空书名=清除');
+    store.setBookContext('三体', '', '');
+    store.clearBookContext();
+    assert.equal((await notes()).length, 0, 'clear 后不注入');
+  });
+
+  test('讨论本书：路由带参进页即注入横幅，X 清除；无参进入不残留', () => {
+    state.routerParams = { bookTitle: '宇宙视界', chapter: '第三章' };
+    const page = chat();
+    assert.equal(page.bookTag, '讨论《宇宙视界》');
+    page.leaveBookContext();
+    assert.equal(page.bookTag, '');
+    state.routerParams = {};
+    const page2 = chat();
+    assert.equal(page2.bookTag, '', '普通进入静默跳过');
+    state.routerParams = { bookTitle: '三体' };
+    const page3 = chat();
+    assert.equal(page3.bookTag, '讨论《三体》', '无章节也可注入');
+    delete state.routerParams;
+  });
+
 }
