@@ -34,6 +34,7 @@ interface McpRpcReply {
 
 const MCP_SERVERS: McpServer[] = [
   { tag: 'es', label: '百炼增强搜索', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/EnhancedSearch/mcp' },
+  { tag: 'ws', label: '百炼联网搜索', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/WebSearch/mcp' },
   { tag: 'wf', label: '百炼网页解析', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/WebFetch/mcp' },
   { tag: 'sg', label: '百炼语音转写', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/SpeechGenerateText/mcp' },
 ];
