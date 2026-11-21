@@ -13,6 +13,7 @@ import { AiPersona } from './AiPersona';
 import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';
 import { NovelMeta, NovelMetaService } from './NovelMetaService';
 import { EncyclopediaHit, EncyclopediaService, WebSearchHit, WebSearchResult } from './EncyclopediaService';
+import { AiService, AiConfig, LlmSearchResult, LlmSearchSource } from './AiService';
 import { BookDetail } from './BookModels';
 import { ServerFeature, ServerRegistry } from './ServerProfile';
 import { AccountManager } from './AccountManager';
@@ -317,10 +318,20 @@ const WEB_SEARCH_PROPS: Record<string, AiToolProperty> = {
   'query': prop('string', '搜索关键词（书名、人名、事件、规格参数等任意信息），尽量精炼，不要整句问话'),
 };
 const TOOL_SEARCH_WEB: AiToolDefinition = defineTool('search_web',
-  '通用网页搜索（百度）：查书籍之外的任意信息——作者近况、作品改编、价格评测、新闻事件、名词解释等。' +
-    '返回若干条结果的标题、原站链接与摘要。百科类词条优先用 search_encyclopedia；' +
-    '摘要不够时可把候选链接讲给用户自行查看。',
+  '通用网页搜索（百度/Bing/360 三引擎并行聚合）：查书籍之外的任意信息——作者近况、作品改编、价格评测、' +
+    '新闻事件、名词解释等。返回若干条结果的来源、标题、链接与摘要（已跨引擎去重）。' +
+    '百科类词条优先用 search_encyclopedia；摘要不够时可把候选链接讲给用户自行查看。',
   WEB_SEARCH_PROPS, ['query']);
+
+const AI_SEARCH_PROPS: Record<string, AiToolProperty> = {
+  'query': prop('string', '要联网查证的问题（自然语言整句即可，AI 搜索引擎会直接针对问题作答）'),
+};
+const TOOL_AI_SEARCH: AiToolDefinition = defineTool('ai_search',
+  'AI 联网搜索引擎问答（通义系 enable_search 强制联网）：直接返回针对问题的整合答案＋引用网页，' +
+    '适合时效性/综合性问题（「XX 最近怎么样」「XX 和 YY 哪个更适合…」）。' +
+    '需要逐条链接清单用 search_web，百科词条用 search_encyclopedia；' +
+    '当前服务商不是通义系（阿里云域名）时本工具会明确告知不可用。',
+  AI_SEARCH_PROPS, ['query']);
 
 const ASK_USER_PROPS: Record<string, AiToolProperty> = {
   'question': prop('string', '要向用户确认的问题，一句话'),
@@ -343,7 +354,7 @@ const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_UPDATE_BOOK_META, TOOL_LIST_CATEGORIES,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
   TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_SEARCH_ENCYCLOPEDIA,
-  TOOL_SEARCH_WEB, TOOL_ASK_USER, TOOL_FORGET_MEMORY,
+  TOOL_SEARCH_WEB, TOOL_AI_SEARCH, TOOL_ASK_USER, TOOL_FORGET_MEMORY,
 ];
 
 /**
@@ -493,6 +504,9 @@ export class AiTools {
     if (name === 'search_web') {
       return '搜索网页';
     }
+    if (name === 'ai_search') {
+      return 'AI 联网问答';
+    }
     if (name === 'save_memory') {
       return '记住用户的事';
     }
@@ -620,6 +634,9 @@ export class AiTools {
       }
       if (name === 'search_web') {
         return await AiTools.searchWeb(AiTools.argString(args, 'query'));
+      }
+      if (name === 'ai_search') {
+        return await AiTools.aiSearch(AiTools.argString(args, 'query'));
       }
       if (name === 'save_memory') {
         return AiPersona.appendMemory(AiTools.argString(args, 'content'));
@@ -960,13 +977,39 @@ export class AiTools {
     const parts: string[] = [];
     for (let i = 0; i < res.items.length; i++) {
       const it: WebSearchHit = res.items[i];
-      let line: string = `${i + 1}. ${it.title}\n链接：${it.url}`;
+      let line: string = `${i + 1}. [${it.source}] ${it.title}\n链接：${it.url}`;
       if (it.summary.length > 0) {
         line = `${line}\n${it.summary}`;
       }
       parts.push(line);
     }
     return parts.join('\n\n');
+  }
+
+  /** AI 联网问答：通义系 enable_search 直出整合答案＋引用；非通义服务商回明确提示（模型可改用 search_web）。 */
+  private static async aiSearch(query: string): Promise<string> {
+    const trimmed: string = query.trim();
+    if (trimmed.length === 0) {
+      return '参数 query 为空，请提供要联网查证的问题。';
+    }
+    const cfg: AiConfig = AiService.loadConfig();
+    if (!AiService.supportsNativeOnlineSearch(cfg.baseUrl)) {
+      return '当前服务商不支持 AI 联网搜索（仅通义千问/阿里云 DashScope 系可用），请改用 search_web 获取链接清单。';
+    }
+    const res: LlmSearchResult = await AiService.aiSearchOnline(trimmed);
+    if (!res.ok) {
+      return `AI 联网搜索失败：${res.error}`;
+    }
+    let out: string = res.answer.trim();
+    if (res.sources.length > 0) {
+      const refs: string[] = [];
+      for (let i = 0; i < res.sources.length; i++) {
+        const s: LlmSearchSource = res.sources[i];
+        refs.push(`${i + 1}. ${s.title} ${s.url}`);
+      }
+      out = `${out}\n\n引用来源：\n${refs.join('\n')}`;
+    }
+    return out;
   }
 
   private static async setCover(args: Record<string, Object>): Promise<string> {
