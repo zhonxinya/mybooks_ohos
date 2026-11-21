@@ -112,9 +112,11 @@ export interface AiStreamHandlers {
  */
 export class AiService {
   static chatStream(messages: AiMessage[], handlers: AiStreamHandlers, maxTokens: number = 2048,
-    mcpTools: AiToolDefinition[] | null = null): AiAbortHandle {
+    mcpTools: AiToolDefinition[] | null = null, override?: AiConfig): AiAbortHandle {
     const handle: AiAbortHandle = { aborted: false };
-    const config: AiConfig = AiServiceConfig.loadConfig();
+    // 功能档覆盖（#1600 vision）：调用方传 loadFeatureConfig 结果，未绑时其等价全局
+    const config: AiConfig = override !== undefined && override.providerId.length > 0 ? override :
+      AiServiceConfig.loadConfig();
     const apiKey: string = AiServiceConfig.apiKeyFor(config.providerId);
 
     // 配置校验先行（回路重构后 client 创建已上移，校验必须在前）
@@ -425,6 +427,26 @@ export class AiService {
   /** 委托 AiServiceConfig.loadVoiceConfig（拆分：见文件头说明）。 */
   static loadVoiceConfig(): AiConfig {
     return AiServiceConfig.loadVoiceConfig();
+  }
+  /** 功能专属模型槽：委托 AiServiceConfig 泛化方法（#1600 批）。 */
+  static loadFeatureConfig(feature: string): AiConfig {
+    return AiServiceConfig.loadFeatureConfig(feature);
+  }
+  static saveFeatureConfig(feature: string, providerId: string, model: string): void {
+    AiServiceConfig.saveFeatureConfig(feature, providerId, model);
+  }
+  static hasFeatureProvider(feature: string): boolean {
+    return AiServiceConfig.hasFeatureProvider(feature);
+  }
+  static loadFeatureProviderId(feature: string): string {
+    return AiServiceConfig.loadFeatureProviderId(feature);
+  }
+  static loadFeatureModel(feature: string): string {
+    return AiServiceConfig.loadFeatureModel(feature);
+  }
+  /** 功能槽目录（功能模型页数据源）。 */
+  static featureIds(): string[] {
+    return AiServiceConfig.FEATURES;
   }
   /** 委托 AiServiceConfig.hasVoiceProvider（拆分：见文件头说明）。 */
   static hasVoiceProvider(): boolean {

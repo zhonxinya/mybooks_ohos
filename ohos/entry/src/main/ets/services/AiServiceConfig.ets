@@ -79,19 +79,37 @@ export class AiServiceConfig {
     TalebookService.prefSet(KEY_AUTO_SPEAK, on ? '1' : '0');
   }
 
+  // ———— 功能专属模型槽：每个 AI 功能可绑「服务商+模型」，留空走回退链 ————
+  /** 功能槽目录（功能模型页数据源）。voice=旧语音档（通话轮转对话模型 + 音频网关兜底）。 */
+  static readonly FEATURES: string[] = ['vision', 'summary', 'voice', 'tts', 'asr', 'realtime'];
+
+  /** 回退父档：音频三件未绑时退语音档，语音档再退全局；其余直接退全局。 */
+  private static featureParent(feature: string): string {
+    return feature === 'tts' || feature === 'asr' || feature === 'realtime' ? 'voice' : '';
+  }
+
+  private static featureProviderKey(feature: string): string {
+    return `ai_${feature}_provider`;
+  }
+
+  private static featureModelKey(feature: string): string {
+    return `ai_${feature}_model`;
+  }
+
   /**
-   * 语音档位配置（语音通话的对话模型 + TTS/ASR/实时通话的网关与 Key）。
-   * 未单独配置服务商（provider 键为空）时跟随全局；配了就**完全独立解析**——
-   * 与全局同服务商时也用自己的 model 与地址，聊天和语音可各用各的。
+   * 功能档位配置：未绑服务商（provider 键空）= 跟随回退父档直至全局；
+   * 绑了就**完全独立解析**——与全局同服务商时也用自己的 model 与地址。
+   * 'voice' 即旧语音档，键名格式与历史常量一致，老配置零迁移。
    */
-  static loadVoiceConfig(): AiConfig {
-    const config: AiConfig = AiServiceConfig.loadConfig();
-    const providerId: string = TalebookService.prefGet(KEY_VOICE_PROVIDER);
+  static loadFeatureConfig(feature: string): AiConfig {
+    const providerId: string = TalebookService.prefGet(AiServiceConfig.featureProviderKey(feature));
     if (providerId.length === 0) {
-      return config;
+      const parent: string = AiServiceConfig.featureParent(feature);
+      return parent.length > 0 ? AiServiceConfig.loadFeatureConfig(parent) : AiServiceConfig.loadConfig();
     }
+    const config: AiConfig = AiServiceConfig.loadConfig();
     const preset: AiProviderPreset = AiServiceConfig.presetOf(providerId);
-    const model: string = TalebookService.prefGet(KEY_VOICE_MODEL);
+    const model: string = TalebookService.prefGet(AiServiceConfig.featureModelKey(feature));
     const finalModel: string = model.length > 0 ? model : preset.model;
     return {
       providerId: providerId,
@@ -105,30 +123,57 @@ export class AiServiceConfig {
     };
   }
 
+  /** 功能是否已独立绑定服务商。 */
+  static hasFeatureProvider(feature: string): boolean {
+    return TalebookService.prefGet(AiServiceConfig.featureProviderKey(feature)).length > 0;
+  }
+
+  /** `providerId` 传空串 = 该功能恢复跟随。`model` 空 = 用该服务商默认模型。 */
+  static saveFeatureConfig(feature: string, providerId: string, model: string): void {
+    if (providerId.length === 0) {
+      TalebookService.prefSet(AiServiceConfig.featureProviderKey(feature), '');
+      TalebookService.prefSet(AiServiceConfig.featureModelKey(feature), '');
+      return;
+    }
+    TalebookService.prefSet(AiServiceConfig.featureProviderKey(feature), providerId);
+    TalebookService.prefSet(AiServiceConfig.featureModelKey(feature), model.trim());
+  }
+
+  /** 已保存的功能服务商 id（''=跟随）。 */
+  static loadFeatureProviderId(feature: string): string {
+    return TalebookService.prefGet(AiServiceConfig.featureProviderKey(feature));
+  }
+
+  /** 已保存的功能模型名（''=服务商默认；音频协议类功能空=协议固定模型）。 */
+  static loadFeatureModel(feature: string): string {
+    return TalebookService.prefGet(AiServiceConfig.featureModelKey(feature));
+  }
+
+  // ———— 语音档兼容层（历史 API，转委托功能槽） ————
+
+  /** 语音档位配置：同 loadFeatureConfig('voice')。 */
+  static loadVoiceConfig(): AiConfig {
+    return AiServiceConfig.loadFeatureConfig('voice');
+  }
+
   /** 语音通话是否已独立配置了服务商。 */
   static hasVoiceProvider(): boolean {
-    return TalebookService.prefGet(KEY_VOICE_PROVIDER).length > 0;
+    return AiServiceConfig.hasFeatureProvider('voice');
   }
 
   /** `providerId` 传空串 = 恢复跟随全局。`model` 空 = 用该服务商默认模型。 */
   static saveVoiceConfig(providerId: string, model: string): void {
-    if (providerId.length === 0) {
-      TalebookService.prefSet(KEY_VOICE_PROVIDER, '');
-      TalebookService.prefSet(KEY_VOICE_MODEL, '');
-      return;
-    }
-    TalebookService.prefSet(KEY_VOICE_PROVIDER, providerId);
-    TalebookService.prefSet(KEY_VOICE_MODEL, model.trim());
+    AiServiceConfig.saveFeatureConfig('voice', providerId, model);
   }
 
   /** 已保存的语音通话服务商 id（''=跟随全局）。 */
   static loadVoiceProviderId(): string {
-    return TalebookService.prefGet(KEY_VOICE_PROVIDER);
+    return AiServiceConfig.loadFeatureProviderId('voice');
   }
 
   /** 已保存的语音通话模型名（''=用服务商默认）。 */
   static loadVoiceModel(): string {
-    return TalebookService.prefGet(KEY_VOICE_MODEL);
+    return AiServiceConfig.loadFeatureModel('voice');
   }
 
   /** realtime 通话音色（池与校验在 AiVoiceKit；此处只管存取，空=默认 longanqian）。 */

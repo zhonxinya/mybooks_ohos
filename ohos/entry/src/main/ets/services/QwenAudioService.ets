@@ -124,9 +124,9 @@ export class QwenAudioService {
 
   // ————————————————— 网络（DashScope 原生路径） —————————————————
 
-  /** 从语音档位服务商 baseUrl（…/compatible-mode/v1）派生网关 origin。 */
-  private static origin(): string {
-    const baseUrl: string = AiService.loadVoiceConfig().baseUrl;
+  /** 从功能档位服务商 baseUrl（…/compatible-mode/v1）派生网关 origin（#1600：TTS/ASR 各自一档）。 */
+  private static origin(feature: string): string {
+    const baseUrl: string = AiService.loadFeatureConfig(feature).baseUrl;
     const schemeEnd: number = baseUrl.indexOf('://');
     if (schemeEnd < 0) {
       throw new Error('Token Plan 服务商地址无效');
@@ -139,8 +139,8 @@ export class QwenAudioService {
     return baseUrl.substring(0, pathStart);
   }
 
-  private static apiKey(): string {
-    const key: string = AiService.apiKeyFor(AiService.loadVoiceConfig().providerId);
+  private static apiKey(feature: string): string {
+    const key: string = AiService.apiKeyFor(AiService.loadFeatureConfig(feature).providerId);
     if (key.length === 0) {
       throw new Error('未配置 Token Plan API Key（AI 设置页填写）');
     }
@@ -148,9 +148,9 @@ export class QwenAudioService {
   }
 
   /** POST JSON，返回响应文本；非 2xx 抛「HTTP code: 响应体截断」。 */
-  private static async postJson(url: string, body: string, transferMs: number): Promise<string> {
+  private static async postJson(url: string, body: string, transferMs: number, feature: string): Promise<string> {
     const headers: rcp.RequestHeaders = {
-      'Authorization': `Bearer ${QwenAudioService.apiKey()}`,
+      'Authorization': `Bearer ${QwenAudioService.apiKey(feature)}`,
       'Content-Type': 'application/json',
     };
     const session: rcp.Session = rcp.createSession({
@@ -189,14 +189,15 @@ export class QwenAudioService {
     const messages: Record<string, Object>[] = [userMsg];
     const input: Record<string, Object> = { 'messages': messages };
     const params: Record<string, Object> = { 'format': 'wav' };
+    const asrModel: string = AiService.loadFeatureModel('asr');
     const payload: Record<string, Object> = {
-      'model': 'qwen-audio-3.0-asr-flash',
+      'model': asrModel.length > 0 ? asrModel : 'qwen-audio-3.0-asr-flash',
       'input': input,
       'parameters': params,
     };
     const text: string = await QwenAudioService.postJson(
-      `${QwenAudioService.origin()}/api/v1/services/aigc/multimodal-generation/generation`,
-      JSON.stringify(payload), 120000);
+      `${QwenAudioService.origin('asr')}/api/v1/services/aigc/multimodal-generation/generation`,
+      JSON.stringify(payload), 120000, 'asr');
     const root = JSON.parse(text) as Record<string, Object>;
     const output = root['output'] as Record<string, Object> | undefined;
     if (output === undefined) {
@@ -210,13 +211,14 @@ export class QwenAudioService {
   static async synthesize(text: string): Promise<string> {
     const ttsInput: Record<string, Object> =
       { 'text': text, 'voice': AiService.loadTtsTimbre(), 'format': TTS_FORMAT, 'sample_rate': TTS_SAMPLE_RATE };
+    const ttsModel: string = AiService.loadFeatureModel('tts');
     const payload: Record<string, Object> = {
-      'model': 'qwen-audio-3.0-tts-plus',
+      'model': ttsModel.length > 0 ? ttsModel : 'qwen-audio-3.0-tts-plus',
       'input': ttsInput,
     };
     const resp: string = await QwenAudioService.postJson(
-      `${QwenAudioService.origin()}/api/v1/services/audio/tts/SpeechSynthesizer`,
-      JSON.stringify(payload), 60000);
+      `${QwenAudioService.origin('tts')}/api/v1/services/audio/tts/SpeechSynthesizer`,
+      JSON.stringify(payload), 60000, 'tts');
     const root = JSON.parse(resp) as Record<string, Object>;
     const output = root['output'] as Record<string, Object> | undefined;
     const audioObj = output !== undefined ? output['audio'] as Record<string, Object> | undefined : undefined;

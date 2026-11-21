@@ -17,7 +17,9 @@ export const settingsDefaults = () => ({
   keys: new Set(['deepseek']), saved: null, models: [], fetchError: '', completeReply: 'ok', mcpTools: [],
   providerModels: {},
   voiceProviderId: '', voiceModel: '', voiceConfig: null, lastCompleteConfig: null, lastCompleteMessages: null,
+  lastChatOverride: null, // #1600：chatStream 第 5 参捕获（vision 档）
   speakEngine: 'system', speakCalls: [], speakStops: 0, callMode: 'realtime',
+  featureSlots: {}, // #1600 功能档：{feature:{providerId,model}}
 });
 export const state = {
   ready: true, handlers: null, copied: '', cancel: null,
@@ -39,9 +41,10 @@ const shim = `
 const state = globalThis.__aiCheck;
 export const AiService = {
   isReady: () => state.ready,
-  chatStream: (messages, handlers) => {
+  chatStream: (messages, handlers, maxTokens, mcpTools, override) => {
     state.handlers = handlers;
     state.lastMessages = messages;
+    state.settings.lastChatOverride = override; // #1600 vision 档断言面
     return { aborted: false, destroy: () => state.cancel?.(handlers) };
   },
   loadConfig: () => state.settings.config,
@@ -131,6 +134,29 @@ export const AiService = {
     }
     return state.settings.config;
   },
+  // #1600 功能档（与真实 AiServiceConfig 同语义：未绑退父档[音频三件→voice]再退全局）
+  loadFeatureConfig(feature) {
+    if (feature === 'voice') { return this.loadVoiceConfig(); }
+    const slot = (state.settings.featureSlots ?? {})[feature];
+    if (slot === undefined || slot.providerId.length === 0) {
+      return ['tts', 'asr', 'realtime'].includes(feature) ? this.loadVoiceConfig() : state.settings.config;
+    }
+    const p = state.settings.providers.find((x) => x.id === slot.providerId);
+    if (p === undefined) { return state.settings.config; }
+    const savedBase = state.settings.baseUrlByProvider && state.settings.baseUrlByProvider[p.id];
+    return { providerId: p.id, baseUrl: savedBase && savedBase.length > 0 ? savedBase : p.baseUrl,
+      model: slot.model.length > 0 ? slot.model : p.model, hasKey: state.settings.keys.has(p.id),
+      temperature: state.settings.config.temperature, vision: false, visionOverride: '',
+      contextLength: state.settings.config.contextLength };
+  },
+  saveFeatureConfig: (feature, providerId, model) => {
+    state.settings.featureSlots = state.settings.featureSlots ?? {};
+    state.settings.featureSlots[feature] = { providerId, model };
+  },
+  loadFeatureProviderId: (feature) => (state.settings.featureSlots?.[feature]?.providerId ?? ''),
+  loadFeatureModel: (feature) => (state.settings.featureSlots?.[feature]?.model ?? ''),
+  hasFeatureProvider: (feature) => (state.settings.featureSlots?.[feature]?.providerId ?? '').length > 0,
+  featureIds: () => ['vision', 'summary', 'voice', 'tts', 'asr', 'realtime'],
 };
 // 页面测试不触发真实播报；#1516 按住说话链走 state.hold 计数与预置返回
 export const QwenAudioService = {
