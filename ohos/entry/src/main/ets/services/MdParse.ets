@@ -1,13 +1,15 @@
 /**
  * 轻量 Markdown 解析（AI 回复排版子集），纯函数、无 ArkUI 依赖，可离线回归。
  * 支持：标题 #~####、无序/有序列表、围栏代码块、引用、表格、分隔线、
- * 行内 **粗体**、*斜体*、`代码`、[链接](url)（只取标题文本着色）。
+ * 行内 **粗体**、*斜体*、`代码`、[链接](url)（着色+保留 href 供渲染层出可点链接清单）。
  */
 
 export interface MdInline {
   text: string;
   /** 0 普通 1 粗体 2 行内代码 3 链接 4 斜体 */
   style: number;
+  /** style=3 链接目标 url（#1511 起解析保留） */
+  href?: string;
 }
 
 export interface MdBlock {
@@ -53,7 +55,8 @@ export function mdParseInline(line: string): MdInline[] {
         const close = line.indexOf(')', mid + 2);
         if (close > mid) {
           if (buf.length > 0) { out.push({ text: buf, style: 0 }); buf = ''; }
-          out.push({ text: line.substring(i + 1, mid), style: 3 });
+          out.push({ text: line.substring(i + 1, mid), style: 3,
+            href: line.substring(mid + 2, close).trim() });
           i = close + 1;
           continue;
         }
@@ -208,4 +211,30 @@ export function mdParseBlocks(content: string): MdBlock[] {
     blocks.push({ kind: 'code', level: 0, segs: [], raw: codeLines.join('\n'), rows: [] });
   }
   return blocks;
+}
+
+/** 链接展示用主机名：去协议与路径（https://a.b/c?d → a.b），供可点链接清单副标。 */
+export function linkHost(url: string): string {
+  const noProto: string = url.startsWith('http://') ? url.substring(7) :
+    (url.startsWith('https://') ? url.substring(8) : url);
+  const end = noProto.search('[/?#]');
+  return end > 0 ? noProto.substring(0, end) : noProto;
+}
+
+/**
+ * 从块行内段收集可点链接（#1511）：Span 无点击事件，渲染层把链接收成分离清单统一点开。
+ * 同 url 去重（引用重复出现只列一次），无 href 的旧样式段跳过。
+ */
+export function collectLinks(lines: MdInline[][]): MdInline[] {
+  const seen: string[] = [];
+  const out: MdInline[] = [];
+  for (const line of lines) {
+    for (const seg of line) {
+      if (seg.style === 3 && seg.href !== undefined && seg.href.length > 0 && seen.indexOf(seg.href) < 0) {
+        seen.push(seg.href);
+        out.push(seg);
+      }
+    }
+  }
+  return out;
 }

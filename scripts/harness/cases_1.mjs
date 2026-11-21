@@ -5,7 +5,7 @@ import { test, state, settingsDefaults, enc, rtB64, deferred, tick, flush } from
 import { dir, read, ETS, ROOT } from './paths.mjs';
 
 export function register(ctx) {
-  const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, chat, reappear } = ctx;
+  const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, chat, reappear } = ctx;
   test('从模型设置返回时刷新三个 AI 页面的可用状态', () => {
     for (const Page of [AiAssistantPage, AiBookPanelPage, AiRecommendPage]) {
       const page = new Page();
@@ -413,6 +413,20 @@ export function register(ctx) {
     const code = blocks[3];
     assert.equal(code.kind, 'code');
     assert.equal(code.raw, '未闭合');
+  });
+  test('MdParse #1511：href 保留、collectLinks 去重、linkHost 展示副标', () => {
+    const lines = mdParseBlocks(
+      '先看 [官网](https://a.example.com/x?y=1)\n再看 [官网](https://a.example.com/x?y=1) 与 [讨论]( https://b.example.com )')[0].segs;
+    const links = collectLinks(lines);
+    assert.equal(links.length, 2);
+    assert.equal(links[0].href, 'https://a.example.com/x?y=1');
+    assert.equal(links[1].text, '讨论');
+    assert.equal(links[1].href, 'https://b.example.com');
+    assert.equal(linkHost('https://a.example.com/x?y=1'), 'a.example.com');
+    assert.equal(linkHost('http://b.example.com#frag'), 'b.example.com');
+    assert.equal(linkHost('example.org/path'), 'example.org');
+    // 无 href 的旧样式段不进清单（历史数据/裸着色段不炸）
+    assert.deepEqual(collectLinks([[{ text: '裸链样式', style: 3 }]]), []);
   });
   test('设置页：添加本地服务商有校验，成功后选中为当前编辑对象', () => {
     resetSettings();
