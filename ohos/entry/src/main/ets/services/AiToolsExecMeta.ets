@@ -9,6 +9,8 @@ import { TalebookService } from './TalebookService';
 import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';
 import { NovelMeta, NovelMetaService } from './NovelMetaService';
 import { EncyclopediaHit, EncyclopediaService, WebSearchHit, WebSearchResult } from './EncyclopediaService';
+import { WebFetchResult, WebFetchService } from './WebFetchService';
+import { BrowserRenderService } from './BrowserRenderService';
 import { AiService, AiConfig, LlmSearchResult, LlmSearchSource } from './AiService';
 import { AiToolsCore } from './AiToolsCore';
 import { AiToolsExecShelf } from './AiToolsExecShelf';
@@ -346,6 +348,28 @@ export class AiToolsExecMeta {
       parts.push(line);
     }
     return parts.join('\n\n');
+  }
+
+  /** 访问具体网页：标题 + 来源 + 正文纯文本；HTTP 拿不到正文时自动走 ArkWeb 渲染降级。 */
+  static async fetchUrl(url: string): Promise<string> {
+    const trimmed: string = url.trim();
+    if (trimmed.length === 0) {
+      return '参数 url 为空，请提供要访问的网页地址。';
+    }
+    const res: WebFetchResult = await WebFetchService.fetch(trimmed);
+    if (res.ok) {
+      const head: string = res.title.length > 0 ? `《${res.title}》\n` : '';
+      return `${head}来源：${trimmed}\n———— 正文 ————\n${res.text}`;
+    }
+    // 类浏览器降级：JS 空壳/反爬拦截页交给隐藏渲染器真渲染后取 innerText
+    if (res.hint === 'render' && BrowserRenderService.isReady()) {
+      const rendered: string = await BrowserRenderService.render(trimmed);
+      if (rendered.length > 0) {
+        return `来源：${trimmed}\n———— 正文（浏览器渲染提取） ————\n${rendered}`;
+      }
+      return `网页抓取失败：${res.error}（已尝试浏览器渲染，仍未取得正文，页面可能需登录或已失效）`;
+    }
+    return `网页抓取失败：${res.error}`;
   }
 
   /** AI 联网问答：通义系 enable_search 直出整合答案＋引用；非通义服务商回明确提示（模型可改用 search_web）。 */

@@ -278,6 +278,15 @@ export function stageEncyclopedia() {
   writeFileSync(join(dir, 'RealEncyclopedia.ts'), source);
 }
 
+/** WebFetchService 真实入检：rcp/util 复用 aiServiceDeps 桩（fetch_url 与网页搜索同 HTTP 通道）。 */
+export function stageWebFetch() {
+  let source = read('services/WebFetchService.ets');
+  source = source
+    .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`);
+  writeFileSync(join(dir, 'RealWebFetch.ts'), source);
+}
+
 /** McpService 真实入检：rcp/util 复用 aiServiceDeps 桩；AiTools 纯类型 import 擦除。 */
 export function stageMcp() {
   let source = read('services/McpService.ets');
@@ -435,6 +444,7 @@ export function stageAiTools() {
     ["'./MetaSearchService'", "'./RealMetaSearch.ts'"],
     ["'./NovelMetaService'", "'./RealNovelMeta.ts'"],
     ["'./EncyclopediaService'", "'./RealEncyclopedia.ts'"],
+    ["'./WebFetchService'", "'./RealWebFetch.ts'"],
     ["'./AiPersona'", "'./RealAiPersona.ts'"],
     ["'./AiService'", "'./RealAiService.ts'"],
     ["'../models/BookListModels'", "'./BookListModels.ts'"],
@@ -445,12 +455,27 @@ export function stageAiTools() {
     ["'./AiToolsCore'", "'./AiToolsCore.ts'"],
     ["'./AiToolsExecMeta'", "'./RealAiToolsExecMeta.ts'"],
     ["'./AiToolsExecShelf'", "'./RealAiToolsExecShelf.ts'"],
+    ["'./BrowserRenderService'", "'./BrowserRenderStub.ts'"],
   ];
+  // 渲染器离线桩：Web 组件依赖页面，harness 里用可控假实现（ready/text/calls 供断言）
+  writeFileSync(join(dir, 'BrowserRenderStub.ts'), [
+    'export class BrowserRenderService {',
+    '  static ready: boolean = false;',
+    '  static text: string = "";',
+    '  static calls: string[] = [];',
+    '  static isReady() { return BrowserRenderService.ready; }',
+    '  static render(url) { BrowserRenderService.calls.push(url); return Promise.resolve(BrowserRenderService.text); }',
+    '  static attach() {}',
+    '  static detach() {}',
+    '  static onPageEnd() {}',
+    '}',
+    '',
+  ].join('\n'));
   const TYPE_NAMES = new Set(['ApiMessageResult', 'ReferBook', 'ReferSearchOpts', 'ReferSearchResponse',
     'SoNovelBookPayload', 'DownloadTask', 'SoNovelSearchItem', 'BookListAddResponse', 'BookDetail',
     'BookListDetailResponse', 'BookListMutationResponse', 'BookListUpdatePayload', 'BookListsResponse',
     'BookListSummary', 'ReadingDevice', 'HomeBook', 'ReadingStatsSummary', 'DoubanDetail', 'DoubanHit',
-    'NovelMeta', 'EncyclopediaHit', 'WebSearchHit', 'WebSearchResult', 'AiConfig', 'LlmSearchResult',
+    'NovelMeta', 'EncyclopediaHit', 'WebSearchHit', 'WebSearchResult', 'WebFetchResult', 'AiConfig', 'LlmSearchResult',
     'LlmSearchSource', 'ToolBookLine', 'AiToolDefinition', 'AiToolParameters', 'AiToolFunctionBody',
     'AiToolProperty', 'AiPermissionMode']);
   for (const [out, ets] of [['RealAiTools.ts', 'services/AiTools.ets'],
@@ -530,7 +555,8 @@ export function stagePage(name) {
     for (const name of clause.split(',').map((part) => part.trim())) {
       if (['AiService', 'AiBookService', 'ShelfApi', 'TalebookService', 'pasteboard', 'AppRouter', 'AI_PROVIDERS',
         'CONTEXT_LENGTH_OPTIONS', 'fileIo as fs', 'photoAccessHelper', 'image', 'util', 'common',
-        'promptAction', 'SymbolGlyphModifier', 'QwenAudioService', 'SpeakService'].includes(name)) {
+        'promptAction', 'SymbolGlyphModifier', 'QwenAudioService', 'SpeakService',
+        'webview', 'BrowserRenderService'].includes(name)) {
         shims.add(name);
       }
     }

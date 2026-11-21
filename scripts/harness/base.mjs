@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { dir } from './paths.mjs';
 import { stagePure, stagePage, stageAiService, stageChatStore, stageAiPersona, stageMetaSearch,
-  stageEncyclopedia, stageMcp, stageQwenAudio, stageNovelMeta, stageReader3, stageAiTools,
+  stageEncyclopedia, stageWebFetch, stageMcp, stageQwenAudio, stageNovelMeta, stageReader3, stageAiTools,
   stageAiVoiceKit } from './stages.mjs';
 
 export const settingsDefaults = () => ({
@@ -172,6 +172,11 @@ export const photoAccessHelper = {
 };
 export const image = { createImageSource: () => null, createImagePacker: () => null };
 export const util = { Base64Helper: class { encodeToStringSync() { return ''; } } };
+// 隐藏渲染器（fetch_url 类浏览器降级）桩：页面测试不渲染 Web，符号可解析即可
+export const webview = { WebviewController: class { loadUrl() {} runJavaScript() { return Promise.resolve(''); } } };
+export const BrowserRenderService = {
+  attach: () => {}, detach: () => {}, onPageEnd: () => {}, isReady: () => false, render: async () => '',
+};
 `;
 writeFileSync(join(dir, 'shim.ts'), shim);
 
@@ -512,6 +517,7 @@ export async function setup() {
   stageMetaSearch();
   stageNovelMeta();
   stageEncyclopedia();
+  stageWebFetch();
   stageMcp();
   stageQwenAudio();
   stageReader3();

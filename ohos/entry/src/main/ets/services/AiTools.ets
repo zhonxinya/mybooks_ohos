@@ -168,6 +168,9 @@ export class AiTools {
     if (name === 'search_web') {
       return '搜索网页';
     }
+    if (name === 'fetch_url') {
+      return '读取网页';
+    }
     if (name === 'ai_search') {
       return 'AI 联网问答';
     }
@@ -301,6 +304,9 @@ export class AiTools {
       }
       if (name === 'search_web') {
         return await AiToolsExecMeta.searchWeb(AiToolsCore.argString(args, 'query'));
+      }
+      if (name === 'fetch_url') {
+        return await AiToolsExecMeta.fetchUrl(AiToolsCore.argString(args, 'url'));
       }
       if (name === 'ai_search') {
         return await AiToolsExecMeta.aiSearch(AiToolsCore.argString(args, 'query'));

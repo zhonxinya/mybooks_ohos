@@ -14,12 +14,16 @@ import { AiPermissionMode, AiTools } from '../services/AiTools';
 import { RealtimeCallService, RealtimeCallCallbacks } from '../services/RealtimeCallService';
 import { AiVoiceKit, VOICE_SYSTEM_PROMPT, VOICE_TOOL_NOTE } from '../services/AiVoiceKit';
 import { AppRouter } from '../utils/AppRouter';
+import { webview } from '@kit.ArkWeb';
+import { BrowserRenderService } from '../services/BrowserRenderService';
 
 /** 技能卡片/芯片点击：把现成提示词填入输入框，用户可先补书名再发送。 */
 
 @Entry
 @Component
 struct AiAssistantPage {
+  // fetch_url 降级通道的隐藏 ArkWeb 控制器（就绪后移交 BrowserRenderService）
+  private renderCtrl: webview.WebviewController = new webview.WebviewController();
   // —— 以下都是 store 状态的页面镜像：store 每次变化经 onStoreChange 拉齐 ——
   @State messages: ChatBubble[] = [];
   @State input: string = '';
@@ -183,6 +187,7 @@ struct AiAssistantPage {
       this.endVoiceSession();
     }
     this.store.detachView(this.viewToken);
+    BrowserRenderService.detach();
   }
 
   /** store 状态变化回调：拉齐页面镜像（attachView 时注册）。 */
@@ -508,6 +513,21 @@ struct AiAssistantPage {
           this.pageContent();
         },
       });
+      // 隐藏渲染器（类浏览器）：fetch_url 遇 JS 空壳/反爬页时的降级提取通道。
+      // 1vp 全透明但保持渲染（Visibility.None 会停 JS），controller 经 onControllerAttached 交给服务。
+      Web({ src: 'about:blank', controller: this.renderCtrl })
+        .width(1)
+        .height(1)
+        .opacity(0)
+        .javaScriptAccess(true)
+        .domStorageAccess(true)
+        .fileAccess(false)
+        .onControllerAttached((): void => {
+          BrowserRenderService.attach(this.renderCtrl);
+        })
+        .onPageEnd((): void => {
+          BrowserRenderService.onPageEnd();
+        })
     }
     .width('100%')
     .height('100%')

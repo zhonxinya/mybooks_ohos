@@ -483,11 +483,11 @@ export function register(ctx) {
     Kit.AiVoiceKit.voiceSwitcher = null;
     // realtimeDefinitions：全集+1，set_voice 不占末位（OpenCode 丢末项护栏）
     const defs = RealAiTools.realtimeDefinitions('confirm');
-    assert.equal(defs.length, 29);
+    assert.equal(defs.length, 30); // 29 全集（含 fetch_url）+ set_voice
     assert.equal(defs[defs.length - 1].function.name, 'forget_memory');
     assert.ok(defs.some((d) => d.function.name === 'set_voice'));
     const ro = RealAiTools.realtimeDefinitions('readonly');
-    assert.equal(ro.length, 17, 'set_voice 非写工具，只读模式保留');
+    assert.equal(ro.length, 18, 'set_voice 非写工具，只读模式保留（17 只读含 fetch_url + set_voice）');
     assert.ok(ro[ro.length - 1].function.name !== 'set_voice', '末位护栏：set_voice 不得占尾');
     // 文字回路 dispatch 兜底：误调给出引导而非未知工具
     const guide = await RealAiTools.execute('set_voice', '{"voice":"longanqian"}');

@@ -279,6 +279,106 @@ export function register(ctx) {
     deps.state.rcpError = null;
   });
 
+  test('fetch_url：正文提取纯函数、抓取请求形态、非法 URL/非 2xx/截断与工具文案', async () => {
+    const { WebFetchService } = await load('RealWebFetch');
+    deps.state.rcpError = null;
+    deps.state.rcpResponses = [];
+    // 纯函数：剥 script/style/注释/head，块级边界换行，实体解码，压空白
+    const html = '<html><head><title>三体 &#183; 刘慈欣</title><style>.x{}</style></head>' +
+      '<body><script>var a=1;</script><!--注释-->' +
+      '<h1>第一章</h1><p>这是&nbsp;正文&lt;第一段&gt;。</p>' +
+      '<div>第二段&#39;引号&#39;。</div><footer>页脚噪声</footer></body></html>';
+    const body = WebFetchService.extractBody(html);
+    assert.ok(body.includes('第一章') && body.includes('这是 正文<第一段>'), body);
+    assert.ok(body.includes('第二段\'引号\''), body);
+    assert.ok(!body.includes('var a') && !body.includes('.x{}') && !body.includes('注释'), '脚本/样式/注释须剥离');
+    assert.ok(!body.includes('\n\n\n'), '连续空行须压缩');
+    // URL 校验：仅 http(s)，挡 javascript:/file:/短串
+    assert.ok(WebFetchService.validUrl('https://www.baidu.com/'));
+    assert.ok(!WebFetchService.validUrl('javascript:alert(1)'));
+    assert.ok(!WebFetchService.validUrl('ftp://x.example/a'));
+    assert.ok(!WebFetchService.validUrl(''));
+    // 抓取成功：GET 形态 + 标题 + 正文文案
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(html) }];
+    const ok = await WebFetchService.fetch('https://example.com/book');
+    assert.ok(ok.ok && ok.title === '三体 · 刘慈欣', JSON.stringify(ok));
+    assert.equal(deps.state.lastRequest.method, 'GET');
+    assert.equal(deps.state.lastRequest.url, 'https://example.com/book');
+    // 工具层文案：《标题》+ 来源 + 正文
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(html) }];
+    const out = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/book"}');
+    assert.ok(out.includes('《三体 · 刘慈欣》') && out.includes('来源：https://example.com/book') &&
+      out.includes('正文'), out);
+    // 非法 URL：不发请求，直接回文案
+    const before = deps.state.requests.length;
+    const bad = await RealAiTools.execute('fetch_url', '{"url":"javascript:alert(1)"}');
+    assert.ok(bad.includes('URL 无效'), bad);
+    assert.equal(deps.state.requests.length, before, '非法 URL 不应发起网络请求');
+    // 非 2xx：失败文案不抛错
+    deps.state.rcpResponses = [{ statusCode: 404, body: enc('not found') }];
+    assert.ok((await RealAiTools.execute('fetch_url', '{"url":"https://example.com/x"}')).includes('404'));
+    // 纯脚本页（剥完无正文）：明确提示
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc('<html><head><title>SPA</title></head><body><script>render()</script><div id="app"></div></body></html>') }];
+    assert.ok((await RealAiTools.execute('fetch_url', '{"url":"https://example.com/spa"}')).includes('未能提取'));
+    // 超长截断：>6000 字符正文带截断标记
+    const long = '<html><head><title>长文</title></head><body><p>' + '字'.repeat(7000) + '</p></body></html>';
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(long) }];
+    const trunc = await WebFetchService.fetch('https://example.com/long');
+    assert.ok(trunc.ok && trunc.text.includes('正文过长已截断') && trunc.text.length < 6100, `${trunc.text.length}`);
+    // 空 url 参数
+    assert.ok((await RealAiTools.execute('fetch_url', '{"url":"  "}')).includes('url 为空'));
+    deps.state.rcpResponses = [];
+    deps.state.rcpError = null;
+  });
+
+  test('fetch_url 类浏览器降级：needsRender 判定 + hint 标记 + 渲染器就绪时走渲染文案', async () => {
+    const { WebFetchService } = await load('RealWebFetch');
+    const Brs = await load('BrowserRenderStub');
+    deps.state.rcpError = null;
+    // 纯函数判定
+    assert.equal(WebFetchService.needsRender(403, ''), true, '403 反爬值得渲染');
+    assert.equal(WebFetchService.needsRender(404, ''), false, '404 渲染也没用');
+    const spa = '<html><head><title>SPA</title></head><body><script>render()</script><div id="app"></div></body></html>';
+    assert.equal(WebFetchService.needsRender(200, spa), true, 'JS 空壳须渲染');
+    assert.equal(WebFetchService.needsRender(200, '<html><body><p>' + '字'.repeat(300) + '</p></body></html>'),
+      false, '正文充足不渲染');
+    assert.equal(WebFetchService.needsRender(200, '<html><body><p>短但没脚本</p></body></html>'), false,
+      '短静态页不值得重开销');
+    // hint 标记：SPA 页与 403 均带 render 提示
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(spa) }];
+    const r1 = await WebFetchService.fetch('https://example.com/spa');
+    assert.equal(r1.hint, 'render', JSON.stringify(r1));
+    deps.state.rcpResponses = [{ statusCode: 403, body: enc('blocked') }];
+    const r2 = await WebFetchService.fetch('https://example.com/x');
+    assert.equal(r2.hint, 'render');
+    // 正常页 hint 为空
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc('<html><body><p>' + '字'.repeat(300) + '</p></body></html>') }];
+    assert.equal((await WebFetchService.fetch('https://example.com/ok')).hint, '');
+    // 渲染器未就绪（默认）：维持原失败文案
+    Brs.BrowserRenderService.ready = false;
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(spa) }];
+    const out1 = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/spa"}');
+    assert.ok(out1.includes('未能提取') && !out1.includes('浏览器渲染'), out1);
+    // 就绪但渲染空（页面失效）：明确说明已尝试
+    Brs.BrowserRenderService.ready = true;
+    Brs.BrowserRenderService.text = '';
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(spa) }];
+    const out2 = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/spa"}');
+    assert.ok(out2.includes('已尝试浏览器渲染'), out2);
+    // 就绪且有正文：走渲染提取文案，并确认 loadUrl 收到原 url
+    Brs.BrowserRenderService.text = '渲染出来的正文内容，足够长以通过判定阈值。'.repeat(10);
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(spa) }];
+    const out3 = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/spa"}');
+    assert.ok(out3.includes('浏览器渲染提取') && out3.includes('渲染出来的正文'), out3);
+    assert.ok(Brs.BrowserRenderService.calls.includes('https://example.com/spa'));
+    // 收尾复位，避免污染其他用例
+    Brs.BrowserRenderService.ready = false;
+    Brs.BrowserRenderService.text = '';
+    Brs.BrowserRenderService.calls = [];
+    deps.state.rcpResponses = [];
+    deps.state.rcpError = null;
+  });
+
   test('ai_search：通义 enable_search 请求形态、引用文案与非通义服务商回落', async () => {
     // RealAiService 存储桩直配通义服务商（p:/s: 前缀=TalebookService pref/secure）
     deps.state.store.set('p:ai_provider', 'qianwen');
