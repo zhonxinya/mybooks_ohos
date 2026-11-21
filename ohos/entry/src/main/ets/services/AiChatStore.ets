@@ -1,7 +1,7 @@
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { image } from '@kit.ImageKit';
 import { util } from '@kit.ArkTS';
-import { AiTools, AiPermissionMode, parseToolBookLines, ToolBookLine } from './AiTools';
+import { AiTools, AiPermissionMode, AiToolDefinition, parseToolBookLines, ToolBookLine } from './AiTools';
 import { AiService, AiConfig, AiMessage, AiStreamHandlers, AiAbortHandle } from './AiService';
 import { AiPersona } from './AiPersona';
 import { TalebookService } from './TalebookService';
@@ -634,7 +634,14 @@ export class AiChatStore {
     if (requestId !== this.requestId || !this.thinking) {
       return;
     }
-    const handle: AiAbortHandle = AiService.chatStream(context, handlers, 2048);
+    // MCP 预热：Token Plan 下拿百炼 MCP 工具清单（其余服务商零请求；
+    // 握手失败静默空集，聊天照常走内置工具）。放在中断检查之后，退页不浪费连接。
+    const mcpTools: AiToolDefinition[] = await AiService.mcpToolset();
+    if (requestId !== this.requestId || !this.thinking) {
+      return;
+    }
+    const handle: AiAbortHandle = AiService.chatStream(context, handlers, 2048,
+      mcpTools.length > 0 ? mcpTools : null);
     if (requestId === this.requestId && this.thinking) {
       this.abort = handle;
     }
