@@ -15,8 +15,8 @@ interface AiFieldParams {
 /**
  * AI 模型设置：本地配置，不依赖服务端。
  *
- * 一个页面装下「选服务商 → 填地址/模型/Key → 测连通」的完整闭环，
- * 避免用户为了改一个字段来回跳页。
+ * 「服务商 / 模型 / 语音 / 说明」四档 TAB 分开，每档只装本类设置；
+ * 模型档额外维护本地常用模型清单（对话页快切菜单优先用它）。
  */
 @Entry
 @Component
@@ -53,6 +53,14 @@ struct AiSettingsPage {
   @State voiceModel: string = '';
   @State voiceModelOptions: string[] = [];
   @State voiceFetchingModels: boolean = false;
+  /** TAB 档位：0 服务商 / 1 模型 / 2 语音 / 3 说明。变量名避讳 CustomComponent.tabIndex 属性方法。 */
+  @State activeTab: number = 0;
+  /** 当前服务商的本地常用模型清单（对话页快切菜单数据源）。 */
+  @State providerModels: string[] = [];
+  /** 手动添加模型的输入框。 */
+  @State newModelName: string = '';
+  /** 拉取结果里已勾选、待并入清单的模型 id。 */
+  @State pickedModels: string[] = [];
 
   aboutToAppear(): void {
     this.autoSpeakOn = AiService.loadAutoSpeak();
@@ -71,6 +79,7 @@ struct AiSettingsPage {
     this.temperature = config.temperature;
     this.visionOverride = config.visionOverride;
     this.contextLength = config.contextLength;
+    this.providerModels = AiService.loadProviderModels(this.providerId);
     if (!this.hasKey) {
       // 未配置过时给出预设默认值，减少填空
       const preset: AiProviderPreset = AiService.presetOf(this.providerId);
@@ -105,6 +114,9 @@ struct AiSettingsPage {
     this.hasKey = AiService.hasKeyFor(id);
     this.testResult = '';
     this.modelOptions = [];
+    this.providerModels = AiService.loadProviderModels(id);
+    this.pickedModels = [];
+    this.newModelName = '';
   }
 
   private isCustomSelected(): boolean {
@@ -153,6 +165,57 @@ struct AiSettingsPage {
     });
   }
 
+  // ———— 本地常用模型清单（对话页快切菜单数据源，按服务商持久化） ————
+
+  /** 手动把一个模型 id 加进清单（去重）。 */
+  private addModelToList(): void {
+    const name: string = this.newModelName.trim();
+    if (name.length === 0) {
+      this.toast('请填写模型名称');
+      return;
+    }
+    if (this.providerModels.indexOf(name) >= 0) {
+      this.toast('清单里已有该模型');
+      return;
+    }
+    this.providerModels = this.providerModels.concat([name]);
+    AiService.saveProviderModels(this.providerId, this.providerModels);
+    this.newModelName = '';
+  }
+
+  private removeModel(name: string): void {
+    this.providerModels = this.providerModels.filter((m: string): boolean => m !== name);
+    AiService.saveProviderModels(this.providerId, this.providerModels);
+  }
+
+  private isPicked(name: string): boolean {
+    return this.pickedModels.indexOf(name) >= 0;
+  }
+
+  private togglePick(name: string): void {
+    this.pickedModels = this.isPicked(name)
+      ? this.pickedModels.filter((m: string): boolean => m !== name)
+      : this.pickedModels.concat([name]);
+  }
+
+  /** 把拉取列表里勾选的模型并入本地清单（去重后落盘）。 */
+  private applyPicked(): void {
+    if (this.pickedModels.length === 0) {
+      this.toast('还没有勾选模型');
+      return;
+    }
+    const merged: string[] = this.providerModels.slice();
+    for (const m of this.pickedModels) {
+      if (merged.indexOf(m) < 0) {
+        merged.push(m);
+      }
+    }
+    this.providerModels = merged;
+    AiService.saveProviderModels(this.providerId, this.providerModels);
+    this.pickedModels = [];
+    this.toast(`已加入清单，共 ${merged.length} 个`);
+  }
+
   /** 用当前填写的地址与 Key 拉模型列表；Key 留空则回退到该服务商已保存的。 */
   private async fetchModelList(): Promise<void> {
     if (this.fetchingModels) {
@@ -166,6 +229,7 @@ struct AiSettingsPage {
         this.toast('该服务未返回模型列表');
       } else {
         this.modelOptions = ids;
+        this.pickedModels = [];
         this.toast(`获取到 ${ids.length} 个模型，可从下拉选择`);
       }
     } catch (error) {
@@ -431,6 +495,36 @@ struct AiSettingsPage {
 
   @Builder
   pageContent() {
+    Tabs({ index: this.activeTab }) {
+      TabContent() {
+        this.tabProvider();
+      }
+      .tabBar('服务商')
+
+      TabContent() {
+        this.tabModel();
+      }
+      .tabBar('模型')
+
+      TabContent() {
+        this.tabVoice();
+      }
+      .tabBar('语音')
+
+      TabContent() {
+        this.tabAbout();
+      }
+      .tabBar('说明')
+    }
+    .barMode(BarMode.Fixed)
+    .width('100%')
+    .height('100%')
+    .onChange((index: number) => this.activeTab = index);
+  }
+
+  /** TAB 1 服务商：chips 选择/添加/删除 + 地址 + Key + 保存测试。 */
+  @Builder
+  tabProvider() {
     Scroll() {
       Column({ space: 16 }) {
         SectionTitle({ title: '服务商' });
@@ -492,6 +586,42 @@ struct AiSettingsPage {
           this.field({ label: '接口地址', value: this.baseUrl, placeholder: 'https://api.deepseek.com/v1',
             onChange: (v: string) => this.baseUrl = v });
           Column({ space: 6 }) {
+            Text(this.hasKey ? 'API Key（已保存，留空则保持不变）' : 'API Key')
+              .fontSize(13)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%');
+            TextInput({ placeholder: this.hasKey ? '••••••••' : 'sk-...', text: this.apiKey })
+              .type(InputType.Password)
+              .height(44)
+              .onChange((v: string) => this.apiKey = v);
+          }
+          .width('100%');
+        }
+        .width('100%')
+        .padding($r('app.float.page_padding'))
+        .borderRadius($r('app.float.card_radius'))
+        .backgroundColor($r('app.color.card_background'));
+
+        this.testResultLine();
+        this.saveRow();
+      }
+      .width('100%')
+      .padding($r('app.float.page_padding'))
+      .alignItems(HorizontalAlign.Start);
+    }
+    .width('100%')
+    .height('100%')
+    .align(Alignment.Top);
+  }
+
+  /** TAB 2 模型：当前模型 + 本地常用清单管理 + 随机性/上下文/vision。 */
+  @Builder
+  tabModel() {
+    Scroll() {
+      Column({ space: 16 }) {
+        SectionTitle({ title: '当前模型' });
+        Column({ space: 12 }) {
+          Column({ space: 6 }) {
             Row() {
               Text('模型')
                 .fontSize(13)
@@ -515,18 +645,96 @@ struct AiSettingsPage {
               .onSelect((index: number, value: string) => this.model = value);
           }
           .width('100%');
-          Column({ space: 6 }) {
-            Text(this.hasKey ? 'API Key（已保存，留空则保持不变）' : 'API Key')
-              .fontSize(13)
-              .fontColor($r('app.color.text_secondary'))
+        }
+        .width('100%')
+        .padding($r('app.float.page_padding'))
+        .borderRadius($r('app.float.card_radius'))
+        .backgroundColor($r('app.color.card_background'));
+
+        SectionTitle({ title: '常用模型清单' });
+        Text('对话页顶栏快切菜单用这份清单；不用每次现拉全量列表。')
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%');
+        Column({ space: 12 }) {
+          if (this.providerModels.length === 0) {
+            Text('清单为空（对话页将临时拉取服务商全量列表）')
+              .fontSize(12)
+              .fontColor($r('app.color.text_tertiary'))
               .width('100%');
-            TextInput({ placeholder: this.hasKey ? '••••••••' : 'sk-...', text: this.apiKey })
-              .type(InputType.Password)
+          } else {
+            ForEach(this.providerModels, (item: string) => {
+              Row({ space: 8 }) {
+                Text(item)
+                  .fontSize(13)
+                  .fontColor($r('app.color.text_primary'))
+                  .layoutWeight(1)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis });
+                Text(this.model === item ? '使用中' : '')
+                  .fontSize(11)
+                  .fontColor($r('app.color.brand_primary'));
+                Text('删除')
+                  .fontSize(12)
+                  .fontColor($r('app.color.error'))
+                  .onClick(() => {
+                    this.removeModel(item);
+                  });
+              }
+              .width('100%');
+            }, (item: string) => item)
+          }
+          Row({ space: 12 }) {
+            TextInput({ placeholder: '手动添加模型 id，如 gpt-4o', text: this.newModelName })
               .height(44)
-              .onChange((v: string) => this.apiKey = v);
+              .layoutWeight(1)
+              .onChange((v: string) => this.newModelName = v);
+            SecondaryButton({
+              label: '添加',
+              onTap: () => {
+                this.addModelToList();
+              },
+            });
           }
           .width('100%');
 
+          if (this.modelOptions.length > 0) {
+            Text(`拉取到 ${this.modelOptions.length} 个模型，点选后可加入清单：`)
+              .fontSize(12)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%');
+            ForEach(this.modelOptions, (item: string) => {
+              Row({ space: 8 }) {
+                Text(this.isPicked(item) ? '☑' : '☐')
+                  .fontSize(14)
+                  .fontColor($r('app.color.brand_primary'));
+                Text(item)
+                  .fontSize(13)
+                  .fontColor($r('app.color.text_secondary'))
+                  .layoutWeight(1)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis });
+              }
+              .width('100%')
+              .onClick(() => {
+                this.togglePick(item);
+              });
+            }, (item: string) => item)
+            PrimaryButton({
+              label: '把勾选项加入清单',
+              onTap: () => {
+                this.applyPicked();
+              },
+            }).width('100%');
+          }
+        }
+        .width('100%')
+        .padding($r('app.float.page_padding'))
+        .borderRadius($r('app.float.card_radius'))
+        .backgroundColor($r('app.color.card_background'));
+
+        SectionTitle({ title: '生成参数' });
+        Column({ space: 12 }) {
           Column({ space: 6 }) {
             Row() {
               Text('随机性')
@@ -598,50 +806,23 @@ struct AiSettingsPage {
         .borderRadius($r('app.float.card_radius'))
         .backgroundColor($r('app.color.card_background'));
 
-        Row() {
-          Text('灵魂与记忆')
-            .fontSize(13)
-            .fontColor($r('app.color.text_secondary'));
-          Text('人格设定 · 跨对话记忆')
-            .fontSize(11)
-            .fontColor($r('app.color.text_tertiary'))
-            .margin({ left: 8 });
-          Blank();
-          Text('›')
-            .fontSize(16)
-            .fontColor($r('app.color.text_tertiary'));
-        }
-        .width('100%')
-        .padding($r('app.float.page_padding'))
-        .borderRadius($r('app.float.card_radius'))
-        .backgroundColor($r('app.color.card_background'))
-        .onClick(() => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiPersonaPage' }));
+        this.testResultLine();
+        this.saveRow();
+      }
+      .width('100%')
+      .padding($r('app.float.page_padding'))
+      .alignItems(HorizontalAlign.Start);
+    }
+    .width('100%')
+    .height('100%')
+    .align(Alignment.Top);
+  }
 
-        if (this.testResult.length > 0) {
-          Text(this.testResult)
-            .fontSize(12)
-            .fontColor(this.testOk ? $r('app.color.success') : $r('app.color.error'))
-            .width('100%');
-        }
-
-        Row({ space: 12 }) {
-          PrimaryButton({
-            label: this.testing ? '测试中…' : '保存并测试',
-            buttonEnabled: !this.testing,
-            onTap: () => {
-              void this.test();
-            },
-          }).layoutWeight(1);
-          SecondaryButton({
-            label: '仅保存',
-            buttonEnabled: !this.testing,
-            onTap: () => {
-              this.save();
-            },
-          }).layoutWeight(1);
-        }
-        .width('100%');
-
+  /** TAB 3 语音：播报引擎/探测/自动播报/通话模式/语音对话模型。 */
+  @Builder
+  tabVoice() {
+    Scroll() {
+      Column({ space: 16 }) {
         Row() {
           Text('播报引擎')
             .fontSize(13)
@@ -678,6 +859,8 @@ struct AiSettingsPage {
           }
         }
         .width('100%');
+
+        this.testResultLine();
 
         Row() {
           Text('回复自动播报（对话页）')
@@ -752,6 +935,39 @@ struct AiSettingsPage {
           }
         }
         .width('100%');
+      }
+      .width('100%')
+      .padding($r('app.float.page_padding'))
+      .alignItems(HorizontalAlign.Start);
+    }
+    .width('100%')
+    .height('100%')
+    .align(Alignment.Top);
+  }
+
+  /** TAB 4 说明：灵魂入口、使用说明、打开助手。 */
+  @Builder
+  tabAbout() {
+    Scroll() {
+      Column({ space: 16 }) {
+        Row() {
+          Text('灵魂与记忆')
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'));
+          Text('人格设定 · 跨对话记忆')
+            .fontSize(11)
+            .fontColor($r('app.color.text_tertiary'))
+            .margin({ left: 8 });
+          Blank();
+          Text('›')
+            .fontSize(16)
+            .fontColor($r('app.color.text_tertiary'));
+        }
+        .width('100%')
+        .padding($r('app.float.page_padding'))
+        .borderRadius($r('app.float.card_radius'))
+        .backgroundColor($r('app.color.card_background'))
+        .onClick(() => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiPersonaPage' }));
 
         Column({ space: 8 }) {
           Text('说明')
@@ -779,6 +995,10 @@ struct AiSettingsPage {
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
             .width('100%');
+          Text('• 「模型」页的常用模型清单按服务商保存，对话页顶栏快切菜单优先用它。')
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%');
         }
         .width('100%')
         .padding($r('app.float.page_padding'))
@@ -797,6 +1017,38 @@ struct AiSettingsPage {
     .width('100%')
     .height('100%')
     .align(Alignment.Top);
+  }
+
+  /** 保存/测试结果行（服务商与模型两档共用同一状态）。 */
+  @Builder
+  testResultLine() {
+    if (this.testResult.length > 0) {
+      Text(this.testResult)
+        .fontSize(12)
+        .fontColor(this.testOk ? $r('app.color.success') : $r('app.color.error'))
+        .width('100%');
+    }
+  }
+
+  @Builder
+  saveRow() {
+    Row({ space: 12 }) {
+      PrimaryButton({
+        label: this.testing ? '测试中…' : '保存并测试',
+        buttonEnabled: !this.testing,
+        onTap: () => {
+          void this.test();
+        },
+      }).layoutWeight(1);
+      SecondaryButton({
+        label: '仅保存',
+        buttonEnabled: !this.testing,
+        onTap: () => {
+          this.save();
+        },
+      }).layoutWeight(1);
+    }
+    .width('100%');
   }
 
   /** chips 行尾部的「＋ 添加」：展开/收起本机服务商添加表单。 */
