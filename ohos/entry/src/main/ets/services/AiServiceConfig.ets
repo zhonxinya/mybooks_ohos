@@ -16,7 +16,6 @@ export class AiServiceConfig {
     AiServiceConfig.migrateLegacyKey();
     const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
     const preset: AiProviderPreset = AiServiceConfig.presetOf(providerId);
-    const baseUrl: string = TalebookService.secureGet(KEY_BASE_URL);
     const model: string = TalebookService.prefGet(KEY_MODEL);
     const temperatureText: string = TalebookService.prefGet(KEY_TEMPERATURE);
     const temperature: number = temperatureText.length > 0 ? Number(temperatureText) : DEFAULT_TEMPERATURE;
@@ -26,7 +25,7 @@ export class AiServiceConfig {
     const contextK: number = contextText.length > 0 ? Number(contextText) : DEFAULT_CONTEXT_K;
     return {
       providerId: providerId,
-      baseUrl: baseUrl.length > 0 ? baseUrl : preset.baseUrl,
+      baseUrl: AiServiceConfig.baseUrlFor(providerId),
       model: finalModel,
       hasKey: TalebookService.secureGet(AiServiceConfig.apiKeyKey(providerId)).length > 0,
       temperature: Number.isFinite(temperature) ? temperature : DEFAULT_TEMPERATURE,
@@ -81,13 +80,14 @@ export class AiServiceConfig {
   }
 
   /**
-   * 语音通话页用的对话模型配置。未单独配置（或配置的服务商已被删除）时跟随全局；
-   * TTS/ASR 载体仍走 Token Plan 网关（QwenAudioService 按全局配置派生），这里只换「思考的大脑」。
+   * 语音档位配置（语音通话的对话模型 + TTS/ASR/实时通话的网关与 Key）。
+   * 未单独配置服务商（provider 键为空）时跟随全局；配了就**完全独立解析**——
+   * 与全局同服务商时也用自己的 model 与地址，聊天和语音可各用各的。
    */
   static loadVoiceConfig(): AiConfig {
     const config: AiConfig = AiServiceConfig.loadConfig();
     const providerId: string = TalebookService.prefGet(KEY_VOICE_PROVIDER);
-    if (providerId.length === 0 || providerId === config.providerId) {
+    if (providerId.length === 0) {
       return config;
     }
     const preset: AiProviderPreset = AiServiceConfig.presetOf(providerId);
@@ -95,8 +95,7 @@ export class AiServiceConfig {
     const finalModel: string = model.length > 0 ? model : preset.model;
     return {
       providerId: providerId,
-      // 自定义服务商的地址就存在预设里；预设服务商被改过全局地址时无法区分，按预设走
-      baseUrl: preset.baseUrl,
+      baseUrl: AiServiceConfig.baseUrlFor(providerId),
       model: finalModel,
       hasKey: TalebookService.secureGet(AiServiceConfig.apiKeyKey(providerId)).length > 0,
       temperature: config.temperature,
@@ -153,6 +152,29 @@ export class AiServiceConfig {
   /** 各服务商 Key 的存储键；自定义服务商 id 带时间戳，不与前缀冲突。 */
   static apiKeyKey(providerId: string): string {
     return KEY_API_KEY_PREFIX + providerId;
+  }
+
+  /** 各服务商接口地址的存储键（与 Key 同样按服务商分槽，互不覆盖）。 */
+  static baseUrlKey(providerId: string): string {
+    return KEY_BASE_URL_PREFIX + providerId;
+  }
+
+  /** 指定服务商的接口地址：本槽存过用本槽，否则回落预设（自定义商预设即注册地址）。 */
+  static baseUrlFor(providerId: string): string {
+    AiServiceConfig.migrateLegacyBaseUrl();
+    const saved: string = TalebookService.secureGet(AiServiceConfig.baseUrlKey(providerId));
+    return saved.length > 0 ? saved : AiServiceConfig.presetOf(providerId).baseUrl;
+  }
+
+  /** 旧版全局单槽地址一次性迁移：挪进当前所选服务商的槽位后清空。 */
+  static migrateLegacyBaseUrl(): void {
+    const legacy: string = TalebookService.secureGet(KEY_BASE_URL);
+    if (legacy.length === 0) {
+      return;
+    }
+    const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
+    TalebookService.secureSet(AiServiceConfig.baseUrlKey(providerId), legacy);
+    TalebookService.secureSet(KEY_BASE_URL, '');
   }
 
   /** 读取指定服务商的 API Key（未配置返回空串）。 */
@@ -249,6 +271,7 @@ export class AiServiceConfig {
     for (let i = 0; i < list.length; i++) {
       if (list[i].id === id) {
         TalebookService.secureSet(AiServiceConfig.apiKeyKey(id), '');
+        TalebookService.secureSet(AiServiceConfig.baseUrlKey(id), '');
       } else {
         kept.push(list[i]);
       }
@@ -303,7 +326,7 @@ export class AiServiceConfig {
   static saveConfig(providerId: string, baseUrl: string, model: string, apiKey: string,
     temperature: number, visionOverride: string = '', contextLength: number = DEFAULT_CONTEXT_K): void {
     TalebookService.prefSet(KEY_PROVIDER, providerId);
-    TalebookService.secureSet(KEY_BASE_URL, AiServiceHttp.normalizeBaseUrl(baseUrl));
+    TalebookService.secureSet(AiServiceConfig.baseUrlKey(providerId), AiServiceHttp.normalizeBaseUrl(baseUrl));
     TalebookService.prefSet(KEY_MODEL, model.trim());
     TalebookService.prefSet(KEY_TEMPERATURE, `${temperature}`);
     TalebookService.prefSet(KEY_VISION, visionOverride);
@@ -358,7 +381,10 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
 
 /** 一条对话消息（OpenAI 协议）。 */
 export const KEY_PROVIDER: string = 'ai_provider';
+/** 旧版全局单槽接口地址；首次读取时迁移到所属服务商槽后清空。 */
 export const KEY_BASE_URL: string = 'ai_base_url';
+/** 各服务商接口地址前缀：`ai_base_url_<providerId>`，与 Key 同样分槽互不覆盖。 */
+export const KEY_BASE_URL_PREFIX: string = 'ai_base_url_';
 export const KEY_MODEL: string = 'ai_model';
 /** 对话页：AI 回复完成后自动用 Token Plan TTS 朗读（默认关）。 */
 export const KEY_AUTO_SPEAK: string = 'ai_auto_speak';

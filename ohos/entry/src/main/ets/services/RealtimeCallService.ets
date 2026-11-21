@@ -363,7 +363,7 @@ export class RealtimeCallService {
 
   /** Token Plan 网关 http(s) origin → ws(s)。 */
   private static wsOrigin(): string {
-    const baseUrl: string = AiService.loadConfig().baseUrl;
+    const baseUrl: string = AiService.loadVoiceConfig().baseUrl;
     const schemeEnd: number = baseUrl.indexOf('://');
     if (schemeEnd < 0) {
       throw new Error('Token Plan 服务商地址无效');
@@ -375,7 +375,7 @@ export class RealtimeCallService {
   }
 
   private static apiKey(): string {
-    const key: string = AiService.apiKeyFor(AiService.loadConfig().providerId);
+    const key: string = AiService.apiKeyFor(AiService.loadVoiceConfig().providerId);
     if (key.length === 0) {
       throw new Error('未配置 Token Plan API Key（AI 设置页填写）');
     }

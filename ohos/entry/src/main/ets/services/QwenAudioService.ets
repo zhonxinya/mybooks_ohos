@@ -1,6 +1,6 @@
 // Token Plan（千问）音频服务：录音→ASR、文本→TTS→本地播放。
 // 协议均为 DashScope 原生路径（不在 compatible-mode 子路径下），实测档案见
-// docs/token-plan-audio-protocol-2026-11-20.md；Key/baseUrl 复用 AiService 当前服务商配置。
+// docs/token-plan-audio-protocol-2026-11-20.md；Key/baseUrl 取语音档位服务商（未单配时=全局）。
 import { rcp } from '@kit.RemoteCommunicationKit';
 import { util } from '@kit.ArkTS';
 import { audio } from '@kit.AudioKit';
@@ -125,9 +125,9 @@ export class QwenAudioService {
 
   // ————————————————— 网络（DashScope 原生路径） —————————————————
 
-  /** 从服务商 baseUrl（…/compatible-mode/v1）派生网关 origin。 */
+  /** 从语音档位服务商 baseUrl（…/compatible-mode/v1）派生网关 origin。 */
   private static origin(): string {
-    const baseUrl: string = AiService.loadConfig().baseUrl;
+    const baseUrl: string = AiService.loadVoiceConfig().baseUrl;
     const schemeEnd: number = baseUrl.indexOf('://');
     if (schemeEnd < 0) {
       throw new Error('Token Plan 服务商地址无效');
@@ -141,7 +141,7 @@ export class QwenAudioService {
   }
 
   private static apiKey(): string {
-    const key: string = AiService.apiKeyFor(AiService.loadConfig().providerId);
+    const key: string = AiService.apiKeyFor(AiService.loadVoiceConfig().providerId);
     if (key.length === 0) {
       throw new Error('未配置 Token Plan API Key（AI 设置页填写）');
     }

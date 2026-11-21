@@ -432,6 +432,10 @@ export class AiService {
   static apiKeyFor(providerId: string): string {
     return AiServiceConfig.apiKeyFor(providerId);
   }
+  /** 委托 AiServiceConfig.baseUrlFor（指定服务商的接口地址，按服务商分槽）。 */
+  static baseUrlFor(providerId: string): string {
+    return AiServiceConfig.baseUrlFor(providerId);
+  }
   /** 委托 AiServiceConfig.hasKeyFor（拆分：见文件头说明）。 */
   static hasKeyFor(providerId: string): boolean {
     return AiServiceConfig.hasKeyFor(providerId);

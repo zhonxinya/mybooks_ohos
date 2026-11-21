@@ -107,8 +107,9 @@ struct AiSettingsPage {
     this.providerId = id;
     this.providerIndex = this.indexOfProvider(id);
     const preset: AiProviderPreset = AiService.presetOf(id);
-    // 切换服务商时地址与模型跟随预设；Key 各家不通用，但按服务商分开存过就不用重填
-    this.baseUrl = preset.baseUrl;
+    // 切换服务商时地址回填该服务商已保存的槽位（没存过回落预设），模型跟随预设；
+    // Key 各家不通用，但按服务商分开存过就不用重填
+    this.baseUrl = AiService.baseUrlFor(id);
     this.model = preset.model;
     this.apiKey = '';
     this.hasKey = AiService.hasKeyFor(id);
@@ -435,13 +436,9 @@ struct AiSettingsPage {
     return items;
   }
 
-  /** 语音服务商的接口地址：自定义商取注册地址；全局同款复用已保存的全局地址。 */
+  /** 语音服务商的接口地址：按服务商分槽读取（本槽存过用本槽，否则回落预设）。 */
   private voiceBaseUrl(): string {
-    const config: AiConfig = AiService.loadConfig();
-    if (this.voiceProviderId === config.providerId) {
-      return config.baseUrl;
-    }
-    return AiService.presetOf(this.voiceProviderId).baseUrl;
+    return AiService.baseUrlFor(this.voiceProviderId);
   }
 
   private async fetchVoiceModels(): Promise<void> {
