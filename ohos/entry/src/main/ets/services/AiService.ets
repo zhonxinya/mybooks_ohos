@@ -120,6 +120,8 @@ const KEY_VISION: string = 'ai_vision';
 const KEY_CONTEXT: string = 'ai_context_length';
 /** 权限模式：'readonly'/'confirm'/'auto'；未设置时按逐笔确认。 */
 const KEY_PERMISSION: string = 'ai_permission_mode';
+/** 本地常用模型清单（按服务商分开存）：`ai_provider_models_<id>` = JSON 字符串数组。 */
+const KEY_PROVIDER_MODELS_PREFIX: string = 'ai_provider_models_';
 
 /** 上下文长度档位（K tokens），设置页下拉与轮数映射共用。 */
 export const CONTEXT_LENGTH_OPTIONS: number[] = [4, 8, 32, 128, 200];
@@ -401,6 +403,35 @@ export class AiService {
 
   private static saveCustomProviders(list: AiProviderPreset[]): void {
     TalebookService.prefSet(KEY_CUSTOM_PROVIDERS, JSON.stringify(list));
+  }
+
+  /**
+   * 本地常用模型清单（按服务商分开存）：设置页手动添加/拉取勾选写入，
+   * 对话页顶栏快切菜单优先用它——免去每次现拉全量列表。
+   */
+  static loadProviderModels(providerId: string): string[] {
+    const raw: string = TalebookService.prefGet(`${KEY_PROVIDER_MODELS_PREFIX}${providerId}`, '');
+    if (raw.length === 0) {
+      return [];
+    }
+    try {
+      const arr: Object[] = JSON.parse(raw) as Object[];
+      const out: string[] = [];
+      for (let i = 0; i < arr.length; i++) {
+        if (typeof arr[i] === 'string') {
+          out.push(arr[i] as string);
+        }
+      }
+      return out;
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  /** 覆盖保存某服务商的模型清单；空数组即清除该键。 */
+  static saveProviderModels(providerId: string, models: string[]): void {
+    TalebookService.prefSet(`${KEY_PROVIDER_MODELS_PREFIX}${providerId}`,
+      models.length === 0 ? '' : JSON.stringify(models));
   }
 
   static presetOf(providerId: string): AiProviderPreset {

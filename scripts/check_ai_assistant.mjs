@@ -23,6 +23,7 @@ const settingsDefaults = () => ({
     { id: 'opencode', name: 'OpenCode (Go)', baseUrl: 'https://opencode.ai/inference/openai/v1', model: 'big-pickle', vision: false },
   ],
   keys: new Set(['deepseek']), saved: null, models: [], fetchError: '', completeReply: 'ok',
+  providerModels: {},
   voiceProviderId: '', voiceModel: '', voiceConfig: null, lastCompleteConfig: null, lastCompleteMessages: null,
   speakEngine: 'system', speakCalls: [], speakStops: 0, callMode: 'realtime',
 });
@@ -65,6 +66,8 @@ export const AiService = {
     if (state.settings.fetchError.length > 0) { throw new Error(state.settings.fetchError); }
     return state.settings.models.slice();
   },
+  loadProviderModels: (id) => (state.settings.providerModels[id] ?? []).slice(),
+  saveProviderModels: (id, models) => { state.settings.providerModels[id] = models.slice(); },
   saveConfig: (providerId, baseUrl, model, apiKey, temperature, visionOverride, contextLength) => {
     state.settings.saved = { providerId, baseUrl, model, apiKey, temperature, visionOverride, contextLength };
     if (apiKey.length > 0) { state.settings.keys.add(providerId); }
@@ -3414,6 +3417,76 @@ try {
     assert.ok(retry[0].value.includes('获取模型列表'), retry[0].value);
     assert.equal(page.modelChipLabel(), 'very-long-mode…');
     state.settings.fetchError = '';
+  });
+
+  test('设置页模型清单：手动添加去重即存、删除、拉取勾选合并、切服务商重载', () => {
+    resetSettings();
+    const page = settingsPage();
+    assert.deepEqual(page.providerModels, [], '初始为空');
+    page.newModelName = ' qwen-max ';
+    page.addModelToList();
+    assert.deepEqual(page.providerModels, ['qwen-max'], 'trim 后入清单');
+    assert.deepEqual(state.settings.providerModels.deepseek, ['qwen-max'], '改动即落盘');
+    page.newModelName = 'qwen-max';
+    page.addModelToList();
+    assert.equal(page.providerModels.length, 1, '重复添加去重');
+    page.newModelName = '  ';
+    page.addModelToList();
+    assert.equal(page.providerModels.length, 1, '空名不落盘');
+    page.newModelName = 'glm-4';
+    page.addModelToList();
+    page.removeModel('qwen-max');
+    assert.deepEqual(page.providerModels, ['glm-4']);
+    assert.deepEqual(state.settings.providerModels.deepseek, ['glm-4'], '删除也落盘');
+    // 拉取勾选合并
+    page.modelOptions = ['a', 'b', 'c'];
+    page.togglePick('a');
+    page.togglePick('b');
+    page.togglePick('b');
+    assert.deepEqual(page.pickedModels, ['a'], '再点取消勾选');
+    page.providerModels = ['b'];
+    page.applyPicked();
+    assert.deepEqual(page.providerModels, ['b', 'a'], '勾选并入去重');
+    assert.deepEqual(state.settings.providerModels.deepseek, ['b', 'a'], '合并按当前服务商落盘');
+    assert.equal(page.pickedModels.length, 0, '并入后清空勾选');
+    page.applyPicked();
+    assert.deepEqual(state.settings.providerModels.deepseek, ['b', 'a'], '无勾选时不落盘');
+    // 切服务商重载各自清单
+    state.settings.providerModels.opencode = ['big-pickle'];
+    page.selectProvider('opencode');
+    assert.deepEqual(page.providerModels, ['big-pickle']);
+    page.selectProvider('deepseek');
+    assert.deepEqual(page.providerModels, ['b', 'a']);
+  });
+
+  test('对话页快切：本地清单优先零拉取，「重新获取」绕过清单拉全量', async () => {
+    resetSettings();
+    state.settings.providerModels.deepseek = ['m-a', 'm-b'];
+    state.settings.fetchError = '服务商不支持模型列表'; // 若误走拉取必失败
+    const page = chat();
+    await flush();
+    assert.deepEqual(page.modelChoices, ['m-a', 'm-b'], '进页直接用本地清单');
+    const items = page.modelMenuItems();
+    assert.equal(items.length, 3, '2 模型 + 重新获取项');
+    items[2].action();
+    await flush();
+    assert.deepEqual(page.modelChoices, ['m-a', 'm-b'], '拉取失败不动清单');
+    state.settings.fetchError = '';
+    items[2].action();
+    await flush();
+    assert.deepEqual(page.modelChoices, state.settings.models, '重新获取绕过清单拉全量');
+    resetSettings();
+  });
+
+  test('AiService 服务商模型清单持久化：回读、空数组清除、坏 JSON 容错', () => {
+    deps.state.store.set('p:ai_provider_models_custom-9', JSON.stringify(['a', 'b', 3]));
+    assert.deepEqual(RealAiService.loadProviderModels('custom-9'), ['a', 'b'], '非字符串项丢弃');
+    RealAiService.saveProviderModels('custom-9', ['x']);
+    assert.deepEqual(RealAiService.loadProviderModels('custom-9'), ['x']);
+    RealAiService.saveProviderModels('custom-9', []);
+    assert.deepEqual(RealAiService.loadProviderModels('custom-9'), [], '空数组即清除');
+    deps.state.store.set('p:ai_provider_models_custom-9', '{bad json');
+    assert.deepEqual(RealAiService.loadProviderModels('custom-9'), [], '坏 JSON 不抛错');
   });
 
   test('Token Plan 音频链路：ASR/TTS 请求形态、缓存清理与未配 Key 容错', async () => {

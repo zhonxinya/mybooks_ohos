@@ -76,12 +76,30 @@ struct AiAssistantPage {
 
   /**
    * 模型快切态：currentModel 始终跟随全局配置（设置页改完返回即同步）；
-   * 列表为空且已配置地址时静默拉一次，失败不打扰——菜单里给「重新获取」出口。
+   * 本地常用模型清单（设置页维护）优先，未维护时静默拉一次服务商列表，
+   * 失败不打扰——菜单里给「重新获取」出口。
    */
   private loadModelState(): void {
     const cfg: AiConfig = AiService.loadConfig();
     this.currentModel = cfg.model;
-    if (this.modelChoices.length > 0 || cfg.baseUrl.length === 0) {
+    if (cfg.baseUrl.length === 0) {
+      return;
+    }
+    const local: string[] = AiService.loadProviderModels(cfg.providerId);
+    if (local.length > 0) {
+      this.modelChoices = local;
+      return;
+    }
+    if (this.modelChoices.length > 0) {
+      return;
+    }
+    this.refreshModels();
+  }
+
+  /** 绕过本地清单直接拉服务端全量列表（菜单「重新获取」出口）。 */
+  private refreshModels(): void {
+    const cfg: AiConfig = AiService.loadConfig();
+    if (cfg.baseUrl.length === 0) {
       return;
     }
     AiService.fetchModels(cfg.providerId, cfg.baseUrl, '').then((ids: string[]): void => {
@@ -124,8 +142,7 @@ struct AiAssistantPage {
       items.push({
         value: '重新获取模型列表',
         action: (): void => {
-          this.modelChoices = [];
-          this.loadModelState();
+          this.refreshModels();
         },
       });
     }
