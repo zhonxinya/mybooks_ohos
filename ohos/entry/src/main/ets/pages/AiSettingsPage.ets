@@ -5,6 +5,10 @@ import { SpeakService } from '../services/SpeakService';
 import { AppRouter } from '../utils/AppRouter';
 import { REALTIME_TIMBRES, TTS_TIMBRES, timbreLabel, AiVoiceTimbre } from '../services/AiVoiceKit';
 
+/** 思考强度档位：值即 reasoning_effort 透传内容，default 不发字段。 */
+const REASONING_EFFORT_OPTIONS: string[] = ['default', 'low', 'medium', 'high'];
+const REASONING_EFFORT_LABELS: string[] = ['跟随模型默认', '低', '中', '高'];
+
 /** @Builder 只有传单个对象字面量才是引用传递；标量参数不随 @State 更新，切服务商时输入框会停在旧值。 */
 interface AiFieldParams {
   label: string;
@@ -51,6 +55,8 @@ struct AiSettingsPage {
   /** 音色：realtime 通话 / 播报 TTS 各一槽（池见 AiVoiceKit）。 */
   @State rtTimbre: string = 'longanqian';
   @State ttsTimbre: string = 'longanhuan_v3.6';
+  /** 思考强度：'default'/'low'/'medium'/'high'（见请求体 reasoning_effort）。 */
+  @State reasoningEffort: string = 'default';
   /** 语音通话对话模型：false=跟随全局；provider 0=跟随，其余=providers[index-1]。 */
   @State voiceFollow: boolean = true;
   @State voiceProviderId: string = '';
@@ -72,6 +78,7 @@ struct AiSettingsPage {
     this.callMode = AiService.loadCallMode();
     this.rtTimbre = AiService.loadRealtimeTimbre();
     this.ttsTimbre = AiService.loadTtsTimbre();
+    this.reasoningEffort = AiService.loadReasoningEffort();
     this.voiceProviderId = AiService.loadVoiceProviderId();
     this.voiceFollow = this.voiceProviderId.length === 0;
     this.voiceModel = AiService.loadVoiceModel();
@@ -280,6 +287,29 @@ struct AiSettingsPage {
       items.push(opt);
     }
     return items;
+  }
+
+  private effortItems(): SelectOption[] {
+    const items: SelectOption[] = [];
+    for (let i = 0; i < REASONING_EFFORT_OPTIONS.length; i++) {
+      const opt: SelectOption = { value: REASONING_EFFORT_LABELS[i] };
+      items.push(opt);
+    }
+    return items;
+  }
+
+  private indexOfEffort(): number {
+    for (let i = 0; i < REASONING_EFFORT_OPTIONS.length; i++) {
+      if (REASONING_EFFORT_OPTIONS[i] === this.reasoningEffort) {
+        return i;
+      }
+    }
+    return 0;
+  }
+
+  private effortLabel(effort: string): string {
+    const idx: number = REASONING_EFFORT_OPTIONS.indexOf(effort);
+    return idx >= 0 ? REASONING_EFFORT_LABELS[idx] : REASONING_EFFORT_LABELS[0];
   }
 
   private contextSelectIndex(): number {
@@ -789,6 +819,26 @@ struct AiSettingsPage {
                 this.contextLength = CONTEXT_LENGTH_OPTIONS[index];
               });
             Text(`对话时携带最近约 ${AiService.contextRounds(this.contextLength)} 轮历史；档位越高越费 token`)
+              .fontSize(11)
+              .fontColor($r('app.color.text_tertiary'))
+              .width('100%');
+          }
+          .width('100%');
+
+          Column({ space: 6 }) {
+            Text('思考强度')
+              .fontSize(13)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%');
+            Select(this.effortItems())
+              .selected(this.indexOfEffort())
+              .value(this.effortLabel(this.reasoningEffort))
+              .width('100%')
+              .onSelect((index: number, value: string) => {
+                this.reasoningEffort = REASONING_EFFORT_OPTIONS[index];
+                AiService.saveReasoningEffort(this.reasoningEffort);
+              });
+            Text('仅对思考型模型生效（OpenAI 兼容 reasoning_effort 透传）；「跟随模型默认」不发送该参数')
               .fontSize(11)
               .fontColor($r('app.color.text_tertiary'))
               .width('100%');

@@ -481,17 +481,61 @@ export function register(ctx) {
     await Kit.AiVoiceKit.runTool('set_voice', '{"voice":"bogus"}', 'c2', null);
     assert.equal(switched, 0, '非法音色不得触发会话重建');
     Kit.AiVoiceKit.voiceSwitcher = null;
-    // realtimeDefinitions：全集+1，set_voice 不占末位（OpenCode 丢末项护栏）
+    // realtimeDefinitions：全集−ask_user+set_voice，set_voice 不占末位（OpenCode 丢末项护栏）
     const defs = RealAiTools.realtimeDefinitions('confirm');
-    assert.equal(defs.length, 30); // 29 全集（含 fetch_url）+ set_voice
+    assert.equal(defs.length, 29, '29 全集−ask_user（语音无卡片）+set_voice');
     assert.equal(defs[defs.length - 1].function.name, 'forget_memory');
     assert.ok(defs.some((d) => d.function.name === 'set_voice'));
+    assert.ok(!defs.some((d) => d.function.name === 'ask_user'), 'ask_user 不得暴露给语音');
     const ro = RealAiTools.realtimeDefinitions('readonly');
-    assert.equal(ro.length, 18, 'set_voice 非写工具，只读模式保留（17 只读含 fetch_url + set_voice）');
+    assert.equal(ro.length, 17, 'set_voice 非写工具，只读模式保留（16 只读含 fetch_url 去 ask_user + set_voice）');
     assert.ok(ro[ro.length - 1].function.name !== 'set_voice', '末位护栏：set_voice 不得占尾');
     // 文字回路 dispatch 兜底：误调给出引导而非未知工具
     const guide = await RealAiTools.execute('set_voice', '{"voice":"longanqian"}');
     assert.ok(guide.indexOf('仅在实时语音通话中可用') >= 0, guide);
+    // 语音侧自我学习规程（与文字共用 save_memory 记忆通道）
+    assert.ok(Kit.VOICE_TOOL_NOTE.indexOf('save_memory') >= 0, '语音缺自我学习指引');
+    assert.ok(Kit.VOICE_TOOL_NOTE.indexOf('同一份长期记忆') >= 0, '语音指引未点明记忆共享');
   });
 
+  test('语音工具面与文字统一：realtimeDefinitions 并入 MCP 动态工具，mcp_ 调用走统一路由', async () => {
+    const mcp = [{ type: 'function', function: { name: 'mcp_es_search', description: '增强搜索', parameters: { type: 'object', properties: {} } } }];
+    const defs = RealAiTools.realtimeDefinitions('confirm', mcp);
+    assert.equal(defs.length, 30, '29（含 set_voice）+1 MCP');
+    assert.equal(defs[defs.length - 1].function.name, 'mcp_es_search', 'MCP 并尾；set_voice 护栏位不前移');
+    assert.ok(defs.some((d) => d.function.name === 'set_voice'));
+    const ro = RealAiTools.realtimeDefinitions('readonly', mcp);
+    assert.equal(ro.length, 18, '17+1 MCP');
+    // 统一路由：语音 runTool 与文字回路同源 AiService.toolRunFor——mcp_ 前缀进 MCP 容错分支，
+    // 不再落 dispatch 的「未知工具」（旧语音链路 mcp 调用必然失败的根因）
+    const out = await RealAiService.toolRunFor('mcp_es_search', '{}', 'c1');
+    assert.ok(typeof out === 'string' && out.length > 0);
+    assert.ok(out.indexOf('未知工具') < 0, out);
+    // 内置工具经同一路由仍达 dispatch（回归护栏：ask_user 语音侧兜底文案）
+    const ask = await RealAiService.toolRunFor('ask_user', '{"question":"哪本?"}', 'c2');
+    assert.ok(ask.indexOf('正文里直接问') >= 0, ask);
+  });
+
+  test('groupActivities 活动合并：相邻同名同标签并一条 ×N，状态聚合 doing>rejected，summary/books 取最后非空', async () => {
+    const Model = await load('AiChatModel');
+    const g = Model.groupActivities;
+    const act = (name, label, state, summary = '', books = []) => ({ name, label, state, summary, books });
+    assert.deepEqual(g([]), []);
+    const one = g([act('search_web', '搜索网页', 'done', '3 条')]);
+    assert.equal(one.length, 1);
+    assert.equal(one[0].count, 1);
+    const merged = g([act('search_web', '搜索网页', 'done', 'A'),
+      act('search_web', '搜索网页', 'done', 'B'), act('fetch_url', '读取网页', 'done')]);
+    assert.equal(merged.length, 2, '同名相邻合并，异名另起');
+    assert.equal(merged[0].count, 2);
+    assert.equal(merged[0].summary, 'B', 'summary 取组内最后非空');
+    const diffLabel = g([act('search_web', '搜索一', 'done'), act('search_web', '搜索二', 'done')]);
+    assert.equal(diffLabel.length, 2, '标签不同不合并（并行同工具不同任务各算一步）');
+    assert.equal(g([act('add_to_shelf', '加入书架', 'done'), act('add_to_shelf', '加入书架', 'rejected')])[0].state,
+      'rejected');
+    assert.equal(g([act('x', 'X', 'doing'), act('x', 'X', 'done')])[0].state, 'doing', '任一在途即 doing');
+    const bk = g([act('list_shelf', '查看书架', 'done', '', [{ title: 'A', subtitle: '', cover: '' }]),
+      act('list_shelf', '查看书架', 'done', '', [{ title: 'B', subtitle: '', cover: '' }])]);
+    assert.equal(bk[0].books[0].title, 'B');
+  });
 }

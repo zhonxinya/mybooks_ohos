@@ -249,7 +249,9 @@ struct AiVoiceCallPage {
     };
     try {
       const prompt: string = VOICE_SYSTEM_PROMPT + VOICE_TOOL_NOTE;
-      await RealtimeCallService.connect(prompt, cb, AiTools.realtimeDefinitions(AiService.loadPermission()));
+      // 与文字回路同源：MCP 动态工具一并注入语音工具面（非 Token Plan/失败=空集）
+      const mcpTools = await AiService.mcpToolset();
+      await RealtimeCallService.connect(prompt, cb, AiTools.realtimeDefinitions(AiService.loadPermission(), mcpTools));
       this.rtMode = true;
       this.muted = false;
       this.st = ST_LISTENING;

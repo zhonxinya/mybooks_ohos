@@ -59,7 +59,9 @@ export const VOICE_TOOL_NOTE: string =
   '\n图书相关请求（找书、看书评、下载、加书单等）必须先调用工具查询再回答；' +
   '拿到工具结果后用一两句口语概括，不要逐条念 JSON，寒暄不要调用工具。' +
   '\n当场景明显适合另一种声线（如给孩子讲故事、用户点名要男声/温柔声、角色扮演）时，' +
-  '可调用 set_voice 更换你的音色；换音色会让会话短暂重连，一小时内别反复换。';
+  '可调用 set_voice 更换你的音色；换音色会让会话短暂重连，一小时内别反复换。' +
+  '\n听到明确的偏好或纠正（「我喜欢…」「不对，其实是…」）时，用 save_memory 随手记一条简短事实，' +
+  '与文字对话共用同一份长期记忆；遵守写操作确认规则，不重复记已有记忆。';
 
 export class AiVoiceKit {
   /**
@@ -132,7 +134,7 @@ export class AiVoiceKit {
         if (permission === 'readonly') {
           output = '当前为只读权限模式，写操作不可执行。';
         } else if (permission === 'confirm') {
-          const label: string = AiTools.toolLabel(name);
+          const label: string = AiService.toolLabelFor(name);
           let allow: boolean = false;
           try {
             const dialog = await uiContext.getPromptAction().showDialog({
@@ -147,12 +149,12 @@ export class AiVoiceKit {
           } catch (_error) {
             allow = false;
           }
-          output = allow ? await AiTools.execute(name, args, callId) : '用户拒绝了该操作。';
+          output = allow ? await AiService.toolRunFor(name, args, callId) : '用户拒绝了该操作。';
         } else {
-          output = await AiTools.execute(name, args, callId);
+          output = await AiService.toolRunFor(name, args, callId);
         }
       } else {
-        output = await AiTools.execute(name, args, callId);
+        output = await AiService.toolRunFor(name, args, callId);
       }
     } catch (error) {
       output = `工具执行失败：${error}`;

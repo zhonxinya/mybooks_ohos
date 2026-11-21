@@ -278,6 +278,9 @@ export function register(ctx) {
     assert.ok(sys.includes('回答与思考过程一律使用中文'), '缺中文约束');
     assert.ok(sys.includes('工具返回「暂时失败」时可稍后原样重试一次'), '缺工具失败重试引导');
     assert.ok(sys.includes('返回「执行失败」时按错误提示修正参数或方案再试'), '缺确定性失败修正指引');
+    assert.ok(sys.includes('自我学习：用 save_memory'), '工具档缺自我学习规程');
+    assert.ok(sys.includes('先用 forget_memory 删除再 save 新版'), '学习规程缺冲突更新纪律');
+    assert.ok(sys.includes('不要记录：工具随时可查的数据'), '学习规程缺不该记清单');
     assert.ok(sys.includes('当前为「逐笔确认」权限模式'), 'confirm 档缺补注');
     state.settings.permission = 'readonly';
     const ro = (await store.buildContext())[0].content;
@@ -296,6 +299,7 @@ export function register(ctx) {
     assert.ok(!noTools.includes('先调用相应工具'), '无 tools 档不得写「先调用相应工具」');
     assert.ok(!noTools.includes('权限模式'), '无 tools 档不得带权限补注');
     assert.ok(!noTools.includes('search_sonovel'), '无 tools 档不得带跨工具流程指引');
+    assert.ok(!noTools.includes('自我学习'), '无 tools 档不得带学习规程（save_memory 无写入通道）');
     assert.ok(noTools.includes('回答与思考过程一律使用中文'), '中文约束应全档保留');
     assert.ok(noTools.includes('如实说明不确定，绝不编造'), '无 tools 档仍须防编造');
     state.settings.config = savedConfig;

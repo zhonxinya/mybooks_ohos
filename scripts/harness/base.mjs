@@ -110,6 +110,8 @@ export const AiService = {
   saveRealtimeTimbre: (v) => { state.settings.rtTimbre = v; },
   loadTtsTimbre: () => state.settings.ttsTimbre ?? 'longanhuan_v3.6',
   saveTtsTimbre: (v) => { state.settings.ttsTimbre = v; },
+  loadReasoningEffort: () => state.settings.reasoningEffort ?? 'default',
+  saveReasoningEffort: (v) => { state.settings.reasoningEffort = v; },
   loadVoiceConfig: () => {
     if (state.settings.voiceProviderId.length > 0) {
       const p = state.settings.providers.find((x) => x.id === state.settings.voiceProviderId);

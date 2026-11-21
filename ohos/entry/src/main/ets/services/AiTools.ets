@@ -49,12 +49,19 @@ export class AiTools {
   }
 
   /**
-   * realtime 语音通话工具面 = 文字全集 + set_voice。
-   * 音色切换只在通话会话有意义，不进 TOOL_DEFS（文字回路不暴露）。
+   * realtime 语音通话工具面 = 文字全集（去 ask_user）+ set_voice + MCP 动态工具。
+   * 与文字 toolset 对齐：mcpTools 由调用方 connect 前 await mcpToolset() 取得（空=非 Token Plan）。
+   * ask_user 排除：语音无选项卡片交互，回路会引导模型正文提问，暴露出去只会白耗一轮调用。
+   * set_voice 只在通话有意义，不进 TOOL_DEFS；插末前保留 OpenCode 丢末项护栏（mcp 项在其后）。
    */
-  static realtimeDefinitions(mode: AiPermissionMode = 'confirm'): AiToolDefinition[] {
-    const defs: AiToolDefinition[] = AiTools.definitions(mode).slice();
+  static realtimeDefinitions(mode: AiPermissionMode = 'confirm',
+    mcpTools: AiToolDefinition[] | null = null): AiToolDefinition[] {
+    const defs: AiToolDefinition[] = AiTools.definitions(mode).filter((d: AiToolDefinition): boolean =>
+      d.function.name !== 'ask_user');
     defs.splice(defs.length - 1, 0, TOOL_SET_VOICE);
+    if (mcpTools !== null && mcpTools.length > 0) {
+      return defs.concat(mcpTools);
+    }
     return defs;
   }
 

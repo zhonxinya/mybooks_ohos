@@ -141,6 +141,16 @@ export class AiServiceConfig {
     TalebookService.prefSet(KEY_REALTIME_TIMBRE, voice);
   }
 
+  /** 思考强度档位：'default'（跟随模型默认，请求体不发字段）/'low'/'medium'/'high'。 */
+  static loadReasoningEffort(): string {
+    const v: string = TalebookService.prefGet(KEY_REASONING_EFFORT);
+    return v.length > 0 ? v : 'default';
+  }
+
+  static saveReasoningEffort(effort: string): void {
+    TalebookService.prefSet(KEY_REASONING_EFFORT, effort);
+  }
+
   /** 播报 TTS 音色（空=默认 longanhuan_v3.6，实测可用音色）。 */
   static loadTtsTimbre(): string {
     const v: string = TalebookService.prefGet(KEY_TTS_TIMBRE);
@@ -413,6 +423,8 @@ export const KEY_VOICE_PROVIDER: string = 'ai_voice_provider';
 export const KEY_VOICE_MODEL: string = 'ai_voice_model';
 export const KEY_REALTIME_TIMBRE: string = 'ai_voice_timbre_realtime';
 export const KEY_TTS_TIMBRE: string = 'ai_voice_timbre_tts';
+/** 推理模型的思考强度（OpenAI 兼容 reasoning_effort）。 */
+export const KEY_REASONING_EFFORT: string = 'ai_reasoning_effort';
 /** AI 回复播报引擎：'system'（默认）/'cloud'（Token Plan TTS）。 */
 export const KEY_SPEAK_ENGINE: string = 'ai_speak_engine';
 /** 语音通话模式：'realtime'（默认，WS 全双工）/'turn'（轮转）。 */
