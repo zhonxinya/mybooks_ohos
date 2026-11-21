@@ -7,97 +7,17 @@ import { AiService, AiConfig, AiMessage, AiStreamHandlers, AiAbortHandle } from 
 import { AiPersona } from './AiPersona';
 import { TalebookService } from './TalebookService';
 
-import { ChatActivity, ChatBubble, parseBubbles, sessionTitle } from './AiChatModel';
+import { AskRequest, buildSessionMd, ChatActivity, ChatBubble, ChatSession, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, COMPRESS_MIN_DROPPED, HistorySummary, parseBubbles, sessionMatches, sessionTitle } from './AiChatModel';
+import { permissionPromptNote, SUMMARY_SYSTEM_PROMPT, SYSTEM_PROMPT, SYSTEM_PROMPT_LEARN, SYSTEM_PROMPT_TOOLS } from './AiChatPrompts';
 
-export { ChatActivity, ChatBubble } from './AiChatModel';
+export { AskRequest, ChatActivity, ChatBubble, ChatSession, HistorySummary } from './AiChatModel';
 
 /** 写操作闸门确认弹窗；需要 UIContext，只有页面在场时可用。 */
 export type ConfirmUi = (label: string, args: string) => Promise<boolean>;
 
-/** ask_user 反问卡片的待答状态：对话页渲染选项按钮，点选/跳过经 answerAsk 归还回路。 */
-export interface AskRequest {
-  question: string;
-  options: string[];
-}
-
-/** 存档会话（不含当前会话）：切换/新建时当前会话整条归档到这里。 */
-export interface ChatSession {
-  id: string;
-  title: string;
-  updatedAt: number;
-  messages: ChatBubble[];
-}
-
-/**
- * 系统提示词只留**行为规则与跨工具流程**：单个工具的名称/用途/参数由请求体
- * tools 数组自带（AiTools 描述是权威来源，此处复述既烧 token 又会与代码漂移）。
- * 权限模式说明由 permissionPromptNote 按当前档位追加，三档都有明确表述。
- * 工具指引段（SYSTEM_PROMPT_TOOLS）只在通道挂 tools 时拼入，见 buildContext。
- */
-const SYSTEM_PROMPT: string =
-  '你是一个电子书阅读应用的助手。回答与思考过程一律使用中文（书名、参数值等原文引用除外），简洁、准确。' +
-  '问题涉及用户的书籍、阅读情况或其他可查证的信息，而你没有可靠依据时，如实说明不确定，绝不编造。' +
-  '系统提示中若已有「用户记忆」列表，回答时自然参考、不必复述。';
-
-/** 工具通道的行为规则与跨工具流程（仅 OpenCode 网关挂 tools 时可用）。 */
-const SYSTEM_PROMPT_TOOLS: string =
-  '问题涉及用户的书籍、阅读情况或其他可查证的信息时，先调用相应工具拿到真实数据再回答，绝不编造；' +
-  '工具数据不足时直接说明不确定。' +
-  '工具返回「暂时失败」时可稍后原样重试一次；返回「执行失败」时按错误提示修正参数或方案再试，勿原样重试；仍失败如实告知，不反复重试。' +
-  '写操作（建书单、加书、下载任务、改元数据、换封面、删记忆）一律按后文的权限模式说明处理。' +
-  '需要用户在多个候选间拍板、或缺少无法安全臆断的关键信息时，用 ask_user 提出一个问题并给 2-6 个简短选项，' +
-    '得到答复前不要执行有后果的操作；用户跳过时基于现状谨慎收敛，不要反复追问。' +
-  '换封面流程：先 search_cover 列出候选给用户看，用户选定后再 set_cover。' +
-  '网文下载流程：search_sonovel 拿 url → add_sonovel_task 入队 → list_download_tasks 报进度，成品完成后自动进本地书架可读。';
-
-/**
- * 自我学习规程：save_memory/forget_memory 工具早已就位，但模型没有触发时机与记录纪律，
- * 记忆全靠用户点名——此段把「何时记、怎么记、何时更新」写进提示词。只在工具通道拼入。
- */
-const SYSTEM_PROMPT_LEARN: string =
-  '\n\n自我学习：用 save_memory 主动把值得长期记住的事实沉淀进记忆，让后续对话不重复犯错、不重复询问。' +
-  '以下时机立即记录：用户表达偏好或习惯（「我喜欢…」「我只看…」）；用户纠正你（「别这样」「不对，其实是…」）；' +
-  '多步任务后出现可复用的路径、参数或 id。记录规矩：一条一个简短事实，不重复「用户记忆」列表现有条目；' +
-  '发现条目过时或矛盾，先用 forget_memory 删除再 save 新版。不要记录：工具随时可查的数据、单次闲聊、未证实的猜测。';
-
-/** 权限模式补注：追加在系统提示末尾，用顶栏徽标的准确档位名（模型曾瞎编「可写/编辑模式」）。 */
-function permissionPromptNote(mode: AiPermissionMode): string {
-  if (mode === 'readonly') {
-    return '当前为「只读」权限模式：写操作工具不可用，调用会被系统拒绝。' +
-      '用户要求改动数据时，请其点击对话页顶栏「权限」徽标切换到「逐笔确认」或「自动放行」。';
-  }
-  if (mode === 'auto') {
-    return '当前为「自动放行」权限模式：写操作工具不逐笔确认、直接执行；执行后如实汇报改了什么。';
-  }
-  return '当前为「逐笔确认」权限模式：每个写操作工具执行前会请用户批准，用户拒绝时不要坚持重试，问明原因即可。';
-}
-
 /** 附图发送前的压缩长边（像素）：够模型看清，又不至于撑爆请求体。 */
 const IMAGE_MAX_EDGE: number = 1024;
 const IMAGE_JPEG_QUALITY: number = 80;
-
-/** 对话历史持久化（preferences 明文 KV，与账号列表同层）：只存已固化的气泡。 */
-const CHAT_HISTORY_KEY: string = 'ai_chat_history';
-/** 历史上限：超出丢弃最旧条目，避免 preferences.json 无限膨胀。 */
-const CHAT_HISTORY_MAX: number = 60;
-/** 会话存档键：不含当前会话（当前仍走 ai_chat_history，退出页面重进照常恢复）。 */
-const CHAT_SESSIONS_KEY: string = 'ai_chat_sessions';
-/** 存档会话数上限：超出按 updatedAt 从旧到新丢弃。 */
-const CHAT_SESSIONS_MAX: number = 12;
-/** 历史摘要键：按会话 id 存「被窗口截断的旧轮」的压缩摘要。 */
-const CHAT_SUMMARIES_KEY: string = 'ai_chat_summaries';
-/** 未摘数量达到该阈值才触发一次摘要请求：压缩自身也要省 token。 */
-const COMPRESS_MIN_DROPPED: number = 8;
-/** 摘要生成请求的系统提示词：面向「续聊携带」，只留事实不复议论。 */
-const SUMMARY_SYSTEM_PROMPT: string =
-  '把对话片段压缩成供后续对话使用的交接摘要：保留书名/id、用户偏好、已完成与未完成事项等关键事实，' +
-    '要点式短句，总量不超过 200 字。只输出摘要正文。';
-
-/** 单会话的历史摘要：text=摘要正文，count=已折叠进摘要的筛后气泡前缀条数。 */
-export interface HistorySummary {
-  text: string;
-  count: number;
-}
 
 /** 摘要落盘条目：HistorySummary 加会话 id，仅用于 JSON 持久化。 */
 interface SummaryRecord {
@@ -140,6 +60,8 @@ export class AiChatStore {
   private askResolve: ((answer: string) => void) | null = null;
   /** 存档会话列表（时间戳 id 去重、updatedAt 排序截顶）；当前会话不在其中。 */
   sessions: ChatSession[] = [];
+  /** 当前会话的手动改名（#1513）：当前会话不在 sessions 里，改名先落这里，归档时随带。 */
+  private currentNamed: string = '';
   /** 各会话历史摘要（键=会话 id）：窗口外旧轮压缩后随会话携带，不再静默丢弃。 */
   private summaries: Map<string, HistorySummary> = new Map();
   private compressing: boolean = false;
@@ -779,8 +701,11 @@ export class AiChatStore {
 
   // —— 多会话：当前会话始终走 ai_chat_history，切换/新建时整条归档进 ai_chat_sessions ——
 
-  /** 面板显示的当前会话标题。 */
+  /** 面板显示的当前会话标题：手动改名（#1513）优先于自动生成。 */
   currentTitle(): string {
+    if (this.currentNamed.length > 0) {
+      return this.currentNamed;
+    }
     const t: string = sessionTitle(this.messages);
     return t.length > 0 ? t : '新对话';
   }
@@ -809,8 +734,9 @@ export class AiChatStore {
           || typeof rec['updatedAt'] !== 'number') {
           continue;
         }
-        list.push({ id: rec['id'], title: rec['title'], updatedAt: rec['updatedAt'],
-          messages: parseBubbles(rec['messages']) });
+        list.push({ id: rec['id'], title: rec['title'],
+          named: typeof rec['named'] === 'string' ? rec['named'] : '',
+          updatedAt: rec['updatedAt'], messages: parseBubbles(rec['messages']) });
       }
       list.sort((a: ChatSession, b: ChatSession): number => b.updatedAt - a.updatedAt);
       this.sessions = list.slice(0, CHAT_SESSIONS_MAX);
@@ -826,8 +752,10 @@ export class AiChatStore {
       return;
     }
     const title: string = sessionTitle(items);
+    const named: string = this.currentNamed;
     this.sessions.push({ id: this.currentId,
-      title: title.length > 0 ? title : '新对话', updatedAt: Date.now(),
+      title: named.length > 0 ? named : (title.length > 0 ? title : '新对话'),
+      named: named, updatedAt: Date.now(),
       messages: items.slice(-CHAT_HISTORY_MAX) });
     if (this.sessions.length > CHAT_SESSIONS_MAX) {
       this.sessions.sort((a: ChatSession, b: ChatSession): number => a.updatedAt - b.updatedAt);
@@ -847,6 +775,7 @@ export class AiChatStore {
     this.stashCurrent();
     this.messages = [];
     this.currentId = this.nextId();
+    this.currentNamed = '';
     this.errorTip = '';
     this.saveHistory();
     this.notify();
@@ -868,6 +797,7 @@ export class AiChatStore {
     this.saveSessions();
     this.messages = target.messages.slice();
     this.currentId = target.id;
+    this.currentNamed = target.named;
     this.errorTip = '';
     this.saveHistory();
     this.notify();
@@ -887,6 +817,72 @@ export class AiChatStore {
       this.saveSummaries();
     }
     this.notify();
+  }
+
+  /**
+   * 会话改名（#1513）：trim 后超长截 30 字。当前会话落 currentNamed 槽
+   * （归档时随带，切回不丢）；存档会话直接改 title+named。空名拒绝。
+   */
+  renameSession(id: string, name: string): boolean {
+    const t: string = name.trim();
+    if (t.length === 0) {
+      return false;
+    }
+    const cut: string = t.length > 30 ? `${t.slice(0, 30)}…` : t;
+    if (id.length === 0 || id === this.currentId) {
+      this.currentNamed = cut;
+      this.notify();
+      return true;
+    }
+    const target: ChatSession | undefined =
+      this.sessions.find((s: ChatSession): boolean => s.id === id);
+    if (target === undefined) {
+      return false;
+    }
+    target.title = cut;
+    target.named = cut;
+    this.saveSessions();
+    this.notify();
+    return true;
+  }
+
+  /** 面板列表按关键词过滤（#1513）：匹配标题或任一消息正文；空词原样返回。 */
+  searchSessions(kw: string): ChatSession[] {
+    if (kw.trim().length === 0) {
+      return this.sessions.slice();
+    }
+    return this.sessions.filter((s: ChatSession): boolean => sessionMatches(s.title, s.messages, kw));
+  }
+
+  /** 导出取正文（#1513）：空 id 或当前会话 → 当前 messages；找不到目标返回空。 */
+  sessionMessages(id: string): ChatBubble[] {
+    if (id.length === 0 || id === this.currentId) {
+      return this.messages.slice();
+    }
+    const target: ChatSession | undefined =
+      this.sessions.find((s: ChatSession): boolean => s.id === id);
+    return target === undefined ? [] : target.messages.slice();
+  }
+
+  /** 导出/展示用会话标题（#1513）。 */
+  sessionTitleOf(id: string): string {
+    if (id.length === 0 || id === this.currentId) {
+      return this.currentTitle();
+    }
+    const target: ChatSession | undefined =
+      this.sessions.find((s: ChatSession): boolean => s.id === id);
+    return target === undefined ? '新对话' : target.title;
+  }
+
+  /** 会话导出 Markdown 文本（#1513）：无可导出内容返回空串（调用侧提示）。 */
+  exportSessionMd(id: string): string {
+    const items: ChatBubble[] = this.sessionMessages(id);
+    const solid: ChatBubble[] = items.filter((b: ChatBubble): boolean =>
+      !b.streaming && b.error !== true && b.content.trim().length > 0);
+    if (solid.length === 0) {
+      return '';
+    }
+    return buildSessionMd(this.sessionTitleOf(id), solid, Date.now());
   }
 
   /**
@@ -981,6 +977,7 @@ export class AiChatStore {
     this.summaries.clear();
     this.compressing = false;
     this.bookContext = '';
+    this.currentNamed = '';
     this.streamViews.clear();
     TalebookService.prefSet(CHAT_HISTORY_KEY, '[]');
     TalebookService.prefSet(CHAT_SESSIONS_KEY, '[]');

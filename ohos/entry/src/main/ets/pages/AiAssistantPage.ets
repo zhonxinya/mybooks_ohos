@@ -1,7 +1,7 @@
 import { pasteboard } from '@kit.BasicServicesKit';
 import { promptAction, SymbolGlyphModifier } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
-import { fileIo as fs } from '@kit.CoreFileKit';
+import { fileIo as fs, picker } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { PageScaffold, SecondaryButton, TextButton } from '../components';
 import { MarkdownText } from '../components/MarkdownText';
@@ -51,6 +51,8 @@ struct AiAssistantPage {
   /** 存档会话列表与当前会话 id（store 镜像），供「对话」面板渲染。 */
   @State sessions: ChatSession[] = [];
   @State currentId: string = '';
+  /** 会话面板搜索词（#1513）：过滤走 store.searchSessions，命中含标题与消息正文。 */
+  @State sessQuery: string = '';
   /** 对话管理半模态面板开关（页面局部态）。 */
   @State sessionsSheet: boolean = false;
   /** 顶栏模型快切（只改全局配置的 model 字段）：当前模型 id + 服务商模型列表。 */
@@ -741,14 +743,16 @@ struct AiAssistantPage {
   }
 
   /**
-   * 对话管理面板：当前会话置顶带勾（不可点对比），存档会话点击切换、X 删除。
-   * 生成中一律拒绝切换/新建（store 返回 false 转提示）；渲染体在 SessionsSheet 组件。
+   * 对话管理面板：当前会话置顶带勾（不可点对比），存档会话点击切换。
+   * #1513：搜索过滤、行内改名与导出；生成中拒绝切换/新建（store 返回 false 转提示）。
    */
   @Builder
   sessionsSheetView() {
     SessionsSheet({
-      sessions: this.sessions,
+      sessions: this.store.searchSessions(this.sessQuery),
       currentTitle: this.store.currentTitle(),
+      currentId: this.currentId,
+      query: this.sessQuery,
       onPick: (id: string): void => {
         if (!this.store.switchSession(id)) {
           this.toast('生成中，请稍候再切换');
@@ -764,8 +768,59 @@ struct AiAssistantPage {
           this.sessionsSheet = false;
         }
       },
+      onQuery: (kw: string): void => {
+        this.sessQuery = kw;
+      },
+      onRename: (id: string, name: string): void => {
+        if (!this.store.renameSession(id, name)) {
+          this.toast('重命名失败：标题不能为空');
+        }
+      },
+      onExport: (id: string): void => {
+        void this.exportSession(id);
+      },
     });
   }
+
+  /** 导出会话为 Markdown（#1513）：系统保存面板选位置，写不进只提示失败不静默。 */
+  private async exportSession(id: string): Promise<void> {
+    const md: string = this.store.exportSessionMd(id);
+    if (md.length === 0) {
+      this.toast('这条对话还没有可导出的内容');
+      return;
+    }
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    try {
+      const options = new picker.DocumentSaveOptions();
+      // SDK 实名：newFileNames 预置文件名、fileSuffixChoices 限定后缀选择
+      options.newFileNames = [`${this.safeFileName(this.store.sessionTitleOf(id))}.md`];
+      options.fileSuffixChoices = ['.md'];
+      const viewPicker = new picker.DocumentViewPicker(context);
+      const uris: string[] = await viewPicker.save(options);
+      if (uris.length === 0) {
+        return;
+      }
+      const file = fs.openSync(uris[0], fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      try {
+        fs.writeSync(file.fd, md);
+      } finally {
+        fs.closeSync(file);
+      }
+      this.toast('已导出 Markdown');
+    } catch (e) {
+      this.toast(`导出失败：${e}`);
+    }
+  }
+
+  /** 导出文件名净化：文件系统非法字符换空格，限 40 字。 */
+  private safeFileName(title: string): string {
+    const cleaned: string = title.replace(/[\\/:*?"<>|\r\n]/g, ' ').trim();
+    if (cleaned.length === 0) {
+      return 'AI对话';
+    }
+    return cleaned.length > 40 ? cleaned.substring(0, 40) : cleaned;
+  }
+
 
   @Builder
   pageContent() {

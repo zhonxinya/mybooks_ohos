@@ -707,4 +707,56 @@ export function register(ctx) {
     assert.ok(JSON.parse(state.prefs.get('ai_chat_history')).length > 0, '重试轮落盘');
   });
 
+  test('会话改名/搜索/导出（#1513）：named 跨归档持久；搜索含正文；导出稿跳过错误/流式', async () => {
+    const model = await load('AiChatModel');
+    const bs = [
+      { role: 'user', content: '推荐科幻', streaming: false, error: false, activities: [] },
+      { role: 'assistant', content: '《三体》', streaming: false, error: false, activities: [] },
+      { role: 'assistant', content: '网络错误', streaming: false, error: true, activities: [] },
+      { role: 'assistant', content: '半成品', streaming: true, error: false, activities: [] },
+      { role: 'assistant', content: '   ', streaming: false, error: false, activities: [] },
+    ];
+    const md = model.buildSessionMd('科幻推荐', bs, new Date(2026, 10, 21, 9, 5).getTime());
+    assert.ok(md.startsWith('# 科幻推荐'), '标题行');
+    assert.ok(md.includes('2026-11-21 09:05'), '导出时间戳');
+    assert.ok(md.includes('## 用户\n\n推荐科幻') && md.includes('## 助手\n\n《三体》'), '角色分节');
+    assert.ok(!md.includes('网络错误') && !md.includes('半成品'), '错误/流式/空气泡不入稿');
+    assert.equal(model.sessionMatches('abc', bs, ''), true, '空词恒匹配');
+    assert.equal(model.sessionMatches('abc', bs, '三体'), true, '正文命中');
+    assert.equal(model.sessionMatches('ABC def', bs, 'aBC'), true, '标题忽略大小写');
+    assert.equal(model.sessionMatches('abc', bs, 'zzz'), false, '无命中排除');
+    // store：当前会话改名→归档名随带；存档会话改名直接落盘
+    const page = chat();
+    const store = AiChatStore.instance();
+    await page.send('第一个问题');
+    state.handlers.onDone('答一');
+    assert.equal(store.renameSession(store.currentId, '  '), false, '空名拒绝');
+    assert.equal(store.renameSession(store.currentId, '我的科幻话题'), true);
+    assert.equal(store.currentTitle(), '我的科幻话题', '当前会话改名即生效');
+    assert.equal(store.newSession(), true);
+    await page.send('三体里的主线矛盾');
+    state.handlers.onDone('答二');
+    const s1 = store.sessions[0];
+    assert.equal(s1.title, '我的科幻话题', '归档带改名标题');
+    assert.equal(s1.named, '我的科幻话题', 'named 槽持久化');
+    assert.equal(store.renameSession(s1.id, '归档话题名'), true, '存档会话改名');
+    assert.equal(store.sessions[0].title, '归档话题名');
+    const raw = JSON.parse(state.prefs.get('ai_chat_sessions'));
+    assert.equal(raw.find((r) => r.id === s1.id).named, '归档话题名', '存档改名落盘');
+    // 搜索过滤（只过滤存档列表，当前会话恒置顶）
+    assert.equal(store.searchSessions('归档').length, 1, '标题命中');
+    assert.equal(store.searchSessions('答一').length, 1, '正文命中');
+    assert.equal(store.searchSessions('zzz').length, 0, '无命中为空');
+    assert.equal(store.searchSessions('  ').length, 1, '空词原样返回');
+    // 导出
+    assert.ok(store.exportSessionMd(s1.id).includes('答一'), '导出存档会话');
+    assert.ok(store.exportSessionMd('').includes('三体里的主线矛盾'), '空 id=当前会话');
+    assert.equal(store.exportSessionMd('no-such-id'), '', '目标不存在导出空');
+    // 切回：named 随带；超长截断
+    assert.equal(store.switchSession(s1.id), true);
+    assert.equal(store.currentTitle(), '归档话题名', '切回后改名不丢');
+    assert.equal(store.renameSession(s1.id, 'x'.repeat(50)), true);
+    assert.equal(store.currentTitle().length, 31, '超长截 30+省略号');
+  });
+
 }

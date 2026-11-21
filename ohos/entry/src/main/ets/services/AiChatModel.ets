@@ -195,3 +195,76 @@ export function groupActivities(acts: ChatActivity[]): ActivityGroup[] {
   }
   return groups;
 }
+
+/**
+ * 会话搜索匹配（#1513）：空查询恒真；匹配标题或任一消息正文，忽略大小写。
+ * 纯函数供 store.searchSessions 过滤存档与会话共用。
+ */
+export function sessionMatches(title: string, bubbles: ChatBubble[], kw: string): boolean {
+  const q: string = kw.trim().toLowerCase();
+  if (q.length === 0) {
+    return true;
+  }
+  if (title.toLowerCase().indexOf(q) >= 0) {
+    return true;
+  }
+  for (const b of bubbles) {
+    if (b.content.toLowerCase().indexOf(q) >= 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** 会话导出为 Markdown 文本（#1513）：跳过流式/错误/空消息；now 由调用侧传入保证可回归。 */
+export function buildSessionMd(title: string, bubbles: ChatBubble[], now: number): string {
+  const d: Date = new Date(now);
+  const pad = (n: number): string => n < 10 ? `0${n}` : `${n}`;
+  const parts: string[] = [`# ${title}`, '',
+    `> 导出于 MyBooks AI 助手 · ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+      `${pad(d.getHours())}:${pad(d.getMinutes())}`];
+  for (const b of bubbles) {
+    if (b.streaming || b.error === true || b.content.trim().length === 0) {
+      continue;
+    }
+    parts.push('', `## ${b.role === 'user' ? '用户' : '助手'}`, '', b.content.trim());
+  }
+  return `${parts.join('\n')}\n`;
+}
+
+/** ask_user 反问卡片的待答状态：对话页渲染选项按钮，点选/跳过经 answerAsk 归还回路。 */
+export interface AskRequest {
+  question: string;
+  options: string[];
+}
+
+/** 存档会话（不含当前会话）：切换/新建时当前会话整条归档到这里。 */
+export interface ChatSession {
+  id: string;
+  title: string;
+  /** 用户手动改名（#1513）：空串=未改名，标题跟随自动生成；跨归档持久。 */
+  named: string;
+  updatedAt: number;
+  messages: ChatBubble[];
+}
+
+/** 单会话的历史摘要：text=摘要正文，count=已折叠进摘要的筛后气泡前缀条数。 */
+export interface HistorySummary {
+  text: string;
+  count: number;
+}
+
+// —— 对话持久化常量（preferences 明文 KV，与账号列表同层；存读逻辑在 AiChatStore）——
+
+/** 对话历史键：只存已固化的气泡。 */
+export const CHAT_HISTORY_KEY: string = 'ai_chat_history';
+/** 历史上限：超出丢弃最旧条目，避免 preferences.json 无限膨胀。 */
+export const CHAT_HISTORY_MAX: number = 60;
+/** 会话存档键：不含当前会话（当前仍走 ai_chat_history，退出页面重进照常恢复）。 */
+export const CHAT_SESSIONS_KEY: string = 'ai_chat_sessions';
+/** 存档会话数上限：超出按 updatedAt 从旧到新丢弃。 */
+export const CHAT_SESSIONS_MAX: number = 12;
+/** 历史摘要键：按会话 id 存「被窗口截断的旧轮」的压缩摘要。 */
+export const CHAT_SUMMARIES_KEY: string = 'ai_chat_summaries';
+/** 未摘数量达到该阈值才触发一次摘要请求：压缩自身也要省 token。 */
+export const COMPRESS_MIN_DROPPED: number = 8;

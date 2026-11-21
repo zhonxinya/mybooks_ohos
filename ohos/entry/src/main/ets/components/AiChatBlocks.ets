@@ -268,17 +268,59 @@ export struct AskUserCard {
   }
 }
 
+/** 会话行的图标动作钮（改名/导出/删除同一形态）。 */
+@Component
+struct SheetIconBtn {
+  icon: Resource = $r('sys.symbol.square_and_pencil');
+  onTap: () => void = () => {};
+
+  build() {
+    Stack() {
+      SymbolGlyph(this.icon)
+        .fontSize(14)
+        .fontColor([$r('app.color.text_secondary')]);
+    }
+    .width(28)
+    .height(28)
+    .borderRadius(14)
+    .backgroundColor($r('app.color.page_background'))
+    .onClick(() => this.onTap());
+  }
+}
+
 /**
- * 对话管理面板：当前会话置顶带勾（不可点对比），存档会话点击切换、X 删除。
- * 生成中拒绝切换/新建的判断留页面（store 返回 false 转提示 + 关面板）。
+ * 对话管理面板：当前会话置顶带勾（不可点对比），存档会话点击切换。
+ * #1513 增强：顶部搜索框（标题+正文过滤，过滤结果由页面传入）、
+ * 每行改名（铅笔）与导出 Markdown（下载图标），存档行另有删除。
+ * 生成中拒绝切换/新建（store 返回 false 转提示）由页面判断。
  */
 @Component
 export struct SessionsSheet {
   @Prop sessions: ChatSession[] = [];
   currentTitle: string = '';
+  currentId: string = '';
+  query: string = '';
+  /** 行内改名（#1513）：PromptAction 无输入弹窗 API，编辑态放面板行内。 */
+  @State editingId: string = '';
+  @State draft: string = '';
   onPick: (id: string) => void = () => {};
   onDelete: (id: string) => void = () => {};
   onNew: () => void = () => {};
+  onQuery: (kw: string) => void = () => {};
+  onRename: (id: string, name: string) => void = () => {};
+  onExport: (id: string) => void = () => {};
+
+  private startEdit(id: string, cur: string): void {
+    this.editingId = id;
+    this.draft = cur;
+  }
+
+  private commitEdit(): void {
+    if (this.editingId.length > 0) {
+      this.onRename(this.editingId, this.draft);
+    }
+    this.editingId = '';
+  }
 
   /** 会话行的相对时间短标（今天显时分，否则显月日）。 */
   private sessionTime(ts: number): string {
@@ -294,18 +336,40 @@ export struct SessionsSheet {
   }
 
   build() {
-    Column() {
+    Column({ space: 6 }) {
+      TextInput({ placeholder: '搜索对话（标题或内容）', text: this.query })
+        .fontSize(14)
+        .height(38)
+        .backgroundColor($r('app.color.page_background'))
+        .onChange((v: string) => this.onQuery(v));
+
       Column({ space: 6 }) {
         Row({ space: 8 }) {
           SymbolGlyph($r('sys.symbol.checkmark'))
             .fontSize(14)
             .fontColor([$r('app.color.brand_primary')]);
-          Text(this.currentTitle)
-            .fontSize(14)
-            .fontColor($r('app.color.brand_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1);
+          if (this.editingId === this.currentId) {
+            TextInput({ text: this.draft })
+              .fontSize(14)
+              .layoutWeight(1)
+              .onChange((v: string) => {
+                this.draft = v;
+              })
+              .onSubmit(() => this.commitEdit());
+            SheetIconBtn({ icon: $r('sys.symbol.checkmark'), onTap: () => this.commitEdit() });
+            SheetIconBtn({ icon: $r('sys.symbol.xmark'), onTap: (): void => {
+              this.editingId = '';
+            } });
+          } else {
+            Text(this.currentTitle)
+              .fontSize(14)
+              .fontColor($r('app.color.brand_primary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .layoutWeight(1);
+            SheetIconBtn({ icon: $r('sys.symbol.square_and_pencil'), onTap: () => this.startEdit(this.currentId, this.currentTitle) });
+            SheetIconBtn({ icon: $r('sys.symbol.square_and_arrow_down'), onTap: () => this.onExport('') });
+          }
           Text('当前')
             .fontSize(11)
             .fontColor($r('app.color.text_tertiary'));
@@ -314,7 +378,8 @@ export struct SessionsSheet {
         .padding({ left: 10, right: 10, top: 10, bottom: 10 });
 
         if (this.sessions.length === 0) {
-          Text('没有其它对话：切换话题时点「新建对话」，当前对话会完整存档')
+          Text(this.query.trim().length > 0 ? '没有匹配的对话'
+            : '没有其它对话：切换话题时点「新建对话」，当前对话会完整存档')
             .fontSize(12)
             .fontColor($r('app.color.text_tertiary'))
             .padding(10)
@@ -322,30 +387,42 @@ export struct SessionsSheet {
         }
         ForEach(this.sessions, (s: ChatSession) => {
           Row({ space: 8 }) {
-            Text(s.title)
-              .fontSize(14)
-              .fontColor($r('app.color.text_primary'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .layoutWeight(1);
-            Text(this.sessionTime(s.updatedAt))
-              .fontSize(11)
-              .fontColor($r('app.color.text_tertiary'));
-            Stack() {
-              SymbolGlyph($r('sys.symbol.trash'))
+            if (this.editingId === s.id) {
+              TextInput({ text: this.draft })
                 .fontSize(14)
-                .fontColor([$r('app.color.text_secondary')]);
+                .layoutWeight(1)
+                .onChange((v: string) => {
+                  this.draft = v;
+                })
+                .onSubmit(() => this.commitEdit());
+              SheetIconBtn({ icon: $r('sys.symbol.checkmark'), onTap: () => this.commitEdit() });
+              SheetIconBtn({ icon: $r('sys.symbol.xmark'), onTap: (): void => {
+                this.editingId = '';
+              } });
+            } else {
+              Text(s.title)
+                .fontSize(14)
+                .fontColor($r('app.color.text_primary'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .layoutWeight(1);
+              Text(this.sessionTime(s.updatedAt))
+                .fontSize(11)
+                .fontColor($r('app.color.text_tertiary'));
+              SheetIconBtn({ icon: $r('sys.symbol.square_and_pencil'), onTap: () => this.startEdit(s.id, s.title) });
+              SheetIconBtn({ icon: $r('sys.symbol.square_and_arrow_down'), onTap: () => this.onExport(s.id) });
+              SheetIconBtn({ icon: $r('sys.symbol.trash'), onTap: () => this.onDelete(s.id) });
             }
-            .width(28)
-            .height(28)
-            .borderRadius(14)
-            .backgroundColor($r('app.color.page_background'))
-            .onClick(() => this.onDelete(s.id));
           }
           .width('100%')
           .padding({ left: 10, right: 10, top: 10, bottom: 10 })
-          .onClick(() => this.onPick(s.id));
-        }, (s: ChatSession) => s.id);
+          .onClick(() => {
+            // 编辑态点行不触发切换（会连带吞掉正在输入的焦点）
+            if (this.editingId !== s.id) {
+              this.onPick(s.id);
+            }
+          });
+        }, (s: ChatSession) => `${s.id}-${s.title}`);
       }
       .width('100%');
 

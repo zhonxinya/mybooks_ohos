@@ -246,10 +246,12 @@ export function stageChatStore() {
       `import { AiService } from './shim.ts';`)
     .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
     .replace(`from './TalebookService'`, `from './shim.ts'`)
-    .replace(`import { ChatActivity, ChatBubble, parseBubbles, sessionTitle } from './AiChatModel';`,
-      `import { parseBubbles, sessionTitle } from './AiChatModel.ts';\nimport type { ChatActivity, ChatBubble } from './AiChatModel.ts';`)
-    .replace(`export { ChatActivity, ChatBubble } from './AiChatModel';`,
-      `export type { ChatActivity, ChatBubble } from './AiChatModel.ts';`)
+    .replace(`import { AskRequest, buildSessionMd, ChatActivity, ChatBubble, ChatSession, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, COMPRESS_MIN_DROPPED, HistorySummary, parseBubbles, sessionMatches, sessionTitle } from './AiChatModel';`,
+      `import { parseBubbles, sessionTitle, buildSessionMd, sessionMatches, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, COMPRESS_MIN_DROPPED } from './AiChatModel.ts';\nimport type { AskRequest, ChatActivity, ChatBubble, ChatSession, HistorySummary } from './AiChatModel.ts';`)
+    .replace(`export { AskRequest, ChatActivity, ChatBubble, ChatSession, HistorySummary } from './AiChatModel';`,
+      `export type { AskRequest, ChatActivity, ChatBubble, ChatSession, HistorySummary } from './AiChatModel.ts';`)
+    .replace(`import { permissionPromptNote, SUMMARY_SYSTEM_PROMPT, SYSTEM_PROMPT, SYSTEM_PROMPT_LEARN, SYSTEM_PROMPT_TOOLS } from './AiChatPrompts';`,
+      `import { permissionPromptNote, SUMMARY_SYSTEM_PROMPT, SYSTEM_PROMPT, SYSTEM_PROMPT_LEARN, SYSTEM_PROMPT_TOOLS } from './AiChatPrompts.ts';`)
     .replace(`from '@kit.CoreFileKit'`, `from './shim.ts'`)
     .replace(`from '@kit.ImageKit'`, `from './shim.ts'`)
     .replace(`from '@kit.ArkTS'`, `from './shim.ts'`);

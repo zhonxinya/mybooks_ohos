@@ -510,6 +510,7 @@ export async function setup() {
   stagePure('HomeModels', 'models/HomeModels.ets', []);
   stagePure('LibraryMatch', 'utils/LibraryMatch.ets', ['BookItem']);
   stagePure('MdParse', 'services/MdParse.ets', []);
+  stagePure('AiChatPrompts', 'services/AiChatPrompts.ets', ['AiPermissionMode']);
   stagePure('AiSkills', 'services/AiSkills.ets', []);
   for (const name of ['AiAssistantPage', 'AiBookPanelPage', 'AiRecommendPage', 'AiSettingsPage',
     'AiPersonaPage']) {
