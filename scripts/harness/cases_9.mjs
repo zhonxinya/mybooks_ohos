@@ -1,9 +1,9 @@
-// 用例组 9：对话 UI 精修 P2/P3 批（Token 用量/思考耗时/按住说话；自 cases_1 拆出以过 800 行门禁）
+// 用例组 9：对话 UI 精修 P2/P3 批（Token 用量/思考耗时/按住说话/只读工具缓存；自 cases_1 拆出以过 800 行门禁）
 import assert from 'node:assert/strict';
-import { test, state } from './base.mjs';
+import { test, state, enc } from './base.mjs';
 
 export function register(ctx) {
-  const { load, AiChatStore, chat } = ctx;
+  const { load, deps, RealAiTools, AiChatStore, chat } = ctx;
 
   test('Token 用量（#1514）：parseUsage 校验、mergeUsage 累加、整包解析、落盘往返、气泡固化', async () => {
     const model = await load('AiChatModel');
@@ -135,6 +135,58 @@ export function register(ctx) {
     state.handlers.onDone('完毕');
     // 入口门控：语音档非 Token Plan 不显示按钮
     assert.equal(chat().holdTalkReady, false, '无云端 ASR 档藏入口');
+  });
+
+  test('只读工具缓存（#1517）：白名单、归一键、命中零请求、失败不固化、FIFO 上限', async () => {
+    assert.equal(RealAiTools.isCacheable('search_web'), true);
+    assert.equal(RealAiTools.isCacheable('mcp_web_search'), true, 'mcp 动态工具全家');
+    assert.equal(RealAiTools.isCacheable('search_books'), false, '书目侧信道类不缓存');
+    assert.equal(RealAiTools.isCacheable('list_download_tasks'), false, '进度语义类不缓存');
+    assert.equal(RealAiTools.isCacheable('add_to_shelf'), false, '写工具不缓存');
+    // 归一键：参数同义不同序等价；坏 JSON 原样退化
+    assert.equal(RealAiTools.toolCacheKey('t', '{"b":2,"a":1}'),
+      RealAiTools.toolCacheKey('t', '{"a":1,"b":2}'), '键序无关');
+    assert.notEqual(RealAiTools.toolCacheKey('t', 'not json'),
+      RealAiTools.toolCacheKey('t', 'other'), '坏 JSON 按原文区分');
+    // FIFO 上限：24 封顶，最旧出局
+    RealAiTools.clearToolCache();
+    for (let i = 0; i < 25; i++) {
+      RealAiTools.rememberCache(`k${i}`, `v${i}`);
+    }
+    assert.equal(RealAiTools.toolCache.size, 24, '上限 24');
+    assert.equal(RealAiTools.toolCache.has('k0'), false, '最旧被逐');
+    assert.equal(RealAiTools.toolCache.get('k24'), 'v24');
+    // 端到端：真发一次→同参再调命中零请求（本用例内开缓存）
+    RealAiTools.cacheDisabled = false;
+    try {
+      const html = '<html><head><title>缓存页</title></head><body><p>正文段落。</p></body></html>';
+      deps.state.rcpError = null;
+      deps.state.rcpResponses = [{ statusCode: 200, body: enc(html) }];
+      const before = deps.state.requests.length;
+      const first = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/cached"}');
+      assert.ok(first.includes('《缓存页》') && !first.includes('[缓存复用]'), first);
+      assert.equal(deps.state.requests.length, before + 1);
+      const second = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/cached"}');
+      assert.ok(second.startsWith('[缓存复用]'), `命中须带标注：${second}`);
+      assert.equal(deps.state.requests.length, before + 1, '缓存命中不发网络请求');
+      // 瞬时失败轮不固化：恢复后重试是真执行
+      deps.state.rcpError = new Error('connection reset by peer');
+      const errText = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/err"}');
+      assert.ok(errText.includes('失败'), `网络异常应回失败文本：${errText}`);
+      assert.equal(deps.state.rcpResponses.length, 0);
+      deps.state.rcpError = null;
+      deps.state.rcpResponses = [{ statusCode: 200, body: enc(html) }];
+      const after = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/err"}');
+      assert.ok(!after.includes('[缓存复用]') && after.includes('《缓存页》'), '失败不钉，重试可达');
+      RealAiTools.clearToolCache();
+      // 不同参数不互扰
+      deps.state.rcpResponses = [{ statusCode: 200, body: enc(html) }, { statusCode: 200, body: enc(html) }];
+      await RealAiTools.execute('fetch_url', '{"url":"https://example.com/a"}');
+      await RealAiTools.execute('fetch_url', '{"url":"https://example.com/b"}');
+      assert.equal(deps.state.rcpResponses.length, 0, '两个 URL 各自真执行');
+    } finally {
+      RealAiTools.cacheDisabled = true;
+    }
   });
 
 }

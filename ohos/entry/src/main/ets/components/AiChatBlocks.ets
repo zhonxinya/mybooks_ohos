@@ -4,6 +4,7 @@ import { TextButton } from './TextButton';
 import { ToolResultList } from './ToolResultList';
 import { ActivityGroup, formatThinkMs, groupActivities } from '../services/AiChatModel';
 import { AiChatStore, ChatActivity, ChatSession } from '../services/AiChatStore';
+import { ToolBookLine } from '../services/AiToolsDefs';
 
 /**
  * AI 对话页的视图组件集（自 AiAssistantPage 外移，页面只留状态机与装配）。
@@ -84,8 +85,35 @@ export struct ReasoningBlock {
   }
 }
 
-/**
- * 工具调用活动区：摘要折叠行 + 展开明细；相邻同名调用合并为一条（×N）。
+/** 书目计数折叠行：默认只显「共 N 本」，点开才渲染封面卡列表（流式刷新只动计数）。 */
+@Component
+struct BookListFold {
+  @Prop items: ToolBookLine[] = [];
+  @State open: boolean = false;
+
+  build() {
+    Column({ space: 6 }) {
+      Row({ space: 4 }) {
+        SymbolGlyph(this.open ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
+          .fontSize(12)
+          .fontColor([$r('app.color.text_tertiary')]);
+        Text(`共 ${this.items.length} 本`)
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'));
+      }
+      .onClick(() => {
+        this.open = !this.open;
+      });
+      if (this.open) {
+        ToolResultList({ items: this.items });
+      }
+    }
+    .alignItems(HorizontalAlign.Start)
+    .width('100%');
+  }
+}
+
+/** 工具调用活动区：摘要折叠行 + 展开明细；相邻同名调用合并为一条（×N）。
  * 流式期固定展开且禁用折叠点击——气泡随增量重建，组件内折叠态必被复位（同 ReasoningBlock）。
  * 单步活动默认展开：折叠只对多步有意义。
  */
@@ -164,7 +192,7 @@ export struct ActivityTimeline {
               }
               .width('100%');
               if (g.books.length > 0) {
-                ToolResultList({ items: g.books });
+                BookListFold({ items: g.books });
               }
             }
             .alignItems(HorizontalAlign.Start)
