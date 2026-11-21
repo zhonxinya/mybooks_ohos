@@ -278,6 +278,15 @@ export function stageEncyclopedia() {
   writeFileSync(join(dir, 'RealEncyclopedia.ts'), source);
 }
 
+/** WebFetchService 真实入检：rcp/util 复用 aiServiceDeps 桩（fetch_url 与网页搜索同 HTTP 通道）。 */
+export function stageWebFetch() {
+  let source = read('services/WebFetchService.ets');
+  source = source
+    .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`);
+  writeFileSync(join(dir, 'RealWebFetch.ts'), source);
+}
+
 /** McpService 真实入检：rcp/util 复用 aiServiceDeps 桩；AiTools 纯类型 import 擦除。 */
 export function stageMcp() {
   let source = read('services/McpService.ets');
@@ -435,6 +444,7 @@ export function stageAiTools() {
     ["'./MetaSearchService'", "'./RealMetaSearch.ts'"],
     ["'./NovelMetaService'", "'./RealNovelMeta.ts'"],
     ["'./EncyclopediaService'", "'./RealEncyclopedia.ts'"],
+    ["'./WebFetchService'", "'./RealWebFetch.ts'"],
     ["'./AiPersona'", "'./RealAiPersona.ts'"],
     ["'./AiService'", "'./RealAiService.ts'"],
     ["'../models/BookListModels'", "'./BookListModels.ts'"],
@@ -450,7 +460,7 @@ export function stageAiTools() {
     'SoNovelBookPayload', 'DownloadTask', 'SoNovelSearchItem', 'BookListAddResponse', 'BookDetail',
     'BookListDetailResponse', 'BookListMutationResponse', 'BookListUpdatePayload', 'BookListsResponse',
     'BookListSummary', 'ReadingDevice', 'HomeBook', 'ReadingStatsSummary', 'DoubanDetail', 'DoubanHit',
-    'NovelMeta', 'EncyclopediaHit', 'WebSearchHit', 'WebSearchResult', 'AiConfig', 'LlmSearchResult',
+    'NovelMeta', 'EncyclopediaHit', 'WebSearchHit', 'WebSearchResult', 'WebFetchResult', 'AiConfig', 'LlmSearchResult',
     'LlmSearchSource', 'ToolBookLine', 'AiToolDefinition', 'AiToolParameters', 'AiToolFunctionBody',
     'AiToolProperty', 'AiPermissionMode']);
   for (const [out, ets] of [['RealAiTools.ts', 'services/AiTools.ets'],

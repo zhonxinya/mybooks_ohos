@@ -9,6 +9,7 @@ import { TalebookService } from './TalebookService';
 import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';
 import { NovelMeta, NovelMetaService } from './NovelMetaService';
 import { EncyclopediaHit, EncyclopediaService, WebSearchHit, WebSearchResult } from './EncyclopediaService';
+import { WebFetchResult, WebFetchService } from './WebFetchService';
 import { AiService, AiConfig, LlmSearchResult, LlmSearchSource } from './AiService';
 import { AiToolsCore } from './AiToolsCore';
 import { AiToolsExecShelf } from './AiToolsExecShelf';
@@ -346,6 +347,20 @@ export class AiToolsExecMeta {
       parts.push(line);
     }
     return parts.join('\n\n');
+  }
+
+  /** 访问具体网页：标题 + 来源 + 正文纯文本；一切失败回文案（不抛错，同 search_web 通道风格）。 */
+  static async fetchUrl(url: string): Promise<string> {
+    const trimmed: string = url.trim();
+    if (trimmed.length === 0) {
+      return '参数 url 为空，请提供要访问的网页地址。';
+    }
+    const res: WebFetchResult = await WebFetchService.fetch(trimmed);
+    if (!res.ok) {
+      return `网页抓取失败：${res.error}`;
+    }
+    const head: string = res.title.length > 0 ? `《${res.title}》\n` : '';
+    return `${head}来源：${trimmed}\n———— 正文 ————\n${res.text}`;
   }
 
   /** AI 联网问答：通义系 enable_search 直出整合答案＋引用；非通义服务商回明确提示（模型可改用 search_web）。 */

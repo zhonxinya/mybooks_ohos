@@ -272,7 +272,7 @@ export function register(ctx) {
     assert.equal(deps.state.chatCalls.length, 2, 'errs=' + JSON.stringify(errs));
     assert.equal(deps.state.chatCalls[0].body.stream, true);
     assert.ok(Array.isArray(deps.state.chatCalls[0].body.tools) &&
-      deps.state.chatCalls[0].body.tools.length === 28, 'SDK 通道请求体须挂全量 tools');
+      deps.state.chatCalls[0].body.tools.length === 29, 'SDK 通道请求体须挂全量 tools');
     // 第二轮：assistant tool_calls + tool 结果回填，终轮回答
     const msgs = deps.state.chatCalls[1].body.messages;
     const asst = msgs.find((m) => m.role === 'assistant' && m.tool_calls !== undefined);

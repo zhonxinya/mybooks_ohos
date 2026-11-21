@@ -295,6 +295,15 @@ export const TOOL_SEARCH_WEB: AiToolDefinition = defineTool('search_web',
     '百科类词条优先用 search_encyclopedia；摘要不够时可把候选链接讲给用户自行查看。',
   WEB_SEARCH_PROPS, ['query']);
 
+export const FETCH_URL_PROPS: Record<string, AiToolProperty> = {
+  'url': prop('string', '要访问的完整网页地址（http:// 或 https:// 开头），可取自 search_web 结果的链接'),
+};
+export const TOOL_FETCH_URL: AiToolDefinition = defineTool('fetch_url',
+  '访问一个具体网页并读取正文：给定 URL 直连抓取，返回页面标题与正文纯文本（过长会截断）。' +
+    '当 search_web 的摘要不够、需要看某条结果的完整内容时用它；一次抓一个链接，需要多篇就分多次调用。' +
+    '不能登录、不执行 JS，纯脚本渲染的页面可能取不到正文。',
+  FETCH_URL_PROPS, ['url']);
+
 export const AI_SEARCH_PROPS: Record<string, AiToolProperty> = {
   'query': prop('string', '要联网查证的问题（自然语言整句即可，AI 搜索引擎会直接针对问题作答）'),
 };
@@ -336,6 +345,6 @@ export const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_UPDATE_BOOK_META, TOOL_LIST_CATEGORIES,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
   TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_SEARCH_ENCYCLOPEDIA,
-  TOOL_SEARCH_WEB, TOOL_AI_SEARCH, TOOL_ASK_USER, TOOL_FORGET_MEMORY,
+  TOOL_SEARCH_WEB, TOOL_FETCH_URL, TOOL_AI_SEARCH, TOOL_ASK_USER, TOOL_FORGET_MEMORY,
 ];
 

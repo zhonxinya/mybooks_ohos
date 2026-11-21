@@ -279,6 +279,58 @@ export function register(ctx) {
     deps.state.rcpError = null;
   });
 
+  test('fetch_url：正文提取纯函数、抓取请求形态、非法 URL/非 2xx/截断与工具文案', async () => {
+    const { WebFetchService } = await load('RealWebFetch');
+    deps.state.rcpError = null;
+    deps.state.rcpResponses = [];
+    // 纯函数：剥 script/style/注释/head，块级边界换行，实体解码，压空白
+    const html = '<html><head><title>三体 &#183; 刘慈欣</title><style>.x{}</style></head>' +
+      '<body><script>var a=1;</script><!--注释-->' +
+      '<h1>第一章</h1><p>这是&nbsp;正文&lt;第一段&gt;。</p>' +
+      '<div>第二段&#39;引号&#39;。</div><footer>页脚噪声</footer></body></html>';
+    const body = WebFetchService.extractBody(html);
+    assert.ok(body.includes('第一章') && body.includes('这是 正文<第一段>'), body);
+    assert.ok(body.includes('第二段\'引号\''), body);
+    assert.ok(!body.includes('var a') && !body.includes('.x{}') && !body.includes('注释'), '脚本/样式/注释须剥离');
+    assert.ok(!body.includes('\n\n\n'), '连续空行须压缩');
+    // URL 校验：仅 http(s)，挡 javascript:/file:/短串
+    assert.ok(WebFetchService.validUrl('https://www.baidu.com/'));
+    assert.ok(!WebFetchService.validUrl('javascript:alert(1)'));
+    assert.ok(!WebFetchService.validUrl('ftp://x.example/a'));
+    assert.ok(!WebFetchService.validUrl(''));
+    // 抓取成功：GET 形态 + 标题 + 正文文案
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(html) }];
+    const ok = await WebFetchService.fetch('https://example.com/book');
+    assert.ok(ok.ok && ok.title === '三体 · 刘慈欣', JSON.stringify(ok));
+    assert.equal(deps.state.lastRequest.method, 'GET');
+    assert.equal(deps.state.lastRequest.url, 'https://example.com/book');
+    // 工具层文案：《标题》+ 来源 + 正文
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(html) }];
+    const out = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/book"}');
+    assert.ok(out.includes('《三体 · 刘慈欣》') && out.includes('来源：https://example.com/book') &&
+      out.includes('正文'), out);
+    // 非法 URL：不发请求，直接回文案
+    const before = deps.state.requests.length;
+    const bad = await RealAiTools.execute('fetch_url', '{"url":"javascript:alert(1)"}');
+    assert.ok(bad.includes('URL 无效'), bad);
+    assert.equal(deps.state.requests.length, before, '非法 URL 不应发起网络请求');
+    // 非 2xx：失败文案不抛错
+    deps.state.rcpResponses = [{ statusCode: 404, body: enc('not found') }];
+    assert.ok((await RealAiTools.execute('fetch_url', '{"url":"https://example.com/x"}')).includes('404'));
+    // 纯脚本页（剥完无正文）：明确提示
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc('<html><head><title>SPA</title></head><body><script>render()</script><div id="app"></div></body></html>') }];
+    assert.ok((await RealAiTools.execute('fetch_url', '{"url":"https://example.com/spa"}')).includes('未能提取'));
+    // 超长截断：>6000 字符正文带截断标记
+    const long = '<html><head><title>长文</title></head><body><p>' + '字'.repeat(7000) + '</p></body></html>';
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(long) }];
+    const trunc = await WebFetchService.fetch('https://example.com/long');
+    assert.ok(trunc.ok && trunc.text.includes('正文过长已截断') && trunc.text.length < 6100, `${trunc.text.length}`);
+    // 空 url 参数
+    assert.ok((await RealAiTools.execute('fetch_url', '{"url":"  "}')).includes('url 为空'));
+    deps.state.rcpResponses = [];
+    deps.state.rcpError = null;
+  });
+
   test('ai_search：通义 enable_search 请求形态、引用文案与非通义服务商回落', async () => {
     // RealAiService 存储桩直配通义服务商（p:/s: 前缀=TalebookService pref/secure）
     deps.state.store.set('p:ai_provider', 'qianwen');

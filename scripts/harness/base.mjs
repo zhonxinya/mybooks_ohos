@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { dir } from './paths.mjs';
 import { stagePure, stagePage, stageAiService, stageChatStore, stageAiPersona, stageMetaSearch,
-  stageEncyclopedia, stageMcp, stageQwenAudio, stageNovelMeta, stageReader3, stageAiTools,
+  stageEncyclopedia, stageWebFetch, stageMcp, stageQwenAudio, stageNovelMeta, stageReader3, stageAiTools,
   stageAiVoiceKit } from './stages.mjs';
 
 export const settingsDefaults = () => ({
@@ -512,6 +512,7 @@ export async function setup() {
   stageMetaSearch();
   stageNovelMeta();
   stageEncyclopedia();
+  stageWebFetch();
   stageMcp();
   stageQwenAudio();
   stageReader3();
