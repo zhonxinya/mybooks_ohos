@@ -568,6 +568,61 @@ struct AiAssistantPage {
     return `bubble-${index}-${bubble.role}-${bubble.streaming ? 's' : 'd'}-${bubble.activities.length}-${bubble.content.length}-${(bubble.images ?? []).length}-${(bubble.reasoning ?? '').length}`;
   }
 
+  /**
+   * 长按菜单选项（纯逻辑，可离线回归）：流式气泡不提供任何操作；
+   * 编辑重发只对用户气泡且非生成中；重新生成与底部按钮同规则（仅最新一条回答）。
+   */
+  private bubbleMenuKinds(bubble: ChatBubble, index: number): string[] {
+    if (bubble.streaming) {
+      return [];
+    }
+    const kinds: string[] = ['copy'];
+    if (bubble.role === 'user' && !this.thinking) {
+      kinds.push('edit');
+    }
+    kinds.push('delete');
+    if (bubble.role === 'assistant' && !bubble.error && bubble.voice !== true
+      && index === this.messages.length - 1 && !this.thinking) {
+      kinds.push('regen');
+    }
+    return kinds;
+  }
+
+  private menuLabel(kind: string): string {
+    if (kind === 'edit') {
+      return '编辑重发';
+    }
+    if (kind === 'delete') {
+      return '删除';
+    }
+    if (kind === 'regen') {
+      return '重新生成';
+    }
+    return '复制';
+  }
+
+  /** 权威拦截在 store（生成中/流式气泡守卫），这里只管回填与提示。 */
+  private runMenuAction(kind: string, index: number): void {
+    if (kind === 'copy') {
+      void this.copyBubble(index);
+      return;
+    }
+    if (kind === 'delete') {
+      this.store.deleteBubble(index);
+      return;
+    }
+    if (kind === 'edit') {
+      const text = this.store.editResend(index);
+      if (text.length > 0) {
+        this.input = text;
+      }
+      return;
+    }
+    if (kind === 'regen' && !this.store.regenerate()) {
+      this.toast('生成中，请稍候');
+    }
+  }
+
   build() {
     Column() {
       PageScaffold({
@@ -995,7 +1050,21 @@ struct AiAssistantPage {
     .padding(14)
     .borderRadius($r('app.float.card_radius'))
     .backgroundColor(bubble.role === 'user' ? $r('app.color.brand_primary_light') : $r('app.color.card_background'))
-    .shadow({ radius: 10, type: ShadowType.COLOR, color: $r('app.color.button_shadow'), offsetX: 0, offsetY: 2 });
+    .shadow({ radius: 10, type: ShadowType.COLOR, color: $r('app.color.button_shadow'), offsetX: 0, offsetY: 2 })
+    .bindContextMenu(this.bubbleMenu(bubble, index), ResponseType.LongPress);
+  }
+
+  /** 气泡长按菜单（#1507）：选项由 bubbleMenuKinds 按气泡状态生成，流式期空数组=不响应。 */
+  @Builder
+  bubbleMenu(bubble: ChatBubble, index: number) {
+    Menu() {
+      ForEach(this.bubbleMenuKinds(bubble, index), (kind: string) => {
+        MenuItem({ content: this.menuLabel(kind) })
+          .onClick(() => {
+            this.runMenuAction(kind, index);
+          });
+      }, (kind: string): string => kind);
+    }
   }
 
   /** 对话进行中的技能芯片：横向滚动，点击填入输入框（不自动发送）。 */
