@@ -10,6 +10,25 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 const MAX_LINES = 800;
+// UI 组件化临时豁免（计划#207，服务层已清零）：每页拆分并上板截图验收后**删除对应行**。
+// 豁免理由：UI 组件提取属渲染改动，回归测不到「@Builder 值传递状态不刷新」类问题，
+// 必须模拟器在线逐页截图确认（AGENTS.md），不允许盲拆合入。
+const UI_ALLOWLIST = new Set([
+  'ohos/entry/src/main/ets/pages/AdminPluginsPage.ets', // #1481
+  'ohos/entry/src/main/ets/pages/BookDetailPage.ets', // #1482
+  'ohos/entry/src/main/ets/pages/AdminScanPage.ets', // #1483
+  'ohos/entry/src/main/ets/pages/AdminSettingsPage.ets', // #1483
+  'ohos/entry/src/main/ets/pages/ReadKitReader.ets', // #1484
+  'ohos/entry/src/main/ets/pages/BookSourceManagePage.ets', // #1484
+  'ohos/entry/src/main/ets/pages/BookListDetailPage.ets', // #1484
+  'ohos/entry/src/main/ets/pages/AiAssistantPage.ets', // #1480
+  'ohos/entry/src/main/ets/pages/AdminOpdsPage.ets', // #1480
+  'ohos/entry/src/main/ets/pages/AiSettingsPage.ets', // #1480
+  'ohos/entry/src/main/ets/pages/NetworkLibraryPage.ets', // #1480
+  'ohos/entry/src/main/ets/pages/BookUploadPage.ets', // #1480
+  'ohos/entry/src/main/ets/pages/MimoTtsToolPage.ets', // #1480
+  'ohos/entry/src/main/ets/pages/BooksTabPage.ets', // #1480
+]);
 const ROOT = new URL('..', import.meta.url).pathname;
 const TARGETS = [
   { dir: join(ROOT, 'ohos/entry/src/main/ets'), ext: '.ets' },
@@ -83,7 +102,14 @@ for (const t of TARGETS) {
   }
 }
 rows.sort((a, b) => b.eff - a.eff);
-const violations = rows.filter((r) => r.eff > MAX_LINES);
+const over = rows.filter((r) => r.eff > MAX_LINES);
+const violations = over.filter((r) => !UI_ALLOWLIST.has(r.path));
+const allowed = over.filter((r) => UI_ALLOWLIST.has(r.path));
+const stale = [...UI_ALLOWLIST].filter((p) => !over.some((r) => r.path === p));
+if (stale.length > 0) {
+  console.log('提示：以下豁免项已合规，请从 UI_ALLOWLIST 删除：');
+  for (const p of stale) { console.log(`  ${p}`); }
+}
 
 if (args.has('--all')) {
   for (const r of rows.slice(0, 40)) {
@@ -92,10 +118,12 @@ if (args.has('--all')) {
   console.log('---');
 }
 if (violations.length === 0) {
-  console.log(`行数门禁通过：${rows.length} 个文件均 ≤${MAX_LINES} 有效行`);
+  console.log(`行数门禁通过：${rows.length} 个文件均 ≤${MAX_LINES} 有效行` +
+    (allowed.length > 0 ? `（UI 豁免 ${allowed.length} 项待拆，见 UI_ALLOWLIST 注释）` : ''));
   process.exit(0);
 }
-console.log(`行数门禁：${violations.length}/${rows.length} 个文件超 ${MAX_LINES} 有效行`);
+console.log(`行数门禁：${violations.length}/${rows.length} 个文件超 ${MAX_LINES} 有效行` +
+  (allowed.length > 0 ? `（另有 UI 豁免 ${allowed.length} 项不计）` : ''));
 for (const v of violations) {
   console.log(`  ${String(v.eff).padStart(5)} 有效行  ${v.path}`);
 }
