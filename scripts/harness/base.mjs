@@ -172,6 +172,11 @@ export const photoAccessHelper = {
 };
 export const image = { createImageSource: () => null, createImagePacker: () => null };
 export const util = { Base64Helper: class { encodeToStringSync() { return ''; } } };
+// 隐藏渲染器（fetch_url 类浏览器降级）桩：页面测试不渲染 Web，符号可解析即可
+export const webview = { WebviewController: class { loadUrl() {} runJavaScript() { return Promise.resolve(''); } } };
+export const BrowserRenderService = {
+  attach: () => {}, detach: () => {}, onPageEnd: () => {}, isReady: () => false, render: async () => '',
+};
 `;
 writeFileSync(join(dir, 'shim.ts'), shim);
 

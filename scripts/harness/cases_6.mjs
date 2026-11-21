@@ -331,6 +331,54 @@ export function register(ctx) {
     deps.state.rcpError = null;
   });
 
+  test('fetch_url 类浏览器降级：needsRender 判定 + hint 标记 + 渲染器就绪时走渲染文案', async () => {
+    const { WebFetchService } = await load('RealWebFetch');
+    const Brs = await load('BrowserRenderStub');
+    deps.state.rcpError = null;
+    // 纯函数判定
+    assert.equal(WebFetchService.needsRender(403, ''), true, '403 反爬值得渲染');
+    assert.equal(WebFetchService.needsRender(404, ''), false, '404 渲染也没用');
+    const spa = '<html><head><title>SPA</title></head><body><script>render()</script><div id="app"></div></body></html>';
+    assert.equal(WebFetchService.needsRender(200, spa), true, 'JS 空壳须渲染');
+    assert.equal(WebFetchService.needsRender(200, '<html><body><p>' + '字'.repeat(300) + '</p></body></html>'),
+      false, '正文充足不渲染');
+    assert.equal(WebFetchService.needsRender(200, '<html><body><p>短但没脚本</p></body></html>'), false,
+      '短静态页不值得重开销');
+    // hint 标记：SPA 页与 403 均带 render 提示
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(spa) }];
+    const r1 = await WebFetchService.fetch('https://example.com/spa');
+    assert.equal(r1.hint, 'render', JSON.stringify(r1));
+    deps.state.rcpResponses = [{ statusCode: 403, body: enc('blocked') }];
+    const r2 = await WebFetchService.fetch('https://example.com/x');
+    assert.equal(r2.hint, 'render');
+    // 正常页 hint 为空
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc('<html><body><p>' + '字'.repeat(300) + '</p></body></html>') }];
+    assert.equal((await WebFetchService.fetch('https://example.com/ok')).hint, '');
+    // 渲染器未就绪（默认）：维持原失败文案
+    Brs.BrowserRenderService.ready = false;
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(spa) }];
+    const out1 = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/spa"}');
+    assert.ok(out1.includes('未能提取') && !out1.includes('浏览器渲染'), out1);
+    // 就绪但渲染空（页面失效）：明确说明已尝试
+    Brs.BrowserRenderService.ready = true;
+    Brs.BrowserRenderService.text = '';
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(spa) }];
+    const out2 = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/spa"}');
+    assert.ok(out2.includes('已尝试浏览器渲染'), out2);
+    // 就绪且有正文：走渲染提取文案，并确认 loadUrl 收到原 url
+    Brs.BrowserRenderService.text = '渲染出来的正文内容，足够长以通过判定阈值。'.repeat(10);
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(spa) }];
+    const out3 = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/spa"}');
+    assert.ok(out3.includes('浏览器渲染提取') && out3.includes('渲染出来的正文'), out3);
+    assert.ok(Brs.BrowserRenderService.calls.includes('https://example.com/spa'));
+    // 收尾复位，避免污染其他用例
+    Brs.BrowserRenderService.ready = false;
+    Brs.BrowserRenderService.text = '';
+    Brs.BrowserRenderService.calls = [];
+    deps.state.rcpResponses = [];
+    deps.state.rcpError = null;
+  });
+
   test('ai_search：通义 enable_search 请求形态、引用文案与非通义服务商回落', async () => {
     // RealAiService 存储桩直配通义服务商（p:/s: 前缀=TalebookService pref/secure）
     deps.state.store.set('p:ai_provider', 'qianwen');

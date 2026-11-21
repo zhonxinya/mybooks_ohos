@@ -13,6 +13,8 @@ export interface WebFetchResult {
   /** 正文纯文本（已截断）；失败为空。 */
   text: string;
   error: string;
+  /** 'render'=HTTP 通道拿不到正文（JS 空壳/反爬拦截），调用方可改用 ArkWeb 渲染重试。 */
+  hint: string;
 }
 
 /** 抓取字节上限：超出部分不进入解码，防大文件/二进制拖死工具调用。 */
@@ -31,11 +33,13 @@ export class WebFetchService {
   static async fetch(rawUrl: string): Promise<WebFetchResult> {
     const url: string = rawUrl.trim();
     if (!WebFetchService.validUrl(url)) {
-      return { ok: false, title: '', text: '', error: 'URL 无效：需以 http:// 或 https:// 开头的完整地址' };
+      return { ok: false, title: '', text: '', error: 'URL 无效：需以 http:// 或 https:// 开头的完整地址', hint: '' };
     }
+    // 类浏览器指纹：真实 Chrome/Android UA（OpenHarmony 原生 UA 常被 WAF 直接拦 403）
     const headers: rcp.RequestHeaders = {
-      'User-Agent': 'Mozilla/5.0 (Phone; OpenHarmony 6.0) AppleWebKit/537.36 (KHTML, like Gecko) Mobile Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.6',
     };
     // 超时同搜索引擎通道（EncyclopediaService.fetchText）：连不上 10s 内放弃，别挂死回路
@@ -46,11 +50,15 @@ export class WebFetchService {
       const request: rcp.Request = new rcp.Request(url, 'GET', headers);
       const response: rcp.Response = await session.fetch(request);
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        return { ok: false, title: '', text: '', error: `HTTP ${response.statusCode}` };
+        return {
+          ok: false, title: '', text: '',
+          error: `HTTP ${response.statusCode}`,
+          hint: WebFetchService.needsRender(response.statusCode, '') ? 'render' : '',
+        };
       }
       const body: ArrayBuffer | undefined = response.body;
       if (body === undefined || body.byteLength === 0) {
-        return { ok: false, title: '', text: '', error: '页面为空' };
+        return { ok: false, title: '', text: '', error: '页面为空', hint: 'render' };
       }
       const bytes: Uint8Array = new Uint8Array(body);
       const capped: Uint8Array = bytes.byteLength > FETCH_MAX_BYTES ?
@@ -60,18 +68,42 @@ export class WebFetchService {
       const titleMatch: RegExpExecArray | null = /<title[^>]*>([^<]{1,200})<\/title>/i.exec(html);
       const title: string = titleMatch !== null ? WebFetchService.decodeEntities(titleMatch[1]).trim() : '';
       let text: string = WebFetchService.extractBody(html);
-      if (text.length === 0) {
-        return { ok: false, title: title, text: '', error: '未能提取可读正文（页面可能由脚本渲染）' };
+      if (text.length === 0 || WebFetchService.needsRender(200, html)) {
+        return {
+          ok: false, title: title, text: '',
+          error: '未能提取可读正文（页面可能由脚本渲染）', hint: 'render',
+        };
       }
       if (text.length > FETCH_TEXT_MAX) {
         text = `${text.substring(0, FETCH_TEXT_MAX)}…（正文过长已截断）`;
       }
-      return { ok: true, title: title, text: text, error: '' };
+      return { ok: true, title: title, text: text, error: '', hint: '' };
     } catch (error) {
-      return { ok: false, title: '', text: '', error: `${error}` };
+      return { ok: false, title: '', text: '', error: `${error}`, hint: '' };
     } finally {
       session.close();
     }
+  }
+
+  /**
+   * 类浏览器判定：HTTP 通道结果不可用、值得真渲染重试吗。
+   * status=HTTP 码（html 传 '' 时仅按码判）；html=原始页面。
+   */
+  static needsRender(status: number, html: string): boolean {
+    if (status === 403 || status === 429 || status === 451 || status === 503) {
+      return true;
+    }
+    if (html.length === 0) {
+      return false;
+    }
+    if (WebFetchService.extractBody(html).length >= 200) {
+      return false;
+    }
+    // JS 空壳特征：脚本多而可读文本少 / 「请启用 JavaScript」提示 / SPA 挂载点
+    const scripts: number = (html.match(/<script/gi) ?? []).length;
+    return scripts >= 2 ||
+      /enable\s+javascript|需要启用\s*javascript|请先开启\s*javascript/i.test(html) ||
+      /id=["'](app|root)["']/i.test(html);
   }
 
   /** 去脚本/样式/注释/head，块级边界转换行，去标签，实体解码，压空白。 */
