@@ -1,9 +1,9 @@
-// 用例组 9：对话 UI 精修 P2/P3 批（Token 用量/思考耗时/按住说话/只读工具缓存；自 cases_1 拆出以过 800 行门禁）
+// 用例组 9：对话 UI 精修 P2/P3 批（Token 用量/思考耗时/按住说话/只读工具缓存/功能专属模型槽；自 cases_1 拆出以过 800 行门禁）
 import assert from 'node:assert/strict';
 import { test, state, enc } from './base.mjs';
 
 export function register(ctx) {
-  const { load, deps, RealAiTools, AiChatStore, chat } = ctx;
+  const { load, deps, RealAiService, RealAiTools, AiChatStore, chat } = ctx;
 
   test('Token 用量（#1514）：parseUsage 校验、mergeUsage 累加、整包解析、落盘往返、气泡固化', async () => {
     const model = await load('AiChatModel');
@@ -187,6 +187,58 @@ export function register(ctx) {
     } finally {
       RealAiTools.cacheDisabled = true;
     }
+  });
+
+  test('功能专属模型槽（#1600）：voice 键兼容、音频三件回退链、绑定独立、解绑跟随', async () => {
+    deps.state.store.clear();
+    RealAiService.saveConfig('deepseek', 'https://api.deepseek.com/v1', 'deepseek-chat', 'sk-d', 0.5);
+    // 未绑功能档 = 全局
+    assert.equal(RealAiService.loadFeatureConfig('vision').providerId, 'deepseek');
+    assert.equal(RealAiService.hasFeatureProvider('vision'), false);
+    // voice = 历史键零迁移：saveVoiceConfig 即绑 'voice' 功能档
+    RealAiService.saveVoiceConfig('qwen-tokenplan', 'qwen3.6-flash');
+    assert.equal(RealAiService.loadFeatureConfig('voice').providerId, 'qwen-tokenplan', 'voice 槽读旧键');
+    assert.equal(RealAiService.loadFeatureProviderId('voice'), 'qwen-tokenplan');
+    assert.equal(RealAiService.loadVoiceConfig().model, RealAiService.loadFeatureConfig('voice').model,
+      '兼容层与泛化层等价');
+    // 音频三件未绑退 voice（voice 再退全局的链在兼容用例已覆盖）
+    assert.equal(RealAiService.loadFeatureConfig('asr').providerId, 'qwen-tokenplan', 'asr 未绑退语音档');
+    assert.equal(RealAiService.loadFeatureConfig('tts').model, 'qwen3.6-flash');
+    // 绑定后独立解析（voice 保持另一模型）
+    RealAiService.saveFeatureConfig('asr', 'opencode', 'asr-custom');
+    assert.equal(RealAiService.loadFeatureConfig('asr').providerId, 'opencode');
+    assert.equal(RealAiService.loadFeatureModel('asr'), 'asr-custom');
+    assert.equal(RealAiService.loadFeatureConfig('realtime').providerId, 'qwen-tokenplan', 'realtime 仍退 voice');
+    // 解绑 = 恢复跟随
+    RealAiService.saveFeatureConfig('asr', '', '');
+    assert.equal(RealAiService.hasFeatureProvider('asr'), false);
+    assert.equal(RealAiService.loadFeatureConfig('asr').providerId, 'qwen-tokenplan');
+    // 非音频档绑定后与 voice 无关（vision 绑 ollama 不影响语音档）
+    RealAiService.saveFeatureConfig('vision', 'ollama', 'llava');
+    assert.equal(RealAiService.loadFeatureConfig('vision').baseUrl, 'http://127.0.0.1:11434/v1');
+    assert.equal(RealAiService.loadFeatureConfig('voice').providerId, 'qwen-tokenplan');
+    deps.state.store.clear();
+    // store 消费链（shim 语义）：带图轮 chatStream 收到 vision 档、纯文本轮无 override
+    const page = chat();
+    const store = AiChatStore.instance();
+    await store.send('纯文本', []);
+    assert.equal(state.settings.lastChatOverride, undefined, '文本轮不传功能档');
+    state.handlers.onDone('好');
+    state.settings.providers.push({ id: 'ollama', name: 'Ollama', baseUrl: 'http://127.0.0.1:11434/v1',
+      model: 'llama3', hasKey: false });
+    state.settings.featureSlots.vision = { providerId: 'ollama', model: 'llava' };
+    store.visionEnabled = true; // 视觉开关是前置门（关=图不进 bubbleImages，功能档无从触发）
+    await store.send('看图', ['/tmp/pic.png']);
+    assert.equal(state.settings.lastChatOverride.providerId, 'ollama', '带图轮走绑定档');
+    state.handlers.onDone('图好');
+    // 摘要压缩走 summary 档：塞满触发阈值轮次后断言 complete 收到的 config
+    state.settings.featureSlots.summary = { providerId: 'ollama', model: 'qwen2.5:7b' };
+    for (let i = 0; i < 16; i++) {
+      await store.send(`第${i}问`, []);
+      state.handlers.onDone(`第${i}答，内容足够长以触发窗口外判定xxxxxxxxxxxx`);
+    }
+    await store.compressHistory();
+    assert.equal(state.settings.lastCompleteConfig.providerId, 'ollama', '摘要吃绑定档');
   });
 
 }

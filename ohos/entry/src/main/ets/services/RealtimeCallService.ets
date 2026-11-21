@@ -131,7 +131,9 @@ export class RealtimeCallService {
       RealtimeCallService.failCreated('实时网关连接失败');
     });
 
-    const url: string = `${RealtimeCallService.wsOrigin()}/api-ws/v1/realtime?model=${REALTIME_MODEL}`;
+    const rtModel: string = AiService.loadFeatureModel('realtime');
+    const url: string = `${RealtimeCallService.wsOrigin()}/api-ws/v1/realtime?model=` +
+      (rtModel.length > 0 ? rtModel : REALTIME_MODEL);
     const header: Record<string, string> = { 'Authorization': `Bearer ${RealtimeCallService.apiKey()}` };
     const options: webSocket.WebSocketRequestOptions = { header: header };
     await new Promise<void>((resolve: () => void, reject: (e: Error) => void): void => {
@@ -431,7 +433,8 @@ export class RealtimeCallService {
 
   /** Token Plan 网关 http(s) origin → ws(s)。 */
   private static wsOrigin(): string {
-    const baseUrl: string = AiService.loadVoiceConfig().baseUrl;
+    // #1600：实时档独立（未绑自动退语音档→全局），不再是语音档的寄生调用
+    const baseUrl: string = AiService.loadFeatureConfig('realtime').baseUrl;
     const schemeEnd: number = baseUrl.indexOf('://');
     if (schemeEnd < 0) {
       throw new Error('Token Plan 服务商地址无效');
@@ -443,7 +446,7 @@ export class RealtimeCallService {
   }
 
   private static apiKey(): string {
-    const key: string = AiService.apiKeyFor(AiService.loadVoiceConfig().providerId);
+    const key: string = AiService.apiKeyFor(AiService.loadFeatureConfig('realtime').providerId);
     if (key.length === 0) {
       throw new Error('未配置 Token Plan API Key（AI 设置页填写）');
     }

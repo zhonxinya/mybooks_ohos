@@ -389,10 +389,11 @@ export class AiChatStore {
       : parts.join('\n');
     this.compressing = true;
     try {
+      // 摘要压缩走独立功能档（#1600）：可绑便宜模型省 token，未绑跟随全局
       const text: string = (await AiService.complete([
         { role: 'system', content: SUMMARY_SYSTEM_PROMPT },
         { role: 'user', content: prompt },
-      ], 512)).trim();
+      ], 512, AiService.loadFeatureConfig('summary'))).trim();
       if (text.length > 0) {
         // 期间用户可能已切会话：摘要归属发起时的 sessionId，不跟随 currentId 漂移
         this.summaries.set(sessionId, { text: text, count: start });
@@ -536,8 +537,10 @@ export class AiChatStore {
     if (requestId !== this.requestId || !this.thinking) {
       return;
     }
+    // 带图轮走视觉功能档（#1600）：可把多模态绑到另一个服务商/模型；未绑=全局等价
+    const visionCfg: AiConfig | undefined = bubbleImages.length > 0 ? AiService.loadFeatureConfig('vision') : undefined;
     const handle: AiAbortHandle = AiService.chatStream(context, handlers, 2048,
-      mcpTools.length > 0 ? mcpTools : null);
+      mcpTools.length > 0 ? mcpTools : null, visionCfg);
     if (requestId === this.requestId && this.thinking) {
       this.abort = handle;
     }
