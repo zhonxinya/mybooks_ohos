@@ -79,6 +79,54 @@ export class AiTools {
     return AiTools.WRITE_TOOLS.indexOf(name) >= 0;
   }
 
+  // ———— 只读工具结果缓存（#1517）：进程级内存，不落盘、重启即清 ————
+  /**
+   * 缓存白名单：贵且静态的联网/元数据类，结果纯文本、无书目 side-channel。
+   * 不缓存书目侧信道类（命中会把 book 卡槽旁路掉）与进度语义类（list_download_tasks）。
+   */
+  private static readonly CACHEABLE_TOOLS: string[] =
+    ['search_meta', 'get_novel_meta', 'search_encyclopedia', 'search_web', 'fetch_url', 'ai_search'];
+  /** 条数上限：FIFO 淘汰，长会话内存有界。 */
+  private static readonly TOOL_CACHE_MAX: number = 24;
+  private static toolCache: Map<string, string> = new Map();
+  /** 回归隔离开关：harness setup 置 true（既有用例多次同参调用是设计使然），#1517 用例内手动开回。 */
+  static cacheDisabled: boolean = false;
+
+  static isCacheable(name: string): boolean {
+    return AiTools.CACHEABLE_TOOLS.indexOf(name) >= 0 || name.indexOf('mcp_') === 0;
+  }
+
+  /** 缓存键归一：参数按 key 排序序列化，同义不同序也命中；坏 JSON 原样退化精确匹配。 */
+  static toolCacheKey(name: string, argsJson: string): string {
+    let norm: string = argsJson.trim();
+    try {
+      const obj: Record<string, Object> = JSON.parse(norm) as Record<string, Object>;
+      const keys: string[] = Object.keys(obj);
+      keys.sort();
+      const parts: string[] = [];
+      for (const k of keys) {
+        parts.push(`${k}=${JSON.stringify(obj[k])}`);
+      }
+      norm = parts.join('&');
+    } catch (_error) {
+      // 参数不可解析时按原文，代价只是命中率
+    }
+    return `${name}|${norm}`;
+  }
+
+  /** 清历史等本地数据变更时可主动调用；默认缓存随进程存活。 */
+  static clearToolCache(): void {
+    AiTools.toolCache.clear();
+  }
+
+  private static rememberCache(key: string, text: string): void {
+    if (AiTools.toolCache.size >= AiTools.TOOL_CACHE_MAX && !AiTools.toolCache.has(key)) {
+      const oldest: string = AiTools.toolCache.keys().next().value as string;
+      AiTools.toolCache.delete(oldest);
+    }
+    AiTools.toolCache.set(key, text);
+  }
+
 
   static takeLastBooks(): ToolBookLine[] {
     const books: ToolBookLine[] = AiToolsCore.lastBooks;
@@ -203,8 +251,29 @@ export class AiTools {
    *   要整趟网关往返（秒级+token），这类失败无副作用，本地重试最快最省。
    * - **写工具永不自动重试**：部分成功可能已落在服务端，盲目重试会重复执行；
    *   只回传分类文案，由模型（和用户确认闸门）决定下一步。
+   * - 白名单只读工具先查会话缓存（#1517），命中直接回文本，成功轮结果才固化。
    */
   static async execute(name: string, argsJson: string, callId: string = ''): Promise<string> {
+    const cacheable: boolean = AiTools.isCacheable(name) && !AiTools.cacheDisabled;
+    const key: string = cacheable ? AiTools.toolCacheKey(name, argsJson) : '';
+    if (cacheable) {
+      const hit: string | undefined = AiTools.toolCache.get(key);
+      if (hit !== undefined) {
+        // 前缀标注让模型知道这是会话内复用而非新鲜查询，避免据此断言「最新状态」
+        return `[缓存复用] ${hit}`;
+      }
+    }
+    const text: string = await AiTools.executeWithRetry(name, argsJson, callId);
+    // 含「失败」一律不固化：除重试环兜底文案外，工具内部把网络/HTTP 异常消化成的
+    // 失败文本（如「网页抓取失败：…」）也在 dispatch 正常返回里，钉住会放大成整会话错误。
+    // 误伤正文含「失败」的正常结果只是不缓存，代价仅命中率。
+    if (cacheable && text.indexOf('失败') < 0) {
+      AiTools.rememberCache(key, text);
+    }
+    return text;
+  }
+
+  private static async executeWithRetry(name: string, argsJson: string, callId: string): Promise<string> {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         return await AiTools.dispatch(name, argsJson, callId);

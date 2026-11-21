@@ -562,6 +562,8 @@ export async function setup() {
   const deps = await load('aiServiceDeps');
   const { AiService: RealAiService } = await load('RealAiService');
   const { AiTools: RealAiTools } = await load('RealAiTools');
+  // #1517：既有用例刻意多次同参调用驱动状态机，默认关只读工具缓存（用例内自开）
+  RealAiTools.cacheDisabled = true;
   const { parseToolBookLines } = await load('AiToolsDefs');
   const { toolsState } = await load('aiToolsDeps');
   const { mdParseBlocks, mdParseInline, collectLinks, linkHost } = await load('MdParse');
