@@ -79,6 +79,7 @@ export interface SoNovelBookPayload {
   url: string;
   bookName: string;
   author: string;
+  cover?: string;
   category?: string;
   latestChapter?: string;
   lastUpdateTime?: string;

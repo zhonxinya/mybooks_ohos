@@ -192,6 +192,7 @@ export class AiToolsExecShelf {
       url: url,
       bookName: bookName,
       author: AiToolsCore.argString(args, 'author'),
+      cover: AiToolsCore.argString(args, 'cover'),
       format: format,
       language: 'zh-CN',
     };

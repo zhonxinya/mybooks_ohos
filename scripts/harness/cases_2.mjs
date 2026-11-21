@@ -62,9 +62,15 @@ export function register(ctx) {
       t.includes('下载与转换在服务器进行') && t.includes('自动拉取到本地书架'), t);
     assert.equal(toolsState.tasks.length, 1);
     assert.equal(toolsState.processed, 1);
+    // bug#1486 防线：工具入参的元数据必须原样进入下载 payload（入库记录取的就是这些字段）
+    assert.equal(toolsState.tasks[0].payload.author, '会说话的肘子');
+    const tc = await RealAiTools.execute('add_sonovel_task',
+      '{"book_name":"黎明之剑","url":"http://x/book/9/","author":"远瞳","cover":"http://img/9.jpg","source_id":3}');
+    assert.ok(tc.includes('已加入云端下载任务'), tc);
+    assert.equal(toolsState.tasks[1].payload.cover, 'http://img/9.jpg');
     const dup = await RealAiTools.execute('add_sonovel_task', '{"book_name":"夜的命名术","url":"http://x/book/1/"}');
     assert.ok(dup.includes('已在下载队列中'));
-    assert.equal(toolsState.tasks.length, 1);
+    assert.equal(toolsState.tasks.length, 2);
     toolsState.tasks[0].status = 'downloading';
     toolsState.tasks[0].progress = 42;
     toolsState.tasks[0].message = '章节进度 42/100';
@@ -115,6 +121,8 @@ export function register(ctx) {
     assert.equal(toolsState.talebookEnqueues.length, 1);
     const p = toolsState.talebookEnqueues[0];
     assert.equal(p.bookId, 12);
+    assert.equal(p.author, '刘慈欣');
+    assert.equal(p.cover, 'https://stub.example/cover/12.png');
     assert.equal(p.format, 'epub');
     assert.ok(p.destPath.endsWith('/books/12.epub'), p.destPath);
     assert.equal(toolsState.processed, 1);

@@ -160,7 +160,7 @@ export const ReferSearchResponse = undefined;
 export const TalebookService = {
   getReadingHistory: () => toolsState.history.slice(),
   ensureAuthenticated: async () => toolsState.authOk,
-  resolveCoverUrl: (c) => (c.startsWith('http') ? c : 'https://stub.example/' + c),
+  resolveCoverUrl: (c) => (c.length === 0 ? '' : c.startsWith('http') ? c : 'https://stub.example' + (c.startsWith('/') ? c : '/' + c)),
   dataDir: () => '/stub-files',
   getBookDetailAsync: async (id) => (toolsState.bookDetailAsync
     ? await toolsState.bookDetailAsync(id) : { status: 404, body: null, error: 'stub: 未设置' }),

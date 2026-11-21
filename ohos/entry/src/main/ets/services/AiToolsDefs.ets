@@ -116,7 +116,8 @@ export const BOOKLIST_ADD_PROPS: Record<string, AiToolProperty> = {
 export const SONOVEL_TASK_PROPS: Record<string, AiToolProperty> = {
   'book_name': prop('string', '小说名'),
   'url': prop('string', '书源站详情页 url（来自 search_sonovel）'),
-  'author': prop('string', '作者，可留空'),
+  'author': prop('string', '作者（来自 search_sonovel），可留空'),
+  'cover': prop('string', '封面图 url（先调 get_novel_meta 拿封面），可留空；缺失时系统入库前自动抓取补全'),
   'source_id': prop('number', '书源 id（来自 search_sonovel）'),
   'source_name': prop('string', '书源名（来自 search_sonovel）'),
   'format': prop('string', '生成格式 epub 或 txt，默认 epub'),
