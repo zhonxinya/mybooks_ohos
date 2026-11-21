@@ -2,7 +2,7 @@ import { LengthMetrics } from '@kit.ArkUI';
 import { MarkdownText } from './MarkdownText';
 import { TextButton } from './TextButton';
 import { ToolResultList } from './ToolResultList';
-import { ActivityGroup, groupActivities } from '../services/AiChatModel';
+import { ActivityGroup, formatThinkMs, groupActivities } from '../services/AiChatModel';
 import { AiChatStore, ChatActivity, ChatSession } from '../services/AiChatStore';
 
 /**
@@ -15,8 +15,15 @@ import { AiChatStore, ChatActivity, ChatSession } from '../services/AiChatStore'
 export struct ReasoningBlock {
   @Prop @Watch('onReasoningChange') reasoning: string = '';
   live: boolean = false;
+  /** 思考耗时毫秒（#1515）：0=未知（旧存档/未打点），标题不带时长。 */
+  thinkMs: number = 0;
   @State expanded: boolean = false;
   private bodyScroller: Scroller = new Scroller();
+
+  private thinkSuffix(): string {
+    const t: string = formatThinkMs(this.thinkMs > 0 ? this.thinkMs : undefined);
+    return t.length > 0 ? ` · ${t}` : '';
+  }
 
   aboutToAppear(): void {
     this.expanded = this.live;
@@ -48,7 +55,7 @@ export struct ReasoningBlock {
           SymbolGlyph(this.expanded ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
             .fontSize(12)
             .fontColor([$r('app.color.text_tertiary')]);
-          Text(this.live ? '正在思考' : '思考过程')
+          Text(this.live ? '正在思考' : `思考过程${this.thinkSuffix()}`)
             .fontSize(12)
             .fontColor($r('app.color.text_tertiary'));
         }
@@ -185,6 +192,9 @@ export struct StreamBubble {
   @State text: string = '';
   @State reasoning: string = '';
   @State acts: ChatActivity[] = [];
+  /** 打字光标位（#1515）：530ms 交替；只存在于流式泡挂载期，固化即随组件销毁。 */
+  @State caret: boolean = true;
+  private caretTimer: number | null = null;
   private viewToken: number = 0;
 
   private pull(): void {
@@ -197,10 +207,17 @@ export struct StreamBubble {
   aboutToAppear(): void {
     this.viewToken = AiChatStore.instance().attachStreamView((): void => this.pull());
     this.pull();
+    this.caretTimer = setInterval((): void => {
+      this.caret = !this.caret;
+    }, 530);
   }
 
   aboutToDisappear(): void {
     AiChatStore.instance().detachStreamView(this.viewToken);
+    if (this.caretTimer !== null) {
+      clearInterval(this.caretTimer);
+      this.caretTimer = null;
+    }
   }
 
   build() {
@@ -209,7 +226,7 @@ export struct StreamBubble {
       ReasoningBlock({ reasoning: this.reasoning, live: true });
       ActivityTimeline({ acts: this.acts, live: true });
       if (this.text.length > 0) {
-        MarkdownText({ content: this.text });
+        MarkdownText({ content: this.text + (this.caret ? '▌' : '') });
       } else if (this.acts.length === 0) {
         Text('思考中…')
           .fontSize(15)

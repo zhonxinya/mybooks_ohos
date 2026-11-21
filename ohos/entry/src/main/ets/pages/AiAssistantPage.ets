@@ -1075,7 +1075,7 @@ struct AiAssistantPage {
           StreamBubble();
         } else {
           if ((bubble.reasoning ?? '').length > 0) {
-            ReasoningBlock({ reasoning: bubble.reasoning ?? '', live: false });
+            ReasoningBlock({ reasoning: bubble.reasoning ?? '', live: false, thinkMs: bubble.thinkMs ?? 0 });
           }
           ActivityTimeline({ acts: bubble.activities, live: false });
           MarkdownText({ content: bubble.content });

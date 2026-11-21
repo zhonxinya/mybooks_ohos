@@ -49,6 +49,8 @@ export class AiChatStore {
 
   private static inst: AiChatStore | null = null;
   private requestId: number = 0;
+  /** 本轮思考起点毫秒（#1515）：send 打点、finishBubble 结算落盘；0=无在途计时。 */
+  private thinkStartAt: number = 0;
   private abort: AiAbortHandle | null = null;
   private loaded: boolean = false;
   /** 当前前台视图的回调（页面 struct 不能 implements 接口，用 token+闭包绑定）。 */
@@ -193,7 +195,7 @@ export class AiChatStore {
     // 停止键：在途反问卡片一并收起（跳过语义），等待中的回路随即在 isAborted 处收尾
     this.answerAsk('');
     const handle: AiAbortHandle | null = this.abort;
-    this.abort = null;
+    this.abort = null; this.thinkStartAt = 0;
     if (handle !== null) {
       handle.aborted = true;
       handle.destroy?.();
@@ -445,9 +447,7 @@ export class AiChatStore {
 
   async send(text: string, images: string[]): Promise<void> {
     const question: string = text.trim();
-    if (question.length === 0 || this.thinking) {
-      return;
-    }
+    if (question.length === 0 || this.thinking) { return; }
     if (!AiService.isReady()) {
       this.configured = false;
       this.errorTip = '尚未配置模型，请先填写接口地址、模型与 API Key';
@@ -467,7 +467,7 @@ export class AiChatStore {
     this.streamingText = '';
     this.streamingReasoning = '';
     this.liveActivities = [];
-    this.thinking = true;
+    this.thinking = true; this.thinkStartAt = Date.now();
     this.cancelDeltaNotify();
     this.notify();
 
@@ -552,6 +552,9 @@ export class AiChatStore {
     last.reasoning = this.streamingReasoning;
     // 复用泡显式覆盖：重试轮不带 usage 时清掉旧计量（#1514）
     last.usage = usage;
+    // 思考耗时在 saveHistory 之前结算，随本轮一起落盘；错误轮/无打点=undefined 不显示
+    last.thinkMs = !isError && this.thinkStartAt > 0 ? Date.now() - this.thinkStartAt : undefined;
+    this.thinkStartAt = 0;
     this.messages = this.messages.slice();
     this.thinking = false;
     this.streamingText = '';
@@ -559,9 +562,7 @@ export class AiChatStore {
     this.liveActivities = [];
     this.abort = null;
     // 上次是错误气泡时，把这次失败的消息踢出上下文（buildContext 已过滤 error）
-    if (isError) {
-      this.errorTip = text;
-    }
+    if (isError) { this.errorTip = text; }
     this.saveHistory();
     this.cancelDeltaNotify();
     this.notify();

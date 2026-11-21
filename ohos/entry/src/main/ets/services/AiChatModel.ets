@@ -33,6 +33,20 @@ export interface ChatBubble {
   ts?: number;
   /** 本轮 token 用量（#1514）；旧存档/服务商不回传=undefined 不显示。 */
   usage?: AiTokenUsage;
+  /** 思考耗时毫秒（#1515）：由页面在 thinking 边沿打点；旧存档=undefined 不显示。 */
+  thinkMs?: number;
+}
+
+/** 思考耗时展示文案（#1515）：无效值返回空串不占位；60s 内一位小数，更长按分秒。 */
+export function formatThinkMs(ms: number | undefined): string {
+  if (ms === undefined || ms < 300) {
+    return '';
+  }
+  if (ms < 60000) {
+    return `${(Math.round(ms / 100) / 10).toFixed(1)}s`;
+  }
+  const s: number = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}m${s % 60}s`;
 }
 
 /** 时间分隔条阈值：与上一条间隔 ≥5 分钟才值得打断阅读节奏插一行时间。 */
@@ -146,6 +160,9 @@ export function parseBubbles(parsed: Object): ChatBubble[] {
     const usage: AiTokenUsage | null = parseUsage(m['usage']);
     if (usage !== null) {
       bubble.usage = usage;
+    }
+    if (typeof m['thinkMs'] === 'number') {
+      bubble.thinkMs = m['thinkMs'];
     }
     bubbles.push(bubble);
   }
