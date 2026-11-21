@@ -1,19 +1,20 @@
 import { pasteboard } from '@kit.BasicServicesKit';
-import { LengthMetrics, promptAction, SymbolGlyphModifier } from '@kit.ArkUI';
+import { promptAction, SymbolGlyphModifier } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
-import { fileIo as fs } from '@kit.CoreFileKit';
+import { fileIo as fs, picker } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { PageScaffold, SecondaryButton, TextButton } from '../components';
 import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
-import { ToolResultList } from '../components/ToolResultList';
+import { ActivityTimeline, AskUserCard, ReasoningBlock, SessionsSheet, StreamBubble } from '../components/AiChatBlocks';
 import { AiChatStore, AskRequest, ChatActivity, ChatBubble, ChatSession } from '../services/AiChatStore';
-import { ActivityGroup, groupActivities } from '../services/AiChatModel';
+import { appendHeardText, formatDividerTime, shouldShowTimeDivider } from '../services/AiChatModel';
 import { AiConfig, AiMessage, AiService } from '../services/AiService';
 import { SpeakService } from '../services/SpeakService';
 import { AiPermissionMode, AiTools } from '../services/AiTools';
 import { RealtimeCallService, RealtimeCallCallbacks } from '../services/RealtimeCallService';
 import { AiVoiceKit, VOICE_SYSTEM_PROMPT, VOICE_TOOL_NOTE } from '../services/AiVoiceKit';
+import { QwenAudioService } from '../services/QwenAudioService';
 import { AppRouter } from '../utils/AppRouter';
 import { webview } from '@kit.ArkWeb';
 import { BrowserRenderService } from '../services/BrowserRenderService';
@@ -51,6 +52,8 @@ struct AiAssistantPage {
   /** 存档会话列表与当前会话 id（store 镜像），供「对话」面板渲染。 */
   @State sessions: ChatSession[] = [];
   @State currentId: string = '';
+  /** 会话面板搜索词（#1513）：过滤走 store.searchSessions，命中含标题与消息正文。 */
+  @State sessQuery: string = '';
   /** 对话管理半模态面板开关（页面局部态）。 */
   @State sessionsSheet: boolean = false;
   /** 顶栏模型快切（只改全局配置的 model 字段）：当前模型 id + 服务商模型列表。 */
@@ -62,6 +65,10 @@ struct AiAssistantPage {
   @State voiceActive: boolean = false;
   @State voiceStatus: string = '';
   @State voiceMuted: boolean = false;
+  /** 按住说话（#1516）：录音中/识别中/入口可用（ASR 仅云端，语音档位须 Token Plan）。 */
+  @State holdRecording: boolean = false;
+  @State holdBusy: boolean = false;
+  @State holdTalkReady: boolean = false;
   /** 语音会话代际：挂断/重开后，旧 connect 异步链的失败回调凭序号作废。 */
   private voiceGen: number = 0;
   /** 会话状态机在全局单例里：退出页面不中断流式回复，后台照常完成并落盘。 */
@@ -71,10 +78,16 @@ struct AiAssistantPage {
   private scroller: Scroller = new Scroller();
   /** scrollToEnd 合并标记：在途未执行的滚动延后一个窗口，防流式期逐 token 抢滚。 */
   private scrollPending: boolean = false;
+  /** 智能跟滚（#1506）：用户上滑读历史时置 false，流式增量不再抢滚；回底/发新消息恢复。 */
+  @State followBottom: boolean = true;
+  private touchLastY: number = 0;
+  /** 「讨论本书」横幅文案（#1508）：阅读器跳转注入，空=无书籍上下文。 */
+  @State bookTag: string = '';
 
   aboutToAppear(): void {
     this.store.refreshSettings();
     this.store.ensureLoaded();
+    this.acceptBookParams();
     this.viewToken = this.store.attachView(
       (): void => this.syncFromStore(),
       (label: string, args: string): Promise<boolean> => this.requestConfirm(label, args));
@@ -181,6 +194,7 @@ struct AiAssistantPage {
     this.autoSpeak = AiService.loadAutoSpeak();
     this.ttsAvailable = AiService.loadSpeakEngine() === 'system' ||
       AiService.loadVoiceConfig().providerId === 'qwen-tokenplan';
+    this.holdTalkReady = AiService.loadVoiceConfig().providerId === 'qwen-tokenplan';
   }
 
   aboutToDisappear(): void {
@@ -188,6 +202,11 @@ struct AiAssistantPage {
     // 但语音会话必须随页结束：麦克风采集/播放不应在后台页继续。
     if (this.voiceActive) {
       this.endVoiceSession();
+    }
+    if (this.holdRecording) {
+      // 退页松开不了手指：直接弃录释放麦克风（与通话页挂断路径同款）
+      QwenAudioService.stopRecordingCleanup();
+      this.holdRecording = false;
     }
     this.store.detachView(this.viewToken);
     BrowserRenderService.detach();
@@ -224,7 +243,10 @@ struct AiAssistantPage {
     this.visionEnabled = this.store.visionEnabled;
     this.contextK = this.store.contextK;
     this.permission = AiService.loadPermission();
-    this.scrollToEnd();
+    // 智能跟滚：用户上滑脱离底部后不再抢滚（#1506），回底/发新消息恢复跟随
+    if (this.followBottom) {
+      this.scrollToEnd();
+    }
   }
 
   /** 权限模式徽标短文案。 */
@@ -377,6 +399,60 @@ struct AiAssistantPage {
     this.store.voiceSealStreaming();
   }
 
+  /** 按住说话·按下（#1516）：授权通过才开录；失败不进录音态（松手会被 guard 吞掉）。 */
+  private async holdStart(): Promise<void> {
+    if (this.holdRecording || this.holdBusy || this.thinking) {
+      return;
+    }
+    if (!(await AiVoiceKit.ensureMicPermission(this.getUIContext()))) {
+      this.toast('请在系统设置中允许麦克风权限后重试');
+      return;
+    }
+    try {
+      await QwenAudioService.startRecording();
+      this.holdRecording = true;
+    } catch (_error) {
+      this.toast('无法开始录音，请检查麦克风占用');
+    }
+  }
+
+  /** 按住说话·松手：wav→ASR→并入输入框（不自动发送，用户可先校对）。 */
+  private async holdFinish(): Promise<void> {
+    if (!this.holdRecording) {
+      return;
+    }
+    this.holdRecording = false;
+    this.holdBusy = true;
+    try {
+      const wav: string = await QwenAudioService.stopRecording();
+      if (wav.length === 0) {
+        this.toast('没听到声音，请再试一次');
+        return;
+      }
+      const heard: string = await QwenAudioService.transcribe(wav);
+      if (heard.length === 0) {
+        this.toast('没有识别到内容');
+        return;
+      }
+      this.input = appendHeardText(this.input, heard);
+    } catch (_error) {
+      this.toast('语音识别失败，稍后重试');
+    } finally {
+      this.holdBusy = false;
+    }
+  }
+
+  /** 输入框占位：按住说话的录音/识别态优先于生成中文案。 */
+  private holdPlaceholder(): string {
+    if (this.holdRecording) {
+      return '聆听中…松手转文字';
+    }
+    if (this.holdBusy) {
+      return '识别中…';
+    }
+    return this.thinking ? '生成中…' : '输入问题';
+  }
+
   private toggleVoiceMute(): void {
     this.voiceMuted = !this.voiceMuted;
     RealtimeCallService.setMuted(this.voiceMuted);
@@ -429,6 +505,8 @@ struct AiAssistantPage {
       images = this.pendingImages;
       this.pendingImages = [];
       this.input = '';
+      // 新消息发出必回「跟随最新」，即便用户此前在上滑读历史
+      this.followBottom = true;
     }
     await this.store.send(text, images);
     // store.send 在流结束落盘后才返回，末条即 AI 回复；开关打开则自动播报
@@ -452,6 +530,61 @@ struct AiAssistantPage {
         // 列表尚未挂载时忽略
       }
     }, 60);
+  }
+
+  /**
+   * 跟滚意图判定（#1506）：只认手指触控，程序 scrollEdge 不触发 onTouch。
+   * 手指明确下滑（内容上移露历史）→ 脱离跟随；回底由 onListScrollStop / 浮钮恢复。
+   */
+  private onListTouch(event: TouchEvent): void {
+    if (event.touches.length === 0) {
+      return;
+    }
+    const y: number = event.touches[0].y;
+    if (event.type === TouchType.Down) {
+      this.touchLastY = y;
+      return;
+    }
+    if (event.type === TouchType.Move && y - this.touchLastY > 24) {
+      this.followBottom = false;
+    }
+    if (event.type === TouchType.Move) {
+      this.touchLastY = y;
+    }
+  }
+
+  /** 滚动停稳：视图已在底缘即恢复跟随（用户手动滑回底部的情形）。 */
+  private onListScrollStop(): void {
+    try {
+      if (this.scroller.isAtEnd()) {
+        this.followBottom = true;
+      }
+    } catch (_error) {
+      // 列表尚未挂载时忽略
+    }
+  }
+
+  /** 「回到底部」浮钮：立即恢复跟随并滚动。 */
+  private backToBottom(): void {
+    this.followBottom = true;
+    this.scrollToEnd();
+  }
+
+  /** 讨论本书（#1508）：阅读器跳转带参时注入书籍上下文并亮横幅；普通进入无参=静默跳过。 */
+  private acceptBookParams(): void {
+    const params = AppRouter.getParams(this.getUIContext()) as Record<string, Object> | null;
+    const title: string = String(params?.['bookTitle'] ?? '');
+    if (title.length === 0) {
+      return;
+    }
+    this.store.setBookContext(title, String(params?.['bookAuthor'] ?? ''), String(params?.['chapter'] ?? ''));
+    this.bookTag = `讨论《${title}》`;
+  }
+
+  /** 横幅关闭：清除本轮书籍上下文（对话内容保留）。 */
+  private leaveBookContext(): void {
+    this.store.clearBookContext();
+    this.bookTag = '';
   }
 
   private applySkill(skill: AiSkill): void {
@@ -504,6 +637,15 @@ struct AiAssistantPage {
     }
   }
 
+  /** 本会话累计 token 用量（#1514）：无 usage 的气泡（旧存档/语音轮）按 0 计。 */
+  private sessionTokens(): number {
+    let n: number = 0;
+    for (const b of this.messages) {
+      n += b.usage?.total ?? 0;
+    }
+    return n;
+  }
+
   private toast(message: string): void {
     try {
       this.getUIContext().getPromptAction().showToast({ message: message });
@@ -519,7 +661,74 @@ struct AiAssistantPage {
     if (bubble.role === 'assistant' && bubble.streaming && !bubble.error && bubble.voice !== true) {
       return `bubble-${index}-assistant-s`;
     }
-    return `bubble-${index}-${bubble.role}-${bubble.streaming ? 's' : 'd'}-${bubble.activities.length}-${bubble.content.length}-${(bubble.images ?? []).length}-${(bubble.reasoning ?? '').length}`;
+    // 分隔条并入 key：上一条被删后本条的分隔状态会变，复用项必须重建才重算
+    const divider: string = this.showsTimeDivider(index) ? 't' : '';
+    return `bubble-${index}-${bubble.role}-${bubble.streaming ? 's' : 'd'}-${bubble.activities.length}-${bubble.content.length}-${(bubble.images ?? []).length}-${(bubble.reasoning ?? '').length}-${divider}`;
+  }
+
+  /** 该气泡上方是否需要时间分隔条（#1509）。 */
+  private showsTimeDivider(index: number): boolean {
+    const b = this.messages[index];
+    if (b === undefined) {
+      return false;
+    }
+    const prev = index > 0 ? this.messages[index - 1] : undefined;
+    return shouldShowTimeDivider(prev?.ts ?? 0, b.ts ?? 0);
+  }
+
+  /**
+   * 长按菜单选项（纯逻辑，可离线回归）：流式气泡不提供任何操作；
+   * 编辑重发只对用户气泡且非生成中；重新生成与底部按钮同规则（仅最新一条回答）。
+   */
+  private bubbleMenuKinds(bubble: ChatBubble, index: number): string[] {
+    if (bubble.streaming) {
+      return [];
+    }
+    const kinds: string[] = ['copy'];
+    if (bubble.role === 'user' && !this.thinking) {
+      kinds.push('edit');
+    }
+    kinds.push('delete');
+    if (bubble.role === 'assistant' && !bubble.error && bubble.voice !== true
+      && index === this.messages.length - 1 && !this.thinking) {
+      kinds.push('regen');
+    }
+    return kinds;
+  }
+
+  private menuLabel(kind: string): string {
+    if (kind === 'edit') {
+      return '编辑重发';
+    }
+    if (kind === 'delete') {
+      return '删除';
+    }
+    if (kind === 'regen') {
+      return '重新生成';
+    }
+    return '复制';
+  }
+
+  /** 权威拦截在 store（生成中/流式气泡守卫），这里只管回填与提示。 */
+  private runMenuAction(kind: string, index: number): void {
+    if (kind === 'copy') {
+      void this.copyBubble(index);
+      return;
+    }
+    if (kind === 'delete') {
+      this.store.deleteBubble(index);
+      return;
+    }
+    if (kind === 'edit') {
+      const text = this.store.editResend(index);
+      if (text.length > 0) {
+        this.input = text;
+      }
+      return;
+    }
+    if (kind === 'regen' && !this.store.regenerate()) {
+      this.toast('生成中，请稍候');
+    }
   }
 
   build() {
@@ -607,114 +816,113 @@ struct AiAssistantPage {
     }
   }
 
-  /** 会话行的相对时间短标（今天显时分，否则显月日）。 */
-  private sessionTime(ts: number): string {
-    const d: Date = new Date(ts);
-    const now: Date = new Date();
-    if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()
-      && d.getDate() === now.getDate()) {
-      const hh: string = d.getHours() < 10 ? `0${d.getHours()}` : `${d.getHours()}`;
-      const mm: string = d.getMinutes() < 10 ? `0${d.getMinutes()}` : `${d.getMinutes()}`;
-      return `${hh}:${mm}`;
-    }
-    return `${d.getMonth() + 1}/${d.getDate()}`;
-  }
-
   /**
-   * 对话管理面板：当前会话置顶带勾（不可点对比），存档会话点击切换、X 删除。
-   * 生成中一律拒绝切换/新建/删除当前内容相关操作（store 返回 false 转提示）。
+   * 对话管理面板：当前会话置顶带勾（不可点对比），存档会话点击切换。
+   * #1513：搜索过滤、行内改名与导出；生成中拒绝切换/新建（store 返回 false 转提示）。
    */
   @Builder
   sessionsSheetView() {
-    Column() {
-      Column({ space: 6 }) {
-        Row({ space: 8 }) {
-          SymbolGlyph($r('sys.symbol.checkmark'))
-            .fontSize(14)
-            .fontColor([$r('app.color.brand_primary')]);
-          Text(this.store.currentTitle())
-            .fontSize(14)
-            .fontColor($r('app.color.brand_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1);
-          Text('当前')
-            .fontSize(11)
-            .fontColor($r('app.color.text_tertiary'));
+    SessionsSheet({
+      sessions: this.store.searchSessions(this.sessQuery),
+      currentTitle: this.store.currentTitle(),
+      currentId: this.currentId,
+      query: this.sessQuery,
+      onPick: (id: string): void => {
+        if (!this.store.switchSession(id)) {
+          this.toast('生成中，请稍候再切换');
+        } else {
+          this.sessionsSheet = false;
         }
-        .width('100%')
-        .padding({ left: 10, right: 10, top: 10, bottom: 10 });
-
-        if (this.sessions.length === 0) {
-          Text('没有其它对话：切换话题时点「新建对话」，当前对话会完整存档')
-            .fontSize(12)
-            .fontColor($r('app.color.text_tertiary'))
-            .padding(10)
-            .width('100%');
+      },
+      onDelete: (id: string): void => this.store.deleteSession(id),
+      onNew: (): void => {
+        if (!this.store.newSession()) {
+          this.toast('生成中，请稍候再新建');
+        } else {
+          this.sessionsSheet = false;
         }
-        ForEach(this.sessions, (s: ChatSession) => {
-          Row({ space: 8 }) {
-            Text(s.title)
-              .fontSize(14)
-              .fontColor($r('app.color.text_primary'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .layoutWeight(1);
-            Text(this.sessionTime(s.updatedAt))
-              .fontSize(11)
-              .fontColor($r('app.color.text_tertiary'));
-            Stack() {
-              SymbolGlyph($r('sys.symbol.trash'))
-                .fontSize(14)
-                .fontColor([$r('app.color.text_secondary')]);
-            }
-            .width(28)
-            .height(28)
-            .borderRadius(14)
-            .backgroundColor($r('app.color.page_background'))
-            .onClick(() => this.store.deleteSession(s.id));
-          }
-          .width('100%')
-          .padding({ left: 10, right: 10, top: 10, bottom: 10 })
-          .onClick(() => {
-            if (!this.store.switchSession(s.id)) {
-              this.toast('生成中，请稍候再切换');
-            } else {
-              this.sessionsSheet = false;
-            }
-          });
-        }, (s: ChatSession) => s.id);
-      }
-      .width('100%');
-
-      TextButton({
-        label: '＋ 新建对话',
-        onTap: () => {
-          if (!this.store.newSession()) {
-            this.toast('生成中，请稍候再新建');
-          } else {
-            this.sessionsSheet = false;
-          }
-        },
-      });
-    }
-    .width('100%')
-    .padding({ left: 12, right: 12, bottom: 16 });
+      },
+      onQuery: (kw: string): void => {
+        this.sessQuery = kw;
+      },
+      onRename: (id: string, name: string): void => {
+        if (!this.store.renameSession(id, name)) {
+          this.toast('重命名失败：标题不能为空');
+        }
+      },
+      onExport: (id: string): void => {
+        void this.exportSession(id);
+      },
+    });
   }
+
+  /** 导出会话为 Markdown（#1513）：系统保存面板选位置，写不进只提示失败不静默。 */
+  private async exportSession(id: string): Promise<void> {
+    const md: string = this.store.exportSessionMd(id);
+    if (md.length === 0) {
+      this.toast('这条对话还没有可导出的内容');
+      return;
+    }
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    try {
+      const options = new picker.DocumentSaveOptions();
+      // SDK 实名：newFileNames 预置文件名、fileSuffixChoices 限定后缀选择
+      options.newFileNames = [`${this.safeFileName(this.store.sessionTitleOf(id))}.md`];
+      options.fileSuffixChoices = ['.md'];
+      const viewPicker = new picker.DocumentViewPicker(context);
+      const uris: string[] = await viewPicker.save(options);
+      if (uris.length === 0) {
+        return;
+      }
+      const file = fs.openSync(uris[0], fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      try {
+        fs.writeSync(file.fd, md);
+      } finally {
+        fs.closeSync(file);
+      }
+      this.toast('已导出 Markdown');
+    } catch (e) {
+      this.toast(`导出失败：${e}`);
+    }
+  }
+
+  /** 导出文件名净化：文件系统非法字符换空格，限 40 字。 */
+  private safeFileName(title: string): string {
+    const cleaned: string = title.replace(/[\\/:*?"<>|\r\n]/g, ' ').trim();
+    if (cleaned.length === 0) {
+      return 'AI对话';
+    }
+    return cleaned.length > 40 ? cleaned.substring(0, 40) : cleaned;
+  }
+
 
   @Builder
   pageContent() {
     Column() {
+      if (this.bookTag.length > 0) {
+        this.bookBannerBar();
+      }
       if (!this.configured) {
         this.notConfigured();
       } else if (this.messages.length === 0) {
         this.emptyState();
       } else {
-        this.chatList();
+        Stack({ alignContent: Alignment.Bottom }) {
+          this.chatList();
+          if (!this.followBottom) {
+            this.bottomPill();
+          }
+        }
+        .layoutWeight(1)
+        .width('100%');
         this.skillBar();
       }
       if (this.pendingAsk !== null) {
-        this.askCard();
+        AskUserCard({
+          question: this.askQuestion(),
+          options: this.askOptions(),
+          onAnswer: (opt: string): void => this.store.answerAsk(opt),
+        });
       }
       this.inputBar();
     }
@@ -809,14 +1017,78 @@ struct AiAssistantPage {
     List({ space: 12, scroller: this.scroller }) {
       ForEach(this.messages, (bubble: ChatBubble, index: number) => {
         ListItem() {
-          this.bubbleView(bubble, index);
+          Column() {
+            // 时间分隔条（#1509）：间隔 ≥5min 或首条时显示
+            if (this.showsTimeDivider(index)) {
+              Text(formatDividerTime(bubble.ts ?? 0))
+                .fontSize(11)
+                .fontColor($r('app.color.text_tertiary'))
+                .width('100%')
+                .textAlign(TextAlign.Center)
+                .margin({ bottom: 2 });
+            }
+            this.bubbleView(bubble, index);
+          }
+          .alignItems(HorizontalAlign.Start);
         }
       }, (bubble: ChatBubble, index: number): string => this.bubbleKey(bubble, index));
     }
-    .layoutWeight(1)
+    .height('100%')
     .width('100%')
     .padding({ left: 12, right: 12, top: 8 })
-    .scrollBar(BarState.Off);
+    .scrollBar(BarState.Off)
+    .onTouch((event: TouchEvent): void => {
+      this.onListTouch(event);
+    })
+    .onScrollStop((): void => {
+      this.onListScrollStop();
+    });
+  }
+
+  /** 流式期用户上滑离底时的「回到底部」胶囊（#1506）。 */
+  @Builder
+  bottomPill() {
+    Row({ space: 4 }) {
+      SymbolGlyph($r('sys.symbol.chevron_down'))
+        .fontSize(14)
+        .fontColor([$r('app.color.brand_primary')]);
+      Text('回到底部')
+        .fontSize(13)
+        .fontColor($r('app.color.text_primary'));
+    }
+    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+    .borderRadius(18)
+    .backgroundColor($r('app.color.card_background'))
+    .shadow({ radius: 8, type: ShadowType.COLOR, color: $r('app.color.button_shadow'), offsetX: 0, offsetY: 2 })
+    .margin({ bottom: 12 })
+    .onClick((): void => {
+      this.backToBottom();
+    });
+  }
+
+  /** 「讨论本书」横幅（#1508）：提示 AI 已带书籍上下文，X 清除。 */
+  @Builder
+  bookBannerBar() {
+    Row({ space: 6 }) {
+      SymbolGlyph($r('sys.symbol.wand_and_stars'))
+        .fontSize(14)
+        .fontColor([$r('app.color.brand_primary')]);
+      Text(this.bookTag)
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1);
+      SymbolGlyph($r('sys.symbol.xmark_circle_fill'))
+        .fontSize(16)
+        .fontColor([$r('app.color.text_tertiary')])
+        .onClick((): void => {
+          this.leaveBookContext();
+        });
+    }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+    .backgroundColor($r('app.color.brand_primary_light'))
   }
 
   @Builder
@@ -868,10 +1140,16 @@ struct AiAssistantPage {
           StreamBubble();
         } else {
           if ((bubble.reasoning ?? '').length > 0) {
-            ReasoningBlock({ reasoning: bubble.reasoning ?? '', live: false });
+            ReasoningBlock({ reasoning: bubble.reasoning ?? '', live: false, thinkMs: bubble.thinkMs ?? 0 });
           }
           ActivityTimeline({ acts: bubble.activities, live: false });
           MarkdownText({ content: bubble.content });
+          // token 用量脚注（#1514）：服务商回传 usage 才显示，旧存档/语音轮无感
+          if (bubble.usage !== undefined && bubble.usage.total > 0) {
+            Text(`已用 ${bubble.usage.total} tokens · 入 ${bubble.usage.prompt} / 出 ${bubble.usage.completion}`)
+              .fontSize(11)
+              .fontColor($r('app.color.text_tertiary'));
+          }
         }
       } else {
         // 语音用户气泡的 ASR 中间结果也在 bubble.content，不能走文字轮 streamingText 镜像
@@ -882,6 +1160,21 @@ struct AiAssistantPage {
           .width('100%')
           .copyOption(CopyOptions.LocalDevice)
           .textAlign(TextAlign.Start);
+      }
+
+      // 失败轮只给「重试」：截掉该错误条连同其问题原样重发（#1512），不保留半截内容
+      if (bubble.error && !bubble.streaming) {
+        Row({ space: 12 }) {
+          TextButton({
+            label: '重试',
+            onTap: () => {
+              if (!this.store.retryFrom(index)) {
+                this.toast('生成中，请稍候');
+              }
+            },
+          });
+        }
+        .width('100%');
       }
 
       if (bubble.role === 'assistant' && !bubble.streaming && !bubble.error && bubble.content.length > 0) {
@@ -915,7 +1208,21 @@ struct AiAssistantPage {
     .padding(14)
     .borderRadius($r('app.float.card_radius'))
     .backgroundColor(bubble.role === 'user' ? $r('app.color.brand_primary_light') : $r('app.color.card_background'))
-    .shadow({ radius: 10, type: ShadowType.COLOR, color: $r('app.color.button_shadow'), offsetX: 0, offsetY: 2 });
+    .shadow({ radius: 10, type: ShadowType.COLOR, color: $r('app.color.button_shadow'), offsetX: 0, offsetY: 2 })
+    .bindContextMenu(this.bubbleMenu(bubble, index), ResponseType.LongPress);
+  }
+
+  /** 气泡长按菜单（#1507）：选项由 bubbleMenuKinds 按气泡状态生成，流式期空数组=不响应。 */
+  @Builder
+  bubbleMenu(bubble: ChatBubble, index: number) {
+    Menu() {
+      ForEach(this.bubbleMenuKinds(bubble, index), (kind: string) => {
+        MenuItem({ content: this.menuLabel(kind) })
+          .onClick(() => {
+            this.runMenuAction(kind, index);
+          });
+      }, (kind: string): string => kind);
+    }
   }
 
   /** 对话进行中的技能芯片：横向滚动，点击填入输入框（不自动发送）。 */
@@ -949,47 +1256,6 @@ struct AiAssistantPage {
   private askOptions(): string[] {
     const ask: AskRequest | null = this.pendingAsk;
     return ask === null ? [] : ask.options;
-  }
-
-  /**
-   * ask_user 反问卡片：AI 需要用户拍板时挂在输入条上方，点选项即把答复归还回路续跑。
-   * 视图解绑/停止键都会在 store 侧按跳过收敛，卡片不会残留成死按钮。
-   */
-  @Builder
-  askCard() {
-    Column({ space: 10 }) {
-      Text(this.askQuestion())
-        .fontSize(14)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
-        .width('100%');
-      Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(8), cross: LengthMetrics.vp(8) } }) {
-        ForEach(this.askOptions(), (opt: string) => {
-          Text(opt)
-            .fontSize(13)
-            .fontColor($r('app.color.brand_primary'))
-            .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-            .borderRadius(14)
-            .backgroundColor($r('app.color.brand_primary_light'))
-            .onClick(() => this.store.answerAsk(opt));
-        }, (opt: string) => opt);
-        Text('跳过')
-          .fontSize(13)
-          .fontColor($r('app.color.text_secondary'))
-          .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-          .borderRadius(14)
-          .border({ width: 1, color: $r('app.color.divider') })
-          .onClick(() => this.store.answerAsk(''));
-      }
-      .width('100%');
-    }
-    .width('100%')
-    .padding(14)
-    .borderRadius($r('app.float.card_radius'))
-    .backgroundColor($r('app.color.card_background'))
-    .shadow({ radius: 8, type: ShadowType.COLOR, color: $r('app.color.button_shadow'), offsetX: 0, offsetY: 2 })
-    .alignItems(HorizontalAlign.Start)
-    .margin({ left: $r('app.float.page_padding'), right: $r('app.float.page_padding'), bottom: 8 });
   }
 
   /** 语音状态点配色：聆听=红（收音中）、思考=黄、说话=品牌色、其余（连接中等）=灰。 */
@@ -1106,6 +1372,11 @@ struct AiAssistantPage {
               .fontSize(11)
               .fontColor($r('app.color.brand_primary'));
           }
+          if (this.sessionTokens() > 0) {
+            Text(`· 共耗 ${this.sessionTokens()} tokens`)
+              .fontSize(11)
+              .fontColor($r('app.color.text_tertiary'));
+          }
         }
         .width('100%')
         .padding({ left: 4, bottom: 4 });
@@ -1128,12 +1399,35 @@ struct AiAssistantPage {
             void this.pickImage();
           });
         }
-        TextInput({ placeholder: this.thinking ? '生成中…' : '输入问题', text: this.input })
-          .layoutWeight(1)
+        // 按住说话（#1516）：44vp Stack 自建热区（Button+Circle 宽高失效坑），按下录音松手转文字
+        if (this.holdTalkReady && !this.voiceActive) {
+          Stack() {
+            SymbolGlyph($r('sys.symbol.mic'))
+              .fontSize(20)
+              .fontColor([this.holdRecording ? Color.White : $r('app.color.text_secondary')]);
+          }
+          .width(44)
           .height(44)
+          .borderRadius(22)
+          .backgroundColor(this.holdRecording ? $r('app.color.brand_primary') :
+            $r('app.color.page_background'))
+          .onTouch((e: TouchEvent): void => {
+            if (e.type === TouchType.Down) {
+              void this.holdStart();
+            } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+              void this.holdFinish();
+            }
+          });
+        }
+        // TextArea 随内容自动长高（#1510），44vp 单行起步、5 行封顶后内部滚动；键盘动作键=发送（板上实测语义）
+        TextArea({ placeholder: this.holdPlaceholder(), text: this.input })
+          .layoutWeight(1)
+          .constraintSize({ minHeight: 44, maxHeight: 132 })
           .borderRadius(22)
           .backgroundColor($r('app.color.page_background'))
           .enabled(!this.thinking)
+          .fontSize(15)
+          .enterKeyType(EnterKeyType.Send)
           .onChange((value: string) => this.input = value)
           .onSubmit(() => { void this.send(this.input); });
 
@@ -1183,216 +1477,5 @@ struct AiAssistantPage {
     .width('100%')
     .padding({ left: 12, right: 12, top: 8, bottom: 12 })
     .backgroundColor($r('app.color.card_background'));
-  }
-}
-
-/** 思考过程块：流式（live）默认展开实时滚动，历史气泡默认折叠，点标题行切换。 */
-@Component
-struct ReasoningBlock {
-  @Prop @Watch('onReasoningChange') reasoning: string = '';
-  live: boolean = false;
-  @State expanded: boolean = false;
-  private bodyScroller: Scroller = new Scroller();
-
-  aboutToAppear(): void {
-    this.expanded = this.live;
-    this.scrollLiveBottom();
-  }
-
-  onReasoningChange(): void {
-    this.scrollLiveBottom();
-  }
-
-  private scrollLiveBottom(): void {
-    if (!this.live) {
-      return;
-    }
-    // 流式思考走 @Prop 增量更新（气泡不重建），每次变化下一拍贴底=始终露出最新一段
-    setTimeout((): void => {
-      try {
-        this.bodyScroller.scrollEdge(Edge.Bottom);
-      } catch (_error) {
-        // 组件已随气泡销毁时忽略
-      }
-    }, 60);
-  }
-
-  build() {
-    if (this.reasoning.length > 0) {
-      Column({ space: 4 }) {
-        Row({ space: 4 }) {
-          SymbolGlyph(this.expanded ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
-            .fontSize(12)
-            .fontColor([$r('app.color.text_tertiary')]);
-          Text(this.live ? '正在思考' : '思考过程')
-            .fontSize(12)
-            .fontColor($r('app.color.text_tertiary'));
-        }
-        .onClick(() => {
-          // 流式期恒展开：气泡随增量重建会把折叠态强行复位，点了也白点，直接禁用避免观感闪烁
-          if (!this.live) {
-            this.expanded = !this.expanded;
-          }
-        });
-        if (this.expanded) {
-          Scroll(this.bodyScroller) {
-            Text(this.reasoning)
-              .fontSize(13)
-              .lineHeight(20)
-              .fontColor($r('app.color.text_secondary'))
-              .width('100%');
-          }
-          .constraintSize({ maxHeight: 220 })
-          .scrollBar(BarState.Auto)
-          .width('100%');
-        }
-      }
-      .width('100%')
-      .alignItems(HorizontalAlign.Start);
-    }
-  }
-}
-
-/**
- * 工具调用活动区：摘要折叠行 + 展开明细；相邻同名调用合并为一条（×N）。
- * 流式期固定展开且禁用折叠点击——气泡随增量重建，组件内折叠态必被复位（同 ReasoningBlock）。
- * 单步活动默认展开：折叠只对多步有意义。
- */
-@Component
-struct ActivityTimeline {
-  @Prop acts: ChatActivity[] = [];
-  live: boolean = false;
-  @State expanded: boolean = false;
-
-  aboutToAppear(): void {
-    this.expanded = this.live || this.acts.length <= 1;
-  }
-
-  private headText(groups: ActivityGroup[]): string {
-    for (const g of groups) {
-      if (g.state === 'doing') {
-        return `执行中：${g.label}…`;
-      }
-    }
-    return `已执行 ${this.acts.length} 步`;
-  }
-
-  build() {
-    if (this.acts.length > 0) {
-      Column({ space: 8 }) {
-        Row({ space: 4 }) {
-          SymbolGlyph(this.expanded ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
-            .fontSize(12)
-            .fontColor([$r('app.color.text_tertiary')]);
-          Text(this.headText(groupActivities(this.acts)))
-            .fontSize(12)
-            .fontColor($r('app.color.text_secondary'))
-            .layoutWeight(1)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis });
-        }
-        .width('100%')
-        .onClick(() => {
-          if (!this.live) {
-            this.expanded = !this.expanded;
-          }
-        });
-        if (this.expanded) {
-          ForEach(groupActivities(this.acts), (g: ActivityGroup, idx: number) => {
-            Column({ space: 6 }) {
-              Row({ space: 8 }) {
-                if (g.state === 'doing') {
-                  LoadingProgress().width(16).height(16).color($r('app.color.brand_primary'));
-                } else {
-                  Stack() {
-                    SymbolGlyph(g.state === 'rejected' ? $r('sys.symbol.xmark') : $r('sys.symbol.checkmark'))
-                      .fontSize(9)
-                      .fontWeight(FontWeight.Bold)
-                      .fontColor([$r('app.color.on_brand')]);
-                  }
-                  .width(16)
-                  .height(16)
-                  .borderRadius(8)
-                  .backgroundColor(g.state === 'rejected' ?
-                    $r('app.color.error') : $r('app.color.brand_primary'));
-                }
-                Text(g.state === 'doing' ? `正在${g.label}…` :
-                  (g.state === 'rejected' ? `已拒绝：${g.label}` :
-                    (g.summary.length > 0 ? `${g.label}：${g.summary}` : g.label)))
-                  .fontSize(12)
-                  .fontColor($r('app.color.text_secondary'))
-                  .layoutWeight(1)
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis });
-                if (g.count > 1) {
-                  Text(`×${g.count}`)
-                    .fontSize(11)
-                    .fontColor($r('app.color.brand_primary'))
-                    .padding({ left: 6, right: 6, top: 1, bottom: 1 });
-                }
-              }
-              .width('100%');
-              if (g.books.length > 0) {
-                ToolResultList({ items: g.books });
-              }
-            }
-            .alignItems(HorizontalAlign.Start)
-            .width('100%');
-          }, (g: ActivityGroup, idx: number) => `${idx}-${g.name}-${g.state}-${g.count}-${g.books.length}`);
-        }
-      }
-      .width('100%')
-      .alignItems(HorizontalAlign.Start)
-      .padding(10)
-      .borderRadius($r('app.float.chip_radius'))
-      .backgroundColor($r('app.color.page_background'));
-    }
-  }
-}
-
-/**
- * 流式文字气泡：自己向 store 订阅增量，打字机期间只更新内容子树。
- * ForEach 里它的 key 恒定（bubbleView 调用处），整轮不重建——避免每次增量
- * 把 markdown 全文重挂、思考/活动区折叠态复位。子组件的流式字段必须 @Prop，
- * 否则本组件 @State 变化传不进已挂载的子组件。
- */
-@Component
-struct StreamBubble {
-  @State text: string = '';
-  @State reasoning: string = '';
-  @State acts: ChatActivity[] = [];
-  private viewToken: number = 0;
-
-  private pull(): void {
-    const store = AiChatStore.instance();
-    this.text = store.streamingText;
-    this.reasoning = store.streamingReasoning;
-    this.acts = store.liveActivities.slice();
-  }
-
-  aboutToAppear(): void {
-    this.viewToken = AiChatStore.instance().attachStreamView((): void => this.pull());
-    this.pull();
-  }
-
-  aboutToDisappear(): void {
-    AiChatStore.instance().detachStreamView(this.viewToken);
-  }
-
-  build() {
-    // space 与 bubbleView 外层一致（6），避免流式→固化瞬间子项间距跳动
-    Column({ space: 6 }) {
-      ReasoningBlock({ reasoning: this.reasoning, live: true });
-      ActivityTimeline({ acts: this.acts, live: true });
-      if (this.text.length > 0) {
-        MarkdownText({ content: this.text });
-      } else if (this.acts.length === 0) {
-        Text('思考中…')
-          .fontSize(15)
-          .fontColor($r('app.color.text_secondary'));
-      }
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start);
   }
 }

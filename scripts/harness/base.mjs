@@ -24,12 +24,16 @@ export const state = {
   shelf: { books: [] }, search: async () => ({ body: { books: [] } }),
   recommend: async () => [], summary: async () => '', review: async () => '', meta: async () => ({}),
   settings: settingsDefaults(), prefs: new Map(), lastMessages: null, lastToast: '',
+  // #1516 按住说话桩：录音/识别计数与预置返回；micGrant=权限授予结果
+  hold: { starts: 0, stops: 0, wav: '', text: '', asrErr: false, b64s: [] }, micGrant: true,
 };
 globalThis.__aiCheck = state;
 // 设置页保存时会记一个配置版本号，桩掉避免 save() 抛错
 globalThis.AppStorage = { setOrCreate: () => {} };
 // bindMenu 构造器（权限/模型菜单）运行时引用 $r 取资源；测试不渲染，桩成资源名即可
 globalThis.$r = (name) => name;
+// #1506 onListTouch 触控意图判定引用 TouchType；桩值与 ArkUI 枚举序号一致
+globalThis.TouchType = { Down: 0, Up: 1, Move: 2, Cancel: 3, OutsideTrigger: 4 };
 export function writeStubs() {
 const shim = `
 const state = globalThis.__aiCheck;
@@ -128,10 +132,21 @@ export const AiService = {
     return state.settings.config;
   },
 };
-// 页面测试不触发真实播报，但 import 名要在（对话页 ttsAvailable 门控下调用不到）
+// 页面测试不触发真实播报；#1516 按住说话链走 state.hold 计数与预置返回
 export const QwenAudioService = {
-  startRecording: async () => {}, stopRecording: async () => '', stopRecordingCleanup: () => {},
-  transcribe: async () => '', synthesize: async () => '/tmp/tts_test.mp3', playFile: async () => true, stopPlayback: () => {},
+  startRecording: async () => { state.hold.starts++; },
+  stopRecording: async () => { state.hold.stops++; return state.hold.wav; },
+  stopRecordingCleanup: () => { state.hold.stops++; },
+  transcribe: async (b64) => {
+    state.hold.b64s.push(b64);
+    if (state.hold.asrErr) { throw new Error('未配置 Token Plan API Key'); }
+    return state.hold.text;
+  },
+  synthesize: async () => '/tmp/tts_test.mp3', playFile: async () => true, stopPlayback: () => {},
+};
+// #1516 按住说话取麦克风权限：页面测试不真授权，按 state.micGrant 给结果
+export const AiVoiceKit = {
+  ensureMicPermission: async () => state.micGrant,
 };
 export const SpeakService = {
   speak: async (text) => { state.settings.speakCalls.push(text); return true; },
@@ -158,7 +173,7 @@ export const pasteboard = {
   MIMETYPE_TEXT_PLAIN: 'text/plain', createData: (_type, text) => text,
   getSystemPasteboard: () => ({ setData: (text) => { state.copied = text; return Promise.resolve(); } }),
 };
-export const AppRouter = { getParams: () => ({}) };
+export const AppRouter = { getParams: () => (globalThis.__aiCheck.routerParams ?? {}) };
 export const promptAction = { showToast: (o) => { state.lastToast = o.message; } };
 export const AI_PROVIDERS = [];
 export const CONTEXT_LENGTH_OPTIONS = [4, 8, 32, 128, 200];
@@ -508,6 +523,7 @@ export async function setup() {
   stagePure('HomeModels', 'models/HomeModels.ets', []);
   stagePure('LibraryMatch', 'utils/LibraryMatch.ets', ['BookItem']);
   stagePure('MdParse', 'services/MdParse.ets', []);
+  stagePure('AiChatPrompts', 'services/AiChatPrompts.ets', ['AiPermissionMode']);
   stagePure('AiSkills', 'services/AiSkills.ets', []);
   for (const name of ['AiAssistantPage', 'AiBookPanelPage', 'AiRecommendPage', 'AiSettingsPage',
     'AiPersonaPage']) {
@@ -548,7 +564,7 @@ export async function setup() {
   const { AiTools: RealAiTools } = await load('RealAiTools');
   const { parseToolBookLines } = await load('AiToolsDefs');
   const { toolsState } = await load('aiToolsDeps');
-  const { mdParseBlocks, mdParseInline } = await load('MdParse');
+  const { mdParseBlocks, mdParseInline, collectLinks, linkHost } = await load('MdParse');
   const { AI_SKILLS } = await load('AiSkills');
   const resetSettings = () => { state.settings = settingsDefaults(); };
   const settingsPage = () => {
@@ -560,21 +576,26 @@ export async function setup() {
   const chat = () => {
     AiChatStore.instance().resetForTest();
     const page = new AiAssistantPage();
-    page.toast = () => {};
+    page.toast = (m) => { state.lastToast = m; };
     page.scrollToEnd = () => {};
+    // #1508 acceptBookParams 直读路由参数：AppRouter shim 忽略 ui 实参，桩空对象即可
+    page.getUIContext = () => ({});
     state.ready = true;
     state.cancel = null;
+    state.hold = { starts: 0, stops: 0, wav: '', text: '', asrErr: false, b64s: [] };
+    state.micGrant = true;
     page.aboutToAppear();
     return page;
   };
   // 重进页面（不重置 store，模拟真实路由返回）：手动装配即可
   const reappear = () => {
     const page = new AiAssistantPage();
-    page.toast = () => {};
+    page.toast = (m) => { state.lastToast = m; };
     page.scrollToEnd = () => {};
+    page.getUIContext = () => ({});
     page.aboutToAppear();
     return page;
   };
-  return { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, chat, reappear };
+  return { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, chat, reappear };
 }
 

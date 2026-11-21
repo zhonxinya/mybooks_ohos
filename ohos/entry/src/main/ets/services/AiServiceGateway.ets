@@ -13,6 +13,8 @@ import type { AiMessage, AiConfig, AiAbortHandle } from './AiService';
 import type { AiSessionHolder } from './AiServiceHttp';
 import { AiServiceConfig, MAX_TOOL_ROUNDS, MAX_GATEWAY_ATTEMPTS, MAX_TOOL_SLOTS } from './AiServiceConfig';
 import { AiServiceHttp } from './AiServiceHttp';
+import { mergeUsage, parseUsage } from './AiChatModel';
+import type { AiTokenUsage } from './AiChatModel';
 
 export class AiServiceGateway {
   static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[],
@@ -23,7 +25,8 @@ export class AiServiceGateway {
     onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null,
     onResult: ((name: string, label: string, text: string, callId: string) => void) | null,
     onReasoning: ((text: string) => void) | null,
-    onAsk: ((question: string, options: string[]) => Promise<string>) | null): Promise<string> {
+    onAsk: ((question: string, options: string[]) => Promise<string>) | null,
+    usageBox: AiTokenUsage[] | null): Promise<string> {
     const headers: rcp.RequestHeaders = {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
@@ -83,7 +86,15 @@ export class AiServiceGateway {
       if (statusCode < 200 || statusCode >= 300) {
         throw new Error(lastError);
       }
-      return AiServiceGateway.parseGatewayReply(text);
+      const reply: GatewayReply = AiServiceGateway.parseGatewayReply(text);
+      // 跨工具轮用量累加进盒（#1514）：与 sessionBox 同法，签名不再扩散
+      if (usageBox !== null && reply.usage !== null) {
+        if (usageBox.length === 0) {
+          usageBox.push({ prompt: 0, completion: 0, total: 0 });
+        }
+        mergeUsage(usageBox[0], reply.usage);
+      }
+      return reply;
     };
     try {
       return await AiServiceGateway.runToolLoop(gwMessages, transport, tools, permission, isAborted,
@@ -325,6 +336,15 @@ export class AiServiceGateway {
       }
       const choices: Object | undefined = (chunk as Record<string, Object>)['choices'];
       if (!Array.isArray(choices) || (choices as Object[]).length === 0) {
+        // include_usage 尾包（#1514）：choices 为空、usage 在顶层；跨轮在 reply.usage 上累加
+        const u = parseUsage((chunk as Record<string, Object>)['usage']);
+        if (u !== null) {
+          if (reply.usage === null) {
+            const zero: AiTokenUsage = { prompt: 0, completion: 0, total: 0 };
+            reply.usage = zero;
+          }
+          mergeUsage(reply.usage, u);
+        }
         continue;
       }
       const first: Object = (choices as Object[])[0];
@@ -395,13 +415,15 @@ export class AiServiceGateway {
     onDelta: (text: string) => void, onReasoning: ((text: string) => void) | null,
     sessionBox: AiSessionHolder[]): Promise<GatewayReply | null> {
     return new Promise<GatewayReply | null>((resolve, reject): void => {
-      const reply: GatewayReply = { content: '', calls: null, reasoning: '' };
+      const reply: GatewayReply = { content: '', calls: null, reasoning: '', usage: null };
       const slots: GatewayToolCall[] = [];
       let settled: boolean = false;
+      const streamOptions: Record<string, Object> = { 'include_usage': true };
       const payload: Record<string, Object> = {
         'model': config.model,
         'messages': gwMessages,
         'stream': true,
+        'stream_options': streamOptions,
         'temperature': config.temperature,
         'max_tokens': maxTokens,
       };
@@ -462,7 +484,7 @@ export class AiServiceGateway {
 
   /** 解析网关整包响应：正文 + tool_calls（不依赖 SDK 的 ChatCompletionMessage 类型）。 */
   static parseGatewayReply(raw: string): GatewayReply {
-    const reply: GatewayReply = { content: '', calls: null, reasoning: '' };
+    const reply: GatewayReply = { content: '', calls: null, reasoning: '', usage: null };
     if (raw.length === 0) {
       return reply;
     }
@@ -479,6 +501,8 @@ export class AiServiceGateway {
         throw new Error(message as string);
       }
     }
+    // 整包通道的 usage 在顶层（#1514）：早于 choices 检查取，异常包也不丢计量
+    reply.usage = parseUsage(root['usage']);
     const choices = root['choices'] as Object[] | undefined;
     if (choices === undefined || choices.length === 0) {
       return reply;
@@ -544,6 +568,8 @@ export interface GatewayReply {
   calls: GatewayToolCall[] | null;
   /** 推理模型的思考过程（OpenAI 兼容字段 reasoning_content，整包模式一次给全）。 */
   reasoning: string;
+  /** 本次请求的 token 用量（#1514）；服务商没回传 usage 时为 null。 */
+  usage: AiTokenUsage | null;
 }
 
 

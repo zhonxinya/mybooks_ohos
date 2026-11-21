@@ -5,7 +5,7 @@ import { test, state, settingsDefaults, enc, rtB64, deferred, tick, flush } from
 import { dir, read, ETS, ROOT } from './paths.mjs';
 
 export function register(ctx) {
-  const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, chat, reappear } = ctx;
+  const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, chat, reappear } = ctx;
   test('从模型设置返回时刷新三个 AI 页面的可用状态', () => {
     for (const Page of [AiAssistantPage, AiBookPanelPage, AiRecommendPage]) {
       const page = new Page();
@@ -414,6 +414,20 @@ export function register(ctx) {
     assert.equal(code.kind, 'code');
     assert.equal(code.raw, '未闭合');
   });
+  test('MdParse #1511：href 保留、collectLinks 去重、linkHost 展示副标', () => {
+    const lines = mdParseBlocks(
+      '先看 [官网](https://a.example.com/x?y=1)\n再看 [官网](https://a.example.com/x?y=1) 与 [讨论]( https://b.example.com )')[0].segs;
+    const links = collectLinks(lines);
+    assert.equal(links.length, 2);
+    assert.equal(links[0].href, 'https://a.example.com/x?y=1');
+    assert.equal(links[1].text, '讨论');
+    assert.equal(links[1].href, 'https://b.example.com');
+    assert.equal(linkHost('https://a.example.com/x?y=1'), 'a.example.com');
+    assert.equal(linkHost('http://b.example.com#frag'), 'b.example.com');
+    assert.equal(linkHost('example.org/path'), 'example.org');
+    // 无 href 的旧样式段不进清单（历史数据/裸着色段不炸）
+    assert.deepEqual(collectLinks([[{ text: '裸链样式', style: 3 }]]), []);
+  });
   test('设置页：添加本地服务商有校验，成功后选中为当前编辑对象', () => {
     resetSettings();
     const page = settingsPage();
@@ -509,7 +523,240 @@ export function register(ctx) {
     err.content = '挂了更长的错误文案';
     assert.notEqual(page.bubbleKey(err, 2), page.bubbleKey({ ...err, content: '短' }, 2), '错误气泡 key 仍覆盖内容长度');
     const user = { role: 'user', content: '问', streaming: false, error: false, activities: [] };
-    assert.equal(page.bubbleKey(user, 3), 'bubble-3-user-d-0-1-0-0');
+    assert.equal(page.bubbleKey(user, 3), 'bubble-3-user-d-0-1-0-0-');
+  });
+
+  test('智能跟滚：上滑离底暂停自动滚动；回底/浮钮/新消息恢复；微小滑动不误判', async () => {
+    const page = chat();
+    let scrolls = 0;
+    page.scrollToEnd = () => { scrolls++; };
+    page.scroller = { isAtEnd: () => false };
+    await page.send('问题');
+    assert.ok(scrolls >= 1, '发消息必须滚动跟随');
+    state.handlers.onDelta('字');
+    const following = scrolls;
+    assert.ok(following >= 2, '跟随时增量滚动');
+    // 手指明显下滑（内容上移露历史）→ 脱离跟随
+    page.onListTouch({ type: globalThis.TouchType.Down, touches: [{ y: 100 }] });
+    page.onListTouch({ type: globalThis.TouchType.Move, touches: [{ y: 200 }] });
+    assert.equal(page.followBottom, false, '上滑读历史应脱离跟随');
+    state.handlers.onDelta('字');
+    state.handlers.onDelta('字');
+    assert.equal(scrolls, following, '离底期生成不得抢滚');
+    state.handlers.onDone('全文');
+    assert.equal(scrolls, following, '离底期收尾也不得强滚');
+    // 停滚恢复：仅视图真在底缘才恢复
+    page.onListScrollStop();
+    assert.equal(page.followBottom, false, '未到底不误恢复');
+    page.scroller = { isAtEnd: () => true };
+    page.onListScrollStop();
+    assert.equal(page.followBottom, true, '滑回底部恢复跟随');
+    // 24px 噪声阈值内不脱跟随
+    page.onListTouch({ type: globalThis.TouchType.Down, touches: [{ y: 100 }] });
+    page.onListTouch({ type: globalThis.TouchType.Move, touches: [{ y: 120 }] });
+    assert.equal(page.followBottom, true, '轻微抖动不误判为读历史');
+    // 浮钮回底
+    page.onListTouch({ type: globalThis.TouchType.Move, touches: [{ y: 400 }] });
+    assert.equal(page.followBottom, false);
+    const before = scrolls;
+    page.backToBottom();
+    assert.equal(page.followBottom, true, '点浮钮立即恢复跟随');
+    assert.equal(scrolls, before + 1, '浮钮滚动不受门控');
+    // 离底期发新消息强制回跟随
+    page.onListTouch({ type: globalThis.TouchType.Move, touches: [{ y: 900 }] });
+    assert.equal(page.followBottom, false);
+    await page.send('再来');
+    assert.equal(page.followBottom, true, '新消息必回跟随最新');
+  });
+
+  test('长按菜单：状态化选项 + 删除单条落盘 + 编辑重发截断回填', async () => {
+    const page = chat();
+    const store = AiChatStore.instance();
+    await page.send('第一个问题');
+    state.handlers.onDone('回答一');
+    // kinds：最新 assistant=复制/删除/重新生成；user=复制/编辑/删除
+    assert.deepEqual(page.bubbleMenuKinds(store.messages[1], 1), ['copy', 'delete', 'regen']);
+    assert.deepEqual(page.bubbleMenuKinds(store.messages[0], 0), ['copy', 'edit', 'delete']);
+    const voice = { role: 'assistant', content: '语音', streaming: false, error: false, activities: [], voice: true };
+    assert.ok(!page.bubbleMenuKinds(voice, 3).includes('regen'), '语音轮不走文字重生成');
+    const err = { role: 'assistant', content: '失败', streaming: false, error: true, activities: [] };
+    assert.deepEqual(page.bubbleMenuKinds(err, 1), ['copy', 'delete'], '错误气泡仅复制/删除');
+    assert.deepEqual(page.bubbleMenuKinds({ role: 'assistant', content: '', streaming: true, error: false, activities: [] }, 2), [],
+      '流式期不响应长按');
+    assert.equal(store.editResend(1), '', 'assistant 气泡不可编辑重发');
+    // 删除单条 + 持久化同步
+    store.deleteBubble(1);
+    assert.equal(store.messages.length, 1);
+    assert.equal(JSON.parse(state.prefs.get('ai_chat_history')).length, 1, '删除必须落盘');
+    store.deleteBubble(99);
+    assert.equal(store.messages.length, 1, '越界拒绝');
+    // 生成期守卫：流式气泡不可删、编辑重发拒绝
+    await page.send('第二个问题');
+    assert.equal(store.editResend(0), '', '生成中不得编辑重发');
+    store.deleteBubble(2);
+    assert.equal(store.messages.length, 3, '流式气泡不可删（copy/edit/delete+streaming 后长度 3）');
+    state.handlers.onDone('回答二');
+    // 编辑重发成功路径：截断该 user 及其后全部，返回原文；页面动作回填输入框
+    const userIdx = store.messages.findIndex((m) => m.role === 'user' && m.content === '第二个问题');
+    assert.ok(userIdx > 0);
+    page.input = '';
+    page.runMenuAction('edit', userIdx);
+    assert.equal(page.input, '第二个问题', '编辑重发回填输入框');
+    assert.equal(store.messages.length, userIdx, '该消息及之后全部抹掉');
+    assert.equal(JSON.parse(state.prefs.get('ai_chat_history')).length, userIdx, '截断落盘');
+  });
+
+  test('讨论本书：buildContext 注入/可选字段省略/清除', async () => {
+    chat();
+    const store = AiChatStore.instance();
+    const notes = async () => (await store.buildContext()).filter((m) => `${m.content}`.includes('用户正在阅读'));
+    assert.equal((await notes()).length, 0, '无书不注入');
+    store.setBookContext('三体', '刘慈欣', '第 10 章');
+    let ctx = await store.buildContext();
+    assert.equal(ctx[1].role, 'system', '书籍上下文紧跟主 system');
+    assert.ok(`${ctx[1].content}`.includes('《三体》（刘慈欣），当前读到：第 10 章'), ctx[1].content);
+    assert.ok(`${ctx[1].content}`.includes('不要生拉硬扯'), '缺引导约束');
+    store.setBookContext('活着', '', '');
+    ctx = await store.buildContext();
+    const note2 = `${(await notes())[0].content}`;
+    assert.ok(note2.includes('《活着》') && !note2.includes('当前读到') && !note2.includes('（'), note2);
+    store.setBookContext('', 'x', 'y');
+    assert.equal((await notes()).length, 0, '空书名=清除');
+    store.setBookContext('三体', '', '');
+    store.clearBookContext();
+    assert.equal((await notes()).length, 0, 'clear 后不注入');
+  });
+
+  test('讨论本书：路由带参进页即注入横幅，X 清除；无参进入不残留', () => {
+    state.routerParams = { bookTitle: '宇宙视界', chapter: '第三章' };
+    const page = chat();
+    assert.equal(page.bookTag, '讨论《宇宙视界》');
+    page.leaveBookContext();
+    assert.equal(page.bookTag, '');
+    state.routerParams = {};
+    const page2 = chat();
+    assert.equal(page2.bookTag, '', '普通进入静默跳过');
+    state.routerParams = { bookTitle: '三体' };
+    const page3 = chat();
+    assert.equal(page3.bookTag, '讨论《三体》', '无章节也可注入');
+    delete state.routerParams;
+  });
+
+  test('时间分隔条：阈值/首条/旧数据 + ts 落盘往返 + 页面判定', async () => {
+    const model = await load('AiChatModel');
+    const MIN = 60000;
+    assert.equal(model.shouldShowTimeDivider(0, 1000), true, '首条/上条无时间显示');
+    assert.equal(model.shouldShowTimeDivider(1000, 0), false, '旧数据无 ts 不显示');
+    assert.equal(model.shouldShowTimeDivider(1000, 1000 + 4 * MIN), false, '4 分钟不插条');
+    assert.equal(model.shouldShowTimeDivider(1000, 1000 + 5 * MIN), true, '5 分钟插条');
+    const today = new Date();
+    today.setHours(9, 5, 0, 0);
+    assert.equal(model.formatDividerTime(today.getTime()), '09:05', '当天只显示时分');
+    const lastYear = new Date();
+    lastYear.setFullYear(lastYear.getFullYear() - 1);
+    assert.match(model.formatDividerTime(lastYear.getTime()), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/, '跨年显示全日期');
+    const parsed = model.parseBubbles([{ role: 'user', content: 'x', activities: [], ts: 123 }]);
+    assert.equal(parsed[0].ts, 123, 'ts 进白名单');
+    assert.equal(model.parseBubbles([{ role: 'user', content: 'x', activities: [] }])[0].ts, 0, '缺 ts 视为 0');
+    // 落盘：同轮 user/assistant 同戳
+    const page = chat();
+    await page.send('q');
+    state.handlers.onDone('a');
+    const saved = JSON.parse(state.prefs.get('ai_chat_history'));
+    assert.ok(saved[0].ts > 0 && saved[1].ts === saved[0].ts, '轮次时间戳随历史持久化');
+    // 页面判定：间隔与删除场景
+    page.messages = [
+      { role: 'user', content: 'a', streaming: false, error: false, activities: [], ts: 1000 },
+      { role: 'assistant', content: 'b', streaming: false, error: false, activities: [], ts: 1000 },
+    ];
+    assert.equal(page.showsTimeDivider(0), true);
+    assert.equal(page.showsTimeDivider(1), false);
+    // key 覆盖分隔态：同内容下 prev 无 ts vs 有 ts，key 必须不同（复用项才会重算）
+    const kWith = page.bubbleKey(page.messages[1], 1);
+    page.messages[0].ts = 0;
+    assert.notEqual(page.bubbleKey(page.messages[1], 1), kWith, '分隔态变化必须换 key');
+  });
+
+  test('错误气泡重试：截掉错误条与其问题原样重发；regenerate 委托等价', async () => {
+    const page = chat();
+    const store = AiChatStore.instance();
+    await page.send('问题一');
+    state.handlers.onDone('答案一');
+    await page.send('问题二');
+    assert.equal(store.retryFrom(1), false, 'thinking 期拒绝重试');
+    state.handlers.onError('网络错误');
+    assert.equal(store.messages.length, 4);
+    assert.equal(store.messages[3].error, true, '失败轮固化为错误气泡');
+    // 从错误条位置重试：截掉 [问题二+错误条]，原样重发
+    assert.equal(store.retryFrom(3), true);
+    assert.equal(store.messages.length, 4, '错误条与问题截掉后，问题原样重新入列');
+    assert.equal(store.messages[2].role, 'user');
+    assert.equal(store.messages[2].content, '问题二', '重发的是原问题');
+    assert.equal(store.messages[3].role, 'assistant');
+    assert.equal(store.messages[3].streaming, true, '新一轮流式气泡就位');
+    // retryFrom 内 void send()：chatStream 在 await buildContext 之后才捕获 handlers，让出一拍
+    await new Promise((r) => setTimeout(r, 10));
+    state.handlers.onDone('答案二·重试');
+    assert.equal(store.messages.length, 4);
+    assert.equal(store.messages[3].content, '答案二·重试');
+    assert.equal(store.messages[3].error, false);
+    // 前方无用户问题时静默拒绝；regenerate=末尾锚点委托
+    assert.equal(store.retryFrom(0), false, '无问题可重发');
+    assert.equal(store.regenerate(), true, 'regenerate 走同一 retryFrom');
+    state.handlers.onDone('答案三');
+    assert.ok(JSON.parse(state.prefs.get('ai_chat_history')).length > 0, '重试轮落盘');
+  });
+
+  test('会话改名/搜索/导出（#1513）：named 跨归档持久；搜索含正文；导出稿跳过错误/流式', async () => {
+    const model = await load('AiChatModel');
+    const bs = [
+      { role: 'user', content: '推荐科幻', streaming: false, error: false, activities: [] },
+      { role: 'assistant', content: '《三体》', streaming: false, error: false, activities: [] },
+      { role: 'assistant', content: '网络错误', streaming: false, error: true, activities: [] },
+      { role: 'assistant', content: '半成品', streaming: true, error: false, activities: [] },
+      { role: 'assistant', content: '   ', streaming: false, error: false, activities: [] },
+    ];
+    const md = model.buildSessionMd('科幻推荐', bs, new Date(2026, 10, 21, 9, 5).getTime());
+    assert.ok(md.startsWith('# 科幻推荐'), '标题行');
+    assert.ok(md.includes('2026-11-21 09:05'), '导出时间戳');
+    assert.ok(md.includes('## 用户\n\n推荐科幻') && md.includes('## 助手\n\n《三体》'), '角色分节');
+    assert.ok(!md.includes('网络错误') && !md.includes('半成品'), '错误/流式/空气泡不入稿');
+    assert.equal(model.sessionMatches('abc', bs, ''), true, '空词恒匹配');
+    assert.equal(model.sessionMatches('abc', bs, '三体'), true, '正文命中');
+    assert.equal(model.sessionMatches('ABC def', bs, 'aBC'), true, '标题忽略大小写');
+    assert.equal(model.sessionMatches('abc', bs, 'zzz'), false, '无命中排除');
+    // store：当前会话改名→归档名随带；存档会话改名直接落盘
+    const page = chat();
+    const store = AiChatStore.instance();
+    await page.send('第一个问题');
+    state.handlers.onDone('答一');
+    assert.equal(store.renameSession(store.currentId, '  '), false, '空名拒绝');
+    assert.equal(store.renameSession(store.currentId, '我的科幻话题'), true);
+    assert.equal(store.currentTitle(), '我的科幻话题', '当前会话改名即生效');
+    assert.equal(store.newSession(), true);
+    await page.send('三体里的主线矛盾');
+    state.handlers.onDone('答二');
+    const s1 = store.sessions[0];
+    assert.equal(s1.title, '我的科幻话题', '归档带改名标题');
+    assert.equal(s1.named, '我的科幻话题', 'named 槽持久化');
+    assert.equal(store.renameSession(s1.id, '归档话题名'), true, '存档会话改名');
+    assert.equal(store.sessions[0].title, '归档话题名');
+    const raw = JSON.parse(state.prefs.get('ai_chat_sessions'));
+    assert.equal(raw.find((r) => r.id === s1.id).named, '归档话题名', '存档改名落盘');
+    // 搜索过滤（只过滤存档列表，当前会话恒置顶）
+    assert.equal(store.searchSessions('归档').length, 1, '标题命中');
+    assert.equal(store.searchSessions('答一').length, 1, '正文命中');
+    assert.equal(store.searchSessions('zzz').length, 0, '无命中为空');
+    assert.equal(store.searchSessions('  ').length, 1, '空词原样返回');
+    // 导出
+    assert.ok(store.exportSessionMd(s1.id).includes('答一'), '导出存档会话');
+    assert.ok(store.exportSessionMd('').includes('三体里的主线矛盾'), '空 id=当前会话');
+    assert.equal(store.exportSessionMd('no-such-id'), '', '目标不存在导出空');
+    // 切回：named 随带；超长截断
+    assert.equal(store.switchSession(s1.id), true);
+    assert.equal(store.currentTitle(), '归档话题名', '切回后改名不丢');
+    assert.equal(store.renameSession(s1.id, 'x'.repeat(50)), true);
+    assert.equal(store.currentTitle().length, 31, '超长截 30+省略号');
   });
 
 }

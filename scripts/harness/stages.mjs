@@ -18,9 +18,11 @@ export function stageAiService() {
     ["'./AiServiceConfig'", "'./RealAiServiceConfig.ts'"],
     ["'./AiServiceHttp'", "'./RealAiServiceHttp.ts'"],
     ["'./AiServiceGateway'", "'./RealAiServiceGateway.ts'"],
+    ["'./AiChatModel'", "'./AiChatModel.ts'"],
   ];
   const VALUE_NAMES = new Set(['OpenAI', 'util', 'rcp', 'TalebookService', 'AiTools', 'McpService',
-    'AiServiceConfig', 'AiServiceHttp', 'AiServiceGateway', 'ChatCompletionChunk']);
+    'AiServiceConfig', 'AiServiceHttp', 'AiServiceGateway', 'ChatCompletionChunk',
+    'mergeUsage', 'parseUsage']);
   // Config 下沉的常量（KEY_*/DEFAULT_*/MAX_*/TIMEOUT_MS/AI_PROVIDERS）都是运行时值
   const isValue = (n) => VALUE_NAMES.has(n.replace(/.* as /, '')) ||
     /^(KEY_|DEFAULT_|MAX_|TIMEOUT_MS|CONTEXT_LENGTH_OPTIONS|AI_PROVIDERS)/.test(n);
@@ -246,10 +248,12 @@ export function stageChatStore() {
       `import { AiService } from './shim.ts';`)
     .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
     .replace(`from './TalebookService'`, `from './shim.ts'`)
-    .replace(`import { ChatActivity, ChatBubble, parseBubbles, sessionTitle } from './AiChatModel';`,
-      `import { parseBubbles, sessionTitle } from './AiChatModel.ts';\nimport type { ChatActivity, ChatBubble } from './AiChatModel.ts';`)
-    .replace(`export { ChatActivity, ChatBubble } from './AiChatModel';`,
-      `export type { ChatActivity, ChatBubble } from './AiChatModel.ts';`)
+    .replace(`import { AiTokenUsage, AskRequest, buildSessionMd, ChatActivity, ChatBubble, ChatSession, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, COMPRESS_MIN_DROPPED, HistorySummary, parseBubbles, sessionMatches, sessionTitle } from './AiChatModel';`,
+      `import { parseBubbles, sessionTitle, buildSessionMd, sessionMatches, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, COMPRESS_MIN_DROPPED } from './AiChatModel.ts';\nimport type { AiTokenUsage, AskRequest, ChatActivity, ChatBubble, ChatSession, HistorySummary } from './AiChatModel.ts';`)
+    .replace(`export { AskRequest, ChatActivity, ChatBubble, ChatSession, HistorySummary } from './AiChatModel';`,
+      `export type { AskRequest, ChatActivity, ChatBubble, ChatSession, HistorySummary } from './AiChatModel.ts';`)
+    .replace(`import { permissionPromptNote, SUMMARY_SYSTEM_PROMPT, SYSTEM_PROMPT, SYSTEM_PROMPT_LEARN, SYSTEM_PROMPT_TOOLS } from './AiChatPrompts';`,
+      `import { permissionPromptNote, SUMMARY_SYSTEM_PROMPT, SYSTEM_PROMPT, SYSTEM_PROMPT_LEARN, SYSTEM_PROMPT_TOOLS } from './AiChatPrompts.ts';`)
     .replace(`from '@kit.CoreFileKit'`, `from './shim.ts'`)
     .replace(`from '@kit.ImageKit'`, `from './shim.ts'`)
     .replace(`from '@kit.ArkTS'`, `from './shim.ts'`);
@@ -552,7 +556,7 @@ export function stagePage(name) {
         "import type { ChatActivity, ChatBubble } from './RealAiChatStore.ts';\n";
     }
     if (path === '../services/AiChatModel') {
-      return "import { groupActivities } from './AiChatModel.ts';\n" +
+      return "import { groupActivities, shouldShowTimeDivider, formatDividerTime, appendHeardText } from './AiChatModel.ts';\n" +
         "import type { ActivityGroup } from './AiChatModel.ts';\n";
     }
     if (path === '../services/AiSkills') {
@@ -567,7 +571,7 @@ export function stagePage(name) {
     for (const name of clause.split(',').map((part) => part.trim())) {
       if (['AiService', 'AiBookService', 'ShelfApi', 'TalebookService', 'pasteboard', 'AppRouter', 'AI_PROVIDERS',
         'CONTEXT_LENGTH_OPTIONS', 'fileIo as fs', 'photoAccessHelper', 'image', 'util', 'common',
-        'promptAction', 'SymbolGlyphModifier', 'QwenAudioService', 'SpeakService',
+        'promptAction', 'SymbolGlyphModifier', 'QwenAudioService', 'SpeakService', 'AiVoiceKit',
         'webview', 'BrowserRenderService'].includes(name)) {
         shims.add(name);
       }
