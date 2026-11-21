@@ -257,6 +257,17 @@ export const TOOL_FORGET_MEMORY: AiToolDefinition = defineTool('forget_memory',
   '按序号删除一条用户记忆（用户说「别记得/忘掉第 N 条」时用）。序号来自系统提示记忆列表的编号。',
   MEMORY_FORGET_PROPS, ['index']);
 
+export const MCP_ADD_PROPS: Record<string, AiToolProperty> = {
+  'label': prop('string', 'MCP 服务名称（用户可见），如「我的搜索服务」'),
+  'url': prop('string', 'MCP 端点 URL（Streamable HTTP，通常以 /mcp 结尾）'),
+  'api_key': prop('string', '该服务的 API Key（需要鉴权时给；不需要则留空）'),
+};
+export const TOOL_MCP_ADD_SERVER: AiToolDefinition = defineTool('add_mcp_server',
+  '为用户新增一个 MCP 服务（模型上下文协议服务），添加后其工具在下一轮对话自动可用。' +
+    '用户说「帮我加个 MCP 服务」「配置这个 MCP 地址」时用；名称与 URL 必填，需要鉴权就把 Key 一起给。' +
+    'URL/Key 不确定时先用 ask_user 问清楚，不要猜。',
+  MCP_ADD_PROPS, ['label', 'url']);
+
 export const META_SEARCH_PROPS: Record<string, AiToolProperty> = {
   'query': prop('string', '书名或「书名 作者」关键词；也用于网文源检索'),
   'isbn': prop('string', 'ISBN（10/13 位），比书名更准'),
@@ -345,6 +356,6 @@ export const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_UPDATE_BOOK_META, TOOL_LIST_CATEGORIES,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
   TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_SEARCH_ENCYCLOPEDIA,
-  TOOL_SEARCH_WEB, TOOL_FETCH_URL, TOOL_AI_SEARCH, TOOL_ASK_USER, TOOL_FORGET_MEMORY,
+  TOOL_SEARCH_WEB, TOOL_FETCH_URL, TOOL_AI_SEARCH, TOOL_MCP_ADD_SERVER, TOOL_ASK_USER, TOOL_FORGET_MEMORY,
 ];
 

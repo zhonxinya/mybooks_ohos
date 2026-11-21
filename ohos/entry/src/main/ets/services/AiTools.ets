@@ -18,6 +18,7 @@ import { AiToolsCore } from './AiToolsCore';
 import { AiToolsExecMeta } from './AiToolsExecMeta';
 import { AiToolsExecShelf } from './AiToolsExecShelf';
 import { TOOL_DEFS, TOOL_SET_VOICE, ToolBookLine, AiToolDefinition } from './AiToolsDefs';
+import { McpService, McpServer } from './McpService';
 
 /**
  * AI 助手的本地工具集（OpenAI function calling 协议）。
@@ -73,10 +74,28 @@ export class AiTools {
   private static readonly WRITE_TOOLS: string[] =
     ['create_booklist', 'add_books_to_booklist', 'update_booklist', 'delete_booklist',
       'remove_book_from_booklist', 'add_sonovel_task', 'add_to_shelf', 'push_to_device',
-      'update_book_meta', 'set_cover', 'save_memory', 'forget_memory'];
+      'update_book_meta', 'set_cover', 'save_memory', 'forget_memory', 'add_mcp_server'];
 
   static needsConfirm(name: string): boolean {
     return AiTools.WRITE_TOOLS.indexOf(name) >= 0;
+  }
+
+  /**
+   * add_mcp_server 执行：新增自定义 MCP 服务（含可选 Key）。
+   * 返回文案**不回显 Key**（对话历史会落盘），只报告是否已配。
+   */
+  private static addMcpServer(args: Record<string, Object>): string {
+    const label: string = AiToolsCore.argString(args, 'label');
+    const url: string = AiToolsCore.argString(args, 'url');
+    const apiKey: string = AiToolsCore.argString(args, 'api_key');
+    try {
+      const server: McpServer = McpService.addServer(label, url, apiKey);
+      const keyNote: string = apiKey.trim().length > 0 ? '已配置 Key' : '未配置 Key（如该服务需鉴权请补填）';
+      return `已新增 MCP 服务「${server.label}」（${server.url}），${keyNote}。` +
+        '下一轮对话会自动挂载其工具；若未出现可在设置页 MCP 档点「立即探测挂载状态」查看原因。';
+    } catch (error) {
+      return `新增 MCP 服务失败：${error instanceof Error ? error.message : `${error}`}`;
+    }
   }
 
   // ———— 只读工具结果缓存（#1517）：进程级内存，不落盘、重启即清 ————
@@ -238,6 +257,9 @@ export class AiTools {
     if (name === 'ask_user') {
       return '向用户提问';
     }
+    if (name === 'add_mcp_server') {
+      return '新增 MCP 服务';
+    }
     if (name === 'set_voice') {
       return '更换通话音色';
     }
@@ -392,6 +414,9 @@ export class AiTools {
       }
       if (name === 'forget_memory') {
         return AiPersona.removeMemory(AiToolsCore.argNumber(args, 'index'));
+      }
+      if (name === 'add_mcp_server') {
+        return AiTools.addMcpServer(args);
       }
       if (name === 'ask_user') {
         // 文字对话页由回路层（AiService.runToolLoop）拦截执行反问交互；

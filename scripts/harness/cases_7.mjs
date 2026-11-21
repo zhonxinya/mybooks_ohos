@@ -507,7 +507,7 @@ export function register(ctx) {
     Kit.AiVoiceKit.voiceSwitcher = null;
     // realtimeDefinitions：全集−ask_user+set_voice，set_voice 不占末位（OpenCode 丢末项护栏）
     const defs = RealAiTools.realtimeDefinitions('confirm');
-    assert.equal(defs.length, 29, '29 全集−ask_user（语音无卡片）+set_voice');
+    assert.equal(defs.length, 30, '30 全集−ask_user（语音无卡片）+set_voice');
     assert.equal(defs[defs.length - 1].function.name, 'forget_memory');
     assert.ok(defs.some((d) => d.function.name === 'set_voice'));
     assert.ok(!defs.some((d) => d.function.name === 'ask_user'), 'ask_user 不得暴露给语音');
@@ -525,7 +525,7 @@ export function register(ctx) {
   test('语音工具面与文字统一：realtimeDefinitions 并入 MCP 动态工具，mcp_ 调用走统一路由', async () => {
     const mcp = [{ type: 'function', function: { name: 'mcp_es_search', description: '增强搜索', parameters: { type: 'object', properties: {} } } }];
     const defs = RealAiTools.realtimeDefinitions('confirm', mcp);
-    assert.equal(defs.length, 30, '29（含 set_voice）+1 MCP');
+    assert.equal(defs.length, 31, '30（含 set_voice）+1 MCP');
     assert.equal(defs[defs.length - 1].function.name, 'mcp_es_search', 'MCP 并尾；set_voice 护栏位不前移');
     assert.ok(defs.some((d) => d.function.name === 'set_voice'));
     const ro = RealAiTools.realtimeDefinitions('readonly', mcp);

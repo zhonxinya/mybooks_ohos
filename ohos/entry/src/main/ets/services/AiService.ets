@@ -646,6 +646,30 @@ export class AiService {
   static mcpSummary(): string {
     return McpService.summaryBrief();
   }
+  /** 该家是否已有可用 Key（内置家看当前服务商 Key，自定义家看自己的槽）。 */
+  static mcpHasKey(server: McpServer): boolean {
+    return McpService.hasApiKey(server, AiServiceConfig.apiKeyFor(AiServiceConfig.loadConfig().providerId));
+  }
+  /** 该家是否自带 Key 槽（自定义家 UI 才显示 Key 输入框）。 */
+  static mcpOwnsKey(server: McpServer): boolean {
+    return McpService.ownsKey(server);
+  }
+  /** 新增自定义 MCP server（含可选 Key）。 */
+  static mcpAddServer(label: string, url: string, apiKey: string): McpServer {
+    return McpService.addServer(label, url, apiKey);
+  }
+  /** 改自定义家名称/URL/Key。 */
+  static mcpUpdateServer(tag: string, label: string, url: string, apiKey: string): boolean {
+    return McpService.updateServer(tag, label, url, apiKey);
+  }
+  /** 删自定义家（内置家不可删）。 */
+  static mcpRemoveServer(tag: string): boolean {
+    return McpService.removeServer(tag);
+  }
+  /** 设置自定义家 Key。 */
+  static mcpSetKey(tag: string, apiKey: string): void {
+    McpService.setApiKey(tag, apiKey);
+  }
   /** 委托 AiServiceHttp.toolLabelFor（拆分：见文件头说明）。 */
   static toolLabelFor(name: string): string {
     return AiServiceHttp.toolLabelFor(name);

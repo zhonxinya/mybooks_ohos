@@ -465,6 +465,7 @@ export function stageAiTools() {
     ["'../models/HomeModels'", "'./HomeModels.ts'"],
     ["'./AiTools'", "'./RealAiTools.ts'"],
     ["'./AiToolsDefs'", "'./AiToolsDefs.ts'"],
+    ["'./McpService'", "'./RealMcp.ts'"],
     ["'./AiToolsCore'", "'./AiToolsCore.ts'"],
     ["'./AiToolsExecMeta'", "'./RealAiToolsExecMeta.ts'"],
     ["'./AiToolsExecShelf'", "'./RealAiToolsExecShelf.ts'"],
@@ -490,7 +491,7 @@ export function stageAiTools() {
     'BookListSummary', 'ReadingDevice', 'HomeBook', 'ReadingStatsSummary', 'DoubanDetail', 'DoubanHit',
     'NovelMeta', 'EncyclopediaHit', 'WebSearchHit', 'WebSearchResult', 'WebFetchResult', 'AiConfig', 'LlmSearchResult',
     'LlmSearchSource', 'ToolBookLine', 'AiToolDefinition', 'AiToolParameters', 'AiToolFunctionBody',
-    'AiToolProperty', 'AiPermissionMode']);
+    'AiToolProperty', 'AiPermissionMode', 'McpServer']);
   for (const [out, ets] of [['RealAiTools.ts', 'services/AiTools.ets'],
     ['AiToolsCore.ts', 'services/AiToolsCore.ets'],
     ['RealAiToolsExecMeta.ts', 'services/AiToolsExecMeta.ets'],
