@@ -30,6 +30,8 @@ globalThis.__aiCheck = state;
 globalThis.AppStorage = { setOrCreate: () => {} };
 // bindMenu 构造器（权限/模型菜单）运行时引用 $r 取资源；测试不渲染，桩成资源名即可
 globalThis.$r = (name) => name;
+// #1506 onListTouch 触控意图判定引用 TouchType；桩值与 ArkUI 枚举序号一致
+globalThis.TouchType = { Down: 0, Up: 1, Move: 2, Cancel: 3, OutsideTrigger: 4 };
 export function writeStubs() {
 const shim = `
 const state = globalThis.__aiCheck;

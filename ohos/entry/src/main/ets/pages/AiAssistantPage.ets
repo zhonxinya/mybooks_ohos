@@ -71,6 +71,9 @@ struct AiAssistantPage {
   private scroller: Scroller = new Scroller();
   /** scrollToEnd 合并标记：在途未执行的滚动延后一个窗口，防流式期逐 token 抢滚。 */
   private scrollPending: boolean = false;
+  /** 智能跟滚（#1506）：用户上滑读历史时置 false，流式增量不再抢滚；回底/发新消息恢复。 */
+  @State followBottom: boolean = true;
+  private touchLastY: number = 0;
 
   aboutToAppear(): void {
     this.store.refreshSettings();
@@ -224,7 +227,10 @@ struct AiAssistantPage {
     this.visionEnabled = this.store.visionEnabled;
     this.contextK = this.store.contextK;
     this.permission = AiService.loadPermission();
-    this.scrollToEnd();
+    // 智能跟滚：用户上滑脱离底部后不再抢滚（#1506），回底/发新消息恢复跟随
+    if (this.followBottom) {
+      this.scrollToEnd();
+    }
   }
 
   /** 权限模式徽标短文案。 */
@@ -429,6 +435,8 @@ struct AiAssistantPage {
       images = this.pendingImages;
       this.pendingImages = [];
       this.input = '';
+      // 新消息发出必回「跟随最新」，即便用户此前在上滑读历史
+      this.followBottom = true;
     }
     await this.store.send(text, images);
     // store.send 在流结束落盘后才返回，末条即 AI 回复；开关打开则自动播报
@@ -452,6 +460,44 @@ struct AiAssistantPage {
         // 列表尚未挂载时忽略
       }
     }, 60);
+  }
+
+  /**
+   * 跟滚意图判定（#1506）：只认手指触控，程序 scrollEdge 不触发 onTouch。
+   * 手指明确下滑（内容上移露历史）→ 脱离跟随；回底由 onListScrollStop / 浮钮恢复。
+   */
+  private onListTouch(event: TouchEvent): void {
+    if (event.touches.length === 0) {
+      return;
+    }
+    const y: number = event.touches[0].y;
+    if (event.type === TouchType.Down) {
+      this.touchLastY = y;
+      return;
+    }
+    if (event.type === TouchType.Move && y - this.touchLastY > 24) {
+      this.followBottom = false;
+    }
+    if (event.type === TouchType.Move) {
+      this.touchLastY = y;
+    }
+  }
+
+  /** 滚动停稳：视图已在底缘即恢复跟随（用户手动滑回底部的情形）。 */
+  private onListScrollStop(): void {
+    try {
+      if (this.scroller.isAtEnd()) {
+        this.followBottom = true;
+      }
+    } catch (_error) {
+      // 列表尚未挂载时忽略
+    }
+  }
+
+  /** 「回到底部」浮钮：立即恢复跟随并滚动。 */
+  private backToBottom(): void {
+    this.followBottom = true;
+    this.scrollToEnd();
   }
 
   private applySkill(skill: AiSkill): void {
@@ -710,7 +756,14 @@ struct AiAssistantPage {
       } else if (this.messages.length === 0) {
         this.emptyState();
       } else {
-        this.chatList();
+        Stack({ alignContent: Alignment.Bottom }) {
+          this.chatList();
+          if (!this.followBottom) {
+            this.bottomPill();
+          }
+        }
+        .layoutWeight(1)
+        .width('100%');
         this.skillBar();
       }
       if (this.pendingAsk !== null) {
@@ -813,10 +866,37 @@ struct AiAssistantPage {
         }
       }, (bubble: ChatBubble, index: number): string => this.bubbleKey(bubble, index));
     }
-    .layoutWeight(1)
+    .height('100%')
     .width('100%')
     .padding({ left: 12, right: 12, top: 8 })
-    .scrollBar(BarState.Off);
+    .scrollBar(BarState.Off)
+    .onTouch((event: TouchEvent): void => {
+      this.onListTouch(event);
+    })
+    .onScrollStop((): void => {
+      this.onListScrollStop();
+    });
+  }
+
+  /** 流式期用户上滑离底时的「回到底部」胶囊（#1506）。 */
+  @Builder
+  bottomPill() {
+    Row({ space: 4 }) {
+      SymbolGlyph($r('sys.symbol.chevron_down'))
+        .fontSize(14)
+        .fontColor([$r('app.color.brand_primary')]);
+      Text('回到底部')
+        .fontSize(13)
+        .fontColor($r('app.color.text_primary'));
+    }
+    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+    .borderRadius(18)
+    .backgroundColor($r('app.color.card_background'))
+    .shadow({ radius: 8, type: ShadowType.COLOR, color: $r('app.color.button_shadow'), offsetX: 0, offsetY: 2 })
+    .margin({ bottom: 12 })
+    .onClick((): void => {
+      this.backToBottom();
+    });
   }
 
   @Builder
