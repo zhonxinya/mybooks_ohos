@@ -10,7 +10,7 @@ import { ChatCompletionContentPartImage } from '@iuroc/openai/src/main/ets/opena
 import { TalebookService } from './TalebookService';
 import { AiTools, AiPermissionMode } from './AiTools';
 import { AiToolDefinition } from './AiToolsDefs';
-import { McpService } from './McpService';
+import { McpService, McpServer } from './McpService';
 import { AiServiceConfig } from './AiServiceConfig';
 import { AiServiceHttp } from './AiServiceHttp';
 import { AiServiceGateway } from './AiServiceGateway';
@@ -608,6 +608,21 @@ export class AiService {
   /** 委托 AiServiceHttp.mcpToolset（拆分：见文件头说明）。 */
   static async mcpToolset(): Promise<AiToolDefinition[]> {
     return AiServiceHttp.mcpToolset();
+  }
+  /** MCP 四家登记清单（设置页「MCP」档数据源）。 */
+  static mcpServers(): McpServer[] {
+    return McpService.serverList();
+  }
+  static loadMcpEnabled(tag: string): boolean {
+    return McpService.isServerEnabled(tag);
+  }
+  /** 开关改动即存并失效工具集缓存（下一轮生效）。 */
+  static saveMcpEnabled(tag: string, on: boolean): void {
+    McpService.setServerEnabled(tag, on);
+  }
+  /** 探测摘要：每家「已禁用/未挂载/N 工具」一行。 */
+  static mcpSummary(): string {
+    return McpService.summaryBrief();
   }
   /** 委托 AiServiceHttp.toolLabelFor（拆分：见文件头说明）。 */
   static toolLabelFor(name: string): string {
