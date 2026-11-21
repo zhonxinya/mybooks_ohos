@@ -64,11 +64,23 @@ export const AiService = {
   saveConfig: (providerId, baseUrl, model, apiKey, temperature, visionOverride, contextLength) => {
     state.settings.saved = { providerId, baseUrl, model, apiKey, temperature, visionOverride, contextLength };
     if (apiKey.length > 0) { state.settings.keys.add(providerId); }
+    // 与真实 AiServiceConfig 对齐：地址按服务商分槽，互不覆盖
+    if (baseUrl.length > 0) {
+      if (!state.settings.baseUrlByProvider) { state.settings.baseUrlByProvider = {}; }
+      state.settings.baseUrlByProvider[providerId] = baseUrl;
+    }
     state.settings.config = { providerId, baseUrl, model,
       hasKey: state.settings.keys.has(providerId), temperature,
       visionOverride, contextLength,
       vision: visionOverride === 'on' ? true : visionOverride === 'off' ? false :
         /vl|vision|4o|omni|gemini|claude|llava|qvq/i.test(model) };
+  },
+  baseUrlFor: (id) => {
+    const saved = state.settings.baseUrlByProvider && state.settings.baseUrlByProvider[id];
+    if (saved !== undefined && saved.length > 0) { return saved; }
+    if (state.settings.config.providerId === id) { return state.settings.config.baseUrl; }
+    const p = state.settings.providers.find((x) => x.id === id);
+    return p !== undefined ? p.baseUrl : '';
   },
   detectVision: (model) => /vl|vision|4o|omni|gemini|claude|llava|qvq/i.test(model),
   supportsTools: () => (state.settings.config.baseUrl ?? '').indexOf('opencode.ai') >= 0,
@@ -96,8 +108,11 @@ export const AiService = {
   loadVoiceConfig: () => {
     if (state.settings.voiceProviderId.length > 0) {
       const p = state.settings.providers.find((x) => x.id === state.settings.voiceProviderId);
-      if (p !== undefined && p.id !== state.settings.config.providerId) {
-        return { providerId: p.id, baseUrl: p.baseUrl,
+      // 与真实 AiServiceConfig 对齐：配了语音服务商就独立解析（同全局服务商也用语音档 model/地址）
+      if (p !== undefined) {
+        const savedBase = state.settings.baseUrlByProvider && state.settings.baseUrlByProvider[p.id];
+        const baseUrl = savedBase && savedBase.length > 0 ? savedBase : p.baseUrl;
+        return { providerId: p.id, baseUrl,
           model: state.settings.voiceModel.length > 0 ? state.settings.voiceModel : p.model,
           hasKey: state.settings.keys.has(p.id), temperature: state.settings.config.temperature,
           vision: false, visionOverride: '', contextLength: state.settings.config.contextLength };

@@ -161,11 +161,11 @@ struct AiAssistantPage {
     this.toast(`已切换模型 ${id}，下一条消息生效`);
   }
 
-  /** 播报可用性：系统引擎档始终可用（失败时按钮里报错）；云端档仅 Token Plan 服务商。 */
+  /** 播报可用性：系统引擎档始终可用（失败时按钮里报错）；云端档仅语音档位为 Token Plan 服务商。 */
   private loadVoiceState(): void {
     this.autoSpeak = AiService.loadAutoSpeak();
     this.ttsAvailable = AiService.loadSpeakEngine() === 'system' ||
-      AiService.loadConfig().providerId === 'qwen-tokenplan';
+      AiService.loadVoiceConfig().providerId === 'qwen-tokenplan';
   }
 
   aboutToDisappear(): void {

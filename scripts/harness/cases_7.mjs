@@ -132,6 +132,41 @@ export function register(ctx) {
     deps.state.ttsFiles.length = 0;
   });
 
+  test('多服务商并存：地址按服务商隔离、语音档位模型独立、音频服务读语音档位', async () => {
+    deps.state.store.clear();
+    // ① 旧版全局单槽地址迁移：挪进所属服务商槽位后清空（否则换商即脏地址）
+    deps.state.store.set('p:ai_provider', 'deepseek');
+    deps.state.store.set('s:ai_base_url', 'https://mirror.deepseek.com/v1');
+    assert.equal(RealAiService.loadConfig().baseUrl, 'https://mirror.deepseek.com/v1', '旧地址迁移后仍对当前服务商生效');
+    assert.equal(deps.state.store.get('s:ai_base_url'), undefined, '旧全局槽迁移后清空');
+    // ② 各服务商地址各存各的：换回 deepseek 不被 opencode/tokenplan 污染
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'big-pickle', 'sk-oc', 0.5);
+    RealAiService.saveConfig('deepseek', 'https://mirror.deepseek.com/v1', 'deepseek-chat', 'sk-d', 0.5);
+    RealAiService.saveConfig('qwen-tokenplan', 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1', 'qwen3.6-flash', 'sk-tp', 0.5);
+    RealAiService.saveConfig('deepseek', 'https://mirror.deepseek.com/v1', 'deepseek-chat', '', 0.5);
+    assert.equal(RealAiService.loadConfig().baseUrl, 'https://mirror.deepseek.com/v1', '全局切回 deepseek 用自己槽的地址，不被 tokenplan 污染');
+    assert.equal(RealAiService.baseUrlFor('deepseek'), 'https://mirror.deepseek.com/v1', '并存：deepseek 地址不被覆盖');
+    assert.equal(RealAiService.baseUrlFor('opencode'), 'https://opencode.ai/zen/go/v1', '并存：opencode 地址独立保存');
+    // ③ 语音档与全局同服务商：自己的 model 独立生效（bug 核心②）
+    RealAiService.saveVoiceConfig('deepseek', 'deepseek-reasoner');
+    const v = RealAiService.loadVoiceConfig();
+    assert.equal(v.providerId, 'deepseek');
+    assert.equal(v.model, 'deepseek-reasoner', '语音档 model 不被全局值吞掉');
+    assert.equal(v.baseUrl, 'https://mirror.deepseek.com/v1');
+    // ④ 聊天=DeepSeek + 语音档=Token Plan 并存：ASR 走语音档的地址与 Key（bug 核心①）
+    RealAiService.saveVoiceConfig('qwen-tokenplan', '');
+    const { QwenAudioService } = await load('RealQwenAudio');
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(JSON.stringify({ output: { text: 'ok' } })) }];
+    deps.state.requests.length = 0;
+    assert.equal(await QwenAudioService.transcribe('QUJDRA=='), 'ok');
+    assert.ok(deps.state.requests[0].url.startsWith('https://token-plan.maas.qianwenaiapi.com/'),
+      `ASR 应走语音档 Token Plan：${deps.state.requests[0].url}`);
+    assert.equal(deps.state.requests[0].headers['Authorization'], 'Bearer sk-tp', 'Key 取语音档服务商槽位');
+    deps.state.rcpResponses = [];
+    deps.state.requests.length = 0;
+    deps.state.store.clear();
+  });
+
   test('语音通话对话模型：跟随全局/独立服务商解析/complete 按 override 出请求', async () => {
     deps.state.store.clear();
     RealAiService.saveConfig('deepseek', 'https://api.deepseek.com/v1', 'deepseek-chat', 'sk-d', 0.5);
@@ -150,9 +185,9 @@ export function register(ctx) {
     assert.equal(RealAiService.loadVoiceConfig().model, 'qwen3.6-flash', 'model 空回落服务商默认');
     deps.state.store.set('s:ai_api_key_qwen-tokenplan', 'sk-tp');
     assert.equal(RealAiService.loadVoiceConfig().hasKey, true);
-    // ③ 选了与全局相同的服务商 → 直接跟随全局值（忽略语音 model）
+    // ③ 选了与全局相同的服务商：语音 model 独立生效（档位配置优先于全局）
     RealAiService.saveVoiceConfig('deepseek', 'other-model');
-    assert.equal(RealAiService.loadVoiceConfig().model, 'deepseek-chat');
+    assert.equal(RealAiService.loadVoiceConfig().model, 'other-model');
     // ④ complete 带 override：请求用语音配置的地址/模型/Key
     RealAiService.saveVoiceConfig('opencode', 'voice-model');
     deps.state.store.set('s:ai_api_key_opencode', 'sk-oc');
