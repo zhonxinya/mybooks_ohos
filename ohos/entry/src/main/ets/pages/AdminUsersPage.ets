@@ -1,6 +1,7 @@
 import {
   PageScaffold, LoadingState, EmptyState, PrimaryButton, IconCircleButton, LazyDataSource } from '../components';
 import { TalebookApi } from '../services/TalebookApi';
+import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
@@ -89,7 +90,7 @@ struct AdminUsersPage {
     const page = this.currentPage;
     try {
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.getAdminUserList(page, PaginationConstants.PAGE_SIZE);
+      const rsp = await TalebookApiAdmin.getAdminUserList(page, PaginationConstants.PAGE_SIZE);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
         if (!reset) {
@@ -169,7 +170,7 @@ struct AdminUsersPage {
   }
 
   private patchUser(payload: Record<string, Object>, successMsg: string): void {
-    TalebookApi.updateAdminUser(payload)
+    TalebookApiAdmin.updateAdminUser(payload)
       .then((rsp) => {
         if (rsp.err === undefined || rsp.err === 'ok') {
           this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : successMsg);
@@ -236,7 +237,7 @@ struct AdminUsersPage {
       payload['password'] = this.editPassword;
     }
     this.saving = true;
-    TalebookApi.updateAdminUser(payload)
+    TalebookApiAdmin.updateAdminUser(payload)
       .then((rsp) => {
         this.saving = false;
         if (rsp.err === undefined || rsp.err === 'ok') {
@@ -284,7 +285,7 @@ struct AdminUsersPage {
       return;
     }
     this.saving = true;
-    TalebookApi.createAdminUser(username, password, nickname, email)
+    TalebookApiAdmin.createAdminUser(username, password, nickname, email)
       .then((rsp) => {
         this.saving = false;
         if (rsp.err === undefined || rsp.err === 'ok') {

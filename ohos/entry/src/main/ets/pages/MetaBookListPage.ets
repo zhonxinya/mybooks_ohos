@@ -1,6 +1,7 @@
 import { PageScaffold, FilterChipItem, LoadingState, EmptyState, ChipButton, LazyDataSource } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, MetaNameCount } from '../services/TalebookApi';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationConstants } from '../utils/PaginationHelper';
 import { AppRouter } from '../utils/AppRouter';
@@ -211,7 +212,7 @@ struct MetaBookListPage {
           }
           return;
         }
-        const categories: MetaItem[] = await TalebookApi.getCategories();
+        const categories: MetaItem[] = await TalebookApiBooks.getCategories();
         this.items = categories;
         this.pins = [];
         this.total = categories.length;
@@ -289,8 +290,8 @@ struct MetaBookListPage {
     }
     try {
       await TalebookService.ensureAuthenticated();
-      const rsp = pinned ? await TalebookApi.unpinItem(this.pinItemType(), name) :
-        await TalebookApi.pinItem(this.pinItemType(), name);
+      const rsp = pinned ? await TalebookApiBooks.unpinItem(this.pinItemType(), name) :
+        await TalebookApiBooks.pinItem(this.pinItemType(), name);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.getUIContext().getPromptAction().showToast({
           message: rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err,

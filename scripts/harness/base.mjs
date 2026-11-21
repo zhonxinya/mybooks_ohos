@@ -428,6 +428,10 @@ export const TalebookService = {
   getBookNavCachedAsync: async () => (toolsState.bookNavAsync
     ? await toolsState.bookNavAsync() : { status: 200, body: null, error: 'stub: 未设置' }),
 };
+// TalebookApi 拆分域类：与门面共用同一桩对象（toolsState 可编程性不分家）
+export const TalebookApiBooks = TalebookApi;
+export const TalebookApiAdmin = TalebookApi;
+export const TalebookApiToolbox = TalebookApi;
 export const AnnotationApi = {
   listBookAnnotations: async (_id, _scope) => {
     if (toolsState.notesError.length > 0) { throw new Error(toolsState.notesError); }

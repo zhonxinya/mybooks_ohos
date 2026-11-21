@@ -2,6 +2,7 @@ import {
   PageScaffold, PrimaryButton, LoadingState
 } from '../components';
 import { TalebookApi, ApiMessageResult, apiErrorMessage } from '../services/TalebookApi';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 import { TalebookService } from '../services/TalebookService';
 
 @Entry
@@ -60,7 +61,7 @@ struct ReviewBookLanguageToolPage {
     this.busy = true;
     this.setMsg('正在提交语言检测任务…', false);
     try {
-      const rsp: ApiMessageResult = await TalebookApi.reviewBookLanguage();
+      const rsp: ApiMessageResult = await TalebookApiToolbox.reviewBookLanguage();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '启动失败', true);
         return;

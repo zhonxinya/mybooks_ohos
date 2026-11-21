@@ -10,6 +10,7 @@ import {
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { BookUploadService, PickedBookFile } from '../services/BookUploadService';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 
 const TAB_CONVERT: number = 0;
 const TAB_CLONES: number = 1;
@@ -121,7 +122,7 @@ struct MimoTtsToolPage {
 
   private async loadConfig(): Promise<void> {
     try {
-      const rsp: MimoTtsConfigResponse = await TalebookApi.mimoTtsGetConfig();
+      const rsp: MimoTtsConfigResponse = await TalebookApiToolbox.mimoTtsGetConfig();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.configHint = apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '无已保存配置';
         return;
@@ -147,7 +148,7 @@ struct MimoTtsToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ApiMessageResult = await TalebookApi.mimoTtsDeleteConfig();
+      const rsp: ApiMessageResult = await TalebookApiToolbox.mimoTtsDeleteConfig();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '删除配置失败');
         return;
@@ -200,7 +201,7 @@ struct MimoTtsToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ApiMessageResult = await TalebookApi.mimoTtsTest(this.buildTestReq());
+      const rsp: ApiMessageResult = await TalebookApiToolbox.mimoTtsTest(this.buildTestReq());
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '测试失败', true);
         return;
@@ -254,7 +255,7 @@ struct MimoTtsToolPage {
       if (this.cloneVoice.trim().length > 0) {
         req.cloneVoice = this.cloneVoice.trim();
       }
-      const rsp: ApiMessageResult = await TalebookApi.mimoTtsConvert(req);
+      const rsp: ApiMessageResult = await TalebookApiToolbox.mimoTtsConvert(req);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '启动转换失败', true);
         return;
@@ -272,7 +273,7 @@ struct MimoTtsToolPage {
 
   private async refreshProgress(fromPoll: boolean): Promise<void> {
     try {
-      const rsp: ToolboxTaskProgressResponse = await TalebookApi.mimoTtsProgress();
+      const rsp: ToolboxTaskProgressResponse = await TalebookApiToolbox.mimoTtsProgress();
       const data = rsp.data;
       const status = data !== undefined ? String(data['status'] ?? '') : '';
       const percentRaw = data !== undefined ? data['percent'] : undefined;
@@ -316,7 +317,7 @@ struct MimoTtsToolPage {
 
   private async loadClones(): Promise<void> {
     try {
-      const rsp: MimoTtsClonesResponse = await TalebookApi.mimoTtsCloneList();
+      const rsp: MimoTtsClonesResponse = await TalebookApiToolbox.mimoTtsCloneList();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.clones = [];
         return;
@@ -333,7 +334,7 @@ struct MimoTtsToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ApiMessageResult = await TalebookApi.mimoTtsCloneDelete(name);
+      const rsp: ApiMessageResult = await TalebookApiToolbox.mimoTtsCloneDelete(name);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '删除失败');
         return;
@@ -352,7 +353,7 @@ struct MimoTtsToolPage {
 
   private async loadPrompts(): Promise<void> {
     try {
-      const rsp: MimoTtsPromptsResponse = await TalebookApi.mimoTtsPromptList();
+      const rsp: MimoTtsPromptsResponse = await TalebookApiToolbox.mimoTtsPromptList();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.prompts = [];
         return;
@@ -375,7 +376,7 @@ struct MimoTtsToolPage {
     }
     this.busy = true;
     try {
-      const rsp = await TalebookApi.mimoTtsPromptSave(name, desc);
+      const rsp = await TalebookApiToolbox.mimoTtsPromptSave(name, desc);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '保存失败');
         return;
@@ -396,7 +397,7 @@ struct MimoTtsToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ApiMessageResult = await TalebookApi.mimoTtsPromptDelete(name);
+      const rsp: ApiMessageResult = await TalebookApiToolbox.mimoTtsPromptDelete(name);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '删除失败');
         return;
@@ -466,7 +467,7 @@ struct MimoTtsToolPage {
     const picked = this.clonePicked;
     this.busy = true;
     try {
-      const rsp = await TalebookApi.mimoTtsCloneUpload(picked.localPath, picked.name, voiceName);
+      const rsp = await TalebookApiToolbox.mimoTtsCloneUpload(picked.localPath, picked.name, voiceName);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '上传失败');
         return;
@@ -742,7 +743,7 @@ struct MimoTtsToolPage {
                     label: '路径',
                     onTap: () => {
                       const n = String(item['name'] ?? '');
-                      this.toast(TalebookApi.mimoTtsCloneAudioPath(n));
+                      this.toast(TalebookApiToolbox.mimoTtsCloneAudioPath(n));
                     },
                   });
                   TextButton({

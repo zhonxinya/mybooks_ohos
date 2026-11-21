@@ -2,6 +2,7 @@ import {
   PageScaffold, PrimaryButton, SecondaryButton, SettingCell, LoadingState
 } from '../components';
 import { TalebookApi, ApiMessageResult, apiErrorMessage } from '../services/TalebookApi';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 import { TalebookService } from '../services/TalebookService';
 import { BookItem } from '../services/BookModels';
 
@@ -147,7 +148,7 @@ struct MergeFormatsToolPage {
     this.busy = true;
     try {
       const deletedId = this.leftId;
-      const rsp: ApiMessageResult = await TalebookApi.mergeBookFormats(this.leftId, this.rightId);
+      const rsp: ApiMessageResult = await TalebookApiToolbox.mergeBookFormats(this.leftId, this.rightId);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '合并失败', true);
         return;

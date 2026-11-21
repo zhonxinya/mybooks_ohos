@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { PageScaffold, LoadingState, EmptyState } from '../components';
 import { TalebookApi } from '../services/TalebookApi';
+import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { ExternalLinkOpener } from '../services/ExternalLinkOpener';
@@ -32,7 +33,7 @@ struct AdminResourcesPage {
     this.loadError = '';
     try {
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.getAdminResources();
+      const rsp = await TalebookApiAdmin.getAdminResources();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.loadError = rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err;
         return;

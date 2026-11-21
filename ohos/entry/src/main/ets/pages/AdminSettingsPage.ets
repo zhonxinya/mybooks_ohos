@@ -2,6 +2,8 @@ import { common } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { PageScaffold, LoadingState, EmptyState, PrimaryButton, SecondaryButton, IconCircleButton, ChipButton } from '../components';
 import { TalebookApi } from '../services/TalebookApi';
+import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { TalebookService } from '../services/TalebookService';
 import { BookUploadService } from '../services/BookUploadService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
@@ -348,7 +350,7 @@ struct AdminSettingsPage {
         return;
       }
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.getAdminSettings();
+      const rsp = await TalebookApiAdmin.getAdminSettings();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.loadError = rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err;
         return;
@@ -416,7 +418,7 @@ struct AdminSettingsPage {
       return;
     }
     try {
-      const rsp = await TalebookApi.getSysInfo();
+      const rsp = await TalebookApiAdmin.getSysInfo();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.sysInfoSummary = '';
         return;
@@ -447,7 +449,7 @@ struct AdminSettingsPage {
       return;
     }
     try {
-      const rsp = await TalebookApi.getStampStatus();
+      const rsp = await TalebookApiAdmin.getStampStatus();
       this.stampExists = rsp.exists === true;
     } catch (_e) {
       this.stampExists = false;
@@ -458,14 +460,14 @@ struct AdminSettingsPage {
   private async refreshServerNotes(): Promise<void> {
     if (this.supports(ServerFeature.ADMIN_RELEASE_NOTES)) {
       try {
-        this.releaseNotes = await TalebookApi.getReleaseNotes();
+        this.releaseNotes = await TalebookApiBooks.getReleaseNotes();
       } catch (_e) {
         this.releaseNotes = '';
       }
     }
     if (this.supports(ServerFeature.ADMIN_THANKS_NOTES)) {
       try {
-        const rsp = await TalebookApi.getThanksNotes();
+        const rsp = await TalebookApiAdmin.getThanksNotes();
         this.thanksNames = rsp.names ?? [];
       } catch (_e) {
         this.thanksNames = [];
@@ -485,7 +487,7 @@ struct AdminSettingsPage {
     }
     this.stampBusy = true;
     try {
-      const rsp = await TalebookApi.uploadStamp(file.localPath, file.name);
+      const rsp = await TalebookApiAdmin.uploadStamp(file.localPath, file.name);
       BookUploadService.removeStagedFile(file.localPath);
       if (rsp.err === undefined || rsp.err === 'ok') {
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '图章已上传');
@@ -506,7 +508,7 @@ struct AdminSettingsPage {
     }
     this.tokenBusy = true;
     try {
-      const rsp = await TalebookApi.generateAdminToken();
+      const rsp = await TalebookApiAdmin.generateAdminToken();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : String(rsp.err));
         return;
@@ -551,7 +553,7 @@ struct AdminSettingsPage {
     }
     this.sslBusy = true;
     try {
-      const rsp = await TalebookApi.uploadAdminSsl(
+      const rsp = await TalebookApiAdmin.uploadAdminSsl(
         crt.localPath, crt.name, key.localPath, key.name);
       BookUploadService.removeStagedFile(crt.localPath);
       BookUploadService.removeStagedFile(key.localPath);
@@ -587,7 +589,7 @@ struct AdminSettingsPage {
     }
     this.bookbarnBusy = true;
     try {
-      const rsp = await TalebookApi.applyBookbarnToken();
+      const rsp = await TalebookApiAdmin.applyBookbarnToken();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : String(rsp.err));
         return;
@@ -617,7 +619,7 @@ struct AdminSettingsPage {
       return;
     }
     this.saving = true;
-    TalebookApi.saveAdminSettings(this.settings)
+    TalebookApiAdmin.saveAdminSettings(this.settings)
       .then((rsp) => {
         this.saving = false;
         if (rsp.err === undefined || rsp.err === 'ok') {
@@ -642,7 +644,7 @@ struct AdminSettingsPage {
       primaryButton: {
         value: '确认重启',
         action: () => {
-          TalebookApi.restartAdminServer()
+          TalebookApiAdmin.restartAdminServer()
             .then((rsp) => {
               this.toast(rsp.err === 'ok' ? '服务正在重启，请稍后刷新页面' :
                 `重启失败：${rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err}`);
@@ -667,7 +669,7 @@ struct AdminSettingsPage {
       return;
     }
     this.toast('测试邮件发送中…');
-    TalebookApi.testAdminMail(server, username, password, encryption)
+    TalebookApiAdmin.testAdminMail(server, username, password, encryption)
       .then((rsp) => {
         if (rsp.err === 'ok') {
           this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '测试邮件已发送');
@@ -690,7 +692,7 @@ struct AdminSettingsPage {
       return;
     }
     this.toast('AI 连接测试中…');
-    TalebookApi.testAdminAI(apiUrl, apiKey, apiModel)
+    TalebookApiAdmin.testAdminAI(apiUrl, apiKey, apiModel)
       .then((rsp) => {
         if (rsp.err === 'ok') {
           this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : 'AI服务连接测试成功');

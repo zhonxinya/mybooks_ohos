@@ -26,6 +26,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # 行数门禁（800 有效行；UI 贴线页临时豁免见 check_file_lines.mjs UI_ALLOWLIST）
+      - name: Check file lines
+        run: node scripts/check_file_lines.mjs --gate
+
       - name: Build HAP
         id: build
         uses: ./.github/actions/build-hap

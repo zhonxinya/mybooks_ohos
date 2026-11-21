@@ -6,6 +6,7 @@ import {
   ToolboxDataResponse, ToolboxTaskProgressResponse
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 
 @Entry
 @Component
@@ -94,7 +95,7 @@ struct TextReplaceToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ToolboxDataResponse = await TalebookApi.textReplacePreview(
+      const rsp: ToolboxDataResponse = await TalebookApiToolbox.textReplacePreview(
         bookId, this.pattern, this.replacement, this.useRegex, this.format.trim());
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '预览失败', true);
@@ -148,7 +149,7 @@ struct TextReplaceToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ApiMessageResult = await TalebookApi.textReplaceRun(
+      const rsp: ApiMessageResult = await TalebookApiToolbox.textReplaceRun(
         bookId, this.pattern, this.replacement, this.useRegex,
         this.suffix.trim(), this.format.trim());
       if (rsp.err !== undefined && rsp.err !== 'ok') {
@@ -168,7 +169,7 @@ struct TextReplaceToolPage {
 
   private async refreshProgress(fromPoll: boolean): Promise<void> {
     try {
-      const rsp: ToolboxTaskProgressResponse = await TalebookApi.textReplaceProgress();
+      const rsp: ToolboxTaskProgressResponse = await TalebookApiToolbox.textReplaceProgress();
       const data = rsp.data;
       const status = data !== undefined ? String(data['status'] ?? '') : '';
       const percentRaw = data !== undefined ? (data['percent'] ?? data['progress']) : undefined;

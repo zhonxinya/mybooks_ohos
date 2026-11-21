@@ -4,6 +4,7 @@
  * 失败处理契约在门面 AiTools.execute；共享缓存一律走 AiToolsCore。
  */
 import { ReferBook, ReferSearchOpts, ReferSearchResponse, TalebookApi } from './TalebookApi';
+import { TalebookApiBooks } from './TalebookApiBooks';
 import { TalebookService } from './TalebookService';
 import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';
 import { NovelMeta, NovelMetaService } from './NovelMetaService';
@@ -151,7 +152,7 @@ export class AiToolsExecMeta {
     if (AiToolsCore.argString(args, 'publisher').length > 0) {
       opts.publisher = AiToolsCore.argString(args, 'publisher').trim();
     }
-    const rsp: ReferSearchResponse = await TalebookApi.searchRefer(bookId, opts);
+    const rsp: ReferSearchResponse = await TalebookApiBooks.searchRefer(bookId, opts);
     if (rsp.books.length === 0) {
       return '互联网上没有检索到该书的元数据候选。可尝试补充更准确的 ISBN 再查。';
     }
@@ -219,7 +220,7 @@ export class AiToolsExecMeta {
       if (isbn.length > 0) {
         opts.isbn = isbn;
       }
-      const rsp: ReferSearchResponse = await TalebookApi.searchRefer(bookId, opts);
+      const rsp: ReferSearchResponse = await TalebookApiBooks.searchRefer(bookId, opts);
       // 候选同时缓存给 set_cover 复用（与 search_cover 同一约定）
       AiToolsCore.lastCoverCandidates = rsp.books;
       AiToolsCore.lastCoverBookId = bookId;
@@ -389,7 +390,7 @@ export class AiToolsExecMeta {
     if ((entry.cover_url ?? '').length === 0) {
       return `候选${index}没有封面图片 url，请换一条候选。`;
     }
-    const rsp = await TalebookApi.applyRefer(bookId, entry, false, true);
+    const rsp = await TalebookApiBooks.applyRefer(bookId, entry, false, true);
     if (rsp.err !== undefined && rsp.err !== 'ok') {
       return `换封面失败：${(rsp.msg ?? '').length > 0 ? rsp.msg : rsp.err}`;
     }

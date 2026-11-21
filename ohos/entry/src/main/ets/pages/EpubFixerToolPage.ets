@@ -6,6 +6,7 @@ import {
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { AppRouter } from '../utils/AppRouter';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 
 @Entry
 @Component
@@ -59,7 +60,7 @@ struct EpubFixerToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ApiMessageResult = await TalebookApi.epubFixerFix(bookId, this.backup);
+      const rsp: ApiMessageResult = await TalebookApiToolbox.epubFixerFix(bookId, this.backup);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '启动修复失败', true);
         return;

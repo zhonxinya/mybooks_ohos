@@ -6,6 +6,7 @@ import {
   TalebookApi, apiErrorMessage, ToolboxDataResponse
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 
 @Entry
 @Component
@@ -112,7 +113,7 @@ struct EpubSplitToolPage {
     this.busy = true;
     this.resultHint = '';
     try {
-      const rsp: ToolboxDataResponse = await TalebookApi.epubSplitChapters(bookId);
+      const rsp: ToolboxDataResponse = await TalebookApiToolbox.epubSplitChapters(bookId);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.chapters = [];
         this.selectedNums = [];
@@ -154,7 +155,7 @@ struct EpubSplitToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ToolboxDataResponse = await TalebookApi.epubSplitGenerate(
+      const rsp: ToolboxDataResponse = await TalebookApiToolbox.epubSplitGenerate(
         bookId, this.selectedNums, this.useFirstChapterCover);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '拆分失败', true);

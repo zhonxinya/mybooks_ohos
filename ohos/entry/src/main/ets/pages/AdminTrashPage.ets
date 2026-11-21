@@ -1,5 +1,6 @@
 import { PageScaffold, LoadingState, EmptyState, DangerButton } from '../components';
 import { TalebookApi } from '../services/TalebookApi';
+import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { TalebookService } from '../services/TalebookService';
 import { ApiMessageResult } from '../services/TalebookApi';
 
@@ -33,13 +34,13 @@ struct AdminTrashPage {
     this.loading = this.books.length === 0;
     try {
       await TalebookService.ensureAuthenticated();
-      const booksRsp = await TalebookApi.getTrashBooks();
+      const booksRsp = await TalebookApiAdmin.getTrashBooks();
       if (booksRsp.err !== undefined && booksRsp.err !== 'ok') {
         this.toast(booksRsp.msg !== undefined && booksRsp.msg.length > 0 ? booksRsp.msg : booksRsp.err);
       } else {
         this.books = booksRsp.books ?? [];
       }
-      const sizeRsp = await TalebookApi.getTrashSize();
+      const sizeRsp = await TalebookApiAdmin.getTrashSize();
       if (sizeRsp.err === undefined || sizeRsp.err === 'ok') {
         const sizes = sizeRsp.sizes ?? {};
         this.trashSize = Number(sizes['trash'] ?? 0);
@@ -89,7 +90,7 @@ struct AdminTrashPage {
       return;
     }
     this.working = true;
-    TalebookApi.restoreTrashBooks([bookId])
+    TalebookApiAdmin.restoreTrashBooks([bookId])
       .then((rsp: ApiMessageResult) => {
         this.working = false;
         this.handleResult(rsp, '已恢复');
@@ -113,7 +114,7 @@ struct AdminTrashPage {
             return;
           }
           this.working = true;
-          TalebookApi.purgeTrashBooks([bookId])
+          TalebookApiAdmin.purgeTrashBooks([bookId])
             .then((rsp: ApiMessageResult) => {
               this.working = false;
               this.handleResult(rsp, '已彻底删除');
@@ -140,7 +141,7 @@ struct AdminTrashPage {
             return;
           }
           this.working = true;
-          TalebookApi.clearTrash()
+          TalebookApiAdmin.clearTrash()
             .then((rsp: ApiMessageResult) => {
               this.working = false;
               this.handleResult(rsp, '已清理');

@@ -3,24 +3,53 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { dir, read } from './paths.mjs';
 
-/** 把真实 AiService 落进临时目录：SDK / rcp 类型转 import type，运行时依赖换成桩。 */
+/** 把真实 AiService 四文件族落进临时目录：SDK / rcp 类型转 import type，运行时依赖换成桩。 */
 export function stageAiService() {
-  let source = read('services/AiService.ets');
-  for (const type of ['ChatCompletionChunk', 'ChatCompletionMessageParam', 'ChatCompletionCreateParamsBase',
-    'ChatCompletionContentPart', 'ChatCompletionContentPartText', 'ChatCompletionContentPartImage']) {
-    source = source.replace(`import { ${type} }`, `import type { ${type} }`);
+  // 路径映射（含拆分家族互引）；SDK 深路径类型 import 保留（strip-types 擦除，不触发解析）
+  const PATHS = [
+    ["'@iuroc/openai'", "'./aiServiceDeps.ts'"],
+    ["'@kit.ArkTS'", "'./aiServiceDeps.ts'"],
+    ["'@kit.RemoteCommunicationKit'", "'./aiServiceDeps.ts'"],
+    ["'./TalebookService'", "'./aiServiceDeps.ts'"],
+    ["'./AiTools'", "'./RealAiTools.ts'"],
+    ["'./AiToolsDefs'", "'./AiToolsDefs.ts'"],
+    ["'./McpService'", "'./RealMcp.ts'"],
+    ["'./AiService'", "'./RealAiService.ts'"],
+    ["'./AiServiceConfig'", "'./RealAiServiceConfig.ts'"],
+    ["'./AiServiceHttp'", "'./RealAiServiceHttp.ts'"],
+    ["'./AiServiceGateway'", "'./RealAiServiceGateway.ts'"],
+  ];
+  const VALUE_NAMES = new Set(['OpenAI', 'util', 'rcp', 'TalebookService', 'AiTools', 'McpService',
+    'AiServiceConfig', 'AiServiceHttp', 'AiServiceGateway', 'ChatCompletionChunk']);
+  // Config 下沉的常量（KEY_*/DEFAULT_*/MAX_*/TIMEOUT_MS/AI_PROVIDERS）都是运行时值
+  const isValue = (n) => VALUE_NAMES.has(n.replace(/.* as /, '')) ||
+    /^(KEY_|DEFAULT_|MAX_|TIMEOUT_MS|CONTEXT_LENGTH_OPTIONS|AI_PROVIDERS)/.test(n);
+  for (const [out, ets] of [['RealAiService.ts', 'services/AiService.ets'],
+    ['RealAiServiceConfig.ts', 'services/AiServiceConfig.ets'],
+    ['RealAiServiceHttp.ts', 'services/AiServiceHttp.ets'],
+    ['RealAiServiceGateway.ts', 'services/AiServiceGateway.ets']]) {
+    let source = read(ets).replace(/^(import|export) \{ ([^}]+) \} from '([^']+)';$/gm, (all, verb, clause, path) => {
+      if (verb === 'export') {
+        // 门面转发（export { CONTEXT_LENGTH_OPTIONS } from './AiServiceConfig'）同样要落扩展名
+        const ex = PATHS.find((p) => p[0] === `'${path}'`);
+        return ex === undefined ? all : `export { ${clause} } from ${ex[1]};`;
+      }
+      if (path.startsWith('@iuroc/openai/src/')) {
+        // SDK 深路径全是类型：转 import type（运行时擦除，避免解析未安装的包）
+        return `import type { ${clause} } from '${path}';`;
+      }
+      const hit = PATHS.find((p) => p[0] === `'${path}'`);
+      if (hit === undefined) { return all; }
+      const names = clause.split(',').map((s) => s.trim());
+      const vals = names.filter(isValue);
+      const tys = names.filter((n) => !vals.includes(n));
+      const parts = [];
+      if (vals.length > 0) { parts.push(`import { ${vals.join(', ')} } from ${hit[1]};`); }
+      if (tys.length > 0) { parts.push(`import type { ${tys.join(', ')} } from ${hit[1]};`); }
+      return parts.join('\n');
+    });
+    writeFileSync(join(dir, out), source);
   }
-  source = source
-    .replace(`import { AiTools, AiPermissionMode } from './AiTools';`,
-      `import { AiTools } from './RealAiTools.ts';\nimport type { AiPermissionMode } from './RealAiTools.ts';`)
-    .replace(`import { AiToolDefinition } from './AiToolsDefs';`,
-      `import type { AiToolDefinition } from './AiToolsDefs.ts';`)
-    .replace(`import { McpService } from './McpService';`, `import { McpService } from './RealMcp.ts';`)
-    .replace(`from '@iuroc/openai'`, `from './aiServiceDeps.ts'`)
-    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
-    .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
-    .replace(`from './TalebookService'`, `from './aiServiceDeps.ts'`);
-  writeFileSync(join(dir, 'RealAiService.ts'), source);
 }
 
 // AiTools 的运行时依赖桩：书架/详情/笔记/历史全部可编程，不落真实服务
@@ -171,6 +200,10 @@ export const TalebookService = {
   getBookNavCachedAsync: async () => (toolsState.bookNavAsync
     ? await toolsState.bookNavAsync() : { status: 200, body: null, error: 'stub: 未设置' }),
 };
+// TalebookApi 拆分域类：与门面共用同一桩对象（toolsState 可编程性不分家）
+export const TalebookApiBooks = TalebookApi;
+export const TalebookApiAdmin = TalebookApi;
+export const TalebookApiToolbox = TalebookApi;
 export const AnnotationApi = {
   listBookAnnotations: async (_id, _scope) => {
     if (toolsState.notesError.length > 0) { throw new Error(toolsState.notesError); }
@@ -386,6 +419,9 @@ export function stageAiTools() {
      （接口名在目标 .ts 里被擦除，混值 import 会挂）。 */
   const PATHS = [
     ["'./TalebookApi'", "'./aiToolsDeps.ts'"],
+    ["'./TalebookApiBooks'", "'./aiToolsDeps.ts'"],
+    ["'./TalebookApiAdmin'", "'./aiToolsDeps.ts'"],
+    ["'./TalebookApiToolbox'", "'./aiToolsDeps.ts'"],
     ["'./AnnotationApi'", "'./aiToolsDeps.ts'"],
     ["'./TalebookService'", "'./aiToolsDeps.ts'"],
     ["'./SoNovelService'", "'./aiToolsDeps.ts'"],

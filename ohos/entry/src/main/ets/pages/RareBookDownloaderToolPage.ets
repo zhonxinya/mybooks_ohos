@@ -2,6 +2,7 @@ import {
   PageScaffold, PrimaryButton, LoadingState
 } from '../components';
 import { TalebookApi, ApiMessageResult, apiErrorMessage } from '../services/TalebookApi';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 import { TalebookService } from '../services/TalebookService';
 
 @Entry
@@ -52,7 +53,7 @@ struct RareBookDownloaderToolPage {
     this.busy = true;
     this.setMsg('正在提交下载任务，可能较慢…', false);
     try {
-      const rsp: ApiMessageResult = await TalebookApi.rareBookDownload(url);
+      const rsp: ApiMessageResult = await TalebookApiToolbox.rareBookDownload(url);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '下载失败', true);
         return;

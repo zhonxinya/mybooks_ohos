@@ -4,6 +4,7 @@ import {
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, ReferSearchOpts, ReferSearchResponse } from '../services/TalebookApi';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { ReferBook } from '../common/ApiTypes';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { AppRouter } from '../utils/AppRouter';
@@ -84,7 +85,7 @@ struct ReferResultPage {
       if (publisher.length > 0) {
         opts.publisher = publisher;
       }
-      const rsp: ReferSearchResponse = await TalebookApi.searchRefer(this.bookId, opts);
+      const rsp: ReferSearchResponse = await TalebookApiBooks.searchRefer(this.bookId, opts);
       this.entries = rsp.books;
       this.fromCache = rsp.cached === true;
       const err = rsp.err;
@@ -131,7 +132,7 @@ struct ReferResultPage {
     }
     this.applying = true;
     try {
-      const rsp = await TalebookApi.applyRefer(this.bookId, entry, onlyMeta, onlyCover);
+      const rsp = await TalebookApiBooks.applyRefer(this.bookId, entry, onlyMeta, onlyCover);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
         return;
@@ -164,7 +165,7 @@ struct ReferResultPage {
 
   private async doReset(): Promise<void> {
     try {
-      const rsp = await TalebookApi.resetRefer(this.bookId);
+      const rsp = await TalebookApiBooks.resetRefer(this.bookId);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
         return;

@@ -7,6 +7,8 @@ import {
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 
 @Entry
 @Component
@@ -78,7 +80,7 @@ struct AuthorCleanToolPage {
       }
       await TalebookService.ensureAuthenticated();
       try {
-        const rsp: MetaListResponse = await TalebookApi.getMetaList('author', true);
+        const rsp: MetaListResponse = await TalebookApiBooks.getMetaList('author', true);
         const items = rsp.items !== undefined ? rsp.items : [];
         const total = rsp.total !== undefined ? rsp.total : items.length;
         this.authorTotalHint = `书库作者约 ${total} 位，可搜索后点选`;
@@ -105,7 +107,7 @@ struct AuthorCleanToolPage {
     }
     this.busy = true;
     try {
-      const items: MetaNameCount[] = await TalebookApi.searchAuthors(q);
+      const items: MetaNameCount[] = await TalebookApiBooks.searchAuthors(q);
       this.suggestions = items.slice(0, 20);
       if (this.suggestions.length === 0) {
         this.setMsg('未找到匹配作者', true);
@@ -164,7 +166,7 @@ struct AuthorCleanToolPage {
     this.busy = true;
     try {
       const neu = this.action === 'replace' ? this.newAuthorName.trim() : '';
-      const rsp: ApiMessageResult = await TalebookApi.authorClean(
+      const rsp: ApiMessageResult = await TalebookApiToolbox.authorClean(
         this.action,
         this.authorName.trim(),
         neu,

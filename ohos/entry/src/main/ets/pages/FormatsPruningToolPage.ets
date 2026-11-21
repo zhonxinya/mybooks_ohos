@@ -5,6 +5,7 @@ import {
   TalebookApi, ApiMessageResult, apiErrorMessage, ToolboxTaskProgressResponse
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 
 @Entry
 @Component
@@ -122,7 +123,7 @@ struct FormatsPruningToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ApiMessageResult = await TalebookApi.formatsPruningStart([this.selectedFormat]);
+      const rsp: ApiMessageResult = await TalebookApiToolbox.formatsPruningStart([this.selectedFormat]);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '启动清理失败', true);
         return;
@@ -140,7 +141,7 @@ struct FormatsPruningToolPage {
 
   private async refreshProgress(fromPoll: boolean): Promise<void> {
     try {
-      const rsp: ToolboxTaskProgressResponse = await TalebookApi.formatsPruningProgress();
+      const rsp: ToolboxTaskProgressResponse = await TalebookApiToolbox.formatsPruningProgress();
       const data = rsp.data;
       const status = data !== undefined ? String(data['status'] ?? '') : '';
       const percentRaw = data !== undefined ? (data['percent'] ?? data['progress']) : undefined;

@@ -4,6 +4,7 @@ import { PageScaffold, PrimaryButton, SecondaryButton, LoadingState, SettingCell
 import { DownloadTask, TalebookService } from '../services/TalebookService';
 import { ReaderLauncher, ReaderOpenParams } from '../services/ReaderLauncher';
 import { TalebookApi, ApiMessageResult, apiErrorMessage } from '../services/TalebookApi';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { AccountManager } from '../services/AccountManager';
 import { BookListApi } from '../services/BookListApi';
@@ -398,7 +399,7 @@ struct BookDetailPage {
         return;
       }
       this.toast('正在上传新格式…');
-      const rsp = await TalebookApi.uploadBookFile(file.localPath, file.name, this.bookId);
+      const rsp = await TalebookApiBooks.uploadBookFile(file.localPath, file.name, this.bookId);
       BookUploadService.removeStagedFile(file.localPath);
       if (rsp.err === 'ok') {
         BookUploadService.markLibraryDirty();
@@ -513,7 +514,7 @@ struct BookDetailPage {
     }
     if (ServerRegistry.supports(ServerFeature.BOOK_SOCIAL_STATS)) {
       try {
-        const stats = await TalebookApi.getSocialStats(this.bookId);
+        const stats = await TalebookApiBooks.getSocialStats(this.bookId);
         this.socialStats = stats;
       } catch (_error) {
         this.socialStats = null;
@@ -521,7 +522,7 @@ struct BookDetailPage {
     }
     if (ServerRegistry.supports(ServerFeature.BOOK_REVIEWS)) {
       try {
-        this.reviews = await TalebookApi.getBookReviews(this.bookId);
+        this.reviews = await TalebookApiBooks.getBookReviews(this.bookId);
       } catch (_error) {
         this.reviews = [];
       }
@@ -532,7 +533,7 @@ struct BookDetailPage {
   /** 每格式阅读统计 + 同类推荐/同名图书（服务端不支持的能力不发起请求，失败静默）。 */
   private loadExtraData(): void {
     if (ServerRegistry.supports(ServerFeature.BOOK_FORMAT_STATS)) {
-      TalebookApi.getFormatReadingStats(this.bookId)
+      TalebookApiBooks.getFormatReadingStats(this.bookId)
         .then((stats: FormatReadingStat[]) => {
           this.formatStats = stats;
         })
@@ -541,7 +542,7 @@ struct BookDetailPage {
         });
     }
     if (ServerRegistry.supports(ServerFeature.BOOK_SUGGESTION)) {
-      TalebookApi.getBookSuggestions(this.bookId)
+      TalebookApiBooks.getBookSuggestions(this.bookId)
         .then((items) => {
           this.suggestions = items.slice(0, 12).map((item): BookDetailSuggestion => ({
             id: item.id,
@@ -553,7 +554,7 @@ struct BookDetailPage {
           this.suggestions = [];
         });
       if (this.title.length > 0) {
-        TalebookApi.searchSameTitleBooks(this.title, this.bookId)
+        TalebookApiBooks.searchSameTitleBooks(this.title, this.bookId)
           .then((items) => {
             this.sameTitleBooks = items.slice(0, 12).map((item): BookDetailSuggestion => ({
               id: item.id,
@@ -576,7 +577,7 @@ struct BookDetailPage {
     const next = !this.isWants;
     try {
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.setWants(this.bookId, next);
+      const rsp = await TalebookApiBooks.setWants(this.bookId, next);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp));
         return;
@@ -597,7 +598,7 @@ struct BookDetailPage {
     this.aiFilling = true;
     this.toast('正在 AI 补全元数据…');
     try {
-      const rsp = await TalebookApi.aiFillBook(this.bookId);
+      const rsp = await TalebookApiBooks.aiFillBook(this.bookId);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp));
         return;
@@ -624,7 +625,7 @@ struct BookDetailPage {
     this.openSheet('push');
     try {
       await TalebookService.ensureAuthenticated();
-      this.devices = await TalebookApi.getUserDevices();
+      this.devices = await TalebookApiBooks.getUserDevices();
       const kindle = this.devices.find((device: ReadingDevice) => device.type === 'kindle');
       if (kindle !== undefined && this.pushMailbox.length === 0) {
         this.pushMailbox = kindle.mailbox;
@@ -660,7 +661,7 @@ struct BookDetailPage {
     this.pushing = true;
     try {
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.sendToDevice(this.bookId, type, this.pushDeviceUrl.trim(),
+      const rsp = await TalebookApiBooks.sendToDevice(this.bookId, type, this.pushDeviceUrl.trim(),
         this.pushMailbox.trim(), this.pushFtpUsername.trim(), this.pushFtpPassword,
         this.pushFtpPath.trim());
       if (rsp.err !== undefined && rsp.err !== 'ok') {
@@ -693,7 +694,7 @@ struct BookDetailPage {
     this.sendingMail = true;
     try {
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.sendToMail(this.bookId, email, this.mailFormat);
+      const rsp = await TalebookApiBooks.sendToMail(this.bookId, email, this.mailFormat);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp));
         return;
@@ -738,7 +739,7 @@ struct BookDetailPage {
       primaryButton: {
         value: '删除',
         action: () => {
-          void this.runFormatAction(() => TalebookApi.deleteFormat(this.bookId, this.manageFormat),
+          void this.runFormatAction(() => TalebookApiBooks.deleteFormat(this.bookId, this.manageFormat),
             '格式已删除');
         },
       },
@@ -778,7 +779,7 @@ struct BookDetailPage {
         return;
       }
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.deleteBook(this.bookId);
+      const rsp = await TalebookApiBooks.deleteBook(this.bookId);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp));
         return;
@@ -819,7 +820,7 @@ struct BookDetailPage {
         return;
       }
       this.toast('正在上传封面…');
-      const rsp = await TalebookApi.uploadCover(this.bookId, file.localPath, file.name);
+      const rsp = await TalebookApiBooks.uploadCover(this.bookId, file.localPath, file.name);
       BookUploadService.removeStagedFile(file.localPath);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp));
@@ -936,7 +937,7 @@ struct BookDetailPage {
     }
     try {
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.setReadState(this.bookId, next);
+      const rsp = await TalebookApiBooks.setReadState(this.bookId, next);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp));
         return;
@@ -957,7 +958,7 @@ struct BookDetailPage {
     this.openSheet('review');
     try {
       await TalebookService.ensureAuthenticated();
-      const own = await TalebookApi.getOwnReview(this.bookId);
+      const own = await TalebookApiBooks.getOwnReview(this.bookId);
       this.ownReview = own;
       if (own !== null) {
         this.reviewStars = Math.round(own.rating / 2);
@@ -979,7 +980,7 @@ struct BookDetailPage {
     this.submittingReview = true;
     try {
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.submitReview(this.bookId, this.reviewStars * 2,
+      const rsp = await TalebookApiBooks.submitReview(this.bookId, this.reviewStars * 2,
         this.reviewComment.trim());
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp));
@@ -1002,7 +1003,7 @@ struct BookDetailPage {
       primaryButton: {
         value: '删除',
         action: () => {
-          TalebookApi.deleteReview(this.bookId)
+          TalebookApiBooks.deleteReview(this.bookId)
             .then((rsp) => {
               if (rsp.err === undefined || rsp.err === 'ok') {
                 this.toast('已删除');
@@ -1682,7 +1683,7 @@ struct BookDetailPage {
           fullWidth: false,
           buttonEnabled: !this.formatBusy,
           onTap: () => {
-            void this.runFormatAction(() => TalebookApi.convertBook(this.bookId), '转换任务已提交');
+            void this.runFormatAction(() => TalebookApiBooks.convertBook(this.bookId), '转换任务已提交');
           },
         })
           .layoutWeight(1);
@@ -1691,7 +1692,7 @@ struct BookDetailPage {
           fullWidth: false,
           buttonEnabled: !this.formatBusy,
           onTap: () => {
-            void this.runFormatAction(() => TalebookApi.convertBookToPdf(this.bookId), '转换任务已提交');
+            void this.runFormatAction(() => TalebookApiBooks.convertBookToPdf(this.bookId), '转换任务已提交');
           },
         })
           .layoutWeight(1);
@@ -1720,7 +1721,7 @@ struct BookDetailPage {
           fullWidth: false,
           buttonEnabled: !this.formatBusy && this.manageFormat.length > 0,
           onTap: () => {
-            void this.runFormatAction(() => TalebookApi.separateFormat(this.bookId, this.manageFormat),
+            void this.runFormatAction(() => TalebookApiBooks.separateFormat(this.bookId, this.manageFormat),
               '分离成功');
           },
         })
@@ -1754,14 +1755,14 @@ struct BookDetailPage {
           label: '生成默认封面',
           buttonEnabled: !this.coverBusy,
           onTap: () => {
-            void this.runCoverAction(() => TalebookApi.generateDefaultCover(this.bookId), '已生成默认封面');
+            void this.runCoverAction(() => TalebookApiBooks.generateDefaultCover(this.bookId), '已生成默认封面');
           },
         });
         SecondaryButton({
           label: '裁剪封面白边',
           buttonEnabled: !this.coverBusy,
           onTap: () => {
-            void this.runCoverAction(() => TalebookApi.cropCover(this.bookId), '封面已裁剪');
+            void this.runCoverAction(() => TalebookApiBooks.cropCover(this.bookId), '封面已裁剪');
           },
         });
       }

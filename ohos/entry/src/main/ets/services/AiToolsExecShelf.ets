@@ -3,6 +3,7 @@
  * 阅读历史、so-novel 检索与任务、加书架、书单全生命周期、推送设备、阅读统计。
  */
 import { ApiMessageResult, TalebookApi } from './TalebookApi';
+import { TalebookApiBooks } from './TalebookApiBooks';
 import { AnnotationApi, annotationTypeLabel, ANNOTATION_SCOPE_MINE } from './AnnotationApi';
 import { SoNovelBookPayload, DownloadTask, TalebookService } from './TalebookService';
 import { SoNovelService } from './SoNovelService';
@@ -445,7 +446,7 @@ export class AiToolsExecShelf {
     if (type === 'kindle') {
       mailbox = target;
       if (mailbox.length === 0) {
-        const devices: ReadingDevice[] = await TalebookApi.getUserDevices();
+        const devices: ReadingDevice[] = await TalebookApiBooks.getUserDevices();
         for (let i = 0; i < devices.length; i++) {
           if (devices[i].type === 'kindle' && devices[i].mailbox.length > 0) {
             mailbox = devices[i].mailbox;
@@ -459,7 +460,7 @@ export class AiToolsExecShelf {
     } else {
       url = target;
       if (url.length === 0) {
-        const devices: ReadingDevice[] = await TalebookApi.getUserDevices();
+        const devices: ReadingDevice[] = await TalebookApiBooks.getUserDevices();
         for (let i = 0; i < devices.length; i++) {
           if (devices[i].type === type) {
             url = `${devices[i].schema === 'https' ? 'https' : 'http'}://${devices[i].ip}:${devices[i].port}`;
@@ -471,7 +472,7 @@ export class AiToolsExecShelf {
         return `服务器没有登记${deviceTypeLabel(type)}设备，请在 target 里给出设备地址（如 http://ip:端口）。`;
       }
     }
-    const rsp: ApiMessageResult = await TalebookApi.sendToDevice(bookId, type, url, mailbox, '', '', '');
+    const rsp: ApiMessageResult = await TalebookApiBooks.sendToDevice(bookId, type, url, mailbox, '', '', '');
     if (rsp.err !== undefined && rsp.err !== 'ok') {
       return `推送失败：${rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err}`;
     }
@@ -482,13 +483,13 @@ export class AiToolsExecShelf {
   }
 
   static async readingStats(): Promise<string> {
-    const stats: ReadingStatsSummary | null = await TalebookApi.getReadingStats();
+    const stats: ReadingStatsSummary | null = await TalebookApiBooks.getReadingStats();
     if (stats === null) {
       return '服务器未返回阅读统计（可能未启用该功能或未登录）。';
     }
     let text: string = `阅读统计：累计在读 ${stats.totalReading} 本、累计读完 ${stats.totalReadDone} 本；` +
       `本月在读 ${stats.monthReading} 本、本月读完 ${stats.monthReadDone} 本。`;
-    const reading: HomeBook[] = await TalebookApi.getCurrentReadingBooks();
+    const reading: HomeBook[] = await TalebookApiBooks.getCurrentReadingBooks();
     if (reading.length === 0) {
       return `${text}\n当前没有在读的书记录。`;
     }

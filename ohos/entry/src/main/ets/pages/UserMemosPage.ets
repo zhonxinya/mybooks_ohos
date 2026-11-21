@@ -3,6 +3,7 @@ import {
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, ApiMessageResult } from '../services/TalebookApi';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { UserMemoItem, memoStageLabel, memoTypeLabel } from '../models/UserModels';
 
@@ -59,7 +60,7 @@ struct UserMemosPage {
         return;
       }
       await TalebookService.ensureAuthenticated();
-      this.memos = await TalebookApi.getUserMemos(1, 50);
+      this.memos = await TalebookApiBooks.getUserMemos(1, 50);
     } catch (error) {
       this.loadError = `加载失败：${error}`;
     } finally {
@@ -81,7 +82,7 @@ struct UserMemosPage {
     }
     this.submitting = true;
     try {
-      const rsp = await TalebookApi.createMemo(content, this.newMemoType);
+      const rsp = await TalebookApiBooks.createMemo(content, this.newMemoType);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
         return;

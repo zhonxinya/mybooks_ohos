@@ -4,6 +4,8 @@ import {
 } from '../components';
 import { ApiEnvelope, TalebookService } from '../services/TalebookService';
 import { TalebookApi, IndexHomeData, LibraryStatsResponse, LibraryStatsData } from '../services/TalebookApi';
+import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { BookListApi, BookListsResponse } from '../services/BookListApi';
 import { BookListSummary, BookListCoverBook, booklistColorHex } from '../models/BookListModels';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
@@ -274,7 +276,7 @@ export struct BooksTabPage {
 
   /** 小说页推荐：/api/index 的 random_books + social_recommend_books + new_books，以及书库统计、阅读统计。失败静默。 */
   private loadHomeSections(): void {
-    TalebookApi.getIndexHome()
+    TalebookApiBooks.getIndexHome()
       .then((data: IndexHomeData) => {
         this.randomBooks = this.resolveHomeBooks(data.randomBooks);
         this.socialBooks = this.resolveHomeBooks(data.socialBooks);
@@ -286,7 +288,7 @@ export struct BooksTabPage {
         this.newBooks = [];
       });
     if (ServerRegistry.supports(ServerFeature.ADMIN_LIBRARY_STATS)) {
-      TalebookApi.getLibraryStats()
+      TalebookApiAdmin.getLibraryStats()
         .then((rsp: LibraryStatsResponse) => {
           this.libraryStats = rsp.err === undefined || rsp.err === 'ok' ? (rsp.stats ?? null) : null;
         })
@@ -295,7 +297,7 @@ export struct BooksTabPage {
         });
     }
     if (TalebookService.hasAuthCredentials() && ServerRegistry.supports(ServerFeature.READING_DASHBOARD)) {
-      TalebookApi.getReadingDashboard()
+      TalebookApiBooks.getReadingDashboard()
         .then((stats: ReadingDashboard | null) => {
           this.readingStats = stats;
         })
@@ -886,7 +888,7 @@ export struct BooksTabPage {
     }
     this.randomRefreshing = true;
     const startedAt = Date.now();
-    TalebookApi.getIndexHome()
+    TalebookApiBooks.getIndexHome()
       .then((data: IndexHomeData) => {
         this.randomBooks = this.resolveHomeBooks(data.randomBooks);
       })

@@ -6,6 +6,7 @@ import { StorageKeys } from '../common/Constants';
 import { TalebookService } from '../services/TalebookService';
 import { NotificationService } from '../services/NotificationService';
 import { TalebookApi, LibraryStatsResponse, AdminRunningTasksResponse } from '../services/TalebookApi';
+import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { AccountManager } from '../services/AccountManager';
 import { AccountRecord } from '../models/AccountModels';
@@ -187,7 +188,7 @@ export struct SettingsPage {
       if (!statsSupported) {
         this.librarySummary = '';
       } else {
-        const statsRsp: LibraryStatsResponse = await TalebookApi.getLibraryStats();
+        const statsRsp: LibraryStatsResponse = await TalebookApiAdmin.getLibraryStats();
         if (statsRsp.err === undefined || statsRsp.err === 'ok') {
           const s = statsRsp.stats;
           if (s !== undefined) {
@@ -211,7 +212,7 @@ export struct SettingsPage {
         this.runningTasksSummary = '';
         return;
       }
-      const tasksRsp: AdminRunningTasksResponse = await TalebookApi.getAdminRunningTasks();
+      const tasksRsp: AdminRunningTasksResponse = await TalebookApiAdmin.getAdminRunningTasks();
       if (tasksRsp.err === undefined || tasksRsp.err === 'ok') {
         const tasks = tasksRsp.tasks ?? [];
         const msgs = tasksRsp.messages ?? [];
