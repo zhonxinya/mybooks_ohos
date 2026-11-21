@@ -512,7 +512,8 @@ export async function setup() {
   const { NovelMetaService } = await load('RealNovelMeta');
   const deps = await load('aiServiceDeps');
   const { AiService: RealAiService } = await load('RealAiService');
-  const { AiTools: RealAiTools, parseToolBookLines } = await load('RealAiTools');
+  const { AiTools: RealAiTools } = await load('RealAiTools');
+  const { parseToolBookLines } = await load('AiToolsDefs');
   const { toolsState } = await load('aiToolsDeps');
   const { mdParseBlocks, mdParseInline } = await load('MdParse');
   const { AI_SKILLS } = await load('AiSkills');

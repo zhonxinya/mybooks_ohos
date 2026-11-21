@@ -11,8 +11,10 @@ export function stageAiService() {
     source = source.replace(`import { ${type} }`, `import type { ${type} }`);
   }
   source = source
-    .replace(`import { AiTools, AiPermissionMode, AiToolDefinition } from './AiTools';`,
-      `import { AiTools } from './RealAiTools.ts';\nimport type { AiPermissionMode, AiToolDefinition } from './RealAiTools.ts';`)
+    .replace(`import { AiTools, AiPermissionMode } from './AiTools';`,
+      `import { AiTools } from './RealAiTools.ts';\nimport type { AiPermissionMode } from './RealAiTools.ts';`)
+    .replace(`import { AiToolDefinition } from './AiToolsDefs';`,
+      `import type { AiToolDefinition } from './AiToolsDefs.ts';`)
     .replace(`import { McpService } from './McpService';`, `import { McpService } from './RealMcp.ts';`)
     .replace(`from '@iuroc/openai'`, `from './aiServiceDeps.ts'`)
     .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
@@ -203,8 +205,10 @@ export const TalebookService = { dataDir: () => personaState.dir };
 export function stageChatStore() {
   let source = read('services/AiChatStore.ets');
   source = source
-    .replace(`import { AiTools, AiPermissionMode, AiToolDefinition, parseToolBookLines, ToolBookLine } from './AiTools';`,
-      `import { AiTools, parseToolBookLines } from './RealAiTools.ts';\nimport type { AiPermissionMode, AiToolDefinition, ToolBookLine } from './RealAiTools.ts';`)
+    .replace(`import { AiTools, AiPermissionMode } from './AiTools';`,
+      `import { AiTools } from './RealAiTools.ts';\nimport type { AiPermissionMode } from './RealAiTools.ts';`)
+    .replace(`import { AiToolDefinition, parseToolBookLines, ToolBookLine } from './AiToolsDefs';`,
+      `import { parseToolBookLines } from './AiToolsDefs.ts';\nimport type { AiToolDefinition, ToolBookLine } from './AiToolsDefs.ts';`)
     .replace(`import { AiService, AiConfig, AiMessage, AiStreamHandlers, AiAbortHandle } from './AiService';`,
       `import { AiService } from './shim.ts';`)
     .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
@@ -247,7 +251,7 @@ export function stageMcp() {
   source = source
     .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
     .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
-    .replace(`import { AiToolDefinition, AiToolFunctionBody, AiToolParameters } from './AiTools';\n`, '');
+    .replace(`import { AiToolDefinition, AiToolFunctionBody, AiToolParameters } from './AiToolsDefs';\n`, '');
   writeFileSync(join(dir, 'RealMcp.ts'), source);
 }
 
@@ -377,36 +381,61 @@ export function stageReader3() {
 }
 
 export function stageAiTools() {
-  let source = read('services/AiTools.ets');
-  source = source
-    // 类型注解用的 DoubanDetail/DoubanHit 被 strip-types 擦除，只需值导入 MetaSearchService
-    .replace(`import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';`,
-      `import { MetaSearchService } from './RealMetaSearch.ts';`)
-    .replace(`import { NovelMeta, NovelMetaService } from './NovelMetaService';`,
-      `import { NovelMetaService } from './RealNovelMeta.ts';`)
-    .replace(`import { EncyclopediaHit, EncyclopediaService, WebSearchHit, WebSearchResult } from './EncyclopediaService';`,
-      `import { EncyclopediaService } from './RealEncyclopedia.ts';`)
-    .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
-    .replace(`from './TalebookApi'`, `from './aiToolsDeps.ts'`)
-    .replace(`from './AnnotationApi'`, `from './aiToolsDeps.ts'`)
-    .replace(`from './TalebookService'`, `from './aiToolsDeps.ts'`)
-    .replace(`from './SoNovelService'`, `from './aiToolsDeps.ts'`)
-    .replace(`from '../utils/SoNovelMerge'`, `from './aiToolsDeps.ts'`)
-    .replace(`from './DownloadTaskService'`, `from './aiToolsDeps.ts'`)
-    .replace(`from './BookListApi'`, `from './aiToolsDeps.ts'`)
-    .replace(`from './BookModels'`, `from './aiToolsDeps.ts'`)
-    .replace(`from './ServerProfile'`, `from './aiToolsDeps.ts'`)
-    .replace(`from './AccountManager'`, `from './aiToolsDeps.ts'`)
-    .replace(`from '@kit.CoreFileKit'`, `from './aiToolsDeps.ts'`)
-    .replace(`import { BookListSummary, parseBookListSummary, parseBookListSummaries } from '../models/BookListModels';`,
-      `import type { BookListSummary } from './BookListModels.ts';\nimport { parseBookListSummary, parseBookListSummaries } from './BookListModels.ts';`)
-    .replace(`import { ReadingDevice, deviceTypeLabel } from '../models/DeviceModels';`,
-      `import type { ReadingDevice } from './DeviceModels.ts';\nimport { deviceTypeLabel } from './DeviceModels.ts';`)
-    .replace(`import { HomeBook, ReadingStatsSummary } from '../models/HomeModels';`,
-      `import type { HomeBook, ReadingStatsSummary } from './HomeModels.ts';`)
-    .replace(`import { AiService, AiConfig, LlmSearchResult, LlmSearchSource } from './AiService';`,
-      `import { AiService } from './RealAiService.ts';`);
-  writeFileSync(join(dir, 'RealAiTools.ts'), source);
+  /* AiTools 拆分家族（Defs/Core/Meta/Shelf/门面）统一 staging：
+     import 路径映射到桩/已 staged 文件，并按 strip-types 语义拆 type/value 行
+     （接口名在目标 .ts 里被擦除，混值 import 会挂）。 */
+  const PATHS = [
+    ["'./TalebookApi'", "'./aiToolsDeps.ts'"],
+    ["'./AnnotationApi'", "'./aiToolsDeps.ts'"],
+    ["'./TalebookService'", "'./aiToolsDeps.ts'"],
+    ["'./SoNovelService'", "'./aiToolsDeps.ts'"],
+    ["'../utils/SoNovelMerge'", "'./aiToolsDeps.ts'"],
+    ["'./DownloadTaskService'", "'./aiToolsDeps.ts'"],
+    ["'./BookListApi'", "'./aiToolsDeps.ts'"],
+    ["'./BookModels'", "'./aiToolsDeps.ts'"],
+    ["'./ServerProfile'", "'./aiToolsDeps.ts'"],
+    ["'./AccountManager'", "'./aiToolsDeps.ts'"],
+    ["'@kit.CoreFileKit'", "'./aiToolsDeps.ts'"],
+    ["'./MetaSearchService'", "'./RealMetaSearch.ts'"],
+    ["'./NovelMetaService'", "'./RealNovelMeta.ts'"],
+    ["'./EncyclopediaService'", "'./RealEncyclopedia.ts'"],
+    ["'./AiPersona'", "'./RealAiPersona.ts'"],
+    ["'./AiService'", "'./RealAiService.ts'"],
+    ["'../models/BookListModels'", "'./BookListModels.ts'"],
+    ["'../models/DeviceModels'", "'./DeviceModels.ts'"],
+    ["'../models/HomeModels'", "'./HomeModels.ts'"],
+    ["'./AiTools'", "'./RealAiTools.ts'"],
+    ["'./AiToolsDefs'", "'./AiToolsDefs.ts'"],
+    ["'./AiToolsCore'", "'./AiToolsCore.ts'"],
+    ["'./AiToolsExecMeta'", "'./RealAiToolsExecMeta.ts'"],
+    ["'./AiToolsExecShelf'", "'./RealAiToolsExecShelf.ts'"],
+  ];
+  const TYPE_NAMES = new Set(['ApiMessageResult', 'ReferBook', 'ReferSearchOpts', 'ReferSearchResponse',
+    'SoNovelBookPayload', 'DownloadTask', 'SoNovelSearchItem', 'BookListAddResponse', 'BookDetail',
+    'BookListDetailResponse', 'BookListMutationResponse', 'BookListUpdatePayload', 'BookListsResponse',
+    'BookListSummary', 'ReadingDevice', 'HomeBook', 'ReadingStatsSummary', 'DoubanDetail', 'DoubanHit',
+    'NovelMeta', 'EncyclopediaHit', 'WebSearchHit', 'WebSearchResult', 'AiConfig', 'LlmSearchResult',
+    'LlmSearchSource', 'ToolBookLine', 'AiToolDefinition', 'AiToolParameters', 'AiToolFunctionBody',
+    'AiToolProperty', 'AiPermissionMode']);
+  for (const [out, ets] of [['RealAiTools.ts', 'services/AiTools.ets'],
+    ['AiToolsCore.ts', 'services/AiToolsCore.ets'],
+    ['RealAiToolsExecMeta.ts', 'services/AiToolsExecMeta.ets'],
+    ['RealAiToolsExecShelf.ts', 'services/AiToolsExecShelf.ets']]) {
+    let source = read(ets).replace(/^import \{ ([^}]+) \} from '([^']+)';$/gm, (all, clause, path) => {
+      const hit = PATHS.find((p) => p[0] === `'${path}'`);
+      if (hit === undefined) { return all; }
+      const names = clause.split(',').map((s) => s.trim());
+      const types = names.filter((n) => TYPE_NAMES.has(n.split(' as ')[0]));
+      const vals = names.filter((n) => !TYPE_NAMES.has(n.split(' as ')[0]));
+      const parts = [];
+      if (vals.length > 0) { parts.push(`import { ${vals.join(', ')} } from ${hit[1]};`); }
+      if (types.length > 0) { parts.push(`import type { ${types.join(', ')} } from ${hit[1]};`); }
+      return parts.join('\n');
+    });
+    writeFileSync(join(dir, out), source);
+  }
+  // 定义区纯数据无外部依赖，原样拷
+  writeFileSync(join(dir, 'AiToolsDefs.ts'), read('services/AiToolsDefs.ets'));
 }
 
 export function stagePure(name, path, typeNames) {

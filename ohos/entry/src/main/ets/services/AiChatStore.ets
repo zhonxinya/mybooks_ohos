@@ -1,7 +1,8 @@
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { image } from '@kit.ImageKit';
 import { util } from '@kit.ArkTS';
-import { AiTools, AiPermissionMode, AiToolDefinition, parseToolBookLines, ToolBookLine } from './AiTools';
+import { AiTools, AiPermissionMode } from './AiTools';
+import { AiToolDefinition, parseToolBookLines, ToolBookLine } from './AiToolsDefs';
 import { AiService, AiConfig, AiMessage, AiStreamHandlers, AiAbortHandle } from './AiService';
 import { AiPersona } from './AiPersona';
 import { TalebookService } from './TalebookService';

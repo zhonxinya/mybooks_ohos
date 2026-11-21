@@ -1,4 +1,4 @@
-import { ToolBookLine } from '../services/AiTools';
+import { ToolBookLine } from '../services/AiToolsDefs';
 import { AuthImage } from './AuthImage';
 
 /**
