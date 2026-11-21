@@ -1,6 +1,6 @@
 import { rcp } from '@kit.RemoteCommunicationKit';
 import { util } from '@kit.ArkTS';
-import { AiToolDefinition, AiToolFunctionBody, AiToolParameters } from './AiTools';
+import { AiToolDefinition, AiToolFunctionBody, AiToolParameters } from './AiToolsDefs';
 
 /**
  * 百炼 MCP 客户端（Streamable HTTP / JSON-RPC 2.0）。

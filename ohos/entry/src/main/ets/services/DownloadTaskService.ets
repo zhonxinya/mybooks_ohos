@@ -7,6 +7,7 @@ import {
 import { SoNovelDownloadProgress, SoNovelService } from './SoNovelService';
 import { AccountManager } from './AccountManager';
 import { AccountStore } from './AccountStore';
+import { NovelMeta, NovelMetaService } from './NovelMetaService';
 import { ACCOUNT_LEGACY_ID, isLegacyAccount } from '../models/AccountModels';
 import { ErrorFormat } from '../utils/ErrorFormat';
 
@@ -551,11 +552,29 @@ export class DownloadTaskService {
     }
     const destPath = `${booksDir}/${matched}`;
     DownloadTaskService.writeBytes(destPath, bytes);
+    // 元数据兜底：add_sonovel_task 的 author/cover 均为模型可选入参，缺任一项时
+    // 入库前从书源站详情页抓一次（失败保留原值，不阻塞入库）。
+    let author: string = payload.author;
+    let coverUrl: string = payload.cover ?? '';
+    if (author.length === 0 || coverUrl.length === 0) {
+      try {
+        const meta: NovelMeta = await NovelMetaService.fetchDetail(payload.url);
+        if (meta.ok) {
+          if (author.length === 0) {
+            author = meta.author;
+          }
+          if (coverUrl.length === 0) {
+            coverUrl = meta.cover;
+          }
+        }
+      } catch (_error) {
+      }
+    }
     const record: DownloadRecord = {
       bookId: task.bookId,
       title: payload.bookName,
-      author: payload.author,
-      coverUrl: '',
+      author: author,
+      coverUrl: coverUrl,
       filePath: destPath,
       format: format.toUpperCase(),
       downloadTime: Date.now(),

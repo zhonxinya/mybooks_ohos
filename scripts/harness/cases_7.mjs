@@ -1,0 +1,365 @@
+// 用例组 7：模型清单快切/Token Plan 音频/通话/Speak/Realtime（拆分自 check_ai_assistant.mjs，用例体原样）
+import assert from 'node:assert/strict';
+import { join } from 'node:path';
+import { test, state, settingsDefaults, enc, rtB64, deferred, tick, flush } from './base.mjs';
+import { dir, read, ETS, ROOT } from './paths.mjs';
+
+export function register(ctx) {
+  const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, chat, reappear } = ctx;
+  test('设置页模型清单：手动添加去重即存、删除、拉取勾选合并、切服务商重载', () => {
+    resetSettings();
+    const page = settingsPage();
+    assert.deepEqual(page.providerModels, [], '初始为空');
+    page.newModelName = ' qwen-max ';
+    page.addModelToList();
+    assert.deepEqual(page.providerModels, ['qwen-max'], 'trim 后入清单');
+    assert.deepEqual(state.settings.providerModels.deepseek, ['qwen-max'], '改动即落盘');
+    page.newModelName = 'qwen-max';
+    page.addModelToList();
+    assert.equal(page.providerModels.length, 1, '重复添加去重');
+    page.newModelName = '  ';
+    page.addModelToList();
+    assert.equal(page.providerModels.length, 1, '空名不落盘');
+    page.newModelName = 'glm-4';
+    page.addModelToList();
+    page.removeModel('qwen-max');
+    assert.deepEqual(page.providerModels, ['glm-4']);
+    assert.deepEqual(state.settings.providerModels.deepseek, ['glm-4'], '删除也落盘');
+    // 拉取勾选合并
+    page.modelOptions = ['a', 'b', 'c'];
+    page.togglePick('a');
+    page.togglePick('b');
+    page.togglePick('b');
+    assert.deepEqual(page.pickedModels, ['a'], '再点取消勾选');
+    page.providerModels = ['b'];
+    page.applyPicked();
+    assert.deepEqual(page.providerModels, ['b', 'a'], '勾选并入去重');
+    assert.deepEqual(state.settings.providerModels.deepseek, ['b', 'a'], '合并按当前服务商落盘');
+    assert.equal(page.pickedModels.length, 0, '并入后清空勾选');
+    page.applyPicked();
+    assert.deepEqual(state.settings.providerModels.deepseek, ['b', 'a'], '无勾选时不落盘');
+    // 切服务商重载各自清单
+    state.settings.providerModels.opencode = ['big-pickle'];
+    page.selectProvider('opencode');
+    assert.deepEqual(page.providerModels, ['big-pickle']);
+    page.selectProvider('deepseek');
+    assert.deepEqual(page.providerModels, ['b', 'a']);
+  });
+
+  test('对话页快切：本地清单优先零拉取，「重新获取」绕过清单拉全量', async () => {
+    resetSettings();
+    state.settings.providerModels.deepseek = ['m-a', 'm-b'];
+    state.settings.fetchError = '服务商不支持模型列表'; // 若误走拉取必失败
+    const page = chat();
+    await flush();
+    assert.deepEqual(page.modelChoices, ['m-a', 'm-b'], '进页直接用本地清单');
+    const items = page.modelMenuItems();
+    assert.equal(items.length, 3, '2 模型 + 重新获取项');
+    items[2].action();
+    await flush();
+    assert.deepEqual(page.modelChoices, ['m-a', 'm-b'], '拉取失败不动清单');
+    state.settings.fetchError = '';
+    items[2].action();
+    await flush();
+    assert.deepEqual(page.modelChoices, state.settings.models, '重新获取绕过清单拉全量');
+    resetSettings();
+  });
+
+  test('AiService 服务商模型清单持久化：回读、空数组清除、坏 JSON 容错', () => {
+    deps.state.store.set('p:ai_provider_models_custom-9', JSON.stringify(['a', 'b', 3]));
+    assert.deepEqual(RealAiService.loadProviderModels('custom-9'), ['a', 'b'], '非字符串项丢弃');
+    RealAiService.saveProviderModels('custom-9', ['x']);
+    assert.deepEqual(RealAiService.loadProviderModels('custom-9'), ['x']);
+    RealAiService.saveProviderModels('custom-9', []);
+    assert.deepEqual(RealAiService.loadProviderModels('custom-9'), [], '空数组即清除');
+    deps.state.store.set('p:ai_provider_models_custom-9', '{bad json');
+    assert.deepEqual(RealAiService.loadProviderModels('custom-9'), [], '坏 JSON 不抛错');
+  });
+
+  test('Token Plan 音频链路：ASR/TTS 请求形态、缓存清理与未配 Key 容错', async () => {
+    const { QwenAudioService } = await load('RealQwenAudio');
+    deps.state.rcpResponses.length = 0;
+    deps.state.rcpThrowQueue.length = 0;
+    deps.state.rcpError = null;
+    deps.state.requests.length = 0;
+    deps.state.ttsFiles.length = 0;
+    const prevProvider = deps.state.store.get('p:ai_provider');
+    // 前面设置页用例会把 ai_base_url 落盘覆盖 preset；origin() 派生自它，必须先清
+    const prevBaseUrl = deps.state.store.get('s:ai_base_url');
+    deps.state.store.delete('s:ai_base_url');
+    deps.state.store.set('p:ai_provider', 'qwen-tokenplan');
+    deps.state.store.set('s:ai_api_key_qwen-tokenplan', 'sk-test');
+    // ① ASR：DashScope 原生路径 + data URI 前缀 + output.text 解析
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(JSON.stringify({ output: { text: '推荐一本科幻' } })) }];
+    assert.equal(await QwenAudioService.transcribe('QUJDRA=='), '推荐一本科幻');
+    const asrReq = deps.state.requests[0];
+    assert.equal(asrReq.url, 'https://token-plan.maas.qianwenaiapi.com/api/v1/services/aigc/multimodal-generation/generation');
+    assert.equal(asrReq.headers['Authorization'], 'Bearer sk-test');
+    const asrBody = JSON.parse(asrReq.content);
+    assert.equal(asrBody.model, 'qwen-audio-3.0-asr-flash');
+    assert.ok(asrBody.input.messages[0].content[0].input_audio.data.startsWith('data:audio/wav;base64,QUJDRA=='));
+    assert.equal(asrBody.parameters.format, 'wav');
+    // ② 空录音直接返回空串，不发请求（「没听清」分支的前提）
+    const reqCount = deps.state.requests.length;
+    assert.equal(await QwenAudioService.transcribe(''), '');
+    assert.equal(deps.state.requests.length, reqCount);
+    // ③ TTS：合成→OSS 下载→落盘 /tts/，缓存只留最近 5 个（先种 5 个旧的）
+    for (let i = 0; i < 5; i++) { deps.state.ttsFiles.push(`tts_00${i}.mp3`); }
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ output: { audio: { url: 'https://oss.example/a.mp3?Expires=1' } } })) },
+      { statusCode: 200, body: enc('MP3DATA') },
+    ];
+    const path = await QwenAudioService.synthesize('你好');
+    assert.ok(path.includes('/tts/tts_') && path.endsWith('.mp3'), path);
+    const ttsReq = deps.state.requests[deps.state.requests.length - 2];
+    assert.equal(ttsReq.url, 'https://token-plan.maas.qianwenaiapi.com/api/v1/services/audio/tts/SpeechSynthesizer');
+    const ttsBody = JSON.parse(ttsReq.content);
+    assert.equal(ttsBody.model, 'qwen-audio-3.0-tts-plus');
+    assert.equal(ttsBody.input.voice, 'longanhuan_v3.6');
+    assert.equal(ttsBody.input.sample_rate, 22050);
+    assert.equal(deps.state.rcpResponses.length, 0);
+    assert.equal(deps.state.ttsFiles.length, 5);
+    assert.ok(!deps.state.ttsFiles.includes('tts_000.mp3') && deps.state.ttsFiles.includes(path.slice(path.lastIndexOf('/') + 1)));
+    // ④ 非 2xx 透传状态码与响应体片段
+    deps.state.rcpResponses = [{ statusCode: 401, body: enc('{"code":"InvalidApiKey"}') }];
+    await assert.rejects(() => QwenAudioService.transcribe('QUJD'), /HTTP 401: \{"code":"InvalidApiKey"\}/);
+    // ⑤ 未配 Key：明确指向设置页，不带网络错误
+    deps.state.store.delete('s:ai_api_key_qwen-tokenplan');
+    await assert.rejects(() => QwenAudioService.synthesize('x'), /未配置 Token Plan API Key/);
+    if (prevProvider === undefined) { deps.state.store.delete('p:ai_provider'); } else { deps.state.store.set('p:ai_provider', prevProvider); }
+    if (prevBaseUrl !== undefined) { deps.state.store.set('s:ai_base_url', prevBaseUrl); }
+    deps.state.requests.length = 0;
+    deps.state.ttsFiles.length = 0;
+  });
+
+  test('语音通话对话模型：跟随全局/独立服务商解析/complete 按 override 出请求', async () => {
+    deps.state.store.clear();
+    RealAiService.saveConfig('deepseek', 'https://api.deepseek.com/v1', 'deepseek-chat', 'sk-d', 0.5);
+    // ① 未单独配置 → 跟随全局
+    assert.equal(RealAiService.loadVoiceConfig().providerId, 'deepseek');
+    assert.equal(RealAiService.hasVoiceProvider(), false);
+    // ② 独立选 Token Plan：地址随预设解析，Key 单独判
+    RealAiService.saveVoiceConfig('qwen-tokenplan', 'qwen3.6-flash');
+    let v = RealAiService.loadVoiceConfig();
+    assert.equal(v.providerId, 'qwen-tokenplan');
+    assert.equal(v.model, 'qwen3.6-flash');
+    assert.equal(v.baseUrl, 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1');
+    assert.equal(v.hasKey, false);
+    assert.equal(RealAiService.loadVoiceProviderId(), 'qwen-tokenplan');
+    RealAiService.saveVoiceConfig('qwen-tokenplan', '');
+    assert.equal(RealAiService.loadVoiceConfig().model, 'qwen3.6-flash', 'model 空回落服务商默认');
+    deps.state.store.set('s:ai_api_key_qwen-tokenplan', 'sk-tp');
+    assert.equal(RealAiService.loadVoiceConfig().hasKey, true);
+    // ③ 选了与全局相同的服务商 → 直接跟随全局值（忽略语音 model）
+    RealAiService.saveVoiceConfig('deepseek', 'other-model');
+    assert.equal(RealAiService.loadVoiceConfig().model, 'deepseek-chat');
+    // ④ complete 带 override：请求用语音配置的地址/模型/Key
+    RealAiService.saveVoiceConfig('opencode', 'voice-model');
+    deps.state.store.set('s:ai_api_key_opencode', 'sk-oc');
+    deps.state.rcpResponse = { statusCode: 200,
+      body: enc(JSON.stringify({ choices: [{ message: { content: '好的' } }] })) };
+    assert.equal(await RealAiService.complete([{ role: 'user', content: 'hi' }], 512,
+      RealAiService.loadVoiceConfig()), '好的');
+    const req = deps.state.lastRequest;
+    assert.ok(req.url.startsWith('https://opencode.ai/zen/go/v1'), req.url);
+    assert.equal(JSON.parse(req.content).model, 'voice-model');
+    assert.equal(req.headers['Authorization'], 'Bearer sk-oc');
+    // ⑤ 恢复跟随全局
+    RealAiService.saveVoiceConfig('', '');
+    assert.equal(RealAiService.hasVoiceProvider(), false);
+    assert.equal(RealAiService.loadVoiceConfig().providerId, 'deepseek');
+    deps.state.rcpResponse = null;
+    deps.state.store.delete('s:ai_api_key_qwen-tokenplan');
+    deps.state.store.delete('s:ai_api_key_opencode');
+    deps.state.store.delete('s:ai_base_url');
+  });
+
+  test('设置页语音通话模型：进入读取、切换即存、跟随恢复、模型列表', async () => {
+    resetSettings();
+    let page = settingsPage();
+    assert.equal(page.voiceFollow, true);
+    assert.equal(page.voiceProviderSelectedIndex(), 0);
+    assert.equal(page.voiceProviderItems().length, 3, '跟随全局 + 2 个服务商');
+    // 选服务商（index 2 = opencode）→ 立即持久化、重置模型
+    page.selectVoiceProvider(2);
+    assert.equal(page.voiceFollow, false);
+    assert.equal(state.settings.voiceProviderId, 'opencode');
+    assert.equal(state.settings.voiceModel, '');
+    // 模型列表：未拉取时给服务商默认；手动值也会补进列表
+    assert.ok(page.voiceModelItems().some((it) => it.value === 'big-pickle'));
+    state.settings.models = ['voice-m'];
+    await page.fetchVoiceModels();
+    assert.deepEqual(page.voiceModelOptions, ['voice-m']);
+    // 切回跟随全局 → 清空配置
+    page.selectVoiceProvider(0);
+    assert.equal(page.voiceFollow, true);
+    assert.equal(state.settings.voiceProviderId, '');
+    // 重进页面读回已存配置
+    state.settings.voiceProviderId = 'opencode';
+    state.settings.voiceModel = 'voice-m';
+    page = settingsPage();
+    assert.equal(page.voiceFollow, false);
+    assert.equal(page.voiceModel, 'voice-m');
+    assert.equal(page.voiceProviderSelectedIndex(), 2);
+    assert.ok(page.voiceSummary().includes('OpenCode'));
+    resetSettings();
+  });
+
+  test('SpeakService 播报引擎：默认系统、播完/打断/无引擎三态与开关持久化', async () => {
+    const { SpeakService: RealSpeakService } = await load('RealSpeakService');
+    const { ttsState } = await load('readerTtsDeps');
+    deps.state.store.clear();
+    // ① 默认走系统引擎
+    assert.equal(RealAiService.loadSpeakEngine(), 'system');
+    ttsState.starts.length = 0;
+    ttsState.stops = 0;
+    ttsState.failEngine = false;
+    const p1 = RealSpeakService.speak('第一句');
+    await flush();
+    assert.equal(ttsState.starts.length, 1);
+    assert.deepEqual(ttsState.starts[0].chunks, ['第一句']);
+    ttsState.starts[0].onDone();
+    assert.equal(await p1, true);
+    // ② stop 打断：未播完的 speak 以 false 结束，系统引擎被停
+    const p2 = RealSpeakService.speak('第二句');
+    await flush();
+    RealSpeakService.stop();
+    assert.equal(await p2, false);
+    assert.ok(ttsState.stops >= 1);
+    // ③ 引擎不可用（模拟器 50008 场景）：抛人话错误供页面 toast
+    ttsState.failEngine = true;
+    await assert.rejects(() => RealSpeakService.speak('第三句'), /Creating the engine timed out/);
+    // ④ 引擎开关持久化：非法值回落 system
+    RealAiService.saveSpeakEngine('cloud');
+    assert.equal(RealAiService.loadSpeakEngine(), 'cloud');
+    RealAiService.saveSpeakEngine('bogus');
+    assert.equal(RealAiService.loadSpeakEngine(), 'system');
+    deps.state.store.delete('p:ai_speak_engine');
+    ttsState.starts.length = 0;
+    ttsState.stops = 0;
+    ttsState.failEngine = false;
+  });
+
+  test('RealtimeCallService 全双工：握手形态、append 上行、VAD 打断清队列、拉流消费与字幕事件', async () => {
+    const { RealtimeCallService: Rt } = await load('RealtimeCall');
+    const { rtState } = await load('realtimeDeps');
+    deps.state.store.clear();
+    RealAiService.saveConfig('qwen-tokenplan', 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1', 'qwen3.6-flash', 'sk-tp', 0.5);
+    rtState.sends.length = 0;
+    const ev = [];
+    const cb = {
+      onUserText: (t) => ev.push('user:' + t),
+      onAiTextDelta: (d) => ev.push('delta:' + d),
+      onAiTextDone: (t) => ev.push('done:' + t),
+      onSpeechStarted: () => ev.push('barge'),
+      onSpeechStopped: () => ev.push('stopped'),
+      onResponding: () => ev.push('responding'),
+      onResponseDone: () => ev.push('resp_done'),
+      onFunctionCall: (n, a, c) => ev.push('call:' + n + ':' + c),
+      onError: (m) => ev.push('err:' + m),
+      onClosed: () => ev.push('closed'),
+    };
+    const connecting = Rt.connect('人设指令', cb, [
+      { type: 'function', function: { name: 'search_books', parameters: { type: 'object', properties: {} } } },
+    ]);
+    await flush();
+    assert.equal(rtState.lastUrl, 'wss://token-plan.maas.qianwenaiapi.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus');
+    assert.equal(rtState.lastOptions.header.Authorization, 'Bearer sk-tp');
+    rtState.socket.fireOpen();
+    await flush();
+    rtState.socket.emitEvent(JSON.stringify({ type: 'session.created' }));
+    await flush();
+    // session.update 时序与字段（docs §4 实测协议）
+    const update = JSON.parse(rtState.sends[0]);
+    assert.equal(update.type, 'session.update');
+    assert.equal(update.session.voice, 'longanqian');
+    assert.equal(update.session.turn_detection.type, 'server_vad');
+    assert.equal(update.session.input_audio_format, 'pcm');
+    assert.equal(update.session.output_audio_format, 'pcm');
+    assert.equal(update.session.instructions, '人设指令');
+    assert.equal(update.session.tools[0].function.name, 'search_books');
+    // 麦克风帧 → base64 append
+    const mic = new Uint8Array(3200);
+    mic[0] = 42;
+    rtState.capturer.feedMic(mic);
+    await flush();
+    const append = JSON.parse(rtState.sends[1]);
+    assert.equal(append.type, 'input_audio_buffer.append');
+    assert.equal(Buffer.from(append.audio, 'base64').length, 3200);
+    assert.equal(Buffer.from(append.audio, 'base64')[0], 42);
+    // 下行音频入队并触发 speaking
+    const pcm = new Uint8Array(4800).fill(7);
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.audio.delta', delta: rtB64(pcm) }));
+    await flush();
+    assert.ok(ev.includes('responding'));
+    assert.equal(Rt.getPlayBytes(), 4800);
+    // 拉模式消费 1600B
+    const buf = new ArrayBuffer(1600);
+    rtState.renderer.pull(buf);
+    assert.equal(Rt.getPlayBytes(), 3200);
+    assert.equal(new Uint8Array(buf)[0], 7);
+    // speech_started 打断：队列清零
+    rtState.socket.emitEvent(JSON.stringify({ type: 'input_audio_buffer.speech_started' }));
+    await flush();
+    assert.equal(Rt.getPlayBytes(), 0);
+    assert.ok(ev.includes('barge'));
+    rtState.socket.emitEvent(JSON.stringify({ type: 'input_audio_buffer.speech_stopped' }));
+    // 字幕与错误事件链
+    rtState.socket.emitEvent(JSON.stringify({ type: 'conversation.item.input_audio_transcription.completed', transcript: '你好呀' }));
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.audio_transcript.delta', delta: 'He' }));
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.audio_transcript.delta', delta: 'llo' }));
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.audio_transcript.done', transcript: 'Hello' }));
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.done' }));
+    rtState.socket.emitEvent(JSON.stringify({ type: 'error', error: { message: '示例错误' } }));
+    await flush();
+    assert.ok(ev.includes('stopped'));
+    assert.ok(ev.includes('user:你好呀'));
+    assert.ok(ev.includes('delta:He'));
+    assert.ok(ev.includes('done:Hello'));
+    assert.ok(ev.includes('resp_done'));
+    assert.ok(ev.includes('err:示例错误'));
+    // 工具回路：function_call → 回调执行 → output 回填 + response.create 续流
+    const sendsBeforeCall = rtState.sends.length;
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.function_call_arguments.done',
+      call_id: 'c1', name: 'search_books', arguments: '{"query":"三体"}' }));
+    await flush();
+    assert.ok(ev.includes('call:search_books:c1'));
+    Rt.sendToolResult('c1', '找到《三体》');
+    await flush();
+    assert.equal(rtState.sends.length, sendsBeforeCall + 2);
+    const toolOut = JSON.parse(rtState.sends[sendsBeforeCall]);
+    assert.equal(toolOut.item.type, 'function_call_output');
+    assert.equal(toolOut.item.call_id, 'c1');
+    assert.equal(toolOut.item.output, '找到《三体》');
+    assert.equal(JSON.parse(rtState.sends[sendsBeforeCall + 1]).type, 'response.create');
+    // 工具执行期间用户开口：结果仍回填，但不再抢 response.create（VAD 自动起新轮）
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.function_call_arguments.done',
+      call_id: 'c2', name: 'search_books', arguments: '{}' }));
+    await flush();
+    rtState.socket.emitEvent(JSON.stringify({ type: 'input_audio_buffer.speech_started' }));
+    await flush();
+    const sendsBefore2 = rtState.sends.length;
+    Rt.sendToolResult('c2', '结果');
+    await flush();
+    assert.equal(rtState.sends.length, sendsBefore2 + 1);
+    assert.equal(JSON.parse(rtState.sends[sendsBefore2]).item.call_id, 'c2');
+    // 静音=停上行帧（不断采集），取消静音恢复 append
+    const sendsBefore = rtState.sends.length;
+    Rt.setMuted(true);
+    rtState.capturer.feedMic(mic);
+    await flush();
+    assert.equal(rtState.sends.length, sendsBefore);
+    Rt.setMuted(false);
+    rtState.capturer.feedMic(mic);
+    await flush();
+    assert.equal(rtState.sends.length, sendsBefore + 1);
+    Rt.disconnect();
+    await flush();
+    await connecting;
+    // 缺 Key：连接即抛（页面提示配置）
+    deps.state.store.delete('s:ai_api_key_qwen-tokenplan');
+    await assert.rejects(() => Rt.connect('x', cb, []), /Token Plan API Key/);
+    deps.state.store.clear();
+  });
+
+}

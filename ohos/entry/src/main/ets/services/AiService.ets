@@ -8,7 +8,8 @@ import { ChatCompletionContentPart } from '@iuroc/openai/src/main/ets/openai@4.7
 import { ChatCompletionContentPartText } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { ChatCompletionContentPartImage } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { TalebookService } from './TalebookService';
-import { AiTools, AiPermissionMode, AiToolDefinition } from './AiTools';
+import { AiTools, AiPermissionMode } from './AiTools';
+import { AiToolDefinition } from './AiToolsDefs';
 import { McpService } from './McpService';
 
 /**
