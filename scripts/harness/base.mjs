@@ -24,6 +24,8 @@ export const state = {
   shelf: { books: [] }, search: async () => ({ body: { books: [] } }),
   recommend: async () => [], summary: async () => '', review: async () => '', meta: async () => ({}),
   settings: settingsDefaults(), prefs: new Map(), lastMessages: null, lastToast: '',
+  // #1516 按住说话桩：录音/识别计数与预置返回；micGrant=权限授予结果
+  hold: { starts: 0, stops: 0, wav: '', text: '', asrErr: false, b64s: [] }, micGrant: true,
 };
 globalThis.__aiCheck = state;
 // 设置页保存时会记一个配置版本号，桩掉避免 save() 抛错
@@ -130,10 +132,21 @@ export const AiService = {
     return state.settings.config;
   },
 };
-// 页面测试不触发真实播报，但 import 名要在（对话页 ttsAvailable 门控下调用不到）
+// 页面测试不触发真实播报；#1516 按住说话链走 state.hold 计数与预置返回
 export const QwenAudioService = {
-  startRecording: async () => {}, stopRecording: async () => '', stopRecordingCleanup: () => {},
-  transcribe: async () => '', synthesize: async () => '/tmp/tts_test.mp3', playFile: async () => true, stopPlayback: () => {},
+  startRecording: async () => { state.hold.starts++; },
+  stopRecording: async () => { state.hold.stops++; return state.hold.wav; },
+  stopRecordingCleanup: () => { state.hold.stops++; },
+  transcribe: async (b64) => {
+    state.hold.b64s.push(b64);
+    if (state.hold.asrErr) { throw new Error('未配置 Token Plan API Key'); }
+    return state.hold.text;
+  },
+  synthesize: async () => '/tmp/tts_test.mp3', playFile: async () => true, stopPlayback: () => {},
+};
+// #1516 按住说话取麦克风权限：页面测试不真授权，按 state.micGrant 给结果
+export const AiVoiceKit = {
+  ensureMicPermission: async () => state.micGrant,
 };
 export const SpeakService = {
   speak: async (text) => { state.settings.speakCalls.push(text); return true; },
@@ -563,19 +576,21 @@ export async function setup() {
   const chat = () => {
     AiChatStore.instance().resetForTest();
     const page = new AiAssistantPage();
-    page.toast = () => {};
+    page.toast = (m) => { state.lastToast = m; };
     page.scrollToEnd = () => {};
     // #1508 acceptBookParams 直读路由参数：AppRouter shim 忽略 ui 实参，桩空对象即可
     page.getUIContext = () => ({});
     state.ready = true;
     state.cancel = null;
+    state.hold = { starts: 0, stops: 0, wav: '', text: '', asrErr: false, b64s: [] };
+    state.micGrant = true;
     page.aboutToAppear();
     return page;
   };
   // 重进页面（不重置 store，模拟真实路由返回）：手动装配即可
   const reappear = () => {
     const page = new AiAssistantPage();
-    page.toast = () => {};
+    page.toast = (m) => { state.lastToast = m; };
     page.scrollToEnd = () => {};
     page.getUIContext = () => ({});
     page.aboutToAppear();

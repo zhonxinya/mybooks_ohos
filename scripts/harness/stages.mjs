@@ -556,7 +556,7 @@ export function stagePage(name) {
         "import type { ChatActivity, ChatBubble } from './RealAiChatStore.ts';\n";
     }
     if (path === '../services/AiChatModel') {
-      return "import { groupActivities, shouldShowTimeDivider, formatDividerTime } from './AiChatModel.ts';\n" +
+      return "import { groupActivities, shouldShowTimeDivider, formatDividerTime, appendHeardText } from './AiChatModel.ts';\n" +
         "import type { ActivityGroup } from './AiChatModel.ts';\n";
     }
     if (path === '../services/AiSkills') {
@@ -571,7 +571,7 @@ export function stagePage(name) {
     for (const name of clause.split(',').map((part) => part.trim())) {
       if (['AiService', 'AiBookService', 'ShelfApi', 'TalebookService', 'pasteboard', 'AppRouter', 'AI_PROVIDERS',
         'CONTEXT_LENGTH_OPTIONS', 'fileIo as fs', 'photoAccessHelper', 'image', 'util', 'common',
-        'promptAction', 'SymbolGlyphModifier', 'QwenAudioService', 'SpeakService',
+        'promptAction', 'SymbolGlyphModifier', 'QwenAudioService', 'SpeakService', 'AiVoiceKit',
         'webview', 'BrowserRenderService'].includes(name)) {
         shims.add(name);
       }

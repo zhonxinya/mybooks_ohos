@@ -257,6 +257,15 @@ export function buildSessionMd(title: string, bubbles: ChatBubble[], now: number
   return `${parts.join('\n')}\n`;
 }
 
+/** 按住说话（#1516）把识别文本并入现有输入：两端去空白、空格相接；空识别保留原文。 */
+export function appendHeardText(current: string, heard: string): string {
+  const c: string = current.trim();
+  const h: string = heard.trim();
+  if (h.length === 0) { return c; }
+  if (c.length === 0) { return h; }
+  return `${c} ${h}`;
+}
+
 /** ask_user 反问卡片的待答状态：对话页渲染选项按钮，点选/跳过经 answerAsk 归还回路。 */
 export interface AskRequest {
   question: string;

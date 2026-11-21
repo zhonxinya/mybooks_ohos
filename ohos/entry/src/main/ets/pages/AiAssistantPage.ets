@@ -8,12 +8,13 @@ import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { ActivityTimeline, AskUserCard, ReasoningBlock, SessionsSheet, StreamBubble } from '../components/AiChatBlocks';
 import { AiChatStore, AskRequest, ChatActivity, ChatBubble, ChatSession } from '../services/AiChatStore';
-import { formatDividerTime, shouldShowTimeDivider } from '../services/AiChatModel';
+import { appendHeardText, formatDividerTime, shouldShowTimeDivider } from '../services/AiChatModel';
 import { AiConfig, AiMessage, AiService } from '../services/AiService';
 import { SpeakService } from '../services/SpeakService';
 import { AiPermissionMode, AiTools } from '../services/AiTools';
 import { RealtimeCallService, RealtimeCallCallbacks } from '../services/RealtimeCallService';
 import { AiVoiceKit, VOICE_SYSTEM_PROMPT, VOICE_TOOL_NOTE } from '../services/AiVoiceKit';
+import { QwenAudioService } from '../services/QwenAudioService';
 import { AppRouter } from '../utils/AppRouter';
 import { webview } from '@kit.ArkWeb';
 import { BrowserRenderService } from '../services/BrowserRenderService';
@@ -64,6 +65,10 @@ struct AiAssistantPage {
   @State voiceActive: boolean = false;
   @State voiceStatus: string = '';
   @State voiceMuted: boolean = false;
+  /** 按住说话（#1516）：录音中/识别中/入口可用（ASR 仅云端，语音档位须 Token Plan）。 */
+  @State holdRecording: boolean = false;
+  @State holdBusy: boolean = false;
+  @State holdTalkReady: boolean = false;
   /** 语音会话代际：挂断/重开后，旧 connect 异步链的失败回调凭序号作废。 */
   private voiceGen: number = 0;
   /** 会话状态机在全局单例里：退出页面不中断流式回复，后台照常完成并落盘。 */
@@ -189,6 +194,7 @@ struct AiAssistantPage {
     this.autoSpeak = AiService.loadAutoSpeak();
     this.ttsAvailable = AiService.loadSpeakEngine() === 'system' ||
       AiService.loadVoiceConfig().providerId === 'qwen-tokenplan';
+    this.holdTalkReady = AiService.loadVoiceConfig().providerId === 'qwen-tokenplan';
   }
 
   aboutToDisappear(): void {
@@ -196,6 +202,11 @@ struct AiAssistantPage {
     // 但语音会话必须随页结束：麦克风采集/播放不应在后台页继续。
     if (this.voiceActive) {
       this.endVoiceSession();
+    }
+    if (this.holdRecording) {
+      // 退页松开不了手指：直接弃录释放麦克风（与通话页挂断路径同款）
+      QwenAudioService.stopRecordingCleanup();
+      this.holdRecording = false;
     }
     this.store.detachView(this.viewToken);
     BrowserRenderService.detach();
@@ -386,6 +397,60 @@ struct AiAssistantPage {
     this.voiceStatus = '';
     this.voiceMuted = false;
     this.store.voiceSealStreaming();
+  }
+
+  /** 按住说话·按下（#1516）：授权通过才开录；失败不进录音态（松手会被 guard 吞掉）。 */
+  private async holdStart(): Promise<void> {
+    if (this.holdRecording || this.holdBusy || this.thinking) {
+      return;
+    }
+    if (!(await AiVoiceKit.ensureMicPermission(this.getUIContext()))) {
+      this.toast('请在系统设置中允许麦克风权限后重试');
+      return;
+    }
+    try {
+      await QwenAudioService.startRecording();
+      this.holdRecording = true;
+    } catch (_error) {
+      this.toast('无法开始录音，请检查麦克风占用');
+    }
+  }
+
+  /** 按住说话·松手：wav→ASR→并入输入框（不自动发送，用户可先校对）。 */
+  private async holdFinish(): Promise<void> {
+    if (!this.holdRecording) {
+      return;
+    }
+    this.holdRecording = false;
+    this.holdBusy = true;
+    try {
+      const wav: string = await QwenAudioService.stopRecording();
+      if (wav.length === 0) {
+        this.toast('没听到声音，请再试一次');
+        return;
+      }
+      const heard: string = await QwenAudioService.transcribe(wav);
+      if (heard.length === 0) {
+        this.toast('没有识别到内容');
+        return;
+      }
+      this.input = appendHeardText(this.input, heard);
+    } catch (_error) {
+      this.toast('语音识别失败，稍后重试');
+    } finally {
+      this.holdBusy = false;
+    }
+  }
+
+  /** 输入框占位：按住说话的录音/识别态优先于生成中文案。 */
+  private holdPlaceholder(): string {
+    if (this.holdRecording) {
+      return '聆听中…松手转文字';
+    }
+    if (this.holdBusy) {
+      return '识别中…';
+    }
+    return this.thinking ? '生成中…' : '输入问题';
   }
 
   private toggleVoiceMute(): void {
@@ -1334,8 +1399,28 @@ struct AiAssistantPage {
             void this.pickImage();
           });
         }
+        // 按住说话（#1516）：44vp Stack 自建热区（Button+Circle 宽高失效坑），按下录音松手转文字
+        if (this.holdTalkReady && !this.voiceActive) {
+          Stack() {
+            SymbolGlyph($r('sys.symbol.mic'))
+              .fontSize(20)
+              .fontColor([this.holdRecording ? Color.White : $r('app.color.text_secondary')]);
+          }
+          .width(44)
+          .height(44)
+          .borderRadius(22)
+          .backgroundColor(this.holdRecording ? $r('app.color.brand_primary') :
+            $r('app.color.page_background'))
+          .onTouch((e: TouchEvent): void => {
+            if (e.type === TouchType.Down) {
+              void this.holdStart();
+            } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+              void this.holdFinish();
+            }
+          });
+        }
         // TextArea 随内容自动长高（#1510），44vp 单行起步、5 行封顶后内部滚动；键盘动作键=发送（板上实测语义）
-        TextArea({ placeholder: this.thinking ? '生成中…' : '输入问题', text: this.input })
+        TextArea({ placeholder: this.holdPlaceholder(), text: this.input })
           .layoutWeight(1)
           .constraintSize({ minHeight: 44, maxHeight: 132 })
           .borderRadius(22)
