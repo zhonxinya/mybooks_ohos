@@ -1,5 +1,6 @@
 import { PageScaffold, LoadingState, EmptyState, PrimaryButton } from '../components';
 import { TalebookApi, ApiMessageResult } from '../services/TalebookApi';
+import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 
@@ -44,7 +45,7 @@ struct AdminMemosPage {
     this.loadError = '';
     try {
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.getAdminMemos(1, 100);
+      const rsp = await TalebookApiAdmin.getAdminMemos(1, 100);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.loadError = rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err;
         return;
@@ -104,7 +105,7 @@ struct AdminMemosPage {
       return;
     }
     this.saving = true;
-    TalebookApi.resolveAdminMemo(this.replyMemoId, this.replyContent.trim())
+    TalebookApiAdmin.resolveAdminMemo(this.replyMemoId, this.replyContent.trim())
       .then((rsp: ApiMessageResult) => {
         this.saving = false;
         if (rsp.err === undefined || rsp.err === 'ok') {
@@ -128,7 +129,7 @@ struct AdminMemosPage {
       primaryButton: {
         value: '删除',
         action: () => {
-          TalebookApi.deleteAdminMemo(Number(memo['id'] ?? 0))
+          TalebookApiAdmin.deleteAdminMemo(Number(memo['id'] ?? 0))
             .then((rsp: ApiMessageResult) => {
               if (rsp.err === undefined || rsp.err === 'ok') {
                 this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '已删除');

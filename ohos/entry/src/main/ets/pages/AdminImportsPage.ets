@@ -1,6 +1,7 @@
 import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem,
   PrimaryButton, SecondaryButton, LazyDataSource } from '../components';
 import { TalebookApi, ApiMessageResult, ImportStatusResponse } from '../services/TalebookApi';
+import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationHelper } from '../utils/PaginationHelper';
@@ -131,7 +132,7 @@ struct AdminImportsPage {
       return;
     }
     try {
-      const rsp: ImportStatusResponse = await TalebookApi.getImportStatus();
+      const rsp: ImportStatusResponse = await TalebookApiAdmin.getImportStatus();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.statusDetail = rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : String(rsp.err);
       } else {
@@ -182,7 +183,7 @@ struct AdminImportsPage {
     const page = this.currentPage;
     try {
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.getAdminImportList(page, IMPORT_PAGE_SIZE,
+      const rsp = await TalebookApiAdmin.getAdminImportList(page, IMPORT_PAGE_SIZE,
         this.filterKey(this.selectedFilter));
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
@@ -247,7 +248,7 @@ struct AdminImportsPage {
       return;
     }
     this.working = true;
-    TalebookApi.runAdminImport('"all"', false)
+    TalebookApiAdmin.runAdminImport('"all"', false)
       .then((rsp: ApiMessageResult) => {
         this.working = false;
         this.handleResult(rsp, '已开始扫描并导入');
@@ -267,7 +268,7 @@ struct AdminImportsPage {
       return;
     }
     this.working = true;
-    TalebookApi.cancelAdminImport()
+    TalebookApiAdmin.cancelAdminImport()
       .then((rsp: ApiMessageResult) => {
         this.working = false;
         this.handleResult(rsp, '正在取消任务');
@@ -288,7 +289,7 @@ struct AdminImportsPage {
     }
     const path = JSON.stringify(String(item['path'] ?? ''));
     this.working = true;
-    TalebookApi.runAdminImport(`[${path}]`, true)
+    TalebookApiAdmin.runAdminImport(`[${path}]`, true)
       .then((rsp: ApiMessageResult) => {
         this.working = false;
         this.handleResult(rsp, '已开始导入');
@@ -315,7 +316,7 @@ struct AdminImportsPage {
             return;
           }
           this.working = true;
-          TalebookApi.deleteAdminImportRecords(JSON.stringify([hash]))
+          TalebookApiAdmin.deleteAdminImportRecords(JSON.stringify([hash]))
             .then((rsp: ApiMessageResult) => {
               this.working = false;
               this.handleResult(rsp, '记录已删除');

@@ -8,6 +8,7 @@ import {
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { BookUploadService } from '../services/BookUploadService';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 
 @Entry
 @Component
@@ -144,7 +145,7 @@ struct MinifyPdfToolPage {
         this.toast('未选择 PDF');
         return;
       }
-      const rsp: ToolboxDataResponse = await TalebookApi.minifyPdfUpload(picked.localPath, picked.name);
+      const rsp: ToolboxDataResponse = await TalebookApiToolbox.minifyPdfUpload(picked.localPath, picked.name);
       BookUploadService.removeStagedFile(picked.localPath);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '上传失败', true);
@@ -191,7 +192,7 @@ struct MinifyPdfToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ApiMessageResult = await TalebookApi.minifyPdfProcess(
+      const rsp: ApiMessageResult = await TalebookApiToolbox.minifyPdfProcess(
         this.uploadedFilename, this.buildParams());
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '启动压缩失败', true);
@@ -214,7 +215,7 @@ struct MinifyPdfToolPage {
     }
     try {
       const rsp: ToolboxTaskProgressResponse =
-        await TalebookApi.minifyPdfProgress(this.uploadedFilename);
+        await TalebookApiToolbox.minifyPdfProgress(this.uploadedFilename);
       const data = rsp.data;
       const status = data !== undefined ? String(data['status'] ?? '') : '';
       const percentRaw = data !== undefined ? data['percent'] : undefined;
@@ -243,11 +244,11 @@ struct MinifyPdfToolPage {
 
       if (fromPoll && this.processing) {
         this.setMsg(this.progressHint.length > 0 ? this.progressHint : '压缩已结束', false);
-        this.downloadPath = TalebookApi.minifyPdfDownloadPath(this.uploadedFilename);
+        this.downloadPath = TalebookApiToolbox.minifyPdfDownloadPath(this.uploadedFilename);
       }
       // 完成时也给出下载路径
       if (status === 'done' || status === 'finished' || status === 'success' || percent >= 100) {
-        this.downloadPath = TalebookApi.minifyPdfDownloadPath(this.uploadedFilename);
+        this.downloadPath = TalebookApiToolbox.minifyPdfDownloadPath(this.uploadedFilename);
       }
       this.processing = false;
       this.stopPoll();

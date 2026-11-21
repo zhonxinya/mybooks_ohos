@@ -5,6 +5,7 @@ import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AudioFileInfo, AudioInfoResponse } from '../common/ApiTypes';
 import { TalebookApi } from './TalebookApi';
+import { TalebookApiBooks } from './TalebookApiBooks';
 import { TalebookService } from './TalebookService';
 import { CoverCache } from '../utils/CoverCache';
 import { AudioPlatformOhos } from './AudioPlatformOhos';
@@ -240,7 +241,7 @@ export class AudioPlaybackService {
         this.state.errorMessage = '请先配置 Talebook 服务器';
         return;
       }
-      const rsp: AudioInfoResponse = await TalebookApi.getAudioList(bookId);
+      const rsp: AudioInfoResponse = await TalebookApiBooks.getAudioList(bookId);
       const err = rsp.err ?? rsp.status ?? '';
       if (err.length > 0 && err !== 'ok' && err !== 'ready' && err !== 'available') {
         this.state.errorMessage = rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '暂无音频文件';

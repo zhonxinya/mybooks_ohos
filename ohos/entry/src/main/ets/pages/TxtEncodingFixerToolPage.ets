@@ -6,6 +6,7 @@ import {
   ToolboxDataResponse, ToolboxTaskProgressResponse
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 
 @Entry
 @Component
@@ -84,7 +85,7 @@ struct TxtEncodingFixerToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ToolboxDataResponse = await TalebookApi.txtEncodingFixerAnalyze(bookId);
+      const rsp: ToolboxDataResponse = await TalebookApiToolbox.txtEncodingFixerAnalyze(bookId);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '分析失败', true);
         this.analyzeHint = '';
@@ -139,7 +140,7 @@ struct TxtEncodingFixerToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ApiMessageResult = await TalebookApi.txtEncodingFixerFix(bookId);
+      const rsp: ApiMessageResult = await TalebookApiToolbox.txtEncodingFixerFix(bookId);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '启动修复失败', true);
         return;
@@ -157,7 +158,7 @@ struct TxtEncodingFixerToolPage {
 
   private async refreshProgress(fromPoll: boolean): Promise<void> {
     try {
-      const rsp: ToolboxTaskProgressResponse = await TalebookApi.txtEncodingFixerProgress();
+      const rsp: ToolboxTaskProgressResponse = await TalebookApiToolbox.txtEncodingFixerProgress();
       const data = rsp.data;
       const status = data !== undefined ? String(data['status'] ?? '') : '';
       const percentRaw = data !== undefined ? (data['percent'] ?? data['progress']) : undefined;

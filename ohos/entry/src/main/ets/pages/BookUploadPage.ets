@@ -8,6 +8,8 @@ import { TalebookApi, UploadBookResponse, UploadBatchStartResponse, UploadBatchS
   BatchUploadFile, AddIsbnResult, apiErrorMessage } from '../services/TalebookApi';
 import { BookUploadService, PickedBookFile } from '../services/BookUploadService';
 import { AppRouter } from '../utils/AppRouter';
+import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 
 interface UploadItem {
   id: number;
@@ -164,7 +166,7 @@ struct BookUploadPage {
       }
       localPath = picked.localPath;
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.recognizeBarcode(picked.localPath, picked.name);
+      const rsp = await TalebookApiAdmin.recognizeBarcode(picked.localPath, picked.name);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.isbnError = rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '未识别到条码';
         return;
@@ -698,7 +700,7 @@ struct BookUploadPage {
       // 多个文件时显示队列位置（上传中… 2/5），让用户知道还剩几个
       this.patchItem(item.id, ITEM_UPLOADING, '', 0, queue.length > 1 ? `${i + 1}/${queue.length}` : '');
       try {
-        const rsp: UploadBookResponse = await TalebookApi.uploadBookFile(item.localPath, item.name);
+        const rsp: UploadBookResponse = await TalebookApiBooks.uploadBookFile(item.localPath, item.name);
         if (rsp.err === 'ok' || rsp.err === 'samebook') {
           // samebook：服务端已有同名同格式的书，属于「已上传」而不是失败
           this.patchItem(item.id, ITEM_SUCCESS, rsp.err === 'samebook' ? '已存在该格式' : '',

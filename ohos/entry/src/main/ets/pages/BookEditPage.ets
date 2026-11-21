@@ -1,6 +1,7 @@
 import { PageScaffold, PrimaryButton, LoadingState, ChipButton } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, MetaNameCount } from '../services/TalebookApi';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { AppRouter } from '../utils/AppRouter';
 
@@ -84,7 +85,7 @@ struct BookEditPage {
       this.showAuthorHints = false;
       return;
     }
-    TalebookApi.searchAuthors(query)
+    TalebookApiBooks.searchAuthors(query)
       .then((hints: MetaNameCount[]) => {
         this.authorHints = hints.slice(0, 8);
         this.showAuthorHints = this.authorHints.length > 0;

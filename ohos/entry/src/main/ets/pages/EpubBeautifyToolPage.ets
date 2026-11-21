@@ -9,6 +9,7 @@ import {
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { BookUploadService } from '../services/BookUploadService';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 
 const TAB_RUN: number = 0;
 const TAB_BG: number = 1;
@@ -162,7 +163,7 @@ struct EpubBeautifyToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ToolboxDataResponse = await TalebookApi.epubBeautifyPreview(ids[0]);
+      const rsp: ToolboxDataResponse = await TalebookApiToolbox.epubBeautifyPreview(ids[0]);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '预览失败', true);
         return;
@@ -207,7 +208,7 @@ struct EpubBeautifyToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ApiMessageResult = await TalebookApi.epubBeautifyRun(ids, this.buildOptions());
+      const rsp: ApiMessageResult = await TalebookApiToolbox.epubBeautifyRun(ids, this.buildOptions());
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '启动失败', true);
         return;
@@ -225,7 +226,7 @@ struct EpubBeautifyToolPage {
 
   private async refreshProgress(fromPoll: boolean): Promise<void> {
     try {
-      const rsp: ToolboxTaskProgressResponse = await TalebookApi.epubBeautifyProgress();
+      const rsp: ToolboxTaskProgressResponse = await TalebookApiToolbox.epubBeautifyProgress();
       const data = rsp.data;
       const status = data !== undefined ? String(data['status'] ?? '') : '';
       const percentRaw = data !== undefined ? data['percent'] : undefined;
@@ -266,7 +267,7 @@ struct EpubBeautifyToolPage {
 
   private async loadBgMeta(): Promise<void> {
     try {
-      const rsp: ToolboxDataResponse = await TalebookApi.epubBeautifyBgMeta();
+      const rsp: ToolboxDataResponse = await TalebookApiToolbox.epubBeautifyBgMeta();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.bgMetaHint = apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '无背景图';
         this.bgHas = false;
@@ -303,7 +304,7 @@ struct EpubBeautifyToolPage {
         this.toast('未选择图片');
         return;
       }
-      const rsp: ToolboxDataResponse = await TalebookApi.epubBeautifyBgUpload(picked.localPath, picked.name);
+      const rsp: ToolboxDataResponse = await TalebookApiToolbox.epubBeautifyBgUpload(picked.localPath, picked.name);
       BookUploadService.removeStagedFile(picked.localPath);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '上传失败');
@@ -330,7 +331,7 @@ struct EpubBeautifyToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ToolboxDataResponse = await TalebookApi.epubBeautifyBgUploadBuiltin(id);
+      const rsp: ToolboxDataResponse = await TalebookApiToolbox.epubBeautifyBgUploadBuiltin(id);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '应用内置背景失败');
         return;
@@ -351,7 +352,7 @@ struct EpubBeautifyToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ApiMessageResult = await TalebookApi.epubBeautifyBgDelete();
+      const rsp: ApiMessageResult = await TalebookApiToolbox.epubBeautifyBgDelete();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '删除失败');
         return;
@@ -591,7 +592,7 @@ struct EpubBeautifyToolPage {
           .fontSize(13)
           .fontColor($r('app.color.text_secondary'))
           .width('100%');
-        Text(`原始路径：${TalebookApi.epubBeautifyBgRawPath()}`)
+        Text(`原始路径：${TalebookApiToolbox.epubBeautifyBgRawPath()}`)
           .fontSize(11)
           .fontColor($r('app.color.text_tertiary'))
           .width('100%');

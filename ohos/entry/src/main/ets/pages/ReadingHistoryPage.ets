@@ -6,6 +6,7 @@ import { DownloadRecord, ReadingHistoryItem, TalebookService } from '../services
 import { ReaderLauncher, ReaderOpenParams } from '../services/ReaderLauncher';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { TalebookApi } from '../services/TalebookApi';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { BookItem as ApiBookItem } from '../services/BookModels';
 import { ReadingStatsSummary } from '../models/HomeModels';
 import { DateFormat } from '../utils/DateFormat';
@@ -200,8 +201,8 @@ struct ReadingHistoryPage {
     this.onlineError = '';
     try {
       await TalebookService.ensureAuthenticated();
-      const historyPromise = TalebookApi.getOnlineReadingHistory();
-      const statsPromise = TalebookApi.getReadingStats();
+      const historyPromise = TalebookApiBooks.getOnlineReadingHistory();
+      const statsPromise = TalebookApiBooks.getReadingStats();
       const history = await historyPromise;
       const stats = await statsPromise;
       this.onlineBooks = history.map((item: ApiBookItem): OnlineBook => ({
@@ -228,7 +229,7 @@ struct ReadingHistoryPage {
       primaryButton: {
         value: '清空',
         action: () => {
-          TalebookApi.clearOnlineReadingHistory()
+          TalebookApiBooks.clearOnlineReadingHistory()
             .then((rsp) => {
               if (rsp.err === undefined || rsp.err === 'ok') {
                 this.getUIContext().getPromptAction().showToast({ message: '已清空' });

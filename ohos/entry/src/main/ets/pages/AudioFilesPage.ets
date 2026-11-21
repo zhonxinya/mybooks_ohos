@@ -13,6 +13,7 @@ import {
 import { TalebookService } from '../services/TalebookService';
 import { AudioPlaybackService } from '../services/AudioPlaybackService';
 import { AppRouter } from '../utils/AppRouter';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 
 interface VoiceOption {
   voiceName: string;
@@ -129,7 +130,7 @@ struct AudioFilesPage {
 
   private async loadFiles(): Promise<void> {
     try {
-      const rsp: AudioInfoResponse = await TalebookApi.getAudioList(this.bookId);
+      const rsp: AudioInfoResponse = await TalebookApiBooks.getAudioList(this.bookId);
       const err = rsp.err ?? rsp.status ?? '';
       if (err.length > 0 && err !== 'ok' && err !== 'ready' && err !== 'available') {
         // audio.not_found / unavailable：列表为空但可发起转换
@@ -165,7 +166,7 @@ struct AudioFilesPage {
       return;
     }
     try {
-      const rsp: AudioConversionResponse = await TalebookApi.getAudioConversionStatus(this.bookId);
+      const rsp: AudioConversionResponse = await TalebookApiBooks.getAudioConversionStatus(this.bookId);
       const progress = rsp.data;
       const status = progress !== undefined && progress.status !== undefined ? progress.status : '';
       const percent = progress !== undefined && progress.percent !== undefined ? progress.percent : -1;
@@ -251,7 +252,7 @@ struct AudioFilesPage {
     this.conversionError = '';
     this.busy = true;
     try {
-      const rsp: AudioConversionResponse = await TalebookApi.startAudioConversion(this.bookId, voice, language);
+      const rsp: AudioConversionResponse = await TalebookApiBooks.startAudioConversion(this.bookId, voice, language);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         const errMsg = apiErrorMessage(rsp as ApiMessageResult);
         this.toast(errMsg.length > 0 ? errMsg : '启动转换失败');
@@ -275,7 +276,7 @@ struct AudioFilesPage {
     }
     this.busy = true;
     try {
-      const rsp: ApiMessageResult = await TalebookApi.cancelAudioConversion(this.bookId);
+      const rsp: ApiMessageResult = await TalebookApiBooks.cancelAudioConversion(this.bookId);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '取消失败');
         return;
@@ -297,7 +298,7 @@ struct AudioFilesPage {
     }
     this.busy = true;
     try {
-      const rsp: AudioPurchaseResponse = await TalebookApi.purchaseAudio(this.bookId);
+      const rsp: AudioPurchaseResponse = await TalebookApiBooks.purchaseAudio(this.bookId);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         const errMsg = apiErrorMessage(rsp as ApiMessageResult);
         this.toast(errMsg.length > 0 ? errMsg : '购买失败');
@@ -321,7 +322,7 @@ struct AudioFilesPage {
     }
     this.busy = true;
     try {
-      const rsp: AudioCollectionResponse = await TalebookApi.createAudioCollectionDownload(this.bookId);
+      const rsp: AudioCollectionResponse = await TalebookApiBooks.createAudioCollectionDownload(this.bookId);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         const errMsg = apiErrorMessage(rsp as ApiMessageResult);
         this.toast(errMsg.length > 0 ? errMsg : '打包失败');
@@ -370,7 +371,7 @@ struct AudioFilesPage {
     }
     this.busy = true;
     try {
-      const rsp: ApiMessageResult = await TalebookApi.deleteAudio(this.bookId);
+      const rsp: ApiMessageResult = await TalebookApiBooks.deleteAudio(this.bookId);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '删除失败');
         return;

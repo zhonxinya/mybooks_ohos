@@ -4,6 +4,7 @@ import {
 } from '../components';
 import { ApiEnvelope, TalebookService } from '../services/TalebookService';
 import { TalebookApi } from '../services/TalebookApi';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { BookItem as ApiBookItem } from '../services/BookModels';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
@@ -94,11 +95,11 @@ struct ReadingBooksPage {
           await TalebookService.getFavoritesAsync(page, PaginationConstants.PAGE_SIZE);
         fetched = this.parseEnvelopeBooks(envelope);
       } else if (this.activeTab === 2) {
-        fetched = this.mapApiBooks(await TalebookApi.getWantsBooks(page, PaginationConstants.PAGE_SIZE));
+        fetched = this.mapApiBooks(await TalebookApiBooks.getWantsBooks(page, PaginationConstants.PAGE_SIZE));
       } else if (this.activeTab === 3) {
-        fetched = this.mapApiBooks(await TalebookApi.getReadDoneBooks(page, PaginationConstants.PAGE_SIZE));
+        fetched = this.mapApiBooks(await TalebookApiBooks.getReadDoneBooks(page, PaginationConstants.PAGE_SIZE));
       } else {
-        fetched = this.mapApiBooks(await TalebookApi.getScopedBooks(page, PaginationConstants.PAGE_SIZE));
+        fetched = this.mapApiBooks(await TalebookApiBooks.getScopedBooks(page, PaginationConstants.PAGE_SIZE));
       }
       if (reset) {
         this.books = fetched;
@@ -242,7 +243,7 @@ struct ReadingBooksPage {
     this.removing = true;
     try {
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.batchRemoveState(this.selectedIds, action);
+      const rsp = await TalebookApiBooks.batchRemoveState(this.selectedIds, action);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.getUIContext().getPromptAction().showToast({
           message: rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err,

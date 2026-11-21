@@ -1,5 +1,6 @@
 import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem, LazyDataSource } from '../components';
 import { TalebookApi, ApiMessageResult } from '../services/TalebookApi';
+import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationHelper } from '../utils/PaginationHelper';
@@ -102,7 +103,7 @@ struct AdminBookReviewsPage {
     const page = this.currentPage;
     try {
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.getAdminReviews(this.statusKey(this.selectedStatus), page,
+      const rsp = await TalebookApiAdmin.getAdminReviews(this.statusKey(this.selectedStatus), page,
         REVIEW_PAGE_SIZE);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
@@ -144,7 +145,7 @@ struct AdminBookReviewsPage {
     if (!this.supported) {
       return;
     }
-    TalebookApi.moderateAdminReview(Number(review['id'] ?? 0), action)
+    TalebookApiAdmin.moderateAdminReview(Number(review['id'] ?? 0), action)
       .then((rsp: ApiMessageResult) => {
         if (rsp.err === undefined || rsp.err === 'ok') {
           this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '操作成功');

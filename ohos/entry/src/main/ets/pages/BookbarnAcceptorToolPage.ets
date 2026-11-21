@@ -5,6 +5,7 @@ import {
   TalebookApi, apiErrorMessage, ToolboxDataResponse, BookBarnApplyTokenResponse
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 
 @Entry
 @Component
@@ -71,7 +72,7 @@ struct BookbarnAcceptorToolPage {
 
   private async loadStatus(): Promise<void> {
     try {
-      const rsp: ToolboxDataResponse = await TalebookApi.bookbarnAcceptorStatus();
+      const rsp: ToolboxDataResponse = await TalebookApiToolbox.bookbarnAcceptorStatus();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '获取状态失败', true);
         return;
@@ -89,7 +90,7 @@ struct BookbarnAcceptorToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ToolboxDataResponse = await TalebookApi.bookbarnAcceptorToggle(enabled);
+      const rsp: ToolboxDataResponse = await TalebookApiToolbox.bookbarnAcceptorToggle(enabled);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '切换失败', true);
         // 回滚开关显示
@@ -118,7 +119,7 @@ struct BookbarnAcceptorToolPage {
     }
     this.busy = true;
     try {
-      const rsp: BookBarnApplyTokenResponse = await TalebookApi.bookbarnAcceptorApplyToken();
+      const rsp: BookBarnApplyTokenResponse = await TalebookApiToolbox.bookbarnAcceptorApplyToken();
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '申请 Token 失败', true);
         return;
@@ -147,7 +148,7 @@ struct BookbarnAcceptorToolPage {
     }
     this.busy = true;
     try {
-      const rsp: ToolboxDataResponse = await TalebookApi.bookbarnAcceptorSetCollectionHour(hour);
+      const rsp: ToolboxDataResponse = await TalebookApiToolbox.bookbarnAcceptorSetCollectionHour(hour);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '设置失败', true);
         return;

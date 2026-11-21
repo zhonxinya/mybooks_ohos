@@ -4,6 +4,7 @@ import {
 } from '../components';
 import { ApiEnvelope, TalebookService } from '../services/TalebookService';
 import { TalebookApi } from '../services/TalebookApi';
+import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
 import { mapTalebookBook } from '../utils/BookMapper';
@@ -53,7 +54,7 @@ struct MyBooksPage {
 
       let fetched: Record<string, Object>[] = [];
       if (this.isAdmin) {
-        const rsp = await TalebookApi.getAdminBookList(page, PaginationConstants.PAGE_SIZE);
+        const rsp = await TalebookApiAdmin.getAdminBookList(page, PaginationConstants.PAGE_SIZE);
         if (rsp.err === undefined || rsp.err === 'ok') {
           fetched = rsp.items ?? [];
         }

@@ -1,6 +1,7 @@
 import { PageScaffold, LoadingState, EmptyState, FilterChips, FilterChipItem,
   SecondaryButton } from '../components';
 import { TalebookApi, ApiMessageResult, ToolboxStoreIndexResponse } from '../services/TalebookApi';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { AppRouter } from '../utils/AppRouter';
@@ -55,7 +56,7 @@ struct AdminToolboxPage {
     try {
       await TalebookService.ensureAuthenticated();
       // 管理页需要看到已禁用工具
-      const rsp = await TalebookApi.getAdminToolList(true);
+      const rsp = await TalebookApiToolbox.getAdminToolList(true);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.loadError = rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err;
         return;
@@ -78,7 +79,7 @@ struct AdminToolboxPage {
     this.storeHint = '';
     try {
       await TalebookService.ensureAuthenticated();
-      const rsp: ToolboxStoreIndexResponse = await TalebookApi.getToolboxStoreIndex(forceRefresh);
+      const rsp: ToolboxStoreIndexResponse = await TalebookApiToolbox.getToolboxStoreIndex(forceRefresh);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.loadError = rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err;
         return;
@@ -115,7 +116,7 @@ struct AdminToolboxPage {
       return;
     }
     this.workingId = toolId;
-    const req = enable ? TalebookApi.enableToolboxTool(toolId) : TalebookApi.disableToolboxTool(toolId);
+    const req = enable ? TalebookApiToolbox.enableToolboxTool(toolId) : TalebookApiToolbox.disableToolboxTool(toolId);
     req.then((rsp: ApiMessageResult) => {
       this.workingId = '';
       if (this.handleResult(rsp, enable ? '已启用' : '已禁用')) {
@@ -143,7 +144,7 @@ struct AdminToolboxPage {
         value: '卸载',
         action: () => {
           this.workingId = toolId;
-          TalebookApi.uninstallToolboxTool(toolId)
+          TalebookApiToolbox.uninstallToolboxTool(toolId)
             .then((rsp: ApiMessageResult) => {
               this.workingId = '';
               if (this.handleResult(rsp, '已卸载')) {
@@ -170,7 +171,7 @@ struct AdminToolboxPage {
     }
     const installed = Boolean(tool['installed']);
     this.workingId = toolId;
-    TalebookApi.installToolboxStoreTool(toolId)
+    TalebookApiToolbox.installToolboxStoreTool(toolId)
       .then((rsp: ApiMessageResult) => {
         this.workingId = '';
         if (this.handleResult(rsp, installed ? '已更新' : '已安装')) {

@@ -5,6 +5,8 @@ import {
   SecondaryButton, LazyDataSource,
 } from '../components';
 import { TalebookApi, AdminBookListResponse, ApiMessageResult, CropCoverResult } from '../services/TalebookApi';
+import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { BookUploadService } from '../services/BookUploadService';
@@ -70,7 +72,7 @@ struct AdminBookListPage {
     const page = this.currentPage;
     try {
       await TalebookService.ensureAuthenticated();
-      const rsp = await TalebookApi.getAdminBookList(page, PaginationConstants.PAGE_SIZE, this.activeSearch);
+      const rsp = await TalebookApiAdmin.getAdminBookList(page, PaginationConstants.PAGE_SIZE, this.activeSearch);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
         if (reset) {
@@ -230,7 +232,7 @@ struct AdminBookListPage {
       primaryButton: {
         value: '删除',
         action: () => {
-          TalebookApi.deleteAdminBooks(this.selectedIds)
+          TalebookApiAdmin.deleteAdminBooks(this.selectedIds)
             .then((rsp: ApiMessageResult) => {
               this.handleOpResult(rsp, '已删除');
               this.exitSelection();
@@ -283,21 +285,21 @@ struct AdminBookListPage {
       if (action === 'delete') {
         this.confirmDeleteSelected();
       } else if (action === 'fill') {
-        TalebookApi.fillAdminBooks(ids)
+        TalebookApiAdmin.fillAdminBooks(ids)
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '已启动刷新元数据任务');
             this.exitSelection();
           })
           .catch((e: Object) => this.toast(`操作失败：${e}`));
       } else if (action === 'ai') {
-        TalebookApi.aiFillAdminBooks(ids)
+        TalebookApiAdmin.aiFillAdminBooks(ids)
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '已启动 AI 更新任务');
             this.exitSelection();
           })
           .catch((e: Object) => this.toast(`操作失败：${e}`));
       } else if (action === 'epub') {
-        TalebookApi.epubConvertAdminBooks(ids)
+        TalebookApiAdmin.epubConvertAdminBooks(ids)
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '已启动 EPUB 转换任务');
             this.exitSelection();
@@ -332,14 +334,14 @@ struct AdminBookListPage {
       ],
     }).then((result) => {
       if (result.index === 0) {
-        TalebookApi.saveAdminMetaToFiles(ids)
+        TalebookApiAdmin.saveAdminMetaToFiles(ids)
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '元数据已写入书籍文件');
             this.exitSelection();
           })
           .catch((e: Object) => this.toast(`操作失败：${e}`));
       } else if (result.index === 1) {
-        TalebookApi.updateAdminTitleSort(ids)
+        TalebookApiAdmin.updateAdminTitleSort(ids)
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '标题排序已更新');
             this.exitSelection();
@@ -351,7 +353,7 @@ struct AdminBookListPage {
           this.toast(`${ServerRegistry.profile().displayName} 服务端不支持批量裁剪封面`);
           return;
         }
-        TalebookApi.cropCovers(ids)
+        TalebookApiBooks.cropCovers(ids)
           .then((rsp: CropCoverResult) => {
             const data: Record<string, Object> = rsp.data ?? {};
             this.handleOpResult(rsp, `裁剪完成：成功 ${Number(data['updated'] ?? 0)} 本`);
@@ -397,33 +399,33 @@ struct AdminBookListPage {
     } as promptAction.ActionMenuOptions).then((result) => {
       const action: string = actions[result.index] ?? '';
       if (action === 'fill-all') {
-        TalebookApi.fillAdminBooks('all')
+        TalebookApiAdmin.fillAdminBooks('all')
           .then((rsp: ApiMessageResult) => this.handleOpResult(rsp, '已启动刷新元数据任务'))
           .catch((e: Object) => this.toast(`操作失败：${e}`));
       } else if (action === 'update-all-meta') {
-        TalebookApi.updateAllAdminMeta()
+        TalebookApiAdmin.updateAllAdminMeta()
           .then((rsp: ApiMessageResult) => this.handleOpResult(rsp, '已启动更新全部元数据任务'))
           .catch((e: Object) => this.toast(`操作失败：${e}`));
       } else if (action === 'update-title-sort') {
-        TalebookApi.updateAdminTitleSort()
+        TalebookApiAdmin.updateAdminTitleSort()
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '标题排序已更新');
             void this.loadBooks(true);
           })
           .catch((e: Object) => this.toast(`操作失败：${e}`));
       } else if (action === 'update-dynamic-cover') {
-        TalebookApi.updateAdminDynamicCover('all')
+        TalebookApiAdmin.updateAdminDynamicCover('all')
           .then((rsp: ApiMessageResult) => this.handleOpResult(rsp, '已启动动态封面更新任务'))
           .catch((e: Object) => this.toast(`操作失败：${e}`));
       } else if (action === 'reset-cover') {
-        TalebookApi.resetAdminCover('all')
+        TalebookApiAdmin.resetAdminCover('all')
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '封面已重置');
             void this.loadBooks(true);
           })
           .catch((e: Object) => this.toast(`操作失败：${e}`));
       } else if (action === 'clear-invalid') {
-        TalebookApi.clearAdminInvalidItems()
+        TalebookApiAdmin.clearAdminInvalidItems()
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '已清理无效条目');
             void this.loadBooks(true);

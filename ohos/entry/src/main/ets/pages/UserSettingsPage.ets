@@ -10,6 +10,7 @@ import {
   TalebookApi, AvatarUploadResponse, UserUpdatePayload, VipInfoResponse,
 } from '../services/TalebookApi';
 import { BookUploadService } from '../services/BookUploadService';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 
 @Entry
 @Component
@@ -144,7 +145,7 @@ struct UserSettingsPage {
     }
     this.saving = true;
     try {
-      const rsp = await TalebookApi.updateUserSettings(payload);
+      const rsp = await TalebookApiBooks.updateUserSettings(payload);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
         return;
@@ -179,7 +180,7 @@ struct UserSettingsPage {
         return;
       }
       this.toast('正在上传头像…');
-      const rsp: AvatarUploadResponse = await TalebookApi.uploadAvatar(file.localPath, file.name);
+      const rsp: AvatarUploadResponse = await TalebookApiBooks.uploadAvatar(file.localPath, file.name);
       BookUploadService.removeStagedFile(file.localPath);
       if (rsp.err === 'ok') {
         this.toast('头像已更新');

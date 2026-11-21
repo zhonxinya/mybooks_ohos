@@ -4,6 +4,7 @@ import {
 } from '../components';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApi, ApiMessageResult } from '../services/TalebookApi';
+import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { ExpectedItemModel } from '../models/UserModels';
 
@@ -57,7 +58,7 @@ struct ExpectedBooksPage {
         return;
       }
       await TalebookService.ensureAuthenticated();
-      this.items = await TalebookApi.getExpectedItems();
+      this.items = await TalebookApiBooks.getExpectedItems();
     } catch (error) {
       this.loadError = `加载失败：${error}`;
     } finally {
@@ -79,7 +80,7 @@ struct ExpectedBooksPage {
     }
     this.submitting = true;
     try {
-      const rsp = await TalebookApi.createExpectedItem(title, this.newAuthor.trim(),
+      const rsp = await TalebookApiBooks.createExpectedItem(title, this.newAuthor.trim(),
         this.newPublisher.trim());
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
@@ -105,7 +106,7 @@ struct ExpectedBooksPage {
       primaryButton: {
         value: '删除',
         action: () => {
-          TalebookApi.deleteExpectedItem(item.id)
+          TalebookApiBooks.deleteExpectedItem(item.id)
             .then((rsp: ApiMessageResult) => {
               if (rsp.err === undefined || rsp.err === 'ok') {
                 this.toast('已删除');

@@ -5,6 +5,7 @@ import {
   TalebookApi, ApiMessageResult, apiErrorMessage, ToolboxTaskProgressResponse
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
+import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 
 @Entry
 @Component
@@ -90,7 +91,7 @@ struct ChineseConverterToolPage {
     const mode = this.mode.trim().length > 0 ? this.mode.trim() : 'book';
     this.busy = true;
     try {
-      const rsp: ApiMessageResult = await TalebookApi.chineseConverterConvert(
+      const rsp: ApiMessageResult = await TalebookApiToolbox.chineseConverterConvert(
         bookId, direction, mode, this.convertTitle, this.useA5, this.backup);
       if (rsp.err !== undefined && rsp.err !== 'ok') {
         this.setMsg(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '启动转换失败', true);
@@ -109,7 +110,7 @@ struct ChineseConverterToolPage {
 
   private async refreshProgress(fromPoll: boolean): Promise<void> {
     try {
-      const rsp: ToolboxTaskProgressResponse = await TalebookApi.chineseConverterProgress();
+      const rsp: ToolboxTaskProgressResponse = await TalebookApiToolbox.chineseConverterProgress();
       const data = rsp.data;
       const status = data !== undefined ? String(data['status'] ?? '') : '';
       const percentRaw = data !== undefined ? data['percent'] : undefined;
