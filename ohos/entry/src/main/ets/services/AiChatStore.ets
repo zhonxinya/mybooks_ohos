@@ -147,6 +147,8 @@ export class AiChatStore {
   /** 流式增量通知合并定时器（null=无在途；句柄类型不锁定，Node 计时器句柄同样适用 null 判定）。 */
   private deltaTimer: number | null = null;
   private static readonly DELTA_THROTTLE_MS: number = 80;
+  /** 「讨论本书」上下文（#1508）：阅读器跳转注入，落盘不含——属阅读场景态而非对话内容。 */
+  private bookContext: string = '';
 
   /** 会话 id：毫秒+进程内递增，杜绝同毫秒新建/切换撞 id。 */
   private nextId(): string {
@@ -368,6 +370,11 @@ export class AiChatStore {
       }
     }
     const context: AiMessage[] = [{ role: 'system', content: systemText }];
+    // 讨论本书上下文（#1508）：紧跟主 system，让模型从第一轮就带着书说话
+    if (this.bookContext.length > 0) {
+      context.push({ role: 'system',
+        content: `用户正在阅读${this.bookContext}。回答优先结合这本书；话题与书无关时正常回答，不要生拉硬扯。` });
+    }
     const bubbles: ChatBubble[] = this.messages.filter((m: ChatBubble) =>
       !m.error && (m.content.length > 0 || (m.images ?? []).length > 0));
     const start: number = Math.max(0, bubbles.length - AiService.contextRounds(this.contextK) * 2);
@@ -880,6 +887,24 @@ export class AiChatStore {
     this.notify();
   }
 
+  /**
+   * 设置「讨论本书」上下文（#1508）：阅读器入口跳转时注入，切书再次调用即更新。
+   * 空书名视为清除；不 notify——渲染层横幅由页面自己的 @State 镜像驱动。
+   */
+  setBookContext(title: string, author: string, chapter: string): void {
+    if (title.length === 0) {
+      this.bookContext = '';
+      return;
+    }
+    const who: string = author.length > 0 ? `（${author}）` : '';
+    const where: string = chapter.length > 0 ? `，当前读到：${chapter}` : '';
+    this.bookContext = `《${title}》${who}${where}`;
+  }
+
+  clearBookContext(): void {
+    this.bookContext = '';
+  }
+
   /** 长按菜单删除单条消息（#1507）：流式气泡与越界拒绝，生成期允许删已固化历史。 */
   deleteBubble(index: number): void {
     if (index < 0 || index >= this.messages.length || this.messages[index].streaming) {
@@ -945,6 +970,8 @@ export class AiChatStore {
     this.currentId = this.nextId();
     this.summaries.clear();
     this.compressing = false;
+    this.bookContext = '';
+    this.streamViews.clear();
     TalebookService.prefSet(CHAT_HISTORY_KEY, '[]');
     TalebookService.prefSet(CHAT_SESSIONS_KEY, '[]');
     TalebookService.prefSet(CHAT_SUMMARIES_KEY, '[]');
