@@ -880,6 +880,32 @@ export class AiChatStore {
     this.notify();
   }
 
+  /** 长按菜单删除单条消息（#1507）：流式气泡与越界拒绝，生成期允许删已固化历史。 */
+  deleteBubble(index: number): void {
+    if (index < 0 || index >= this.messages.length || this.messages[index].streaming) {
+      return;
+    }
+    this.messages.splice(index, 1);
+    this.saveHistory();
+    this.notify();
+  }
+
+  /** 编辑重发（#1507）：抹掉该用户消息及其后全部并落盘，返回原文交页面回填输入框；不自动发送。 */
+  editResend(index: number): string {
+    if (this.thinking || index < 0 || index >= this.messages.length) {
+      return '';
+    }
+    const target = this.messages[index];
+    if (target.role !== 'user') {
+      return '';
+    }
+    const text: string = target.content;
+    this.messages.splice(index);
+    this.saveHistory();
+    this.notify();
+    return text;
+  }
+
   /** 重新生成：抹掉最后一条用户消息及其后全部，原样重发该问题（原位替换答案）。 */
   regenerate(): boolean {
     if (this.thinking) {

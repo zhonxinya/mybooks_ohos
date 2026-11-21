@@ -555,4 +555,41 @@ export function register(ctx) {
     assert.equal(page.followBottom, true, '新消息必回跟随最新');
   });
 
+  test('长按菜单：状态化选项 + 删除单条落盘 + 编辑重发截断回填', async () => {
+    const page = chat();
+    const store = AiChatStore.instance();
+    await page.send('第一个问题');
+    state.handlers.onDone('回答一');
+    // kinds：最新 assistant=复制/删除/重新生成；user=复制/编辑/删除
+    assert.deepEqual(page.bubbleMenuKinds(store.messages[1], 1), ['copy', 'delete', 'regen']);
+    assert.deepEqual(page.bubbleMenuKinds(store.messages[0], 0), ['copy', 'edit', 'delete']);
+    const voice = { role: 'assistant', content: '语音', streaming: false, error: false, activities: [], voice: true };
+    assert.ok(!page.bubbleMenuKinds(voice, 3).includes('regen'), '语音轮不走文字重生成');
+    const err = { role: 'assistant', content: '失败', streaming: false, error: true, activities: [] };
+    assert.deepEqual(page.bubbleMenuKinds(err, 1), ['copy', 'delete'], '错误气泡仅复制/删除');
+    assert.deepEqual(page.bubbleMenuKinds({ role: 'assistant', content: '', streaming: true, error: false, activities: [] }, 2), [],
+      '流式期不响应长按');
+    assert.equal(store.editResend(1), '', 'assistant 气泡不可编辑重发');
+    // 删除单条 + 持久化同步
+    store.deleteBubble(1);
+    assert.equal(store.messages.length, 1);
+    assert.equal(JSON.parse(state.prefs.get('ai_chat_history')).length, 1, '删除必须落盘');
+    store.deleteBubble(99);
+    assert.equal(store.messages.length, 1, '越界拒绝');
+    // 生成期守卫：流式气泡不可删、编辑重发拒绝
+    await page.send('第二个问题');
+    assert.equal(store.editResend(0), '', '生成中不得编辑重发');
+    store.deleteBubble(2);
+    assert.equal(store.messages.length, 3, '流式气泡不可删（copy/edit/delete+streaming 后长度 3）');
+    state.handlers.onDone('回答二');
+    // 编辑重发成功路径：截断该 user 及其后全部，返回原文；页面动作回填输入框
+    const userIdx = store.messages.findIndex((m) => m.role === 'user' && m.content === '第二个问题');
+    assert.ok(userIdx > 0);
+    page.input = '';
+    page.runMenuAction('edit', userIdx);
+    assert.equal(page.input, '第二个问题', '编辑重发回填输入框');
+    assert.equal(store.messages.length, userIdx, '该消息及之后全部抹掉');
+    assert.equal(JSON.parse(state.prefs.get('ai_chat_history')).length, userIdx, '截断落盘');
+  });
+
 }
