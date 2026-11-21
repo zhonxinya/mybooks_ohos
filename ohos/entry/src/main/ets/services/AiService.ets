@@ -11,6 +11,13 @@ import { TalebookService } from './TalebookService';
 import { AiTools, AiPermissionMode } from './AiTools';
 import { AiToolDefinition } from './AiToolsDefs';
 import { McpService } from './McpService';
+import { AiServiceConfig } from './AiServiceConfig';
+import { AiServiceHttp } from './AiServiceHttp';
+import { AiServiceGateway } from './AiServiceGateway';
+import { KEY_PROVIDER, KEY_BASE_URL, KEY_MODEL, KEY_AUTO_SPEAK, KEY_VOICE_PROVIDER, KEY_VOICE_MODEL, KEY_SPEAK_ENGINE, KEY_CALL_MODE, KEY_API_KEY, KEY_API_KEY_PREFIX, KEY_CUSTOM_PROVIDERS, KEY_TEMPERATURE, KEY_SESSION_ID, KEY_VISION, KEY_CONTEXT, KEY_PERMISSION, KEY_PROVIDER_MODELS_PREFIX, CONTEXT_LENGTH_OPTIONS, DEFAULT_CONTEXT_K, DEFAULT_TEMPERATURE, TIMEOUT_MS, MAX_TOOL_ROUNDS, MAX_GATEWAY_ATTEMPTS, MAX_TOOL_SLOTS } from './AiServiceConfig';
+import type { GatewayMessage, GatewayToolCall, GatewayReply, AskPayload } from './AiServiceGateway';
+import type { AiSessionHolder } from './AiServiceHttp';
+export { CONTEXT_LENGTH_OPTIONS } from './AiServiceConfig';
 
 /**
  * AI 能力统一走 **OpenAI 兼容 API 调用**（架构约束：不在应用内集成端侧小模型）；
@@ -41,26 +48,6 @@ export interface AiProviderPreset {
   /** 是否支持多模态（可发图片）。当前仅用于提示语，不影响请求体。 */
   vision: boolean;
 }
-
-export const AI_PROVIDERS: AiProviderPreset[] = [
-  { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', vision: true },
-  { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', vision: false },
-  { id: 'moonshot', name: 'Kimi (Moonshot)', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k', vision: false },
-  { id: 'zhipu', name: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash', vision: false },
-  { id: 'qwen', name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus', vision: false },
-  { id: 'siliconflow', name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', vision: false },
-  { id: 'ollama', name: 'Ollama (本地)', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b', vision: false },
-  // OpenCode Go 订阅专用网关（Console 按量走 opencode.ai/inference/openai/v1），
-  // Key 在 opencode.ai/console 创建；网关强制 x-opencode-session 请求头（见 gatewayConfiguration）
-  { id: 'opencode', name: 'OpenCode (Go)', baseUrl: 'https://opencode.ai/zen/go/v1', model: 'big-pickle',
-    vision: false },
-  // Token Plan 订阅网关：除文字模型外，音频三端点（ASR/TTS/realtime）见 docs/token-plan-audio-protocol-2026-11-20.md
-  { id: 'qwen-tokenplan', name: 'Token Plan (千问)', baseUrl: 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1',
-    model: 'qwen3.6-flash', vision: false },
-  { id: 'custom', name: '自定义', baseUrl: '', model: '', vision: false },
-];
-
-/** 一条对话消息（OpenAI 协议）。 */
 export interface AiMessage {
   role: string;
   content: string;
@@ -97,49 +84,6 @@ export interface AiConfig {
   /** 模型上下文窗口长度（K tokens），决定对话页携带历史轮数。 */
   contextLength: number;
 }
-
-const KEY_PROVIDER: string = 'ai_provider';
-const KEY_BASE_URL: string = 'ai_base_url';
-const KEY_MODEL: string = 'ai_model';
-/** 对话页：AI 回复完成后自动用 Token Plan TTS 朗读（默认关）。 */
-const KEY_AUTO_SPEAK: string = 'ai_auto_speak';
-/** 语音通话的对话模型：独立服务商/模型；provider 键为空 = 跟随全局配置。 */
-const KEY_VOICE_PROVIDER: string = 'ai_voice_provider';
-const KEY_VOICE_MODEL: string = 'ai_voice_model';
-/** AI 回复播报引擎：'system'（默认）/'cloud'（Token Plan TTS）。 */
-const KEY_SPEAK_ENGINE: string = 'ai_speak_engine';
-/** 语音通话模式：'realtime'（默认，WS 全双工）/'turn'（轮转）。 */
-const KEY_CALL_MODE: string = 'ai_call_mode';
-/** 旧版单 Key；首次读取时迁移到当前服务商后清空。 */
-const KEY_API_KEY: string = 'ai_api_key';
-const KEY_API_KEY_PREFIX: string = 'ai_api_key_';
-const KEY_CUSTOM_PROVIDERS: string = 'ai_custom_providers';
-const KEY_TEMPERATURE: string = 'ai_temperature';
-/** OpenCode 网关要求的稳定会话 id（首次使用时生成并持久化）。 */
-const KEY_SESSION_ID: string = 'ai_opencode_session';
-/** vision 手动覆盖：'on'/'off'；空串=按模型名自动检测。 */
-const KEY_VISION: string = 'ai_vision';
-const KEY_CONTEXT: string = 'ai_context_length';
-/** 权限模式：'readonly'/'confirm'/'auto'；未设置时按逐笔确认。 */
-const KEY_PERMISSION: string = 'ai_permission_mode';
-/** 本地常用模型清单（按服务商分开存）：`ai_provider_models_<id>` = JSON 字符串数组。 */
-const KEY_PROVIDER_MODELS_PREFIX: string = 'ai_provider_models_';
-
-/** 上下文长度档位（K tokens），设置页下拉与轮数映射共用。 */
-export const CONTEXT_LENGTH_OPTIONS: number[] = [4, 8, 32, 128, 200];
-const DEFAULT_CONTEXT_K: number = 8;
-
-const DEFAULT_TEMPERATURE: number = 0.7;
-const TIMEOUT_MS: number = 180000;
-/** 工具回路最多执行的 tool_calls 轮数；再多一轮不带 tools 逼模型收尾。
- *  上限按「长任务」定：批量场景如 4 本书×（搜+下载）=8 轮，12 轮留余量；
- *  同时兜住模型死循环烧 token。退出对话页不打断回路（后台完成落盘），分钟级任务可行。 */
-const MAX_TOOL_ROUNDS: number = 12;
-/** 网关单轮请求最多尝试次数（1 次原始 + 2 次重试）：网络抖动/429/5xx 不该报废整条回复。 */
-const MAX_GATEWAY_ATTEMPTS: number = 3;
-/** 单轮流式 tool_calls 槽位上限（OpenAI 标准 index 从 0 连续）：异常 index 钳制于此，防无界扩容。 */
-const MAX_TOOL_SLOTS: number = 64;
-
 /** 流式回调：`delta` 为本次增量文本，`done` 表示结束。 */
 export interface AiStreamHandlers {
   onDelta: (delta: string) => void;
@@ -157,541 +101,18 @@ export interface AiStreamHandlers {
   onAsk?: (question: string, options: string[]) => Promise<string>;
 }
 
+
+/**
+ * 门面（800 行门禁拆分）：配置持久化见 AiServiceConfig.ets，SDK 客户端与传输辅助见
+ * AiServiceHttp.ets，网关多轮工具回路见 AiServiceGateway.ets。本文件保留类型契约、
+ * AI_PROVIDERS 常量、chatStream/complete 入口，其余公开方法均为薄委托。
+ */
 export class AiService {
-  /** 读取当前配置（Key 只回传是否存在）。 */
-  static loadConfig(): AiConfig {
-    AiService.migrateLegacyKey();
-    const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
-    const preset: AiProviderPreset = AiService.presetOf(providerId);
-    const baseUrl: string = TalebookService.secureGet(KEY_BASE_URL);
-    const model: string = TalebookService.prefGet(KEY_MODEL);
-    const temperatureText: string = TalebookService.prefGet(KEY_TEMPERATURE);
-    const temperature: number = temperatureText.length > 0 ? Number(temperatureText) : DEFAULT_TEMPERATURE;
-    const finalModel: string = model.length > 0 ? model : preset.model;
-    const visionOverride: string = TalebookService.prefGet(KEY_VISION);
-    const contextText: string = TalebookService.prefGet(KEY_CONTEXT);
-    const contextK: number = contextText.length > 0 ? Number(contextText) : DEFAULT_CONTEXT_K;
-    return {
-      providerId: providerId,
-      baseUrl: baseUrl.length > 0 ? baseUrl : preset.baseUrl,
-      model: finalModel,
-      hasKey: TalebookService.secureGet(AiService.apiKeyKey(providerId)).length > 0,
-      temperature: Number.isFinite(temperature) ? temperature : DEFAULT_TEMPERATURE,
-      vision: visionOverride === 'on' ? true :
-        visionOverride === 'off' ? false : AiService.detectVision(finalModel),
-      visionOverride: visionOverride,
-      contextLength: Number.isFinite(contextK) && contextK > 0 ? contextK : DEFAULT_CONTEXT_K,
-    };
-  }
-
-  /** 按模型名猜是否支持图片：各家视觉模型命名都带特征词，猜错时用户可在设置里手动覆盖。 */
-  static detectVision(model: string): boolean {
-    return /vl|vision|4o|omni|gemini|claude|llava|qvq/i.test(model);
-  }
-
-  /** 上下文窗口（K tokens）→ 对话页携带的历史轮数（一轮=一问一答，另留 tools/图片开销）。 */
-  static contextRounds(contextK: number): number {
-    if (contextK <= 4) {
-      return 4;
-    }
-    if (contextK <= 8) {
-      return 8;
-    }
-    if (contextK <= 32) {
-      return 16;
-    }
-    if (contextK <= 128) {
-      return 30;
-    }
-    return 50;
-  }
-
-  /** 读权限模式（非法/未设置值一律回落为逐笔确认）。 */
-  static loadPermission(): AiPermissionMode {
-    const raw: string = TalebookService.prefGet(KEY_PERMISSION, 'confirm');
-    if (raw === 'readonly' || raw === 'auto') {
-      return raw;
-    }
-    return 'confirm';
-  }
-
-  static savePermission(mode: AiPermissionMode): void {
-    TalebookService.prefSet(KEY_PERMISSION, mode);
-  }
-
-  static loadAutoSpeak(): boolean {
-    return TalebookService.prefGet(KEY_AUTO_SPEAK, '0') === '1';
-  }
-
-  static saveAutoSpeak(on: boolean): void {
-    TalebookService.prefSet(KEY_AUTO_SPEAK, on ? '1' : '0');
-  }
-
-  /**
-   * 语音通话页用的对话模型配置。未单独配置（或配置的服务商已被删除）时跟随全局；
-   * TTS/ASR 载体仍走 Token Plan 网关（QwenAudioService 按全局配置派生），这里只换「思考的大脑」。
-   */
-  static loadVoiceConfig(): AiConfig {
-    const config: AiConfig = AiService.loadConfig();
-    const providerId: string = TalebookService.prefGet(KEY_VOICE_PROVIDER);
-    if (providerId.length === 0 || providerId === config.providerId) {
-      return config;
-    }
-    const preset: AiProviderPreset = AiService.presetOf(providerId);
-    const model: string = TalebookService.prefGet(KEY_VOICE_MODEL);
-    const finalModel: string = model.length > 0 ? model : preset.model;
-    return {
-      providerId: providerId,
-      // 自定义服务商的地址就存在预设里；预设服务商被改过全局地址时无法区分，按预设走
-      baseUrl: preset.baseUrl,
-      model: finalModel,
-      hasKey: TalebookService.secureGet(AiService.apiKeyKey(providerId)).length > 0,
-      temperature: config.temperature,
-      vision: AiService.detectVision(finalModel),
-      visionOverride: '',
-      contextLength: config.contextLength,
-    };
-  }
-
-  /** 语音通话是否已独立配置了服务商。 */
-  static hasVoiceProvider(): boolean {
-    return TalebookService.prefGet(KEY_VOICE_PROVIDER).length > 0;
-  }
-
-  /** `providerId` 传空串 = 恢复跟随全局。`model` 空 = 用该服务商默认模型。 */
-  static saveVoiceConfig(providerId: string, model: string): void {
-    if (providerId.length === 0) {
-      TalebookService.prefSet(KEY_VOICE_PROVIDER, '');
-      TalebookService.prefSet(KEY_VOICE_MODEL, '');
-      return;
-    }
-    TalebookService.prefSet(KEY_VOICE_PROVIDER, providerId);
-    TalebookService.prefSet(KEY_VOICE_MODEL, model.trim());
-  }
-
-  /** 已保存的语音通话服务商 id（''=跟随全局）。 */
-  static loadVoiceProviderId(): string {
-    return TalebookService.prefGet(KEY_VOICE_PROVIDER);
-  }
-
-  /** 已保存的语音通话模型名（''=用服务商默认）。 */
-  static loadVoiceModel(): string {
-    return TalebookService.prefGet(KEY_VOICE_MODEL);
-  }
-
-  /** 播报引擎：'system'=系统语音（CoreSpeechKit，默认）、'cloud'=Token Plan 云端 TTS。 */
-  static loadSpeakEngine(): string {
-    return TalebookService.prefGet(KEY_SPEAK_ENGINE, 'system') === 'cloud' ? 'cloud' : 'system';
-  }
-
-  static saveSpeakEngine(engine: string): void {
-    TalebookService.prefSet(KEY_SPEAK_ENGINE, engine === 'cloud' ? 'cloud' : 'system');
-  }
-
-  /** 通话模式：'realtime'=WS 全双工（默认，打断式）、'turn'=轮转（可用自选对话模型）。 */
-  static loadCallMode(): string {
-    return TalebookService.prefGet(KEY_CALL_MODE, 'realtime') === 'turn' ? 'turn' : 'realtime';
-  }
-
-  static saveCallMode(mode: string): void {
-    TalebookService.prefSet(KEY_CALL_MODE, mode === 'turn' ? 'turn' : 'realtime');
-  }
-
-  /** 各服务商 Key 的存储键；自定义服务商 id 带时间戳，不与前缀冲突。 */
-  private static apiKeyKey(providerId: string): string {
-    return KEY_API_KEY_PREFIX + providerId;
-  }
-
-  /** 读取指定服务商的 API Key（未配置返回空串）。 */
-  static apiKeyFor(providerId: string): string {
-    AiService.migrateLegacyKey();
-    return TalebookService.secureGet(AiService.apiKeyKey(providerId));
-  }
-
-  static hasKeyFor(providerId: string): boolean {
-    return AiService.apiKeyFor(providerId).length > 0;
-  }
-
-  /** 旧版单 Key 一次性迁移：挪进当前所选服务商的槽位后清空。 */
-  private static migrateLegacyKey(): void {
-    const legacy: string = TalebookService.secureGet(KEY_API_KEY);
-    if (legacy.length === 0) {
-      return;
-    }
-    const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
-    TalebookService.secureSet(AiService.apiKeyKey(providerId), legacy);
-    TalebookService.secureSet(KEY_API_KEY, '');
-  }
-
-  /** 本机添加的自定义服务商列表（JSON 落 preferences，坏条目丢弃）。 */
-  static listCustomProviders(): AiProviderPreset[] {
-    const out: AiProviderPreset[] = [];
-    const raw: string = TalebookService.prefGet(KEY_CUSTOM_PROVIDERS);
-    if (raw.length === 0) {
-      return out;
-    }
-    let items: Object[];
-    try {
-      items = JSON.parse(raw) as Object[];
-    } catch (_error) {
-      return out;
-    }
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i] as Record<string, string>;
-      const id: string | undefined = it['id'];
-      const name: string | undefined = it['name'];
-      const baseUrl: string | undefined = it['baseUrl'];
-      const model: string | undefined = it['model'];
-      if (id === undefined || name === undefined || id.length === 0 || name.length === 0) {
-        continue;
-      }
-      out.push({
-        id: id,
-        name: name,
-        baseUrl: baseUrl === undefined ? '' : baseUrl,
-        model: model === undefined ? '' : model,
-        vision: false,
-      });
-    }
-    return out;
-  }
-
-  /** 全部可选服务商：预设 + 本机关加的自定义。 */
-  static listProviders(): AiProviderPreset[] {
-    const out: AiProviderPreset[] = [];
-    for (let i = 0; i < AI_PROVIDERS.length; i++) {
-      out.push(AI_PROVIDERS[i]);
-    }
-    const custom: AiProviderPreset[] = AiService.listCustomProviders();
-    for (let i = 0; i < custom.length; i++) {
-      out.push(custom[i]);
-    }
-    return out;
-  }
-
-  /** 添加一个本地自定义服务商并返回其预设。 */
-  static addCustomProvider(name: string, baseUrl: string, model: string): AiProviderPreset {
-    const trimmedName: string = name.trim();
-    const base: string = AiService.normalizeBaseUrl(baseUrl);
-    if (trimmedName.length === 0 || base.length === 0) {
-      throw new Error('服务商名称与接口地址不能为空');
-    }
-    const preset: AiProviderPreset = {
-      id: `custom-${Date.now()}`,
-      name: trimmedName,
-      baseUrl: base,
-      model: model.trim(),
-      vision: false,
-    };
-    const list: AiProviderPreset[] = AiService.listCustomProviders();
-    list.push(preset);
-    AiService.saveCustomProviders(list);
-    return preset;
-  }
-
-  /** 删除自定义服务商，连带清掉它保存的 Key。 */
-  static removeCustomProvider(id: string): void {
-    const list: AiProviderPreset[] = AiService.listCustomProviders();
-    const kept: AiProviderPreset[] = [];
-    for (let i = 0; i < list.length; i++) {
-      if (list[i].id === id) {
-        TalebookService.secureSet(AiService.apiKeyKey(id), '');
-      } else {
-        kept.push(list[i]);
-      }
-    }
-    AiService.saveCustomProviders(kept);
-  }
-
-  private static saveCustomProviders(list: AiProviderPreset[]): void {
-    TalebookService.prefSet(KEY_CUSTOM_PROVIDERS, JSON.stringify(list));
-  }
-
-  /**
-   * 本地常用模型清单（按服务商分开存）：设置页手动添加/拉取勾选写入，
-   * 对话页顶栏快切菜单优先用它——免去每次现拉全量列表。
-   */
-  static loadProviderModels(providerId: string): string[] {
-    const raw: string = TalebookService.prefGet(`${KEY_PROVIDER_MODELS_PREFIX}${providerId}`, '');
-    if (raw.length === 0) {
-      return [];
-    }
-    try {
-      const arr: Object[] = JSON.parse(raw) as Object[];
-      const out: string[] = [];
-      for (let i = 0; i < arr.length; i++) {
-        if (typeof arr[i] === 'string') {
-          out.push(arr[i] as string);
-        }
-      }
-      return out;
-    } catch (_error) {
-      return [];
-    }
-  }
-
-  /** 覆盖保存某服务商的模型清单；空数组即清除该键。 */
-  static saveProviderModels(providerId: string, models: string[]): void {
-    TalebookService.prefSet(`${KEY_PROVIDER_MODELS_PREFIX}${providerId}`,
-      models.length === 0 ? '' : JSON.stringify(models));
-  }
-
-  static presetOf(providerId: string): AiProviderPreset {
-    const providers: AiProviderPreset[] = AiService.listProviders();
-    for (let i = 0; i < providers.length; i++) {
-      if (providers[i].id === providerId) {
-        return providers[i];
-      }
-    }
-    return AI_PROVIDERS[AI_PROVIDERS.length - 1];
-  }
-
-  /** 保存配置。`apiKey` 传空串表示保持原值不变。 */
-  static saveConfig(providerId: string, baseUrl: string, model: string, apiKey: string,
-    temperature: number, visionOverride: string = '', contextLength: number = DEFAULT_CONTEXT_K): void {
-    TalebookService.prefSet(KEY_PROVIDER, providerId);
-    TalebookService.secureSet(KEY_BASE_URL, AiService.normalizeBaseUrl(baseUrl));
-    TalebookService.prefSet(KEY_MODEL, model.trim());
-    TalebookService.prefSet(KEY_TEMPERATURE, `${temperature}`);
-    TalebookService.prefSet(KEY_VISION, visionOverride);
-    TalebookService.prefSet(KEY_CONTEXT, `${contextLength}`);
-    if (apiKey.length > 0) {
-      TalebookService.secureSet(AiService.apiKeyKey(providerId), apiKey.trim());
-    }
-    // 服务商/Key 变了：MCP 工具集与会话缓存作废，下次发送前重新握手
-    McpService.reset();
-  }
-
-  static clearKey(): void {
-    const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
-    TalebookService.secureSet(AiService.apiKeyKey(providerId), '');
-    TalebookService.secureSet(KEY_API_KEY, '');
-  }
-
-  /** 是否已配置到可用状态（地址、模型、Key 都有）。 */
-  static isReady(): boolean {
-    const config: AiConfig = AiService.loadConfig();
-    return config.baseUrl.length > 0 && config.model.length > 0 && config.hasKey;
-  }
-
-  /**
-   * 拉取服务商的模型 id 列表（`GET {base}/models`，OpenAI 协议通用）。
-   * `apiKeyInput` 传空串表示用该服务商已保存的 Key——设置页可先填 Key 再拉，也可拉已存的。
-   *
-   * 不用 SDK 的 `models.list()`：其 .d.ets 声明返回 `Model[]`，运行时实际 resolve 了
-   * undefined（2026-11-17 上板实测），这里直接用 rcp 发一个带鉴权头的 GET。
-   */
-  static async fetchModels(providerId: string, baseUrl: string, apiKeyInput: string): Promise<string[]> {
-    const key: string = apiKeyInput.trim().length > 0 ? apiKeyInput.trim() : AiService.apiKeyFor(providerId);
-    const base: string = AiService.normalizeBaseUrl(baseUrl);
-    if (base.length === 0) {
-      throw new Error('请先填写接口地址');
-    }
-    if (key.length === 0) {
-      throw new Error('请先填写 API Key');
-    }
-    const headers: rcp.RequestHeaders = {
-      'Authorization': `Bearer ${key}`,
-      'Accept': 'application/json',
-    };
-    // models 端点不校验该头，但保持与 chat 通道一致（见 chatViaGateway）
-    if (AiService.isOpenCodeGateway(base)) {
-      headers['x-opencode-session'] = AiService.opencodeSessionId();
-    }
-    const session: rcp.Session = rcp.createSession();
-    let statusCode: number = 0;
-    let text: string = '';
-    try {
-      const request: rcp.Request = new rcp.Request(`${base}/models`, 'GET', headers);
-      const response: rcp.Response = await session.fetch(request);
-      statusCode = response.statusCode;
-      text = AiService.responseBodyText(response.body);
-    } catch (error) {
-      throw new Error(AiService.friendlyMessage(error instanceof Error ? error.message : String(error)));
-    } finally {
-      session.close();
-    }
-    if (statusCode < 200 || statusCode >= 300) {
-      throw new Error(AiService.httpErrorText(statusCode, text));
-    }
-    const ids: string[] = [];
-    try {
-      const root = JSON.parse(text) as Record<string, Object>;
-      const items = root['data'] as Object[] | undefined;
-      if (items !== undefined) {
-        for (let i = 0; i < items.length; i++) {
-          const it = items[i] as Record<string, string>;
-          const id: string | undefined = it['id'];
-          if (id !== undefined && id.length > 0 && ids.indexOf(id) < 0) {
-            ids.push(id);
-          }
-        }
-      }
-    } catch (_error) {
-      throw new Error('模型列表解析失败，该服务可能不兼容 OpenAI 协议');
-    }
-    return ids;
-  }
-
-  /**
-   * 是否支持服务端内置联网搜索（enable_search 为通义 DashScope 兼容模式私有参数）。
-   * 按域名判定：dashscope / maas / token-plan 均落在 aliyuncs.com，自建 OpenAI 兼容服务不会误判。
-   */
-  static supportsNativeOnlineSearch(baseUrl: string): boolean {
-    return baseUrl.indexOf('aliyuncs.com') >= 0;
-  }
-
-  /**
-   * AI 联网问答：用当前模型开 enable_search + forced_search（强制联网、不让模型凭记忆作答），
-   * rcp 直连绕开 SDK 类型限制（同 fetchModels 通道形态）。
-   * 返回正文与 search_info.search_results 引用列表（≤6 条）；失败全部转 ok=false+error，不抛错。
-   */
-  static async aiSearchOnline(query: string): Promise<LlmSearchResult> {
-    const res: LlmSearchResult = { ok: false, answer: '', sources: [], error: '' };
-    const cfg: AiConfig = AiService.loadConfig();
-    const key: string = AiService.apiKeyFor(cfg.providerId);
-    if (key.length === 0) {
-      res.error = '请先在设置页填写该服务商的 API Key';
-      return res;
-    }
-    const base: string = AiService.normalizeBaseUrl(cfg.baseUrl);
-    try {
-      const messages: AiMessage[] = [
-        { role: 'system', content: '根据实时网页检索结果回答用户问题：先给关键事实，涉及时间请标注日期；检索结果互相矛盾时如实说明。' },
-        { role: 'user', content: query },
-      ];
-      const searchOpts: Record<string, Object> = { 'forced_search': true };
-      const payload: Record<string, Object> = {
-        'model': cfg.model,
-        'messages': messages,
-        'stream': false,
-        'max_tokens': 900,
-        'enable_search': true,
-        'search_options': searchOpts,
-      };
-      const headers: rcp.RequestHeaders = {
-        'Authorization': `Bearer ${key}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      };
-      const session: rcp.Session = rcp.createSession();
-      let statusCode: number = 0;
-      let text: string = '';
-      try {
-        const request: rcp.Request = new rcp.Request(`${base}/chat/completions`, 'POST', headers, JSON.stringify(payload));
-        const response: rcp.Response = await session.fetch(request);
-        statusCode = response.statusCode;
-        text = AiService.responseBodyText(response.body);
-      } finally {
-        session.close();
-      }
-      if (statusCode < 200 || statusCode >= 300) {
-        res.error = AiService.httpErrorText(statusCode, text);
-        return res;
-      }
-      const root = JSON.parse(text) as Record<string, Object>;
-      const choices = root['choices'] as Object[] | undefined;
-      if (choices !== undefined && choices.length > 0) {
-        const msg = (choices[0] as Record<string, Object>)['message'] as Record<string, Object> | undefined;
-        if (msg !== undefined) {
-          const content: Object | undefined = msg['content'];
-          res.answer = content === undefined ? '' : String(content);
-        }
-      }
-      const info = root['search_info'] as Record<string, Object> | undefined;
-      if (info !== undefined) {
-        const hits = info['search_results'] as Object[] | undefined;
-        if (hits !== undefined) {
-          for (let i = 0; i < hits.length && res.sources.length < 6; i++) {
-            const h = hits[i] as Record<string, string>;
-            const title: string = h['title'] === undefined ? '' : h['title'];
-            const url: string = h['url'] === undefined ? '' : h['url'];
-            if (title.length > 0 && url.length > 0) {
-              res.sources.push({ title: title, url: url });
-            }
-          }
-        }
-      }
-      if (res.answer.trim().length === 0) {
-        res.error = '联网搜索返回了空答案';
-        return res;
-      }
-      res.ok = true;
-      return res;
-    } catch (error) {
-      res.error = error instanceof Error ? error.message : `${error}`;
-      return res;
-    }
-  }
-
-  /** rcp 的 body 可能是 string / ArrayBuffer / 已解析对象，统一转文本。 */
-  private static responseBodyText(body: string | Object | ArrayBuffer | undefined): string {
-    if (body === undefined || body === null) {
-      return '';
-    }
-    if (typeof body === 'string') {
-      return body as string;
-    }
-    if (body instanceof ArrayBuffer) {
-      return AiService.responseText(body);
-    }
-    return JSON.stringify(body);
-  }
-
-  /**
-   * 流式对话。返回可中断句柄：调用 `abort()` 停止请求。
-   *
-   * SDK 的 `onData` 已经是逐 chunk 回调（内部完成 SSE 拆行与 UTF-8 解码），
-   * 这里只把 chunk 拼成文本转发给 UI。
-   */
-  /** 内置工具 + MCP 动态工具合并（MCP 全只读，任何权限档都保留）。 */
-  private static toolset(mode: AiPermissionMode, mcpTools: AiToolDefinition[] | null): AiToolDefinition[] {
-    const base: AiToolDefinition[] = AiTools.definitions(mode);
-    if (mcpTools === null || mcpTools.length === 0) {
-      return base;
-    }
-    return base.concat(mcpTools);
-  }
-
-  /**
-   * MCP 工具集门面（聊天页发送前 await）：仅当前服务商=Token Plan 且已配 Key
-   * 才连接百炼三家 MCP；其余情形/任何失败都回空集，聊天走内置工具。
-   */
-  static async mcpToolset(): Promise<AiToolDefinition[]> {
-    const config: AiConfig = AiService.loadConfig();
-    const key: string = AiService.apiKeyFor(config.providerId);
-    if (!McpService.enabledFor(config.providerId, key)) {
-      return [];
-    }
-    try {
-      return await McpService.ensureToolset(key);
-    } catch (_error) {
-      return [];
-    }
-  }
-
-  /** 活动标签：MCP 工具显 server 中文名，内置工具走 AiTools 映射。 */
-  private static toolLabelFor(name: string): string {
-    return McpService.isMcpTool(name) ? McpService.labelOf(name) : AiTools.toolLabel(name);
-  }
-
-  /** 执行路由：mcp_ 前缀走 MCP（自带容错），其余走内置执行器。 */
-  private static toolRunFor(name: string, args: string, callId: string): Promise<string> {
-    if (McpService.isMcpTool(name)) {
-      const config: AiConfig = AiService.loadConfig();
-      return McpService.callTool(name, args, AiService.apiKeyFor(config.providerId));
-    }
-    return AiTools.execute(name, args, callId);
-  }
-  /**
-   * mcpTools：MCP 动态工具集（发送前经 AiService.mcpToolset() 预热取得），
-   * 与内置工具合并挂载；null/空 = 只挂内置工具（非 Token Plan 或握手失败）。
-   */
   static chatStream(messages: AiMessage[], handlers: AiStreamHandlers, maxTokens: number = 2048,
     mcpTools: AiToolDefinition[] | null = null): AiAbortHandle {
     const handle: AiAbortHandle = { aborted: false };
-    const config: AiConfig = AiService.loadConfig();
-    const apiKey: string = AiService.apiKeyFor(config.providerId);
+    const config: AiConfig = AiServiceConfig.loadConfig();
+    const apiKey: string = AiServiceConfig.apiKeyFor(config.providerId);
 
     // 配置校验先行（回路重构后 client 创建已上移，校验必须在前）
     if (config.baseUrl.length === 0 || config.model.length === 0) {
@@ -717,7 +138,7 @@ export class AiService {
       }
     };
 
-    if (AiService.isOpenCodeGateway(config.baseUrl)) {
+    if (AiServiceHttp.isOpenCodeGateway(config.baseUrl)) {
       const gatewaySession: rcp.Session = rcp.createSession();
       handle.destroy = (): void => {
         handle.aborted = true;
@@ -731,9 +152,9 @@ export class AiService {
       const ask: ((label: string, args: string) => Promise<boolean>) | undefined = handlers.onConfirm;
       const done: ((name: string, label: string, text: string, callId: string) => void) | undefined = handlers.onToolResult;
       const think: ((text: string) => void) | undefined = handlers.onReasoning;
-      const permission: AiPermissionMode = AiService.loadPermission();
-      AiService.chatViaGateway(config, apiKey, messages, maxTokens, gatewaySession,
-        AiService.toolset(permission, mcpTools), permission, (): boolean => handle.aborted,
+      const permission: AiPermissionMode = AiServiceConfig.loadPermission();
+      AiServiceGateway.chatViaGateway(config, apiKey, messages, maxTokens, gatewaySession,
+        AiServiceHttp.toolset(permission, mcpTools), permission, (): boolean => handle.aborted,
         notice === undefined ? null : notice,
         ask === undefined ? null : ask,
         done === undefined ? null : done,
@@ -753,15 +174,15 @@ export class AiService {
       return handle;
     }
 
-    const client: OpenAI = AiService.client(config.baseUrl, apiKey);
-    const sdkPermission: AiPermissionMode = AiService.loadPermission();
-    const sdkTools: AiToolDefinition[] = AiService.toolset(sdkPermission, mcpTools);
+    const client: OpenAI = AiServiceHttp.client(config.baseUrl, apiKey);
+    const sdkPermission: AiPermissionMode = AiServiceConfig.loadPermission();
+    const sdkTools: AiToolDefinition[] = AiServiceHttp.toolset(sdkPermission, mcpTools);
     if (sdkTools.length > 0) {
       // 非网关通道同样走 function calling 回路：传输换成 SDK 流式
       // （sdkStreamRound 打字机保留 + 运行时累积 tool_calls），回路主体与网关共用。
       const gwMessages: GatewayMessage[] = [];
       for (let i = 0; i < messages.length; i++) {
-        gwMessages.push({ role: messages[i].role, content: AiService.gatewayContent(messages[i]) });
+        gwMessages.push({ role: messages[i].role, content: AiServiceHttp.gatewayContent(messages[i]) });
       }
       const sessionBox: AiSessionHolder[] = [];
       handle.destroy = (): void => {
@@ -778,9 +199,9 @@ export class AiService {
       const done: ((name: string, label: string, text: string, callId: string) => void) | undefined = handlers.onToolResult;
       const think: ((text: string) => void) | undefined = handlers.onReasoning;
       const transport = async (attach: AiToolDefinition[] | null): Promise<GatewayReply | null> =>
-        AiService.sdkStreamRound(client, config, gwMessages, maxTokens, attach, handle,
+        AiServiceGateway.sdkStreamRound(client, config, gwMessages, maxTokens, attach, handle,
           handlers.onDelta, think === undefined ? null : think, sessionBox);
-      AiService.runToolLoop(gwMessages, transport, sdkTools, sdkPermission,
+      AiServiceGateway.runToolLoop(gwMessages, transport, sdkTools, sdkPermission,
         (): boolean => handle.aborted,
         notice === undefined ? null : notice,
         ask === undefined ? null : ask,
@@ -803,7 +224,7 @@ export class AiService {
     try {
       const params: ChatCompletionCreateParamsBase = {
         model: config.model,
-        messages: AiService.toSdkMessages(messages),
+        messages: AiServiceHttp.toSdkMessages(messages),
         stream: true,
         temperature: config.temperature,
         max_tokens: maxTokens,
@@ -859,22 +280,22 @@ export class AiService {
         },
         onError: (error: Error): void => {
           if (!handle.aborted) {
-            finish(AiService.friendlyMessage(error.message));
+            finish(AiServiceHttp.friendlyMessage(error.message));
           }
         },
       });
       session = result.session as AiSessionHolder;
       result.response.then((response): void => {
         if (response.statusCode < 200 || response.statusCode >= 300) {
-          finish(AiService.httpErrorText(response.statusCode, AiService.responseText(response.body)));
+          finish(AiServiceHttp.httpErrorText(response.statusCode, AiServiceHttp.responseText(response.body)));
           return;
         }
         finish('');
       }).catch((error: Error): void => {
-        finish(AiService.friendlyMessage(error.message));
+        finish(AiServiceHttp.friendlyMessage(error.message));
       });
     } catch (error) {
-      finish(AiService.friendlyMessage(error instanceof Error ? error.message : String(error)));
+      finish(AiServiceHttp.friendlyMessage(error instanceof Error ? error.message : String(error)));
       return handle;
     }
 
@@ -896,23 +317,23 @@ export class AiService {
    * `loadVoiceConfig()` 以走独立选择的对话模型。
    */
   static async complete(messages: AiMessage[], maxTokens: number = 2048, override?: AiConfig): Promise<string> {
-    const config: AiConfig = override !== undefined ? override : AiService.loadConfig();
-    const apiKey: string = AiService.apiKeyFor(config.providerId);
+    const config: AiConfig = override !== undefined ? override : AiServiceConfig.loadConfig();
+    const apiKey: string = AiServiceConfig.apiKeyFor(config.providerId);
     if (config.baseUrl.length === 0 || config.model.length === 0) {
       throw new Error('请先配置 AI 接口地址与模型');
     }
     if (apiKey.length === 0) {
       throw new Error('请先配置 AI API Key');
     }
-    if (AiService.isOpenCodeGateway(config.baseUrl)) {
+    if (AiServiceHttp.isOpenCodeGateway(config.baseUrl)) {
       // 结构化输出（书单 JSON 等）不需要工具，避免模型中途改去查数据
-      return AiService.chatViaGateway(config, apiKey, messages, maxTokens, rcp.createSession(),
-        null, AiService.loadPermission(), null, null, null, null, null, null);
+      return AiServiceGateway.chatViaGateway(config, apiKey, messages, maxTokens, rcp.createSession(),
+        null, AiServiceConfig.loadPermission(), null, null, null, null, null, null);
     }
-    const client: OpenAI = AiService.client(config.baseUrl, apiKey);
+    const client: OpenAI = AiServiceHttp.client(config.baseUrl, apiKey);
     const params: ChatCompletionCreateParamsBase = {
       model: config.model,
-      messages: AiService.toSdkMessages(messages),
+      messages: AiServiceHttp.toSdkMessages(messages),
       stream: false,
       temperature: config.temperature,
       max_tokens: maxTokens,
@@ -923,14 +344,14 @@ export class AiService {
     try {
       const response = await result.response;
       statusCode = response.statusCode;
-      text = AiService.responseText(response.body);
+      text = AiServiceHttp.responseText(response.body);
     } catch (error) {
-      throw new Error(AiService.friendlyMessage(error instanceof Error ? error.message : String(error)));
+      throw new Error(AiServiceHttp.friendlyMessage(error instanceof Error ? error.message : String(error)));
     }
     if (statusCode < 200 || statusCode >= 300) {
-      throw new Error(AiService.httpErrorText(statusCode, text));
+      throw new Error(AiServiceHttp.httpErrorText(statusCode, text));
     }
-    const content: string = AiService.parseContent(text);
+    const content: string = AiServiceHttp.parseContent(text);
     if (content.length === 0) {
       throw new Error('AI 返回内容为空，请检查模型是否可用');
     }
@@ -938,716 +359,240 @@ export class AiService {
   }
 
   /** 建 SDK 客户端。地址按 SDK 约定只给到 `/v1`，它自己拼 `/chat/completions`。 */
-  private static client(baseUrl: string, apiKey: string): OpenAI {
-    return new OpenAI({
-      apiKey: apiKey,
-      baseURL: AiService.normalizeBaseUrl(baseUrl),
-      timeout: TIMEOUT_MS,
-    });
+
+  /** 委托 AiServiceConfig.loadConfig（拆分：见文件头说明）。 */
+  static loadConfig(): AiConfig {
+    return AiServiceConfig.loadConfig();
+  }
+  /** 委托 AiServiceConfig.detectVision（拆分：见文件头说明）。 */
+  static detectVision(model: string): boolean {
+    return AiServiceConfig.detectVision(model);
+  }
+  /** 委托 AiServiceConfig.contextRounds（拆分：见文件头说明）。 */
+  static contextRounds(contextK: number): number {
+    return AiServiceConfig.contextRounds(contextK);
+  }
+  /** 委托 AiServiceConfig.loadPermission（拆分：见文件头说明）。 */
+  static loadPermission(): AiPermissionMode {
+    return AiServiceConfig.loadPermission();
+  }
+  /** 委托 AiServiceConfig.savePermission（拆分：见文件头说明）。 */
+  static savePermission(mode: AiPermissionMode): void {
+    AiServiceConfig.savePermission(mode);
+  }
+  /** 委托 AiServiceConfig.loadAutoSpeak（拆分：见文件头说明）。 */
+  static loadAutoSpeak(): boolean {
+    return AiServiceConfig.loadAutoSpeak();
+  }
+  /** 委托 AiServiceConfig.saveAutoSpeak（拆分：见文件头说明）。 */
+  static saveAutoSpeak(on: boolean): void {
+    AiServiceConfig.saveAutoSpeak(on);
+  }
+  /** 委托 AiServiceConfig.loadVoiceConfig（拆分：见文件头说明）。 */
+  static loadVoiceConfig(): AiConfig {
+    return AiServiceConfig.loadVoiceConfig();
+  }
+  /** 委托 AiServiceConfig.hasVoiceProvider（拆分：见文件头说明）。 */
+  static hasVoiceProvider(): boolean {
+    return AiServiceConfig.hasVoiceProvider();
+  }
+  /** 委托 AiServiceConfig.saveVoiceConfig（拆分：见文件头说明）。 */
+  static saveVoiceConfig(providerId: string, model: string): void {
+    AiServiceConfig.saveVoiceConfig(providerId, model);
+  }
+  /** 委托 AiServiceConfig.loadVoiceProviderId（拆分：见文件头说明）。 */
+  static loadVoiceProviderId(): string {
+    return AiServiceConfig.loadVoiceProviderId();
+  }
+  /** 委托 AiServiceConfig.loadVoiceModel（拆分：见文件头说明）。 */
+  static loadVoiceModel(): string {
+    return AiServiceConfig.loadVoiceModel();
+  }
+  /** 委托 AiServiceConfig.loadSpeakEngine（拆分：见文件头说明）。 */
+  static loadSpeakEngine(): string {
+    return AiServiceConfig.loadSpeakEngine();
+  }
+  /** 委托 AiServiceConfig.saveSpeakEngine（拆分：见文件头说明）。 */
+  static saveSpeakEngine(engine: string): void {
+    AiServiceConfig.saveSpeakEngine(engine);
+  }
+  /** 委托 AiServiceConfig.loadCallMode（拆分：见文件头说明）。 */
+  static loadCallMode(): string {
+    return AiServiceConfig.loadCallMode();
+  }
+  /** 委托 AiServiceConfig.saveCallMode（拆分：见文件头说明）。 */
+  static saveCallMode(mode: string): void {
+    AiServiceConfig.saveCallMode(mode);
+  }
+  /** 委托 AiServiceConfig.apiKeyKey（拆分：见文件头说明）。 */
+  static apiKeyKey(providerId: string): string {
+    return AiServiceConfig.apiKeyKey(providerId);
+  }
+  /** 委托 AiServiceConfig.apiKeyFor（拆分：见文件头说明）。 */
+  static apiKeyFor(providerId: string): string {
+    return AiServiceConfig.apiKeyFor(providerId);
+  }
+  /** 委托 AiServiceConfig.hasKeyFor（拆分：见文件头说明）。 */
+  static hasKeyFor(providerId: string): boolean {
+    return AiServiceConfig.hasKeyFor(providerId);
+  }
+  /** 委托 AiServiceConfig.migrateLegacyKey（拆分：见文件头说明）。 */
+  static migrateLegacyKey(): void {
+    AiServiceConfig.migrateLegacyKey();
+  }
+  /** 委托 AiServiceConfig.listCustomProviders（拆分：见文件头说明）。 */
+  static listCustomProviders(): AiProviderPreset[] {
+    return AiServiceConfig.listCustomProviders();
+  }
+  /** 委托 AiServiceConfig.listProviders（拆分：见文件头说明）。 */
+  static listProviders(): AiProviderPreset[] {
+    return AiServiceConfig.listProviders();
+  }
+  /** 委托 AiServiceConfig.addCustomProvider（拆分：见文件头说明）。 */
+  static addCustomProvider(name: string, baseUrl: string, model: string): AiProviderPreset {
+    return AiServiceConfig.addCustomProvider(name, baseUrl, model);
+  }
+  /** 委托 AiServiceConfig.removeCustomProvider（拆分：见文件头说明）。 */
+  static removeCustomProvider(id: string): void {
+    AiServiceConfig.removeCustomProvider(id);
+  }
+  /** 委托 AiServiceConfig.saveCustomProviders（拆分：见文件头说明）。 */
+  static saveCustomProviders(list: AiProviderPreset[]): void {
+    AiServiceConfig.saveCustomProviders(list);
+  }
+  /** 委托 AiServiceConfig.loadProviderModels（拆分：见文件头说明）。 */
+  static loadProviderModels(providerId: string): string[] {
+    return AiServiceConfig.loadProviderModels(providerId);
+  }
+  /** 委托 AiServiceConfig.saveProviderModels（拆分：见文件头说明）。 */
+  static saveProviderModels(providerId: string, models: string[]): void {
+    AiServiceConfig.saveProviderModels(providerId, models);
+  }
+  /** 委托 AiServiceConfig.presetOf（拆分：见文件头说明）。 */
+  static presetOf(providerId: string): AiProviderPreset {
+    return AiServiceConfig.presetOf(providerId);
+  }
+  /** 委托 AiServiceConfig.saveConfig（拆分：见文件头说明）。 */
+  static saveConfig(providerId: string, baseUrl: string, model: string, apiKey: string, temperature: number, visionOverride: string = '', contextLength: number = DEFAULT_CONTEXT_K): void {
+    AiServiceConfig.saveConfig(providerId, baseUrl, model, apiKey, temperature, visionOverride, contextLength);
+  }
+  /** 委托 AiServiceConfig.clearKey（拆分：见文件头说明）。 */
+  static clearKey(): void {
+    AiServiceConfig.clearKey();
+  }
+  /** 委托 AiServiceConfig.isReady（拆分：见文件头说明）。 */
+  static isReady(): boolean {
+    return AiServiceConfig.isReady();
   }
 
-  /**
-   * 把本项目的 `AiMessage[]` 转成 SDK 的严格联合类型。
-   *
-   * SDK 用的是 `role: 'user'` 这类字面量联合；ArkTS 既不能把宽 string 直接赋过去，
-   * 也不支持索引访问类型（`X['messages']`），所以这里显式声明成
-   * `ChatCompletionMessageParam[]` 再交给 `messages` 字段。
-   */
-  private static toSdkMessages(messages: AiMessage[]): ChatCompletionMessageParam[] {
-    const out: ChatCompletionMessageParam[] = [];
-    for (let i = 0; i < messages.length; i++) {
-      const m: AiMessage = messages[i];
-      if (m.role === 'assistant') {
-        out.push({ role: 'assistant', content: m.content });
-      } else if (m.role === 'system') {
-        out.push({ role: 'system', content: m.content });
-      } else {
-        const images: string[] = m.images ?? [];
-        if (images.length === 0) {
-          out.push({ role: 'user', content: m.content });
-        } else {
-          const parts: ChatCompletionContentPart[] = [];
-          const textPart: ChatCompletionContentPartText = { type: 'text', text: m.content };
-          parts.push(textPart);
-          for (let j = 0; j < images.length; j++) {
-            const imageUrl: ChatCompletionContentPartImage.ImageURL = { url: images[j] };
-            const part: ChatCompletionContentPartImage = { type: 'image_url', image_url: imageUrl };
-            parts.push(part);
-          }
-          out.push({ role: 'user', content: parts });
-        }
-      }
-    }
-    return out;
+  /** 委托 AiServiceHttp.client（拆分：见文件头说明）。 */
+  static client(baseUrl: string, apiKey: string): OpenAI {
+    return AiServiceHttp.client(baseUrl, apiKey);
   }
-
-  /** 网关请求体的消息正文：带图时拼 OpenAI 多模态数组，否则纯文本。 */
-  private static gatewayContent(m: AiMessage): Object {
-    const images: string[] = m.images ?? [];
-    if (images.length === 0) {
-      return m.content;
-    }
-    const parts: Record<string, Object>[] = [];
-    const textPart: Record<string, Object> = { 'type': 'text', 'text': m.content };
-    parts.push(textPart);
-    for (let j = 0; j < images.length; j++) {
-      const urlRec: Record<string, Object> = { 'url': images[j] };
-      const imgPart: Record<string, Object> = { 'type': 'image_url', 'image_url': urlRec };
-      parts.push(imgPart);
-    }
-    return parts;
+  /** 委托 AiServiceHttp.toSdkMessages（拆分：见文件头说明）。 */
+  static toSdkMessages(messages: AiMessage[]): ChatCompletionMessageParam[] {
+    return AiServiceHttp.toSdkMessages(messages);
   }
-
-  /** 稳定会话 id：首次生成后持久化（OpenCode 网关要求同一会话一致路由、复用 prompt 缓存）。 */
-  private static opencodeSessionId(): string {
-    let id: string = TalebookService.prefGet(KEY_SESSION_ID);
-    if (id.length === 0) {
-      id = util.generateRandomUUID(true);
-      TalebookService.prefSet(KEY_SESSION_ID, id);
-    }
-    return id;
+  /** 委托 AiServiceHttp.gatewayContent（拆分：见文件头说明）。 */
+  static gatewayContent(m: AiMessage): Object {
+    return AiServiceHttp.gatewayContent(m);
   }
-
-  /** 是否走 OpenCode 网关（opencode.ai）。 */
-  private static isOpenCodeGateway(baseUrl: string): boolean {
-    return baseUrl.indexOf('opencode.ai') >= 0;
+  /** 委托 AiServiceHttp.opencodeSessionId（拆分：见文件头说明）。 */
+  static opencodeSessionId(): string {
+    return AiServiceHttp.opencodeSessionId();
   }
-
-  /**
-   * 当前配置通道是否具备工具能力：所有 OpenAI 兼容通道都走 rcp 整包工具回路
-   * （挂 tools + function calling），仅自定义/非标准接口例外。
-   * 系统提示词据此决定是否写工具指引——无 tools 还让模型「先调用工具」，
-   * 模型会伪造伪工具调用文本当正文输出（实测 Token Plan 通道 [tools] xxx [/tools]）。
-   */
+  /** 委托 AiServiceHttp.isOpenCodeGateway（拆分：见文件头说明）。 */
+  static isOpenCodeGateway(baseUrl: string): boolean {
+    return AiServiceHttp.isOpenCodeGateway(baseUrl);
+  }
+  /** 委托 AiServiceHttp.supportsTools（拆分：见文件头说明）。 */
   static supportsTools(): boolean {
-    // 回路已泛化：网关整包回路 + SDK 流式回路（运行时累积 tool_calls）都挂 tools，
-    // 项目内所有服务商均为 OpenAI 兼容。若未来接入非兼容服务商，在此按 providerId 排除。
-    return true;
+    return AiServiceHttp.supportsTools();
+  }
+  /** 委托 AiServiceHttp.sleep（拆分：见文件头说明）。 */
+  static sleep(ms: number): Promise<void> {
+    return AiServiceHttp.sleep(ms);
+  }
+  /** 委托 AiServiceHttp.responseBodyText（拆分：见文件头说明）。 */
+  static responseBodyText(body: string | Object | ArrayBuffer | undefined): string {
+    return AiServiceHttp.responseBodyText(body);
+  }
+  /** 委托 AiServiceHttp.toolset（拆分：见文件头说明）。 */
+  static toolset(mode: AiPermissionMode, mcpTools: AiToolDefinition[] | null): AiToolDefinition[] {
+    return AiServiceHttp.toolset(mode, mcpTools);
+  }
+  /** 委托 AiServiceHttp.mcpToolset（拆分：见文件头说明）。 */
+  static async mcpToolset(): Promise<AiToolDefinition[]> {
+    return AiServiceHttp.mcpToolset();
+  }
+  /** 委托 AiServiceHttp.toolLabelFor（拆分：见文件头说明）。 */
+  static toolLabelFor(name: string): string {
+    return AiServiceHttp.toolLabelFor(name);
+  }
+  /** 委托 AiServiceHttp.toolRunFor（拆分：见文件头说明）。 */
+  static toolRunFor(name: string, args: string, callId: string): Promise<string> {
+    return AiServiceHttp.toolRunFor(name, args, callId);
+  }
+  /** 委托 AiServiceHttp.fetchModels（拆分：见文件头说明）。 */
+  static async fetchModels(providerId: string, baseUrl: string, apiKeyInput: string): Promise<string[]> {
+    return AiServiceHttp.fetchModels(providerId, baseUrl, apiKeyInput);
+  }
+  /** 委托 AiServiceHttp.supportsNativeOnlineSearch（拆分：见文件头说明）。 */
+  static supportsNativeOnlineSearch(baseUrl: string): boolean {
+    return AiServiceHttp.supportsNativeOnlineSearch(baseUrl);
+  }
+  /** 委托 AiServiceHttp.aiSearchOnline（拆分：见文件头说明）。 */
+  static async aiSearchOnline(query: string): Promise<LlmSearchResult> {
+    return AiServiceHttp.aiSearchOnline(query);
+  }
+  /** 委托 AiServiceHttp.normalizeBaseUrl（拆分：见文件头说明）。 */
+  static normalizeBaseUrl(baseUrl: string): string {
+    return AiServiceHttp.normalizeBaseUrl(baseUrl);
+  }
+  /** 委托 AiServiceHttp.responseText（拆分：见文件头说明）。 */
+  static responseText(body: ArrayBuffer | undefined): string {
+    return AiServiceHttp.responseText(body);
+  }
+  /** 委托 AiServiceHttp.parseContent（拆分：见文件头说明）。 */
+  static parseContent(raw: string): string {
+    return AiServiceHttp.parseContent(raw);
+  }
+  /** 委托 AiServiceHttp.friendlyMessage（拆分：见文件头说明）。 */
+  static friendlyMessage(message: string): string {
+    return AiServiceHttp.friendlyMessage(message);
+  }
+  /** 委托 AiServiceHttp.httpErrorText（拆分：见文件头说明）。 */
+  static httpErrorText(status: number, body: string): string {
+    return AiServiceHttp.httpErrorText(status, body);
+  }
+  /** 委托 AiServiceHttp.extractErrorDetail（拆分：见文件头说明）。 */
+  static extractErrorDetail(body: string): string {
+    return AiServiceHttp.extractErrorDetail(body);
   }
 
-  /** 退避等待（网关重试间隔用）。 */
-  private static sleep(ms: number): Promise<void> {
-    return new Promise<void>((resolve: () => void) => {
-      setTimeout(resolve, ms);
-    });
+  /** 委托 AiServiceGateway.chatViaGateway（拆分：见文件头说明）。 */
+  static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[], maxTokens: number, session: rcp.Session, tools: AiToolDefinition[] | null, permission: AiPermissionMode, isAborted: (() => boolean) | null, onTool: ((label: string, name: string) => void) | null, onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null, onResult: ((name: string, label: string, text: string, callId: string) => void) | null, onReasoning: ((text: string) => void) | null, onAsk: ((question: string, options: string[]) => Promise<string>) | null): Promise<string> {
+    return AiServiceGateway.chatViaGateway(config, apiKey, messages, maxTokens, session, tools, permission, isAborted, onTool, onConfirm, onResult, onReasoning, onAsk);
   }
-
-  /**
-   * OpenCode 网关对话通道：**绕过 @iuroc SDK 直连 rcp**。
-   *
-   * 原因：网关对 /chat/completions 强制 `x-opencode-session`（缺失 400
-   * MissingSessionID，2026-11-17 上板实测），而 SDK v1.0.10 没有任何自定义
-   * 请求头注入能力——声明里的 requestConfiguration 实为 rcp.Configuration
-   * （无 headers 字段），实测透传也不会附加到请求；且当前 SDK 的 rcp 声明
-   * （4.1.0(11) 精简版）没有流式事件，无法自解析 SSE。故整包返回
-   * （stream:false），OpenCode 对话暂无打字机效果，其他服务商不受影响。
-   *
-   * `tools` 非空时走 **function calling 回路**：模型返回 tool_calls → （写工具按
-   * `permission` 三档处理：只读挡下 / 逐笔过 onConfirm / 自动放行）本地执行（AiTools）
-   * → 以 assistant+tool 消息回填上下文 → 再次请求，
-   * 直到模型给出文本回答或达到 MAX_TOOL_ROUNDS 轮上限。
-   */
-  private static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[],
-    maxTokens: number, session: rcp.Session, tools: AiToolDefinition[] | null,
-    permission: AiPermissionMode,
-    isAborted: (() => boolean) | null,
-    onTool: ((label: string, name: string) => void) | null,
-    onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null,
-    onResult: ((name: string, label: string, text: string, callId: string) => void) | null,
-    onReasoning: ((text: string) => void) | null,
-    onAsk: ((question: string, options: string[]) => Promise<string>) | null): Promise<string> {
-    const headers: rcp.RequestHeaders = {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'x-opencode-session': AiService.opencodeSessionId(),
-    };
-    const gwMessages: GatewayMessage[] = [];
-    for (let i = 0; i < messages.length; i++) {
-      gwMessages.push({ role: messages[i].role, content: AiService.gatewayContent(messages[i]) });
-    }
-    const url: string = `${AiService.normalizeBaseUrl(config.baseUrl)}/chat/completions`;
-    // 网关传输：整包 fetch + 退避重试（网络抖动/429/5xx），null=用户中断
-    const transport = async (attach: AiToolDefinition[] | null): Promise<GatewayReply | null> => {
-      const payload: Record<string, Object> = {
-        'model': config.model,
-        'messages': gwMessages,
-        'stream': false,
-        'temperature': config.temperature,
-        'max_tokens': maxTokens,
-      };
-      if (attach !== null && attach.length > 0) {
-        payload['tools'] = attach;
-      }
-      const request: rcp.Request = new rcp.Request(url, 'POST', headers, JSON.stringify(payload));
-      // 单轮请求失败直接 throw 会让整条多轮回复报废——
-      // 用户侧表现为「工具调用失败不重试、会话中断」。退避重试，其余 4xx 无意义不重试。
-      let statusCode: number = 0;
-      let text: string = '';
-      let lastError: string = '';
-      for (let attempt = 0; attempt < MAX_GATEWAY_ATTEMPTS; attempt++) {
-        if (attempt > 0) {
-          if (isAborted !== null && isAborted()) {
-            return null;
-          }
-          await AiService.sleep(attempt * 1000);
-        }
-        try {
-          const response: rcp.Response = await session.fetch(request);
-          statusCode = response.statusCode;
-          text = AiService.responseBodyText(response.body);
-        } catch (error) {
-          lastError = AiService.friendlyMessage(error instanceof Error ? error.message : String(error));
-          continue;
-        }
-        if (statusCode >= 200 && statusCode < 300) {
-          break;
-        }
-        if (statusCode !== 429 && statusCode < 500) {
-          throw new Error(AiService.httpErrorText(statusCode, text));
-        }
-        lastError = AiService.httpErrorText(statusCode, text);
-      }
-      if (statusCode < 200 || statusCode >= 300) {
-        throw new Error(lastError);
-      }
-      return AiService.parseGatewayReply(text);
-    };
-    try {
-      return await AiService.runToolLoop(gwMessages, transport, tools, permission, isAborted,
-        onTool, onConfirm, onResult, onReasoning, onAsk);
-    } finally {
-      session.close();
-      // 中断/异常可能留下未取配对条目，回路收尾一律清理
-      AiTools.clearPendingBooks();
-    }
+  /** 委托 AiServiceGateway.runToolLoop（拆分：见文件头说明）。 */
+  static async runToolLoop(gwMessages: GatewayMessage[], transport: (attach: AiToolDefinition[] | null) => Promise<GatewayReply | null>, tools: AiToolDefinition[] | null, permission: AiPermissionMode, isAborted: (() => boolean) | null, onTool: ((label: string, name: string) => void) | null, onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null, onResult: ((name: string, label: string, text: string, callId: string) => void) | null, onReasoning: ((text: string) => void) | null, onAsk: ((question: string, options: string[]) => Promise<string>) | null): Promise<string> {
+    return AiServiceGateway.runToolLoop(gwMessages, transport, tools, permission, isAborted, onTool, onConfirm, onResult, onReasoning, onAsk);
   }
-
-  /**
-   * function calling 回路主体（网关整包与 SDK 流式两个传输层共用）：
-   * 请求 → 有 tool_calls 则执行并回填上下文 → 再请求，直到文本回答或轮次上限。
-   * transport 返回 null 表示用户已中断。
-   */
-  private static async runToolLoop(gwMessages: GatewayMessage[],
-    transport: (attach: AiToolDefinition[] | null) => Promise<GatewayReply | null>,
-    tools: AiToolDefinition[] | null, permission: AiPermissionMode,
-    isAborted: (() => boolean) | null,
-    onTool: ((label: string, name: string) => void) | null,
-    onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null,
-    onResult: ((name: string, label: string, text: string, callId: string) => void) | null,
-    onReasoning: ((text: string) => void) | null,
-    onAsk: ((question: string, options: string[]) => Promise<string>) | null): Promise<string> {
-    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-      if (isAborted !== null && isAborted()) {
-        return '';
-      }
-      // 剩 3 轮时提醒模型收敛：多数截断本可避免（软着陆只是兜底，别靠它）
-      if (round === MAX_TOOL_ROUNDS - 3) {
-        gwMessages.push({
-          role: 'user',
-          content: '（内部提示）工具调用仅剩 3 轮。请尽快汇总已获得的结果准备最终回答，不要再发起非必要的工具调用。',
-        });
-      }
-      // 最后一轮不带 tools，逼模型给最终回答而不是继续调工具
-      const attach: AiToolDefinition[] | null = round < MAX_TOOL_ROUNDS ? tools : null;
-      const reply: GatewayReply | null = await transport(attach);
-      if (reply === null) {
-        return '';
-      }
-      if (reply.reasoning.length > 0 && onReasoning !== null) {
-        // 整包模式：本轮思考过程一次性给出（工具回路多轮则逐轮累积）
-        onReasoning(reply.reasoning);
-      }
-      if (reply.calls !== null && reply.calls.length > 0) {
-        if (round === MAX_TOOL_ROUNDS) {
-          // 软着陆：模型此前已产出正文时保留部分成果，整条回复不再报废；
-          // 只有纯工具调用没正文可给才报错（此时前文也无总结价值）
-          if (reply.content.length > 0) {
-            return `${reply.content}\n\n（本次任务工具调用达到 ${MAX_TOOL_ROUNDS} 轮上限，以上为中断时的结果；如需继续请再发一条消息。）`;
-          }
-          throw new Error(`模型连续调用工具达到上限（${MAX_TOOL_ROUNDS} 轮），请把问题说具体些再试`);
-        }
-        const calls: Record<string, Object>[] = [];
-        for (let i = 0; i < reply.calls.length; i++) {
-          const c: GatewayToolCall = reply.calls[i];
-          const fn: Record<string, Object> = { 'name': c.name, 'arguments': c.arguments };
-          const call: Record<string, Object> = { 'id': c.id, 'type': 'function', 'function': fn };
-          calls.push(call);
-        }
-        gwMessages.push({ role: 'assistant', content: reply.content, tool_calls: calls });
-        // 同轮全是免确认（只读）工具 → Promise.all 并发：网络类工具单项要几秒，
-        // 串行白白叠加等待。含写工具保持串行——确认闸门与执行顺序必须和模型输出一致。
-        let allAuto: boolean = true;
-        for (let i = 0; i < reply.calls.length; i++) {
-          // ask_user 需要停下来等用户点选，不能与其他工具并发执行
-          if (AiTools.needsConfirm(reply.calls[i].name) || reply.calls[i].name === 'ask_user') {
-            allAuto = false;
-            break;
-          }
-        }
-        if (allAuto) {
-          const labels: string[] = [];
-          const tasks: Promise<string>[] = [];
-          for (let i = 0; i < reply.calls.length; i++) {
-            const c: GatewayToolCall = reply.calls[i];
-            const l: string = AiService.toolLabelFor(c.name);
-            labels.push(l);
-            if (onTool !== null) {
-              onTool(l, c.name);
-            }
-            tasks.push(AiService.toolRunFor(c.name, c.arguments, c.id));
-          }
-          const results: string[] = await Promise.all(tasks);
-          for (let i = 0; i < results.length; i++) {
-            gwMessages.push({ role: 'tool', content: results[i], tool_call_id: reply.calls[i].id });
-            if (onResult !== null) {
-              onResult(reply.calls[i].name, labels[i], results[i], reply.calls[i].id);
-            }
-          }
-          if (isAborted !== null && isAborted()) {
-            return '';
-          }
-          continue;
-        }
-        for (let i = 0; i < reply.calls.length; i++) {
-          const c: GatewayToolCall = reply.calls[i];
-          let label: string = AiService.toolLabelFor(c.name);
-          if (c.name === 'ask_user') {
-            // 反问工具不落执行器：把问题与选项抛给界面等待点选，答复作为工具结果回填。
-            // 没人能答（无卡片渠道/异常）按跳过处理，模型据此收敛而不是反复追问。
-            if (onTool !== null) {
-              onTool(label, c.name);
-            }
-            let answer: string = '';
-            if (onAsk !== null) {
-              const parsed: AskPayload = AiService.parseAskArgs(c.arguments);
-              try {
-                answer = await onAsk(parsed.question, parsed.options);
-              } catch (_error) {
-                answer = '';
-              }
-            }
-            const askResult: string = answer.length > 0
-              ? `用户选择了「${answer}」`
-              : '用户跳过了该问题（未作答）。请基于已有信息谨慎继续，不要反复追问';
-            gwMessages.push({ role: 'tool', content: askResult, tool_call_id: c.id });
-            if (onResult !== null) {
-              onResult(c.name, label, askResult, c.id);
-            }
-            if (isAborted !== null && isAborted()) {
-              return '';
-            }
-            continue;
-          }
-          if (AiTools.needsConfirm(c.name)) {
-            if (permission === 'readonly') {
-              // 只读模式 tools 里本就没有写工具；走到这里说明模型幻觉调用，回路层同样挡下
-              const blocked: string = '当前为只读权限模式，写操作不可执行';
-              gwMessages.push({ role: 'tool', content: blocked, tool_call_id: c.id });
-              if (onResult !== null) {
-                onResult(c.name, label, blocked, c.id);
-              }
-              continue;
-            }
-            if (permission === 'confirm') {
-              // 写工具先过用户确认闸门；没人能确认（onConfirm 缺省）就一律拒绝
-              let approved: boolean = false;
-              if (onConfirm !== null) {
-                approved = await onConfirm(label, c.arguments);
-              }
-              if (!approved) {
-                gwMessages.push({ role: 'tool', content: '用户拒绝了该操作', tool_call_id: c.id });
-                if (onResult !== null) {
-                  onResult(c.name, label, '用户拒绝了该操作', c.id);
-                }
-                continue;
-              }
-            } else {
-              // 自动放行：不弹确认，活动时间线标注执行方式
-              label = `${label}（自动执行）`;
-            }
-          }
-          if (onTool !== null) {
-            onTool(label, c.name);
-          }
-          const result: string = await AiService.toolRunFor(c.name, c.arguments, '');
-          gwMessages.push({ role: 'tool', content: result, tool_call_id: c.id });
-          if (onResult !== null) {
-            onResult(c.name, label, result, c.id);
-          }
-          if (isAborted !== null && isAborted()) {
-            return '';
-          }
-        }
-        continue;
-      }
-      if (reply.content.length === 0) {
-        throw new Error('AI 返回内容为空，请检查模型是否可用');
-      }
-      return reply.content;
-    }
-    return '';
+  /** 委托 AiServiceGateway.parseAskArgs（拆分：见文件头说明）。 */
+  static parseAskArgs(argsJson: string): AskPayload {
+    return AiServiceGateway.parseAskArgs(argsJson);
   }
-
-  /**
-   * 解析 ask_user 参数：问题 + 候选项。options 约定为顿号分隔串，但模型常交英文逗号/
-   * 分号甚至 JSON 数组，这里全部归一为顿号再拆分，最多取 6 项、去空白。
-   */
-  private static parseAskArgs(argsJson: string): AskPayload {
-    let question: string = '';
-    const options: string[] = [];
-    try {
-      const obj: Record<string, Object> = JSON.parse(argsJson) as Record<string, Object>;
-      const qRaw: Object | undefined = obj['question'];
-      if (typeof qRaw === 'string') {
-        question = qRaw as string;
-      }
-      let text: string = '';
-      const oRaw: Object | undefined = obj['options'];
-      if (typeof oRaw === 'string') {
-        text = oRaw as string;
-      } else if (Array.isArray(oRaw)) {
-        const parts: string[] = [];
-        for (const it of oRaw as Object[]) {
-          if (typeof it === 'string') {
-            parts.push(it as string);
-          }
-        }
-        text = parts.join('、');
-      }
-      text = text.replace(/，/g, '、').replace(/,/g, '、')
-        .replace(/；/g, '、').replace(/;/g, '、');
-      for (const seg of text.split('、')) {
-        const s: string = seg.trim();
-        if (s.length > 0 && options.length < 6) {
-          options.push(s);
-        }
-      }
-    } catch (_error) {
-      // 参数坏 JSON：返回空壳，卡片只剩问题文案，用户仍可跳过
-    }
-    return { question: question, options: options };
+  /** 委托 AiServiceGateway.consumeStreamChunks（拆分：见文件头说明）。 */
+  static consumeStreamChunks(chunks: ChatCompletionChunk[], slots: GatewayToolCall[], reply: GatewayReply, onDelta: (text: string) => void, onReasoning: ((text: string) => void) | null): void {
+    AiServiceGateway.consumeStreamChunks(chunks, slots, reply, onDelta, onReasoning);
   }
-
-  /**
-   * SDK 流式传输层：单轮 stream 请求，正文经 onDelta 打字机回调，
-   * 同时运行时累积 tool_calls 分片（SDK onData 的 chunk 是 JSON.parse 透传，
-   * 与 reasoning_content 同源——类型层没声明不等于运行时没带）。
-   * 分片按 OpenAI 标准：首片带 id/name，后续片按 index 续 arguments。
-   * 返回 null 表示用户中断。
-   */
-  /**
-   * 解析一批流式 chunk：正文/思考累积回调，tool_calls 按 index 归槽。
-   * 全部访问前判空、index 钳制——服务商畸形分片（缺 delta、负/巨 index）
-   * 在这里抛异常等于原生回调栈崩溃，绝不允许外逃。
-   */
-  private static consumeStreamChunks(chunks: ChatCompletionChunk[], slots: GatewayToolCall[],
-    reply: GatewayReply, onDelta: (text: string) => void,
-    onReasoning: ((text: string) => void) | null): void {
-    let piece: string = '';
-    let think: string = '';
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk: Object | undefined = chunks[i] as Object;
-      if (chunk === undefined || chunk === null || typeof chunk !== 'object') {
-        continue;
-      }
-      const choices: Object | undefined = (chunk as Record<string, Object>)['choices'];
-      if (!Array.isArray(choices) || (choices as Object[]).length === 0) {
-        continue;
-      }
-      const first: Object = (choices as Object[])[0];
-      if (first === undefined || first === null || typeof first !== 'object') {
-        continue;
-      }
-      const deltaRaw: Object | undefined = (first as Record<string, Object>)['delta'];
-      if (deltaRaw === undefined || deltaRaw === null || typeof deltaRaw !== 'object') {
-        // 尾包常见形态：只有 finish_reason 没有 delta
-        continue;
-      }
-      const deltaObj: Record<string, Object> = deltaRaw as Record<string, Object>;
-      const content: Object | undefined = deltaObj['content'];
-      if (typeof content === 'string') {
-        piece += content;
-      }
-      const reasoning: Object | undefined = deltaObj['reasoning_content'];
-      if (typeof reasoning === 'string') {
-        think += reasoning;
-      }
-      const tcs: Object | undefined = deltaObj['tool_calls'];
-      if (Array.isArray(tcs)) {
-        const list: Object[] = tcs as Object[];
-        for (let j = 0; j < list.length; j++) {
-          const tc: Object = list[j];
-          if (tc === null || typeof tc !== 'object') {
-            continue;
-          }
-          const rec: Record<string, Object> = tc as Record<string, Object>;
-          const idxRaw: Object | undefined = rec['index'];
-          let idx: number = typeof idxRaw === 'number' ? idxRaw : slots.length;
-          if (idx < 0 || idx >= MAX_TOOL_SLOTS) {
-            // 非法 index（异常流/乱码）：并入末槽，slots 绝不无界扩容
-            idx = slots.length > 0 ? slots.length - 1 : 0;
-          }
-          const fn: Object | undefined = rec['function'];
-          const fnRec: Record<string, Object> | null =
-            fn !== undefined && fn !== null && typeof fn === 'object' ? fn as Record<string, Object> : null;
-          const idPiece: string = typeof rec['id'] === 'string' ? rec['id'] as string : '';
-          const namePiece: string = fnRec !== null && typeof fnRec['name'] === 'string' ?
-            fnRec['name'] as string : '';
-          const argPiece: string = fnRec !== null && typeof fnRec['arguments'] === 'string' ?
-            fnRec['arguments'] as string : '';
-          while (slots.length <= idx) {
-            slots.push({ id: '', name: '', arguments: '' });
-          }
-          if (idPiece.length > 0) {
-            slots[idx].id = idPiece;
-          }
-          if (namePiece.length > 0) {
-            slots[idx].name += namePiece;
-          }
-          slots[idx].arguments += argPiece;
-        }
-      }
-    }
-    if (think.length > 0 && onReasoning !== null) {
-      onReasoning(think);
-    }
-    if (piece.length > 0) {
-      reply.content += piece;
-      onDelta(piece);
-    }
+  /** 委托 AiServiceGateway.sdkStreamRound（拆分：见文件头说明）。 */
+  static sdkStreamRound(client: OpenAI, config: AiConfig, gwMessages: GatewayMessage[], maxTokens: number, attach: AiToolDefinition[] | null, handle: AiAbortHandle, onDelta: (text: string) => void, onReasoning: ((text: string) => void) | null, sessionBox: AiSessionHolder[]): Promise<GatewayReply | null> {
+    return AiServiceGateway.sdkStreamRound(client, config, gwMessages, maxTokens, attach, handle, onDelta, onReasoning, sessionBox);
   }
-
-  private static sdkStreamRound(client: OpenAI, config: AiConfig, gwMessages: GatewayMessage[],
-    maxTokens: number, attach: AiToolDefinition[] | null, handle: AiAbortHandle,
-    onDelta: (text: string) => void, onReasoning: ((text: string) => void) | null,
-    sessionBox: AiSessionHolder[]): Promise<GatewayReply | null> {
-    return new Promise<GatewayReply | null>((resolve, reject): void => {
-      const reply: GatewayReply = { content: '', calls: null, reasoning: '' };
-      const slots: GatewayToolCall[] = [];
-      let settled: boolean = false;
-      const payload: Record<string, Object> = {
-        'model': config.model,
-        'messages': gwMessages,
-        'stream': true,
-        'temperature': config.temperature,
-        'max_tokens': maxTokens,
-      };
-      if (attach !== null && attach.length > 0) {
-        payload['tools'] = attach;
-      }
-      const result = client.chat.completions.create(
-        payload as Object as ChatCompletionCreateParamsBase, {
-          onData: (chunks: ChatCompletionChunk[]): void => {
-            if (handle.aborted || settled) {
-              return;
-            }
-            // 本回调是 SDK（napi）→JS 的落点：这里抛出的未捕获异常不会进
-            // Promise 链，而是沿原生栈直接终止应用（用户侧=聊天崩溃退出）。
-            // 故解析整体包底：畸形 chunk 只丢当条，宁可少一段打字机。
-            try {
-              AiService.consumeStreamChunks(chunks, slots, reply, onDelta, onReasoning);
-            } catch (_error) {
-              // 服务商畸形分片静默跳过
-            }
-          },
-          onError: (error: Error): void => {
-            if (!settled) {
-              settled = true;
-              reject(new Error(AiService.friendlyMessage(error.message)));
-            }
-          },
-        });
-      sessionBox[0] = result.session as AiSessionHolder;
-      result.response.then((response): void => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        if (handle.aborted) {
-          resolve(null);
-          return;
-        }
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          reject(new Error(AiService.httpErrorText(response.statusCode,
-            AiService.responseText(response.body))));
-          return;
-        }
-        reply.calls = slots.length > 0 ? slots : null;
-        resolve(reply);
-      }).catch((error: Error): void => {
-        if (!settled) {
-          settled = true;
-          reject(new Error(AiService.friendlyMessage(error.message)));
-        }
-      });
-    });
-  }
-
-  /** 解析网关整包响应：正文 + tool_calls（不依赖 SDK 的 ChatCompletionMessage 类型）。 */
-  private static parseGatewayReply(raw: string): GatewayReply {
-    const reply: GatewayReply = { content: '', calls: null, reasoning: '' };
-    if (raw.length === 0) {
-      return reply;
-    }
-    let root: Record<string, Object>;
-    try {
-      root = JSON.parse(raw) as Record<string, Object>;
-    } catch (_error) {
-      throw new Error('AI 响应解析失败');
-    }
-    const errorObj = root['error'] as Record<string, Object> | undefined;
-    if (errorObj !== undefined) {
-      const message = errorObj['message'];
-      if (typeof message === 'string') {
-        throw new Error(message as string);
-      }
-    }
-    const choices = root['choices'] as Object[] | undefined;
-    if (choices === undefined || choices.length === 0) {
-      return reply;
-    }
-    const first = choices[0] as Record<string, Object>;
-    const message = first['message'] as Record<string, Object> | undefined;
-    if (message === undefined) {
-      return reply;
-    }
-    const content = message['content'];
-    reply.content = typeof content === 'string' ? content as string : '';
-    const reasoning = message['reasoning_content'];
-    reply.reasoning = typeof reasoning === 'string' ? reasoning as string : '';
-    const rawCalls = message['tool_calls'] as Object[] | undefined;
-    if (rawCalls === undefined || rawCalls.length === 0) {
-      return reply;
-    }
-    const calls: GatewayToolCall[] = [];
-    for (let i = 0; i < rawCalls.length; i++) {
-      const c = rawCalls[i] as Record<string, Object>;
-      const fn = c['function'] as Record<string, Object> | undefined;
-      if (fn === undefined) {
-        continue;
-      }
-      const id = c['id'];
-      const name = fn['name'];
-      const args = fn['arguments'];
-      calls.push({
-        id: typeof id === 'string' ? id as string : '',
-        name: typeof name === 'string' ? name as string : '',
-        arguments: typeof args === 'string' ? args as string : '{}',
-      });
-    }
-    reply.calls = calls.length > 0 ? calls : null;
-    return reply;
-  }
-
-  /** 容错用户输入：去掉末尾 `/chat/completions` 与多余斜杠，SDK 只接受 base URL。 */
-  private static normalizeBaseUrl(baseUrl: string): string {
-    let base: string = baseUrl.trim();
-    while (base.endsWith('/')) {
-      base = base.substring(0, base.length - 1);
-    }
-    const suffix: string = '/chat/completions';
-    if (base.endsWith(suffix)) {
-      base = base.substring(0, base.length - suffix.length);
-    }
-    return base;
-  }
-
-  /** `rcp.Response.body` 是 ArrayBuffer，按 UTF-8 解文本。 */
-  private static responseText(body: ArrayBuffer | undefined): string {
-    if (body === undefined || body.byteLength === 0) {
-      return '';
-    }
-    const decoder = util.TextDecoder.create('utf-8', { ignoreBOM: true });
-    return decoder.decodeToString(new Uint8Array(body));
-  }
-
-  private static parseContent(raw: string): string {
-    if (raw.length === 0) {
-      return '';
-    }
-    try {
-      const root = JSON.parse(raw) as Record<string, Object>;
-      const choices = root['choices'] as Object[] | undefined;
-      if (choices !== undefined && choices.length > 0) {
-        const first = choices[0] as Record<string, Object>;
-        const message = first['message'] as Record<string, Object> | undefined;
-        if (message !== undefined) {
-          const content = message['content'];
-          if (typeof content === 'string') {
-            return content as string;
-          }
-        }
-      }
-      const errorObj = root['error'] as Record<string, Object> | undefined;
-      if (errorObj !== undefined) {
-        const message = errorObj['message'];
-        if (typeof message === 'string') {
-          throw new Error(message as string);
-        }
-      }
-      return '';
-    } catch (error) {
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error('AI 响应解析失败');
-    }
-  }
-
-  /** 把 SDK / 网络层的原始错误翻成人话；识别不出来就原样带上。 */
-  private static friendlyMessage(message: string): string {
-    const text: string = message.trim();
-    if (text.length === 0) {
-      return 'AI 请求失败';
-    }
-    if (text.indexOf('2300007') >= 0 || text.indexOf('2300006') >= 0 ||
-      text.toLowerCase().indexOf('unable to resolve host') >= 0) {
-      return '无法连接 AI 服务，请检查接口地址与网络';
-    }
-    if (text.indexOf('2300028') >= 0 || text.toLowerCase().indexOf('timeout') >= 0) {
-      return 'AI 请求超时，请检查网络或换用更快的模型';
-    }
-    return `AI 请求失败：${text}`;
-  }
-
-  private static httpErrorText(status: number, body: string): string {
-    if (status === 401) {
-      return 'API Key 无效或已过期（HTTP 401）';
-    }
-    if (status === 402) {
-      return '账户余额不足（HTTP 402）';
-    }
-    if (status === 404) {
-      return '接口地址不正确，需以 /v1 结尾（HTTP 404）';
-    }
-    if (status === 429) {
-      return '请求过于频繁或超出配额，请稍后再试（HTTP 429）';
-    }
-    const detail: string = AiService.extractErrorDetail(body);
-    if (detail.length > 0) {
-      return `AI 服务返回 ${status}：${detail}`;
-    }
-    return `AI 服务返回 HTTP ${status}`;
-  }
-
-  private static extractErrorDetail(body: string): string {
-    if (body.length === 0) {
-      return '';
-    }
-    try {
-      const root = JSON.parse(body) as Record<string, Object>;
-      const errorObj = root['error'] as Record<string, Object> | undefined;
-      if (errorObj !== undefined) {
-        const message = errorObj['message'];
-        if (typeof message === 'string') {
-          return (message as string).substring(0, 120);
-        }
-      }
-    } catch (_error) {
-      return body.substring(0, 120);
-    }
-    return '';
+  /** 委托 AiServiceGateway.parseGatewayReply（拆分：见文件头说明）。 */
+  static parseGatewayReply(raw: string): GatewayReply {
+    return AiServiceGateway.parseGatewayReply(raw);
   }
 }
 
@@ -1657,40 +602,3 @@ export interface AiAbortHandle {
   destroy?: () => void;
 }
 
-/**
- * 网关通道专用消息：只有 chatViaGateway 直连时会用到 tool_calls / tool_call_id，
- * 字段名对齐 OpenAI 协议（回填给服务端时必须一致）。
- */
-interface GatewayMessage {
-  role: string;
-  /** 纯文本或 OpenAI 多模态 content 数组（带图时）。 */
-  content?: Object;
-  tool_calls?: Record<string, Object>[];
-  tool_call_id?: string;
-}
-
-/** 响应里的一条工具调用（已拍平 function 嵌套）。 */
-interface GatewayToolCall {
-  id: string;
-  name: string;
-  arguments: string;
-}
-
-/** 整包响应的解析结果。 */
-interface GatewayReply {
-  content: string;
-  calls: GatewayToolCall[] | null;
-  /** 推理模型的思考过程（OpenAI 兼容字段 reasoning_content，整包模式一次给全）。 */
-  reasoning: string;
-}
-
-/** SDK 会话只用到 cancel()；单独声明避免依赖 rcp 的完整类型。 */
-interface AiSessionHolder {
-  cancel: () => void;
-}
-
-/** ask_user 参数解析结果：问题 + 拆好的候选项。 */
-interface AskPayload {
-  question: string;
-  options: string[];
-}

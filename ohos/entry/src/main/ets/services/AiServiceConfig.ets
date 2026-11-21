@@ -1,0 +1,401 @@
+/**
+ * AiService 配置持久化（拆分自 AiService.ets）：preferences 读写、按服务商 API Key、
+ * 自定义服务商清单、语音/权限/上下文等设置项。接口契约仍在 AiService.ets。
+ */
+import { OpenAI } from '@iuroc/openai';
+import { rcp } from '@kit.RemoteCommunicationKit';
+import { TalebookService } from './TalebookService';
+import type { AiPermissionMode } from './AiTools';
+import { McpService } from './McpService';
+import type { AiProviderPreset, AiConfig } from './AiService';
+import { AiServiceHttp } from './AiServiceHttp';
+
+export class AiServiceConfig {
+  /** 读取当前配置（Key 只回传是否存在）。 */
+  static loadConfig(): AiConfig {
+    AiServiceConfig.migrateLegacyKey();
+    const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
+    const preset: AiProviderPreset = AiServiceConfig.presetOf(providerId);
+    const baseUrl: string = TalebookService.secureGet(KEY_BASE_URL);
+    const model: string = TalebookService.prefGet(KEY_MODEL);
+    const temperatureText: string = TalebookService.prefGet(KEY_TEMPERATURE);
+    const temperature: number = temperatureText.length > 0 ? Number(temperatureText) : DEFAULT_TEMPERATURE;
+    const finalModel: string = model.length > 0 ? model : preset.model;
+    const visionOverride: string = TalebookService.prefGet(KEY_VISION);
+    const contextText: string = TalebookService.prefGet(KEY_CONTEXT);
+    const contextK: number = contextText.length > 0 ? Number(contextText) : DEFAULT_CONTEXT_K;
+    return {
+      providerId: providerId,
+      baseUrl: baseUrl.length > 0 ? baseUrl : preset.baseUrl,
+      model: finalModel,
+      hasKey: TalebookService.secureGet(AiServiceConfig.apiKeyKey(providerId)).length > 0,
+      temperature: Number.isFinite(temperature) ? temperature : DEFAULT_TEMPERATURE,
+      vision: visionOverride === 'on' ? true :
+        visionOverride === 'off' ? false : AiServiceConfig.detectVision(finalModel),
+      visionOverride: visionOverride,
+      contextLength: Number.isFinite(contextK) && contextK > 0 ? contextK : DEFAULT_CONTEXT_K,
+    };
+  }
+
+  /** 按模型名猜是否支持图片：各家视觉模型命名都带特征词，猜错时用户可在设置里手动覆盖。 */
+  static detectVision(model: string): boolean {
+    return /vl|vision|4o|omni|gemini|claude|llava|qvq/i.test(model);
+  }
+
+  /** 上下文窗口（K tokens）→ 对话页携带的历史轮数（一轮=一问一答，另留 tools/图片开销）。 */
+  static contextRounds(contextK: number): number {
+    if (contextK <= 4) {
+      return 4;
+    }
+    if (contextK <= 8) {
+      return 8;
+    }
+    if (contextK <= 32) {
+      return 16;
+    }
+    if (contextK <= 128) {
+      return 30;
+    }
+    return 50;
+  }
+
+  /** 读权限模式（非法/未设置值一律回落为逐笔确认）。 */
+  static loadPermission(): AiPermissionMode {
+    const raw: string = TalebookService.prefGet(KEY_PERMISSION, 'confirm');
+    if (raw === 'readonly' || raw === 'auto') {
+      return raw;
+    }
+    return 'confirm';
+  }
+
+  static savePermission(mode: AiPermissionMode): void {
+    TalebookService.prefSet(KEY_PERMISSION, mode);
+  }
+
+  static loadAutoSpeak(): boolean {
+    return TalebookService.prefGet(KEY_AUTO_SPEAK, '0') === '1';
+  }
+
+  static saveAutoSpeak(on: boolean): void {
+    TalebookService.prefSet(KEY_AUTO_SPEAK, on ? '1' : '0');
+  }
+
+  /**
+   * 语音通话页用的对话模型配置。未单独配置（或配置的服务商已被删除）时跟随全局；
+   * TTS/ASR 载体仍走 Token Plan 网关（QwenAudioService 按全局配置派生），这里只换「思考的大脑」。
+   */
+  static loadVoiceConfig(): AiConfig {
+    const config: AiConfig = AiServiceConfig.loadConfig();
+    const providerId: string = TalebookService.prefGet(KEY_VOICE_PROVIDER);
+    if (providerId.length === 0 || providerId === config.providerId) {
+      return config;
+    }
+    const preset: AiProviderPreset = AiServiceConfig.presetOf(providerId);
+    const model: string = TalebookService.prefGet(KEY_VOICE_MODEL);
+    const finalModel: string = model.length > 0 ? model : preset.model;
+    return {
+      providerId: providerId,
+      // 自定义服务商的地址就存在预设里；预设服务商被改过全局地址时无法区分，按预设走
+      baseUrl: preset.baseUrl,
+      model: finalModel,
+      hasKey: TalebookService.secureGet(AiServiceConfig.apiKeyKey(providerId)).length > 0,
+      temperature: config.temperature,
+      vision: AiServiceConfig.detectVision(finalModel),
+      visionOverride: '',
+      contextLength: config.contextLength,
+    };
+  }
+
+  /** 语音通话是否已独立配置了服务商。 */
+  static hasVoiceProvider(): boolean {
+    return TalebookService.prefGet(KEY_VOICE_PROVIDER).length > 0;
+  }
+
+  /** `providerId` 传空串 = 恢复跟随全局。`model` 空 = 用该服务商默认模型。 */
+  static saveVoiceConfig(providerId: string, model: string): void {
+    if (providerId.length === 0) {
+      TalebookService.prefSet(KEY_VOICE_PROVIDER, '');
+      TalebookService.prefSet(KEY_VOICE_MODEL, '');
+      return;
+    }
+    TalebookService.prefSet(KEY_VOICE_PROVIDER, providerId);
+    TalebookService.prefSet(KEY_VOICE_MODEL, model.trim());
+  }
+
+  /** 已保存的语音通话服务商 id（''=跟随全局）。 */
+  static loadVoiceProviderId(): string {
+    return TalebookService.prefGet(KEY_VOICE_PROVIDER);
+  }
+
+  /** 已保存的语音通话模型名（''=用服务商默认）。 */
+  static loadVoiceModel(): string {
+    return TalebookService.prefGet(KEY_VOICE_MODEL);
+  }
+
+  /** 播报引擎：'system'=系统语音（CoreSpeechKit，默认）、'cloud'=Token Plan 云端 TTS。 */
+  static loadSpeakEngine(): string {
+    return TalebookService.prefGet(KEY_SPEAK_ENGINE, 'system') === 'cloud' ? 'cloud' : 'system';
+  }
+
+  static saveSpeakEngine(engine: string): void {
+    TalebookService.prefSet(KEY_SPEAK_ENGINE, engine === 'cloud' ? 'cloud' : 'system');
+  }
+
+  /** 通话模式：'realtime'=WS 全双工（默认，打断式）、'turn'=轮转（可用自选对话模型）。 */
+  static loadCallMode(): string {
+    return TalebookService.prefGet(KEY_CALL_MODE, 'realtime') === 'turn' ? 'turn' : 'realtime';
+  }
+
+  static saveCallMode(mode: string): void {
+    TalebookService.prefSet(KEY_CALL_MODE, mode === 'turn' ? 'turn' : 'realtime');
+  }
+
+  /** 各服务商 Key 的存储键；自定义服务商 id 带时间戳，不与前缀冲突。 */
+  static apiKeyKey(providerId: string): string {
+    return KEY_API_KEY_PREFIX + providerId;
+  }
+
+  /** 读取指定服务商的 API Key（未配置返回空串）。 */
+  static apiKeyFor(providerId: string): string {
+    AiServiceConfig.migrateLegacyKey();
+    return TalebookService.secureGet(AiServiceConfig.apiKeyKey(providerId));
+  }
+
+  static hasKeyFor(providerId: string): boolean {
+    return AiServiceConfig.apiKeyFor(providerId).length > 0;
+  }
+
+  /** 旧版单 Key 一次性迁移：挪进当前所选服务商的槽位后清空。 */
+  static migrateLegacyKey(): void {
+    const legacy: string = TalebookService.secureGet(KEY_API_KEY);
+    if (legacy.length === 0) {
+      return;
+    }
+    const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
+    TalebookService.secureSet(AiServiceConfig.apiKeyKey(providerId), legacy);
+    TalebookService.secureSet(KEY_API_KEY, '');
+  }
+
+  /** 本机添加的自定义服务商列表（JSON 落 preferences，坏条目丢弃）。 */
+  static listCustomProviders(): AiProviderPreset[] {
+    const out: AiProviderPreset[] = [];
+    const raw: string = TalebookService.prefGet(KEY_CUSTOM_PROVIDERS);
+    if (raw.length === 0) {
+      return out;
+    }
+    let items: Object[];
+    try {
+      items = JSON.parse(raw) as Object[];
+    } catch (_error) {
+      return out;
+    }
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i] as Record<string, string>;
+      const id: string | undefined = it['id'];
+      const name: string | undefined = it['name'];
+      const baseUrl: string | undefined = it['baseUrl'];
+      const model: string | undefined = it['model'];
+      if (id === undefined || name === undefined || id.length === 0 || name.length === 0) {
+        continue;
+      }
+      out.push({
+        id: id,
+        name: name,
+        baseUrl: baseUrl === undefined ? '' : baseUrl,
+        model: model === undefined ? '' : model,
+        vision: false,
+      });
+    }
+    return out;
+  }
+
+  /** 全部可选服务商：预设 + 本机关加的自定义。 */
+  static listProviders(): AiProviderPreset[] {
+    const out: AiProviderPreset[] = [];
+    for (let i = 0; i < AI_PROVIDERS.length; i++) {
+      out.push(AI_PROVIDERS[i]);
+    }
+    const custom: AiProviderPreset[] = AiServiceConfig.listCustomProviders();
+    for (let i = 0; i < custom.length; i++) {
+      out.push(custom[i]);
+    }
+    return out;
+  }
+
+  /** 添加一个本地自定义服务商并返回其预设。 */
+  static addCustomProvider(name: string, baseUrl: string, model: string): AiProviderPreset {
+    const trimmedName: string = name.trim();
+    const base: string = AiServiceHttp.normalizeBaseUrl(baseUrl);
+    if (trimmedName.length === 0 || base.length === 0) {
+      throw new Error('服务商名称与接口地址不能为空');
+    }
+    const preset: AiProviderPreset = {
+      id: `custom-${Date.now()}`,
+      name: trimmedName,
+      baseUrl: base,
+      model: model.trim(),
+      vision: false,
+    };
+    const list: AiProviderPreset[] = AiServiceConfig.listCustomProviders();
+    list.push(preset);
+    AiServiceConfig.saveCustomProviders(list);
+    return preset;
+  }
+
+  /** 删除自定义服务商，连带清掉它保存的 Key。 */
+  static removeCustomProvider(id: string): void {
+    const list: AiProviderPreset[] = AiServiceConfig.listCustomProviders();
+    const kept: AiProviderPreset[] = [];
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].id === id) {
+        TalebookService.secureSet(AiServiceConfig.apiKeyKey(id), '');
+      } else {
+        kept.push(list[i]);
+      }
+    }
+    AiServiceConfig.saveCustomProviders(kept);
+  }
+
+  static saveCustomProviders(list: AiProviderPreset[]): void {
+    TalebookService.prefSet(KEY_CUSTOM_PROVIDERS, JSON.stringify(list));
+  }
+
+  /**
+   * 本地常用模型清单（按服务商分开存）：设置页手动添加/拉取勾选写入，
+   * 对话页顶栏快切菜单优先用它——免去每次现拉全量列表。
+   */
+  static loadProviderModels(providerId: string): string[] {
+    const raw: string = TalebookService.prefGet(`${KEY_PROVIDER_MODELS_PREFIX}${providerId}`, '');
+    if (raw.length === 0) {
+      return [];
+    }
+    try {
+      const arr: Object[] = JSON.parse(raw) as Object[];
+      const out: string[] = [];
+      for (let i = 0; i < arr.length; i++) {
+        if (typeof arr[i] === 'string') {
+          out.push(arr[i] as string);
+        }
+      }
+      return out;
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  /** 覆盖保存某服务商的模型清单；空数组即清除该键。 */
+  static saveProviderModels(providerId: string, models: string[]): void {
+    TalebookService.prefSet(`${KEY_PROVIDER_MODELS_PREFIX}${providerId}`,
+      models.length === 0 ? '' : JSON.stringify(models));
+  }
+
+  static presetOf(providerId: string): AiProviderPreset {
+    const providers: AiProviderPreset[] = AiServiceConfig.listProviders();
+    for (let i = 0; i < providers.length; i++) {
+      if (providers[i].id === providerId) {
+        return providers[i];
+      }
+    }
+    return AI_PROVIDERS[AI_PROVIDERS.length - 1];
+  }
+
+  /** 保存配置。`apiKey` 传空串表示保持原值不变。 */
+  static saveConfig(providerId: string, baseUrl: string, model: string, apiKey: string,
+    temperature: number, visionOverride: string = '', contextLength: number = DEFAULT_CONTEXT_K): void {
+    TalebookService.prefSet(KEY_PROVIDER, providerId);
+    TalebookService.secureSet(KEY_BASE_URL, AiServiceHttp.normalizeBaseUrl(baseUrl));
+    TalebookService.prefSet(KEY_MODEL, model.trim());
+    TalebookService.prefSet(KEY_TEMPERATURE, `${temperature}`);
+    TalebookService.prefSet(KEY_VISION, visionOverride);
+    TalebookService.prefSet(KEY_CONTEXT, `${contextLength}`);
+    if (apiKey.length > 0) {
+      TalebookService.secureSet(AiServiceConfig.apiKeyKey(providerId), apiKey.trim());
+    }
+    // 服务商/Key 变了：MCP 工具集与会话缓存作废，下次发送前重新握手
+    McpService.reset();
+  }
+
+  static clearKey(): void {
+    const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
+    TalebookService.secureSet(AiServiceConfig.apiKeyKey(providerId), '');
+    TalebookService.secureSet(KEY_API_KEY, '');
+  }
+
+  /** 是否已配置到可用状态（地址、模型、Key 都有）。 */
+  static isReady(): boolean {
+    const config: AiConfig = AiServiceConfig.loadConfig();
+    return config.baseUrl.length > 0 && config.model.length > 0 && config.hasKey;
+  }
+
+  /**
+   * 拉取服务商的模型 id 列表（`GET {base}/models`，OpenAI 协议通用）。
+   * `apiKeyInput` 传空串表示用该服务商已保存的 Key——设置页可先填 Key 再拉，也可拉已存的。
+   *
+   * 不用 SDK 的 `models.list()`：其 .d.ets 声明返回 `Model[]`，运行时实际 resolve 了
+   * undefined（2026-11-17 上板实测），这里直接用 rcp 发一个带鉴权头的 GET。
+   */
+}
+
+// —— 配置区常量（原 AiService 顶层，拆分后由本文件持有）——
+
+export const AI_PROVIDERS: AiProviderPreset[] = [
+  { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', vision: true },
+  { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', vision: false },
+  { id: 'moonshot', name: 'Kimi (Moonshot)', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k', vision: false },
+  { id: 'zhipu', name: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash', vision: false },
+  { id: 'qwen', name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus', vision: false },
+  { id: 'siliconflow', name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', vision: false },
+  { id: 'ollama', name: 'Ollama (本地)', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b', vision: false },
+  // OpenCode Go 订阅专用网关（Console 按量走 opencode.ai/inference/openai/v1），
+  // Key 在 opencode.ai/console 创建；网关强制 x-opencode-session 请求头（见 gatewayConfiguration）
+  { id: 'opencode', name: 'OpenCode (Go)', baseUrl: 'https://opencode.ai/zen/go/v1', model: 'big-pickle',
+    vision: false },
+  // Token Plan 订阅网关：除文字模型外，音频三端点（ASR/TTS/realtime）见 docs/token-plan-audio-protocol-2026-11-20.md
+  { id: 'qwen-tokenplan', name: 'Token Plan (千问)', baseUrl: 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1',
+    model: 'qwen3.6-flash', vision: false },
+  { id: 'custom', name: '自定义', baseUrl: '', model: '', vision: false },
+];
+
+/** 一条对话消息（OpenAI 协议）。 */
+export const KEY_PROVIDER: string = 'ai_provider';
+export const KEY_BASE_URL: string = 'ai_base_url';
+export const KEY_MODEL: string = 'ai_model';
+/** 对话页：AI 回复完成后自动用 Token Plan TTS 朗读（默认关）。 */
+export const KEY_AUTO_SPEAK: string = 'ai_auto_speak';
+/** 语音通话的对话模型：独立服务商/模型；provider 键为空 = 跟随全局配置。 */
+export const KEY_VOICE_PROVIDER: string = 'ai_voice_provider';
+export const KEY_VOICE_MODEL: string = 'ai_voice_model';
+/** AI 回复播报引擎：'system'（默认）/'cloud'（Token Plan TTS）。 */
+export const KEY_SPEAK_ENGINE: string = 'ai_speak_engine';
+/** 语音通话模式：'realtime'（默认，WS 全双工）/'turn'（轮转）。 */
+export const KEY_CALL_MODE: string = 'ai_call_mode';
+/** 旧版单 Key；首次读取时迁移到当前服务商后清空。 */
+export const KEY_API_KEY: string = 'ai_api_key';
+export const KEY_API_KEY_PREFIX: string = 'ai_api_key_';
+export const KEY_CUSTOM_PROVIDERS: string = 'ai_custom_providers';
+export const KEY_TEMPERATURE: string = 'ai_temperature';
+/** OpenCode 网关要求的稳定会话 id（首次使用时生成并持久化）。 */
+export const KEY_SESSION_ID: string = 'ai_opencode_session';
+/** vision 手动覆盖：'on'/'off'；空串=按模型名自动检测。 */
+export const KEY_VISION: string = 'ai_vision';
+export const KEY_CONTEXT: string = 'ai_context_length';
+/** 权限模式：'readonly'/'confirm'/'auto'；未设置时按逐笔确认。 */
+export const KEY_PERMISSION: string = 'ai_permission_mode';
+/** 本地常用模型清单（按服务商分开存）：`ai_provider_models_<id>` = JSON 字符串数组。 */
+export const KEY_PROVIDER_MODELS_PREFIX: string = 'ai_provider_models_';
+
+/** 上下文长度档位（K tokens），设置页下拉与轮数映射共用。 */
+export const CONTEXT_LENGTH_OPTIONS: number[] = [4, 8, 32, 128, 200];
+export const DEFAULT_CONTEXT_K: number = 8;
+
+export const DEFAULT_TEMPERATURE: number = 0.7;
+export const TIMEOUT_MS: number = 180000;
+/** 工具回路最多执行的 tool_calls 轮数；再多一轮不带 tools 逼模型收尾。
+ *  上限按「长任务」定：批量场景如 4 本书×（搜+下载）=8 轮，12 轮留余量；
+ *  同时兜住模型死循环烧 token。退出对话页不打断回路（后台完成落盘），分钟级任务可行。 */
+export const MAX_TOOL_ROUNDS: number = 12;
+/** 网关单轮请求最多尝试次数（1 次原始 + 2 次重试）：网络抖动/429/5xx 不该报废整条回复。 */
+export const MAX_GATEWAY_ATTEMPTS: number = 3;
+/** 单轮流式 tool_calls 槽位上限（OpenAI 标准 index 从 0 连续）：异常 index 钳制于此，防无界扩容。 */
+export const MAX_TOOL_SLOTS: number = 64;
+
