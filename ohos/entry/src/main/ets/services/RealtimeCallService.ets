@@ -8,6 +8,7 @@ import { audio } from '@kit.AudioKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AiService } from './AiService';
+import type { AiMessage } from './AiService';
 
 const TAG: string = 'RealtimeCall';
 const REALTIME_MODEL: string = 'qwen-audio-3.0-realtime-plus';
@@ -18,6 +19,11 @@ const PLAY_RATE: number = 24000;
 export interface RealtimeCallCallbacks {
   /** 用户一句话的最终转写文本。 */
   onUserText: (text: string) => void;
+  /**
+   * ASR 中间结果（累计全文，非增量；speech_started 时先回调空串清占位）。
+   * 对话页内嵌语音用它做「实时信息流」；可选，通话页等旧消费方不实现即无行为变化。
+   */
+  onUserTextDelta?: (text: string) => void;
   /** AI 回复增量/完结字幕文本。 */
   onAiTextDelta: (delta: string) => void;
   onAiTextDone: (full: string) => void;
@@ -50,6 +56,8 @@ export class RealtimeCallService {
   private static playGen: number = 0;
   private static responding: boolean = false;
   private static aiTranscript: string = '';
+  /** 本句 ASR 中间结果累计（speech_started 清零，completed 后作废）。 */
+  private static userTranscript: string = '';
   private static closed: boolean = false;
   private static base64: util.Base64Helper = new util.Base64Helper();
   private static decoder: util.TextDecoder = util.TextDecoder.create('utf-8');
@@ -87,8 +95,10 @@ export class RealtimeCallService {
   /**
    * 连接并进入可对话状态；失败经 onError 汇报并抛错（页面提示回退）。
    * `tools` 传 AiTools.definitions()（OpenAI function 形态，网关实测接受）；空数组=不带工具。
+   * `history` 为可选文字对话历史：连接后逐条 conversation.item.create 注入，语音接得上上下文。
    */
-  static async connect(instructions: string, callbacks: RealtimeCallCallbacks, tools: Object[]): Promise<void> {
+  static async connect(instructions: string, callbacks: RealtimeCallCallbacks, tools: Object[],
+    history: AiMessage[] = []): Promise<void> {
     RealtimeCallService.disconnect();
     RealtimeCallService.callbacks = callbacks;
     RealtimeCallService.closed = false;
@@ -96,6 +106,7 @@ export class RealtimeCallService {
     RealtimeCallService.playBytes = 0;
     RealtimeCallService.responding = false;
     RealtimeCallService.aiTranscript = '';
+    RealtimeCallService.userTranscript = '';
     RealtimeCallService.muted = false;
     RealtimeCallService.toolWaitResponse = false;
 
@@ -150,6 +161,21 @@ export class RealtimeCallService {
     }
     const update: Record<string, Object> = { 'type': 'session.update', 'session': session };
     RealtimeCallService.sendJson(update);
+    // 文字历史注入：只带 user/assistant 非空文本，system/图片轮跳过
+    for (let i = 0; i < history.length; i++) {
+      const role: string = history[i].role;
+      const content: string = history[i].content;
+      if (content.length === 0 || (role !== 'user' && role !== 'assistant')) {
+        continue;
+      }
+      const part: Record<string, Object> = {
+        'type': role === 'user' ? 'input_text' : 'output_text',
+        'text': content,
+      };
+      const item: Record<string, Object> = { 'type': 'message', 'role': role, 'content': [part] };
+      const seed: Record<string, Object> = { 'type': 'conversation.item.create', 'item': item };
+      RealtimeCallService.sendJson(seed);
+    }
     await RealtimeCallService.startMic();
     await RealtimeCallService.startRenderer();
   }
@@ -213,10 +239,26 @@ export class RealtimeCallService {
       // 打断：立刻丢队列，之后到达的本轮 audio.delta 也随 responding=false 丢弃入队但会被下次清空
       RealtimeCallService.bargeIn();
       RealtimeCallService.toolWaitResponse = false;
+      RealtimeCallService.userTranscript = '';
+      RealtimeCallService.notify((c: RealtimeCallCallbacks): void => {
+        if (c.onUserTextDelta !== undefined) {
+          c.onUserTextDelta('');
+        }
+      });
       RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onSpeechStarted());
     } else if (type === 'input_audio_buffer.speech_stopped') {
       RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onSpeechStopped());
+    } else if (type === 'conversation.item.input_audio_transcription.delta') {
+      // OpenAI 语义：text 为本段增量；页面拿累计全文实时刷新（final 以 completed 为准）
+      RealtimeCallService.userTranscript += String(event['text'] ?? '');
+      const acc: string = RealtimeCallService.userTranscript;
+      RealtimeCallService.notify((c: RealtimeCallCallbacks): void => {
+        if (c.onUserTextDelta !== undefined) {
+          c.onUserTextDelta(acc);
+        }
+      });
     } else if (type === 'conversation.item.input_audio_transcription.completed') {
+      RealtimeCallService.userTranscript = '';
       const transcript: string = String(event['transcript'] ?? '');
       if (transcript.length > 0) {
         RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onUserText(transcript));

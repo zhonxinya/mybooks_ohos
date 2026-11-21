@@ -427,4 +427,46 @@ export function register(ctx) {
     personaState.files.clear();
   });
 
+  test('AiChatStore 语音轮次：interim 占位刷新、final 固化、AI 流式、打断收尾', () => {
+    const store = AiChatStore.instance();
+    store.resetForTest();
+    // ASR 中间结果：单条进行中用户气泡整段替换
+    store.voiceUser('你', false);
+    store.voiceUser('你好', false);
+    assert.equal(store.messages.length, 1);
+    assert.equal(store.messages[0].content, '你好');
+    assert.equal(store.messages[0].streaming, true);
+    // speech_started 清占位（空 interim 撤气泡）
+    store.voiceUser('', false);
+    assert.equal(store.messages.length, 0);
+    // final 固化；空 final 丢弃占位（VAD 误触发）
+    store.voiceUser('你好', false);
+    store.voiceUser('你好。', true);
+    assert.equal(store.messages[0].content, '你好。');
+    assert.equal(store.messages[0].streaming, false);
+    store.voiceUser('嗯', false);
+    store.voiceUser('', true);
+    assert.equal(store.messages.length, 1);
+    // AI 字幕流：首个 delta 建气泡，done 以全文固化
+    store.voiceAi('今天', false);
+    store.voiceAi('晴天', false);
+    assert.equal(store.messages.length, 2);
+    assert.equal(store.messages[1].content, '今天晴天');
+    store.voiceAi('今天是晴天。', true);
+    assert.equal(store.messages[1].content, '今天是晴天。');
+    assert.equal(store.messages[1].streaming, false);
+    // done 空全文：保留已累计文本
+    store.voiceAi('明', false);
+    store.voiceAi('', true);
+    assert.equal(store.messages[2].content, '明');
+    assert.equal(store.messages[2].streaming, false);
+    // 打断后重新开口=新气泡（上一条已 final 固化）；seal 固化尾部流式
+    store.voiceAi('后', false);
+    assert.equal(store.messages.length, 4);
+    store.voiceSealStreaming();
+    assert.equal(store.messages[3].content, '后');
+    assert.equal(store.messages[3].streaming, false);
+    store.resetForTest();
+  });
+
 }

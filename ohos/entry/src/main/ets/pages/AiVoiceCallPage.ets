@@ -8,6 +8,7 @@ import { SpeakService } from '../services/SpeakService';
 import { RealtimeCallService, RealtimeCallCallbacks } from '../services/RealtimeCallService';
 import { AiService, AiMessage } from '../services/AiService';
 import { AiTools } from '../services/AiTools';
+import { AiVoiceKit, VOICE_SYSTEM_PROMPT, VOICE_TOOL_NOTE } from '../services/AiVoiceKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG: string = 'AiVoiceCall';
@@ -18,12 +19,6 @@ const ST_LISTENING: string = 'listening';
 const ST_TRANSCRIBING: string = 'transcribing';
 const ST_THINKING: string = 'thinking';
 const ST_SPEAKING: string = 'speaking';
-
-/** 语音场景专用人设：短、口语化、可直接朗读（不复用文字页 SYSTEM_PROMPT 的工具/书单内容）。 */
-const VOICE_SYSTEM_PROMPT: string =
-  '你是阅读应用里的语音助手，正在和用户实时通话。回答口语化、简洁（一般一到三句），' +
-  '会被直接朗读出来，因此不要使用 Markdown、列表、代码块或表情符号。' +
-  '可以聊书、作者、阅读推荐，也可以日常问答；不确定就直说。';
 
 @Entry
 @Component
@@ -244,13 +239,11 @@ struct AiVoiceCallPage {
         }
       },
       onFunctionCall: (name: string, args: string, callId: string): void => {
-        void this.runTool(name, args, callId);
+        void AiVoiceKit.runTool(name, args, callId, this.getUIContext());
       },
     };
     try {
-      const prompt: string = VOICE_SYSTEM_PROMPT +
-        '\n图书相关请求（找书、看书评、下载、加书单等）必须先调用工具查询再回答；' +
-        '拿到工具结果后用一两句口语概括，不要逐条念 JSON，寒暄不要调用工具。';
+      const prompt: string = VOICE_SYSTEM_PROMPT + VOICE_TOOL_NOTE;
       await RealtimeCallService.connect(prompt, cb, AiTools.definitions(AiService.loadPermission()));
       this.rtMode = true;
       this.muted = false;
@@ -265,43 +258,6 @@ struct AiVoiceCallPage {
   private toggleMute(): void {
     this.muted = !this.muted;
     RealtimeCallService.setMuted(this.muted);
-  }
-
-  /** 执行模型请求的工具（含确认闸门，与文字对话页同语义），结果回填 realtime 会话。 */
-  private async runTool(name: string, args: string, callId: string): Promise<void> {
-    let output: string;
-    try {
-      if (AiTools.needsConfirm(name)) {
-        const permission: string = AiService.loadPermission();
-        if (permission === 'readonly') {
-          output = '当前为只读权限模式，写操作不可执行。';
-        } else if (permission === 'confirm') {
-          const label: string = AiTools.toolLabel(name);
-          let allow: boolean = false;
-          try {
-            const dialog = await this.getUIContext().getPromptAction().showDialog({
-              title: '确认执行',
-              message: `语音通话中，AI 请求执行：${label}\n${args.length > 200 ? `${args.substring(0, 200)}…` : args}`,
-              buttons: [
-                { text: '拒绝', color: '#F44336' },
-                { text: '允许', color: '#4CAF50' },
-              ],
-            });
-            allow = dialog.index === 1;
-          } catch (_error) {
-            allow = false;
-          }
-          output = allow ? await AiTools.execute(name, args, callId) : '用户拒绝了该操作。';
-        } else {
-          output = await AiTools.execute(name, args, callId);
-        }
-      } else {
-        output = await AiTools.execute(name, args, callId);
-      }
-    } catch (error) {
-      output = `工具执行失败：${error}`;
-    }
-    RealtimeCallService.sendToolResult(callId, output);
   }
 
   // ————————————————— 轮转模式（fallback，可用自选对话模型） —————————————————

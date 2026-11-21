@@ -8,9 +8,11 @@ import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { ToolResultList } from '../components/ToolResultList';
 import { AiChatStore, AskRequest, ChatActivity, ChatBubble, ChatSession } from '../services/AiChatStore';
-import { AiConfig, AiService } from '../services/AiService';
+import { AiConfig, AiMessage, AiService } from '../services/AiService';
 import { SpeakService } from '../services/SpeakService';
-import { AiPermissionMode } from '../services/AiTools';
+import { AiPermissionMode, AiTools } from '../services/AiTools';
+import { RealtimeCallService, RealtimeCallCallbacks } from '../services/RealtimeCallService';
+import { AiVoiceKit, VOICE_SYSTEM_PROMPT, VOICE_TOOL_NOTE } from '../services/AiVoiceKit';
 import { AppRouter } from '../utils/AppRouter';
 
 /** 技能卡片/芯片点击：把现成提示词填入输入框，用户可先补书名再发送。 */
@@ -51,6 +53,10 @@ struct AiAssistantPage {
   @State modelChoices: string[] = [];
   /** 流式中的思考过程（store.streamingReasoning 镜像）。 */
   @State streamingReasoning: string = '';
+  /** realtime 全双工语音会话（内嵌本页）：活跃标记 / 状态文案 / 静音。 */
+  @State voiceActive: boolean = false;
+  @State voiceStatus: string = '';
+  @State voiceMuted: boolean = false;
   /** 会话状态机在全局单例里：退出页面不中断流式回复，后台照常完成并落盘。 */
   private store: AiChatStore = AiChatStore.instance();
   /** attachView 凭据：disappear 只解绑自己这一份视图。 */
@@ -170,6 +176,10 @@ struct AiAssistantPage {
 
   aboutToDisappear(): void {
     // 只解绑视图。曾经的 bug：在这里调 stopStreaming，退出对话页即掐断在途流式回复。
+    // 但语音会话必须随页结束：麦克风采集/播放不应在后台页继续。
+    if (this.voiceActive) {
+      this.endVoiceSession();
+    }
     this.store.detachView(this.viewToken);
   }
 
@@ -250,6 +260,104 @@ struct AiAssistantPage {
   /** 输入条「停止」按钮：用户主动中断，与切页无关。 */
   private stopStreaming(): void {
     this.store.stopStreaming();
+  }
+
+  // ————— realtime 全双工语音会话（内嵌对话页）：语音内容以消息流实时上屏 —————
+
+  /** 开始语音会话：注入最近文字历史，ASR/AI 字幕直接写进消息流；再点=挂断。 */
+  private async startVoiceSession(): Promise<void> {
+    if (this.voiceActive) {
+      this.endVoiceSession();
+      return;
+    }
+    if (this.thinking) {
+      promptAction.showToast({ message: '文字回复生成中，先停止再发起语音会话' });
+      return;
+    }
+    if (!await AiVoiceKit.ensureMicPermission(this.getUIContext())) {
+      promptAction.showToast({ message: '需要麦克风权限才能语音对话' });
+      return;
+    }
+    // 最近 8 条定稿文字进语音上下文，AI 接得上此前的对话
+    const history: AiMessage[] = [];
+    const bubbles: ChatBubble[] = this.store.messages;
+    for (let i = Math.max(0, bubbles.length - 8); i < bubbles.length; i++) {
+      const b: ChatBubble = bubbles[i];
+      if (!b.streaming && !b.error && b.content.length > 0 &&
+        (b.role === 'user' || b.role === 'assistant')) {
+        history.push({ role: b.role, content: b.content });
+      }
+    }
+    const cb: RealtimeCallCallbacks = {
+      onUserText: (t: string): void => {
+        this.store.voiceUser(t, true);
+      },
+      onUserTextDelta: (t: string): void => {
+        this.store.voiceUser(t, false);
+      },
+      onAiTextDelta: (d: string): void => {
+        this.store.voiceAi(d, false);
+      },
+      onAiTextDone: (t: string): void => {
+        this.store.voiceAi(t, true);
+      },
+      onSpeechStarted: (): void => {
+        // 开口打断：AI 已出的字幕固化，切回聆听
+        this.store.voiceSealStreaming();
+        this.voiceStatus = '聆听中';
+      },
+      onSpeechStopped: (): void => {
+        this.voiceStatus = '思考中';
+      },
+      onResponding: (): void => {
+        this.voiceStatus = '说话中';
+      },
+      onResponseDone: (): void => {
+        if (this.voiceActive) {
+          this.voiceStatus = '聆听中';
+        }
+      },
+      onFunctionCall: (name: string, args: string, callId: string): void => {
+        void AiVoiceKit.runTool(name, args, callId, this.getUIContext());
+      },
+      onError: (m: string): void => {
+        promptAction.showToast({ message: m });
+      },
+      onClosed: (): void => {
+        // 网关/网络断线：会话态收敛，尾部流式气泡固化
+        this.voiceActive = false;
+        this.voiceStatus = '';
+        this.store.voiceSealStreaming();
+      },
+    };
+    this.voiceActive = true;
+    this.voiceStatus = '连接中…';
+    this.voiceMuted = false;
+    try {
+      await RealtimeCallService.connect(VOICE_SYSTEM_PROMPT + VOICE_TOOL_NOTE, cb,
+        AiTools.definitions(AiService.loadPermission()), history);
+      if (this.voiceActive) {
+        this.voiceStatus = '聆听中';
+      }
+    } catch (error) {
+      this.voiceActive = false;
+      this.voiceStatus = '';
+      promptAction.showToast({ message: error instanceof Error ? error.message : '语音会话连接失败' });
+    }
+  }
+
+  /** 挂断：主动断开（disconnect 不再触发 onClosed），态就地复位。 */
+  private endVoiceSession(): void {
+    RealtimeCallService.disconnect();
+    this.voiceActive = false;
+    this.voiceStatus = '';
+    this.voiceMuted = false;
+    this.store.voiceSealStreaming();
+  }
+
+  private toggleVoiceMute(): void {
+    this.voiceMuted = !this.voiceMuted;
+    RealtimeCallService.setMuted(this.voiceMuted);
   }
 
   /** 附图沙箱目录（历史恢复与发送都从这里读文件）。 */
@@ -404,7 +512,13 @@ struct AiAssistantPage {
     Row({ space: 4 }) {
       TextButton({
         label: '语音',
-        onTap: () => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiVoiceCallPage' }),
+        onTap: () => {
+          // 互斥：进全屏通话页前先挂断本页内嵌会话（realtime 单会话）
+          if (this.voiceActive) {
+            this.endVoiceSession();
+          }
+          AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiVoiceCallPage' });
+        },
       });
       // 权限模式徽标：点击弹三档菜单，当前项带勾
       Text(`权限·${this.permissionLabel()}`)
@@ -883,6 +997,29 @@ struct AiAssistantPage {
     .margin({ left: $r('app.float.page_padding'), right: $r('app.float.page_padding'), bottom: 8 });
   }
 
+  /** 语音会话横幅：活跃期替换输入行——状态 + 静音 + 挂断。 */
+  @Builder
+  voiceBanner() {
+    Row({ space: 10 }) {
+      SymbolGlyph(this.voiceMuted ? $r('sys.symbol.mic_slash') : $r('sys.symbol.mic'))
+        .fontSize(20)
+        .fontColor([this.voiceMuted ? $r('app.color.text_tertiary') : $r('app.color.error')]);
+      Text(`实时语音 · ${this.voiceStatus}`)
+        .fontSize(14)
+        .fontColor($r('app.color.text_primary'))
+        .layoutWeight(1);
+      TextButton({ label: this.voiceMuted ? '取消静音' : '静音', onTap: () => {
+        this.toggleVoiceMute();
+      } });
+      TextButton({ label: '挂断', tone: 'danger', onTap: () => {
+        this.endVoiceSession();
+      } });
+    }
+    .width('100%')
+    .height(44)
+    .padding({ left: 8, right: 4 });
+  }
+
   @Builder
   inputBar() {
     Column() {
@@ -935,6 +1072,9 @@ struct AiAssistantPage {
         .width('100%')
         .padding({ left: 4, bottom: 4 });
       }
+      if (this.voiceActive) {
+        this.voiceBanner()
+      } else {
       Row({ space: 10 }) {
         if (this.visionEnabled) {
           Stack() {
@@ -958,6 +1098,20 @@ struct AiAssistantPage {
           .enabled(!this.thinking)
           .onChange((value: string) => this.input = value)
           .onSubmit(() => { void this.send(this.input); });
+
+        // realtime 语音会话入口：内容实时进消息流，不跳通话页
+        Stack() {
+          SymbolGlyph($r('sys.symbol.phone'))
+            .fontSize(20)
+            .fontColor([Color.Black]);
+        }
+        .width(44)
+        .height(44)
+        .borderRadius(22)
+        .backgroundColor($r('app.color.page_background'))
+        .onClick(() => {
+          void this.startVoiceSession();
+        });
 
         // Circle Button 带图标子节点时 width/height 不生效（实测渲染仅 20vp），改用 Stack 保证 44vp 热区
         Stack() {
@@ -986,6 +1140,7 @@ struct AiAssistantPage {
         });
       }
       .width('100%');
+      }
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 8, bottom: 12 })

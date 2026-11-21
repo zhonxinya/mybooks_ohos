@@ -397,4 +397,64 @@ export function register(ctx) {
     deps.state.store.clear();
   });
 
+  test('RealtimeCallService 内嵌语音：ASR 中间结果累计 + 文字历史注入', async () => {
+    const { RealtimeCallService: Rt } = await load('RealtimeCall');
+    const { rtState } = await load('realtimeDeps');
+    deps.state.store.clear();
+    RealAiService.saveConfig('qwen-tokenplan', 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1', 'qwen3.6-flash', 'sk-tp', 0.5);
+    rtState.sends.length = 0;
+    const ev = [];
+    const cb = {
+      onUserText: (t) => ev.push('user:' + t),
+      onUserTextDelta: (t) => ev.push('udelta:' + t),
+      onAiTextDelta: () => {}, onAiTextDone: () => {}, onSpeechStarted: () => {},
+      onSpeechStopped: () => {}, onResponding: () => {}, onResponseDone: () => {},
+      onFunctionCall: () => {}, onError: () => {}, onClosed: () => {},
+    };
+    const history = [
+      { role: 'system', content: '系统提示应被跳过' },
+      { role: 'user', content: '刚才问的书' },
+      { role: 'assistant', content: '推荐了三体' },
+      { role: 'user', content: '' },
+    ];
+    const connecting = Rt.connect('人设', cb, [], history);
+    await flush();
+    rtState.socket.fireOpen();
+    await flush();
+    rtState.socket.emitEvent(JSON.stringify({ type: 'session.created' }));
+    await flush();
+    // 历史注入：session.update 之后逐条 conversation.item.create，system 与空文本跳过
+    const seeds = rtState.sends.slice(1).map((s) => JSON.parse(s)).filter((m) => m.type === 'conversation.item.create');
+    assert.equal(seeds.length, 2, '只注入 user/assistant 非空文本');
+    assert.equal(seeds[0].item.role, 'user');
+    assert.equal(seeds[0].item.content[0].type, 'input_text');
+    assert.equal(seeds[0].item.content[0].text, '刚才问的书');
+    assert.equal(seeds[1].item.role, 'assistant');
+    assert.equal(seeds[1].item.content[0].type, 'output_text');
+    assert.equal(seeds[1].item.content[0].text, '推荐了三体');
+    // ASR 中间结果：delta 累计全文回调；speech_started 先回调空串清占位
+    ev.length = 0;
+    rtState.socket.emitEvent(JSON.stringify({ type: 'conversation.item.input_audio_transcription.delta', text: '今天' }));
+    await flush();
+    rtState.socket.emitEvent(JSON.stringify({ type: 'conversation.item.input_audio_transcription.delta', text: '天气' }));
+    await flush();
+    assert.deepEqual(ev, ['udelta:今天', 'udelta:今天天气']);
+    // completed 后累计作废：下一句从零开始
+    ev.length = 0;
+    rtState.socket.emitEvent(JSON.stringify({ type: 'conversation.item.input_audio_transcription.completed', transcript: '今天天气' }));
+    await flush();
+    assert.ok(ev.includes('user:今天天气'));
+    ev.length = 0;
+    rtState.socket.emitEvent(JSON.stringify({ type: 'input_audio_buffer.speech_started' }));
+    await flush();
+    assert.deepEqual(ev, ['udelta:'], '新句开始先清占位');
+    rtState.socket.emitEvent(JSON.stringify({ type: 'conversation.item.input_audio_transcription.delta', text: '换个' }));
+    await flush();
+    assert.deepEqual(ev[1], 'udelta:换个', '累计器已随 speech_started 归零');
+    Rt.disconnect();
+    await flush();
+    await connecting;
+    deps.state.store.clear();
+  });
+
 }
