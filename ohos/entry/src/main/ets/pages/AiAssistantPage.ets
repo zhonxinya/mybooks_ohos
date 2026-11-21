@@ -57,6 +57,8 @@ struct AiAssistantPage {
   @State voiceActive: boolean = false;
   @State voiceStatus: string = '';
   @State voiceMuted: boolean = false;
+  /** 语音会话代际：挂断/重开后，旧 connect 异步链的失败回调凭序号作废。 */
+  private voiceGen: number = 0;
   /** 会话状态机在全局单例里：退出页面不中断流式回复，后台照常完成并落盘。 */
   private store: AiChatStore = AiChatStore.instance();
   /** attachView 凭据：disappear 只解绑自己这一份视图。 */
@@ -330,24 +332,28 @@ struct AiAssistantPage {
         this.store.voiceSealStreaming();
       },
     };
+    const gen: number = ++this.voiceGen;
     this.voiceActive = true;
     this.voiceStatus = '连接中…';
     this.voiceMuted = false;
     try {
       await RealtimeCallService.connect(VOICE_SYSTEM_PROMPT + VOICE_TOOL_NOTE, cb,
         AiTools.definitions(AiService.loadPermission()), history);
-      if (this.voiceActive) {
+      if (gen === this.voiceGen && this.voiceActive) {
         this.voiceStatus = '聆听中';
       }
     } catch (error) {
-      this.voiceActive = false;
-      this.voiceStatus = '';
-      promptAction.showToast({ message: error instanceof Error ? error.message : '语音会话连接失败' });
+      if (gen === this.voiceGen) {
+        this.voiceActive = false;
+        this.voiceStatus = '';
+        promptAction.showToast({ message: error instanceof Error ? error.message : '语音会话连接失败' });
+      }
     }
   }
 
-  /** 挂断：主动断开（disconnect 不再触发 onClosed），态就地复位。 */
+  /** 挂断：主动断开（disconnect 不再触发 onClosed），态就地复位，旧连接失败回调作废。 */
   private endVoiceSession(): void {
+    this.voiceGen++;
     RealtimeCallService.disconnect();
     this.voiceActive = false;
     this.voiceStatus = '';

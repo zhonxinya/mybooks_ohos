@@ -121,19 +121,26 @@ export class RealtimeCallService {
       RealtimeCallService.handleEvent(text);
     });
     ws.on('close', (): void => {
+      RealtimeCallService.failCreated('实时连接被关闭');
       if (!RealtimeCallService.closed) {
         RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onClosed());
       }
     });
     ws.on('error', (err: BusinessError): void => {
       hilog.error(0x0000, TAG, 'ws error: %{public}s', err === undefined || err === null ? '' : err.message);
+      RealtimeCallService.failCreated('实时网关连接失败');
     });
 
     const url: string = `${RealtimeCallService.wsOrigin()}/api-ws/v1/realtime?model=${REALTIME_MODEL}`;
     const header: Record<string, string> = { 'Authorization': `Bearer ${RealtimeCallService.apiKey()}` };
     const options: webSocket.WebSocketRequestOptions = { header: header };
     await new Promise<void>((resolve: () => void, reject: (e: Error) => void): void => {
+      // 握手超时兜底：connect 回调可能因网络半开永不返回
+      const timer: number = setTimeout((): void => {
+        reject(new Error('实时网关握手超时'));
+      }, 20000);
       ws.connect(url, options, (err: BusinessError): void => {
+        clearTimeout(timer);
         if (err !== null && err !== undefined) {
           reject(new Error(`连接实时网关失败：${err.message}`));
           return;
@@ -182,6 +189,7 @@ export class RealtimeCallService {
 
   static disconnect(): void {
     RealtimeCallService.closed = true;
+    RealtimeCallService.failCreated('已挂断');
     const capturer: audio.AudioCapturer | null = RealtimeCallService.capturer;
     RealtimeCallService.capturer = null;
     if (capturer !== null) {
@@ -211,11 +219,28 @@ export class RealtimeCallService {
   // ————————————————— 事件分发 —————————————————
 
   private static createdResolve: (() => void) | null = null;
+  private static createdReject: ((e: Error) => void) | null = null;
 
   private static waitForCreated(): Promise<void> {
-    return new Promise<void>((resolve: () => void): void => {
+    return new Promise<void>((resolve: () => void, reject: (e: Error) => void): void => {
       RealtimeCallService.createdResolve = resolve;
+      RealtimeCallService.createdReject = reject;
+      // 超时兜底：TCP/WS 握手成功但网关不回 session.created（鉴权失败/网络半开）不能永挂
+      setTimeout((): void => {
+        RealtimeCallService.failCreated('实时网关无响应（超时）');
+      }, 15000);
     });
+  }
+
+  /** 连接建立期失败：让 waitForCreated 以错误收敛，页面 catch 复位横幅。 */
+  private static failCreated(reason: string): void {
+    const reject: ((e: Error) => void) | null = RealtimeCallService.createdReject;
+    if (reject === null) {
+      return;
+    }
+    RealtimeCallService.createdReject = null;
+    RealtimeCallService.createdResolve = null;
+    reject(new Error(reason));
   }
 
   private static handleEvent(text: string): void {
@@ -232,6 +257,7 @@ export class RealtimeCallService {
     if (type === 'session.created') {
       const resolve: (() => void) | null = RealtimeCallService.createdResolve;
       RealtimeCallService.createdResolve = null;
+      RealtimeCallService.createdReject = null;
       if (resolve !== null) {
         resolve();
       }
