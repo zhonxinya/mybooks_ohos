@@ -186,4 +186,49 @@ export function register(ctx) {
     assert.equal(page.soul, DEFAULT_SOUL);
   });
 
+  test('MCP 每家开关：默认开、禁用家不握手与调用防御、切换即时失效缓存', async () => {
+    const { McpService } = await load('RealMcp');
+    McpService.reset();
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    assert.equal(McpService.isServerEnabled('es'), true, '未设置=启用（默认行为不变）');
+    assert.equal(McpService.serverList().length, 4, '四家登记');
+    const ok = (sid) => ({ statusCode: 200, headers: { 'mcp-session-id': sid },
+      body: enc(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-03-26' } })) });
+    const notify = { statusCode: 202, headers: {}, body: enc('') };
+    const list = (name) => ({ statusCode: 200, headers: {}, body: enc(JSON.stringify(
+      { jsonrpc: '2.0', id: 2, result: { tools: [{ name, description: 'd',
+        inputSchema: { type: 'object', properties: {} } }] } })) });
+    // 关 es：工具集不含、握手零请求（并行队列序=登记序跳过 es：ws,wf,sg）
+    McpService.setServerEnabled('es', false);
+    deps.state.rcpResponses.push(ok('w'), ok('f'), ok('g'), notify, notify, notify,
+      list('web_search'), list('web_extractor'), list('speech_generate_text'));
+    const tools = await McpService.ensureToolset('sk-sp-x');
+    assert.equal(tools.length, 3);
+    assert.ok(!tools.some((t) => t.function.name.startsWith('mcp_es_')), '禁用家不挂载');
+    assert.equal(deps.state.requests.filter((r) => r.url.includes('EnhancedSearch')).length, 0,
+      '禁用家零请求');
+    // 模型幻觉调用禁用家：文案拒绝，不发请求
+    const before = deps.state.requests.length;
+    const denied = await McpService.callTool('mcp_es_bailian_web_search', '{"query":"x"}', 'sk-sp-x');
+    assert.ok(denied.includes('禁用'), denied);
+    assert.equal(deps.state.requests.length, before, '禁用家调用不触网');
+    // 重新启用：setServerEnabled 已 reset 缓存，本轮握手含 es
+    McpService.setServerEnabled('es', true);
+    deps.state.rcpResponses.push(ok('e'), ok('w2'), ok('f2'), ok('g2'),
+      notify, notify, notify, notify,
+      list('bailian_web_search'), list('web_search'), list('web_extractor'), list('speech_generate_text'));
+    const back = await McpService.ensureToolset('sk-sp-x');
+    assert.equal(back.length, 4);
+    assert.equal(back[0].function.name, 'mcp_es_bailian_web_search');
+    // 摘要文案：禁用家标「已禁用」
+    McpService.setServerEnabled('sg', false);
+    assert.ok(McpService.summaryBrief().includes('百炼语音转写：已禁用'));
+    McpService.setServerEnabled('sg', true);
+    McpService.reset();
+    deps.state.store.clear();
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+  });
+
 }

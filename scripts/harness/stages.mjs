@@ -305,6 +305,7 @@ export function stageMcp() {
   source = source
     .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
     .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
+    .replace(`from './TalebookService'`, `from './aiServiceDeps.ts'`)
     .replace(`import { AiToolDefinition, AiToolFunctionBody, AiToolParameters } from './AiToolsDefs';\n`, '');
   writeFileSync(join(dir, 'RealMcp.ts'), source);
 }

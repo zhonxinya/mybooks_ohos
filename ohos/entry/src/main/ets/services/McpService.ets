@@ -1,18 +1,20 @@
 import { rcp } from '@kit.RemoteCommunicationKit';
 import { util } from '@kit.ArkTS';
 import { AiToolDefinition, AiToolFunctionBody, AiToolParameters } from './AiToolsDefs';
+import { TalebookService } from './TalebookService';
 
 /**
  * 百炼 MCP 客户端（Streamable HTTP / JSON-RPC 2.0）。
  *
- * 三家 MCP server 挂在 Token Plan 网关域，鉴权复用设置页已填的 qwen-tokenplan Key；
+ * 四家 MCP server 挂在 Token Plan 网关域，鉴权复用设置页已填的 qwen-tokenplan Key；
  * 当前服务商非 Token Plan 或未配 Key 时整个工具集为空（零请求、静默降级）。
+ * 每家可在设置页「MCP」档单独禁用（ai_mcp_on_<tag>，未设置=启用）。
  * 协议流程：initialize → notifications/initialized → tools/list → tools/call，
  * 会话 id 走 `mcp-session-id` 响应头；响应体兼容纯 JSON 与 SSE `data:` 两种形态。
  */
 
-/** MCP server 登记：tag 用于工具名前缀 `mcp_<tag>_<工具名>`（三家工具名可能重名）。 */
-interface McpServer {
+/** MCP server 登记：tag 用于工具名前缀 `mcp_<tag>_<工具名>`（各家工具名可能重名）。 */
+export interface McpServer {
   tag: string;
   label: string;
   url: string;
@@ -45,6 +47,8 @@ const MCP_PROVIDER_ID: string = 'qwen-tokenplan';
 const MCP_CACHE_TTL_MS: number = 600000;
 /** 工具名前缀段长度：`mcp_es_` 这类固定头部，剥掉后即服务端原名。 */
 const MCP_PREFIX: string = 'mcp_';
+/** 每家启用开关的 preference 键前缀（+tag），未设置=启用；直接读存储避免与 AiServiceConfig 互引。 */
+const MCP_ENABLED_KEY: string = 'ai_mcp_on_';
 
 export class McpService {
   private static cacheKey: string = '';
@@ -63,9 +67,20 @@ export class McpService {
     McpService.states = [];
   }
 
+  /** 单家启用开关（设置页「MCP」档）：未设置=启用。 */
+  static isServerEnabled(tag: string): boolean {
+    return TalebookService.prefGet(MCP_ENABLED_KEY + tag, '1') !== '0';
+  }
+
+  /** 改开关即失效工具集缓存，下一轮按新开关重新握手。 */
+  static setServerEnabled(tag: string, on: boolean): void {
+    TalebookService.prefSet(MCP_ENABLED_KEY + tag, on ? '1' : '0');
+    McpService.reset();
+  }
+
   /**
-   * 取全量 MCP 工具定义（合并三家）：命中缓存零请求；单家失败静默跳过，
-   * 三家全挂返回空数组——聊天照常走内置工具。
+   * 取全量 MCP 工具定义（合并各家）：命中缓存零请求；设置页禁用的家不握手，
+   * 单家失败静默跳过，全挂返回空数组——聊天照常走内置工具。
    */
   static async ensureToolset(apiKey: string): Promise<AiToolDefinition[]> {
     if (apiKey.length === 0) {
@@ -74,7 +89,8 @@ export class McpService {
     const now: number = Date.now();
     if (McpService.cacheKey !== apiKey || now - McpService.cacheAt >= MCP_CACHE_TTL_MS) {
       const fresh: (McpServerState | null)[] = await Promise.all(
-        MCP_SERVERS.map((s: McpServer): Promise<McpServerState | null> => McpService.handshake(s, apiKey)));
+        MCP_SERVERS.map((s: McpServer): Promise<McpServerState | null> =>
+          McpService.isServerEnabled(s.tag) ? McpService.handshake(s, apiKey) : Promise.resolve(null)));
       const states: McpServerState[] = [];
       for (let i = 0; i < fresh.length; i++) {
         const st: McpServerState | null = fresh[i];
@@ -107,11 +123,34 @@ export class McpService {
     return server === null ? name : server.label;
   }
 
+  /** 登记清单（设置页「MCP」档数据源）。 */
+  static serverList(): McpServer[] {
+    return MCP_SERVERS.slice();
+  }
+
+  /** 探测摘要：每家一行——已禁用 / 已挂载 N 工具 / 未挂载（握手失败或还没试）。 */
+  static summaryBrief(): string {
+    const parts: string[] = [];
+    for (let i = 0; i < MCP_SERVERS.length; i++) {
+      const s: McpServer = MCP_SERVERS[i];
+      if (!McpService.isServerEnabled(s.tag)) {
+        parts.push(`${s.label}：已禁用`);
+        continue;
+      }
+      const st: McpServerState | null = McpService.stateOf(s);
+      parts.push(`${s.label}：${st === null ? '未挂载' : `${st.tools.length} 工具`}`);
+    }
+    return parts.join('　');
+  }
+
   /** 执行一个 MCP 工具。契约同 AiTools.execute：永不抛异常，失败返回说明文本。 */
   static async callTool(fullName: string, argsJson: string, apiKey: string): Promise<string> {
     const server: McpServer | null = McpService.serverOf(fullName);
     if (server === null) {
       return `未知的 MCP 工具：${fullName}`;
+    }
+    if (!McpService.isServerEnabled(server.tag)) {
+      return `${server.label}已在设置页的 MCP 档中禁用`;
     }
     if (apiKey.length === 0) {
       return 'MCP 不可用：未配置 Token Plan API Key';
