@@ -3788,7 +3788,7 @@ try {
     deps.state.store.clear();
   });
 
-  test('MCP 客户端：三家握手合并、SSE 解析、单家降级与会话缓存', async () => {
+  test('MCP 客户端：四家握手合并、SSE 解析、单家降级与会话缓存', async () => {
     const { McpService } = await load('RealMcp');
     McpService.reset();
     deps.state.requests.length = 0;
@@ -3800,16 +3800,21 @@ try {
       'event: message\ndata: ' + JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: [
         { name: 'bailian_web_search', description: '联网搜索', inputSchema: { properties: { query: { type: 'string' } }, required: ['query'] } },
       ] } }) + '\n\n') };
+    const wsList = { statusCode: 200, headers: {}, body: enc(JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: [
+      { name: 'web_search', description: '网页搜索', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } },
+    ] } })) };
     const wfList = { statusCode: 200, headers: {}, body: enc(JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: [
       { name: 'web_extractor', description: '网页抽取', inputSchema: { type: 'object', properties: { url: { type: 'string' } } } },
     ] } })) };
     const badKey = { statusCode: 401, headers: {}, body: enc('{"code":"InvalidApiKey","message":"Invalid API-key provided."}') };
-    // 并行发起顺序：init×3 → notify×2（sg 已死）→ list×2；sg 401 降级
-    deps.state.rcpResponses.push(ok('sid-es'), ok('sid-wf'), badKey, notify, notify, esList, wfList);
+    // 并行发起顺序=登记序（es,ws,wf,sg）：init×4 → notify×3（sg 已死）→ list×3；sg 401 降级
+    deps.state.rcpResponses.push(ok('sid-es'), ok('sid-ws'), ok('sid-wf'), badKey,
+      notify, notify, notify, esList, wsList, wfList);
     const tools = await McpService.ensureToolset('sk-sp-test');
-    assert.equal(tools.length, 2, '单家失败静默跳过，其余保留');
+    assert.equal(tools.length, 3, '单家失败静默跳过，其余保留');
     assert.equal(tools[0].function.name, 'mcp_es_bailian_web_search');
-    assert.equal(tools[1].function.name, 'mcp_wf_web_extractor');
+    assert.equal(tools[1].function.name, 'mcp_ws_web_search');
+    assert.equal(tools[2].function.name, 'mcp_wf_web_extractor');
     assert.equal(tools[0].function.parameters.type, 'object', 'inputSchema 缺 type 时强制补齐');
     const req0 = deps.state.requests[0];
     assert.ok(req0.url.includes('/mcps/EnhancedSearch/mcp'));
@@ -3820,10 +3825,11 @@ try {
     assert.equal(listEs.headers['mcp-session-id'], 'sid-es');
     const before = deps.state.requests.length;
     const again = await McpService.ensureToolset('sk-sp-test');
-    assert.equal(again.length, 2);
+    assert.equal(again.length, 3);
     assert.equal(deps.state.requests.length, before, '缓存命中零请求');
     // Key 变化 + reset 都要重新握手
-    deps.state.rcpResponses.push(ok('a'), ok('b'), badKey, notify, notify, esList, wfList);
+    deps.state.rcpResponses.push(ok('a'), ok('b'), ok('c'), badKey,
+      notify, notify, notify, esList, wsList, wfList);
     await McpService.ensureToolset('sk-sp-other');
     assert.ok(deps.state.requests.length > before, '换 Key 强制重握手');
     McpService.reset();
@@ -3831,8 +3837,10 @@ try {
     assert.equal(McpService.enabledFor('qwen-tokenplan', ''), false, '无 Key 不启用');
     assert.equal(McpService.enabledFor('qwen-tokenplan', 'sk-sp-x'), true);
     assert.equal(McpService.isMcpTool('mcp_es_x'), true);
+    assert.equal(McpService.isMcpTool('mcp_ws_x'), true, '第四家前缀同样路由');
     assert.equal(McpService.isMcpTool('search_books'), false);
     assert.equal(McpService.labelOf('mcp_wf_x'), '百炼网页解析');
+    assert.equal(McpService.labelOf('mcp_ws_x'), '百炼联网搜索');
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
   });
@@ -3849,10 +3857,10 @@ try {
       { name: 'search', description: 's', inputSchema: { type: 'object', properties: {} } },
     ] } })) };
     const bad = { statusCode: 401, headers: {}, body: enc('{"code":"InvalidApiKey","message":"nope"}') };
-    // 三家并行：init-es, init-wf, init-sg, notify-es, list-es（wf/sg 在 init 即败）
-    deps.state.rcpResponses.push(init, bad, bad, notify, list);
+    // 四家并行：init-es, init-ws, init-wf, init-sg, notify-es, list-es（ws/wf/sg 在 init 即败）
+    deps.state.rcpResponses.push(init, bad, bad, bad, notify, list);
     await McpService.ensureToolset('k');
-    assert.equal(deps.state.requests.length, 5, 'es 全握手、wf/sg init 即败');
+    assert.equal(deps.state.requests.length, 6, 'es 全握手、ws/wf/sg init 即败');
     // 正常调用：多段 text 拼接
     deps.state.rcpResponses.push({ statusCode: 200, headers: {}, body: enc(JSON.stringify({
       jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: '第一段' }, { type: 'image' }, { type: 'text', text: '第二段' }] } })) });
