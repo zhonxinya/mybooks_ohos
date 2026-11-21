@@ -23,7 +23,7 @@ struct AiFeatureModelsPage {
 
   aboutToAppear(): void {
     this.features = AiService.featureIds();
-    this.providers = AiService.listProviders();
+    this.providers = AiService.listEnabledProviders();
     if (this.features.length > 0) {
       this.enterFeature(this.features[0]);
     }

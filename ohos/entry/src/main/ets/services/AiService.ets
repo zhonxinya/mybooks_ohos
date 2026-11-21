@@ -532,6 +532,28 @@ export class AiService {
   static listProviders(): AiProviderPreset[] {
     return AiServiceConfig.listProviders();
   }
+  /** 委托 AiServiceConfig.listEnabledProviders：停用的服务商不出现（chips/功能槽数据源）。 */
+  static listEnabledProviders(): AiProviderPreset[] {
+    return AiServiceConfig.listEnabledProviders();
+  }
+  static isProviderEnabled(providerId: string): boolean {
+    return AiServiceConfig.isProviderEnabled(providerId);
+  }
+  static setProviderEnabled(providerId: string, on: boolean): void {
+    AiServiceConfig.setProviderEnabled(providerId, on);
+  }
+  /** 指定服务商的「上次使用模型」（本槽没有回落预设默认）。 */
+  static modelFor(providerId: string): string {
+    return AiServiceConfig.modelFor(providerId);
+  }
+  /** 编辑服务商资产但不切当前默认（管理页保存）。 */
+  static updateProviderProfile(providerId: string, baseUrl: string, model: string, apiKey: string): void {
+    AiServiceConfig.updateProviderProfile(providerId, baseUrl, model, apiKey);
+  }
+  /** 设为对话默认服务商。 */
+  static setDefaultProvider(providerId: string): void {
+    AiServiceConfig.setDefaultProvider(providerId);
+  }
   /** 委托 AiServiceConfig.addCustomProvider（拆分：见文件头说明）。 */
   static addCustomProvider(name: string, baseUrl: string, model: string): AiProviderPreset {
     return AiServiceConfig.addCustomProvider(name, baseUrl, model);

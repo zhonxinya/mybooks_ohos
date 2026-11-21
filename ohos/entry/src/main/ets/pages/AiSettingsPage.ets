@@ -73,7 +73,7 @@ struct AiSettingsPage {
     this.rtTimbre = AiService.loadRealtimeTimbre();
     this.ttsTimbre = AiService.loadTtsTimbre();
     this.reasoningEffort = AiService.loadReasoningEffort();
-    this.providers = AiService.listProviders();
+    this.providers = AiService.listEnabledProviders();
     const config: AiConfig = AiService.loadConfig();
     this.providerId = config.providerId;
     this.providerIndex = this.indexOfProvider(config.providerId);
@@ -110,11 +110,10 @@ struct AiSettingsPage {
     }
     this.providerId = id;
     this.providerIndex = this.indexOfProvider(id);
-    const preset: AiProviderPreset = AiService.presetOf(id);
-    // 切换服务商时地址回填该服务商已保存的槽位（没存过回落预设），模型跟随预设；
+    // 切换服务商时地址/模型回填该服务商自己的槽位（没存过回落预设）；
     // Key 各家不通用，但按服务商分开存过就不用重填
     this.baseUrl = AiService.baseUrlFor(id);
-    this.model = preset.model;
+    this.model = AiService.modelFor(id);
     this.apiKey = '';
     this.hasKey = AiService.hasKeyFor(id);
     this.testResult = '';
@@ -140,7 +139,7 @@ struct AiSettingsPage {
     }
     try {
       const preset: AiProviderPreset = AiService.addCustomProvider(this.newName, this.newBaseUrl, this.newModel);
-      this.providers = AiService.listProviders();
+      this.providers = AiService.listEnabledProviders();
       this.showAddForm = false;
       this.newName = '';
       this.newBaseUrl = '';
@@ -161,7 +160,7 @@ struct AiSettingsPage {
         value: '删除',
         action: () => {
           AiService.removeCustomProvider(this.providerId);
-          this.providers = AiService.listProviders();
+          this.providers = AiService.listEnabledProviders();
           this.selectProvider('deepseek');
           this.toast('已删除');
         },
@@ -477,6 +476,22 @@ struct AiSettingsPage {
   tabProvider() {
     Scroll() {
       Column({ space: 16 }) {
+        Row() {
+          Text('服务商管理')
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'));
+          Text('多家并行配置、每家启停与测试')
+            .fontSize(11)
+            .fontColor($r('app.color.text_tertiary'))
+            .margin({ left: 8 });
+          Blank();
+          Text('›')
+            .fontSize(16)
+            .fontColor($r('app.color.text_tertiary'));
+        }
+        .width('100%')
+        .onClick(() => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiProvidersPage' }));
+
         SectionTitle({ title: '服务商' });
         Scroll() {
           FilterChips({

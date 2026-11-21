@@ -16,6 +16,7 @@ export const settingsDefaults = () => ({
   ],
   keys: new Set(['deepseek']), saved: null, models: [], fetchError: '', completeReply: 'ok', mcpTools: [],
   providerModels: {},
+  modelSlots: {}, providerDisabled: {}, defaultProviderId: '', // #1612 模型分槽/启停/设默认
   voiceProviderId: '', voiceModel: '', voiceConfig: null, lastCompleteConfig: null, lastCompleteMessages: null,
   lastChatOverride: null, // #1600：chatStream 第 5 参捕获（vision 档）
   speakEngine: 'system', speakCalls: [], speakStops: 0, callMode: 'realtime',
@@ -49,6 +50,28 @@ export const AiService = {
   },
   loadConfig: () => state.settings.config,
   listProviders: () => state.settings.providers.slice(),
+  // #1612 服务商并行管理：模型分槽、启停、profile 编辑不切默认
+  listEnabledProviders: () => state.settings.providers.filter(
+    (p) => !(state.settings.providerDisabled && state.settings.providerDisabled[p.id] === true)),
+  isProviderEnabled: (id) => !(state.settings.providerDisabled && state.settings.providerDisabled[id] === true),
+  setProviderEnabled: (id, on) => {
+    if (!state.settings.providerDisabled) { state.settings.providerDisabled = {}; }
+    state.settings.providerDisabled[id] = !on;
+  },
+  modelFor: (id) => {
+    const saved = state.settings.modelSlots && state.settings.modelSlots[id];
+    if (saved !== undefined && saved.length > 0) { return saved; }
+    const p = state.settings.providers.find((x) => x.id === id);
+    return p !== undefined ? p.model : '';
+  },
+  updateProviderProfile: (id, baseUrl, model, apiKey) => {
+    if (!state.settings.baseUrlByProvider) { state.settings.baseUrlByProvider = {}; }
+    if (!state.settings.modelSlots) { state.settings.modelSlots = {}; }
+    if (baseUrl.length > 0) { state.settings.baseUrlByProvider[id] = baseUrl; }
+    state.settings.modelSlots[id] = model;
+    if (apiKey.length > 0) { state.settings.keys.add(id); }
+  },
+  setDefaultProvider: (id) => { state.settings.defaultProviderId = id; },
   presetOf: (id) => state.settings.providers.find((p) => p.id === id) ??
     { id: 'custom', name: '自定义', baseUrl: '', model: '', vision: false },
   hasKeyFor: (id) => state.settings.keys.has(id),
@@ -72,11 +95,13 @@ export const AiService = {
   saveConfig: (providerId, baseUrl, model, apiKey, temperature, visionOverride, contextLength) => {
     state.settings.saved = { providerId, baseUrl, model, apiKey, temperature, visionOverride, contextLength };
     if (apiKey.length > 0) { state.settings.keys.add(providerId); }
-    // 与真实 AiServiceConfig 对齐：地址按服务商分槽，互不覆盖
+    // 与真实 AiServiceConfig 对齐：地址/模型按服务商分槽，互不覆盖（#1612）
     if (baseUrl.length > 0) {
       if (!state.settings.baseUrlByProvider) { state.settings.baseUrlByProvider = {}; }
       state.settings.baseUrlByProvider[providerId] = baseUrl;
     }
+    if (!state.settings.modelSlots) { state.settings.modelSlots = {}; }
+    if (model.length > 0) { state.settings.modelSlots[providerId] = model; }
     state.settings.config = { providerId, baseUrl, model,
       hasKey: state.settings.keys.has(providerId), temperature,
       visionOverride, contextLength,
@@ -552,7 +577,7 @@ export async function setup() {
   stagePure('AiChatPrompts', 'services/AiChatPrompts.ets', ['AiPermissionMode']);
   stagePure('AiSkills', 'services/AiSkills.ets', []);
   for (const name of ['AiAssistantPage', 'AiBookPanelPage', 'AiRecommendPage', 'AiSettingsPage',
-    'AiPersonaPage', 'AiFeatureModelsPage']) {
+    'AiPersonaPage', 'AiFeatureModelsPage', 'AiProvidersPage']) {
     stagePage(name);
   }
   stageAiService();
@@ -580,6 +605,7 @@ export async function setup() {
   const { AiRecommendPage } = await load('AiRecommendPage');
   const { AiSettingsPage } = await load('AiSettingsPage');
   const { AiFeatureModelsPage } = await load('AiFeatureModelsPage');
+  const { AiProvidersPage } = await load('AiProvidersPage');
   const { AiPersonaPage } = await load('AiPersonaPage');
   const { AiPersona, DEFAULT_SOUL } = await load('RealAiPersona');
   const { AiChatStore } = await load('RealAiChatStore');
@@ -609,6 +635,13 @@ export async function setup() {
     page.aboutToAppear();
     return page;
   };
+  // #1612 服务商管理页：启停守卫与 profile 编辑直测
+  const providersPage = () => {
+    const page = new AiProvidersPage();
+    page.toast = () => {};
+    page.aboutToAppear();
+    return page;
+  };
   const chat = () => {
     AiChatStore.instance().resetForTest();
     const page = new AiAssistantPage();
@@ -632,6 +665,6 @@ export async function setup() {
     page.aboutToAppear();
     return page;
   };
-  return { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiFeatureModelsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, featurePage, chat, reappear };
+  return { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiFeatureModelsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, featurePage, providersPage, chat, reappear };
 }
 

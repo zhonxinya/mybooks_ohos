@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test, state, enc } from './base.mjs';
 
 export function register(ctx) {
-  const { load, deps, RealAiService, RealAiTools, AiChatStore, chat } = ctx;
+  const { load, deps, RealAiService, RealAiTools, AiChatStore, chat, providersPage, resetSettings } = ctx;
 
   test('Token 用量（#1514）：parseUsage 校验、mergeUsage 累加、整包解析、落盘往返、气泡固化', async () => {
     const model = await load('AiChatModel');
@@ -239,6 +239,57 @@ export function register(ctx) {
     }
     await store.compressHistory();
     assert.equal(state.settings.lastCompleteConfig.providerId, 'ollama', '摘要吃绑定档');
+  });
+
+  test('服务商并行（#1612）：模型分槽互不覆盖、启停过滤、profile 不改默认、旧全局模型迁移', async () => {
+    deps.state.store.clear();
+    // 模型按服务商分槽：切回不丢
+    RealAiService.saveConfig('deepseek', 'https://api.deepseek.com/v1', 'deepseek-chat', 'sk-d', 0.5);
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'glm-4.7', 'sk-o', 0.5);
+    assert.equal(RealAiService.modelFor('deepseek'), 'deepseek-chat', '各家记住自己的模型');
+    assert.equal(RealAiService.modelFor('opencode'), 'glm-4.7');
+    assert.equal(RealAiService.loadConfig().providerId, 'opencode', '最后保存者即默认');
+    // 管理页编辑资产：不动当前默认；Key 留空=保持已存
+    RealAiService.updateProviderProfile('lmstudio', 'http://192.168.31.160:1234/v1', 'qwen3:4b', 'sk-l');
+    assert.equal(RealAiService.loadConfig().providerId, 'opencode', '编辑不改默认');
+    assert.equal(RealAiService.modelFor('lmstudio'), 'qwen3:4b');
+    assert.equal(RealAiService.hasKeyFor('lmstudio'), true);
+    RealAiService.updateProviderProfile('lmstudio', 'http://192.168.31.160:1234/v1', 'qwen3:4b', '');
+    assert.equal(RealAiService.hasKeyFor('lmstudio'), true, 'Key 留空保持');
+    // 启停：enabled 清单过滤，全量清单仍含（管理页可见）
+    RealAiService.setProviderEnabled('opencode', false);
+    assert.equal(RealAiService.isProviderEnabled('opencode'), false);
+    assert.equal(RealAiService.listEnabledProviders().some((p) => p.id === 'opencode'), false);
+    assert.equal(RealAiService.listProviders().some((p) => p.id === 'opencode'), true, '管理页仍可见');
+    RealAiService.setProviderEnabled('opencode', true);
+    assert.equal(RealAiService.listEnabledProviders().some((p) => p.id === 'opencode'), true);
+    // 设为默认只切选择
+    RealAiService.setDefaultProvider('opencode');
+    assert.equal(RealAiService.loadConfig().providerId, 'opencode');
+    // 旧版全局单槽模型一次性迁移进当前家
+    deps.state.store.clear();
+    deps.state.store.set('p:ai_provider', 'deepseek');
+    deps.state.store.set('p:ai_model', 'legacy-m');
+    assert.equal(RealAiService.modelFor('deepseek'), 'legacy-m', '旧模型挪进本家槽');
+    assert.equal(deps.state.store.get('p:ai_model'), '', '旧键清空不重复迁');
+    deps.state.store.clear();
+    // 管理页：默认家不可停用、编辑保存写对槽
+    resetSettings();
+    const page = providersPage();
+    assert.equal(page.all.some((p) => p.id === 'custom'), false, 'custom 占位不生成卡片');
+    page.currentId = 'deepseek';
+    page.toggleEnabled('deepseek', false);
+    assert.equal(state.settings.providerDisabled.deepseek, undefined, '默认家不能停用');
+    page.toggleEnabled('opencode', false);
+    assert.equal(state.settings.providerDisabled.opencode, true);
+    page.enterEdit('opencode');
+    page.editModel = 'glm-5';
+    page.editKey = 'sk-new';
+    page.saveProfile();
+    assert.equal(state.settings.modelSlots.opencode, 'glm-5');
+    assert.equal(state.settings.keys.has('opencode'), true);
+    assert.equal(state.settings.defaultProviderId, '', '编辑保存不动默认');
+    resetSettings();
   });
 
 }

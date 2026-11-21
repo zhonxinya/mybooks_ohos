@@ -15,11 +15,9 @@ export class AiServiceConfig {
   static loadConfig(): AiConfig {
     AiServiceConfig.migrateLegacyKey();
     const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
-    const preset: AiProviderPreset = AiServiceConfig.presetOf(providerId);
-    const model: string = TalebookService.prefGet(KEY_MODEL);
     const temperatureText: string = TalebookService.prefGet(KEY_TEMPERATURE);
     const temperature: number = temperatureText.length > 0 ? Number(temperatureText) : DEFAULT_TEMPERATURE;
-    const finalModel: string = model.length > 0 ? model : preset.model;
+    const finalModel: string = AiServiceConfig.modelFor(providerId);
     const visionOverride: string = TalebookService.prefGet(KEY_VISION);
     const contextText: string = TalebookService.prefGet(KEY_CONTEXT);
     const contextK: number = contextText.length > 0 ? Number(contextText) : DEFAULT_CONTEXT_K;
@@ -234,6 +232,31 @@ export class AiServiceConfig {
     return KEY_BASE_URL_PREFIX + providerId;
   }
 
+  /** 各服务商「上次使用模型」槽位：并行工作时每家记住自己的模型，切回不丢。 */
+  static modelKey(providerId: string): string {
+    return 'ai_model_' + providerId;
+  }
+
+  /** 指定服务商的模型：本槽存过用本槽，否则回落预设默认。 */
+  static modelFor(providerId: string): string {
+    AiServiceConfig.migrateLegacyModel();
+    const saved: string = TalebookService.prefGet(AiServiceConfig.modelKey(providerId));
+    return saved.length > 0 ? saved : AiServiceConfig.presetOf(providerId).model;
+  }
+
+  /** 旧版全局单槽模型一次性迁移：挪进当前服务商槽后清空。 */
+  static migrateLegacyModel(): void {
+    const legacy: string = TalebookService.prefGet(KEY_MODEL);
+    if (legacy.length === 0) {
+      return;
+    }
+    const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
+    if (TalebookService.prefGet(AiServiceConfig.modelKey(providerId)).length === 0) {
+      TalebookService.prefSet(AiServiceConfig.modelKey(providerId), legacy);
+    }
+    TalebookService.prefSet(KEY_MODEL, '');
+  }
+
   /** 指定服务商的接口地址：本槽存过用本槽，否则回落预设（自定义商预设即注册地址）。 */
   static baseUrlFor(providerId: string): string {
     AiServiceConfig.migrateLegacyBaseUrl();
@@ -306,7 +329,7 @@ export class AiServiceConfig {
     return out;
   }
 
-  /** 全部可选服务商：预设 + 本机关加的自定义。 */
+  /** 全部可选服务商：预设 + 本机关加的自定义（含已停用，管理页数据源）。 */
   static listProviders(): AiProviderPreset[] {
     const out: AiProviderPreset[] = [];
     for (let i = 0; i < AI_PROVIDERS.length; i++) {
@@ -317,6 +340,54 @@ export class AiServiceConfig {
       out.push(custom[i]);
     }
     return out;
+  }
+
+  // ———— 每家服务商启停（并行管理页；默认=启用，老配置零变化） ————
+
+  /** 停用标记键 `ai_provider_disabled_<id>`='1'。 */
+  static disabledKey(providerId: string): string {
+    return 'ai_provider_disabled_' + providerId;
+  }
+
+  static isProviderEnabled(providerId: string): boolean {
+    return TalebookService.prefGet(AiServiceConfig.disabledKey(providerId)) !== '1';
+  }
+
+  /** 启停改动让 MCP 工具集缓存作废（网关按服务商现取配置，无需额外失效）。 */
+  static setProviderEnabled(providerId: string, on: boolean): void {
+    TalebookService.prefSet(AiServiceConfig.disabledKey(providerId), on ? '' : '1');
+    McpService.reset();
+  }
+
+  /** 启用的服务商清单：chips / 功能模型页下拉 / 快切菜单数据源——停用的家不出现。 */
+  static listEnabledProviders(): AiProviderPreset[] {
+    const out: AiProviderPreset[] = [];
+    const all: AiProviderPreset[] = AiServiceConfig.listProviders();
+    for (let i = 0; i < all.length; i++) {
+      if (AiServiceConfig.isProviderEnabled(all[i].id)) {
+        out.push(all[i]);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 编辑服务商自身资产（地址/模型/Key），**不动当前默认选择**——管理页用。
+   * `apiKey` 传空串=保持已存值不变（占位「已保存，留空不修改」语义）。
+   */
+  static updateProviderProfile(providerId: string, baseUrl: string, model: string, apiKey: string): void {
+    TalebookService.secureSet(AiServiceConfig.baseUrlKey(providerId), AiServiceHttp.normalizeBaseUrl(baseUrl));
+    TalebookService.prefSet(AiServiceConfig.modelKey(providerId), model.trim());
+    if (apiKey.length > 0) {
+      TalebookService.secureSet(AiServiceConfig.apiKeyKey(providerId), apiKey.trim());
+    }
+    McpService.reset();
+  }
+
+  /** 设为对话默认服务商：只切选择；地址/模型/Key 各家分槽，切回即恢复。 */
+  static setDefaultProvider(providerId: string): void {
+    TalebookService.prefSet(KEY_PROVIDER, providerId);
+    McpService.reset();
   }
 
   /** 添加一个本地自定义服务商并返回其预设。 */
@@ -402,7 +473,7 @@ export class AiServiceConfig {
     temperature: number, visionOverride: string = '', contextLength: number = DEFAULT_CONTEXT_K): void {
     TalebookService.prefSet(KEY_PROVIDER, providerId);
     TalebookService.secureSet(AiServiceConfig.baseUrlKey(providerId), AiServiceHttp.normalizeBaseUrl(baseUrl));
-    TalebookService.prefSet(KEY_MODEL, model.trim());
+    TalebookService.prefSet(AiServiceConfig.modelKey(providerId), model.trim());
     TalebookService.prefSet(KEY_TEMPERATURE, `${temperature}`);
     TalebookService.prefSet(KEY_VISION, visionOverride);
     TalebookService.prefSet(KEY_CONTEXT, `${contextLength}`);
