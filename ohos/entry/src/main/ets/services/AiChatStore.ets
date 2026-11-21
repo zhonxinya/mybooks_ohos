@@ -32,6 +32,8 @@ export interface ChatBubble {
   images?: string[];
   /** 推理模型的思考过程（reasoning_content）；完成固化后随历史持久化。 */
   reasoning?: string;
+  /** 语音轮次气泡（realtime 内嵌会话产生）：渲染时带 mic/播报角标，与文字轮区分。 */
+  voice?: boolean;
 }
 
 /** 写操作闸门确认弹窗；需要 UIContext，只有页面在场时可用。 */
@@ -343,6 +345,7 @@ export class AiChatStore {
           activities: activities,
           images: images,
           reasoning: typeof reasoningRaw === 'string' ? reasoningRaw : '',
+          voice: m['voice'] === true,
         });
       }
     return bubbles;
@@ -670,6 +673,76 @@ export class AiChatStore {
     // 轮次收尾顺带压缩窗口外旧轮（内部阈值+compressing 守卫，不阻塞界面）
     if (!isError) {
       void this.compressHistory();
+    }
+  }
+
+  // ————— 语音（realtime 全双工）轮次：直接写进消息流 —————
+  // 语音会话激活期间文字输入停用，与文字轮（requestId/thinking）天然不并发。
+
+  private lastBubble(): ChatBubble | null {
+    return this.messages.length > 0 ? this.messages[this.messages.length - 1] : null;
+  }
+
+  /**
+   * ASR 结果进流（语音轮）：final=false 为中间结果——「进行中」用户气泡整段替换，
+   * 空文本清占位（VAD 误触发）；final=true 固化，空 final 丢弃占位。
+   */
+  voiceUser(text: string, final: boolean): void {
+    const last: ChatBubble | null = this.lastBubble();
+    if (last !== null && last.role === 'user' && last.streaming) {
+      this.messages.pop();
+    }
+    if (text.length > 0) {
+      this.messages.push({ role: 'user', content: text, streaming: !final, error: false, activities: [], voice: true });
+    }
+    this.messages = this.messages.slice();
+    if (final) {
+      this.saveHistory();
+    }
+    this.notify();
+  }
+
+  /**
+   * AI 字幕进流：delta 在既有流式气泡上累计（打断后重新开口即新气泡）；
+   * final 固化（done 全文优先，空则保留已累计文本）。
+   */
+  voiceAi(text: string, final: boolean): void {
+    const last: ChatBubble | null = this.lastBubble();
+    let content: string = text;
+    if (last !== null && last.role === 'assistant' && last.streaming) {
+      this.messages.pop();
+      if (!final) {
+        content = last.content + text;
+      } else if (text.length === 0) {
+        content = last.content;
+      }
+    }
+    if (content.length > 0) {
+      this.messages.push({ role: 'assistant', content: content, streaming: !final, error: false,
+        activities: [], voice: true });
+    }
+    this.messages = this.messages.slice();
+    if (final) {
+      this.saveHistory();
+    }
+    this.notify();
+  }
+
+  /** 打断/断线收尾：固化尾部流式气泡（AI 已播出的文字保留，光标熄灭）。 */
+  voiceSealStreaming(): void {
+    let changed: boolean = false;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const bubble: ChatBubble = this.messages[i];
+      if (!bubble.streaming) {
+        break;
+      }
+      bubble.streaming = false;
+      changed = true;
+    }
+    if (changed) {
+      this.messages = this.messages.slice();
+      this.saveHistory();
+      this.notify();
     }
   }
 

@@ -131,6 +131,26 @@ export class AiServiceConfig {
     return TalebookService.prefGet(KEY_VOICE_MODEL);
   }
 
+  /** realtime 通话音色（池与校验在 AiVoiceKit；此处只管存取，空=默认 longanqian）。 */
+  static loadRealtimeTimbre(): string {
+    const v: string = TalebookService.prefGet(KEY_REALTIME_TIMBRE);
+    return v.length > 0 ? v : 'longanqian';
+  }
+
+  static saveRealtimeTimbre(voice: string): void {
+    TalebookService.prefSet(KEY_REALTIME_TIMBRE, voice);
+  }
+
+  /** 播报 TTS 音色（空=默认 longanhuan_v3.6，实测可用音色）。 */
+  static loadTtsTimbre(): string {
+    const v: string = TalebookService.prefGet(KEY_TTS_TIMBRE);
+    return v.length > 0 ? v : 'longanhuan_v3.6';
+  }
+
+  static saveTtsTimbre(voice: string): void {
+    TalebookService.prefSet(KEY_TTS_TIMBRE, voice);
+  }
+
   /** 播报引擎：'system'=系统语音（CoreSpeechKit，默认）、'cloud'=Token Plan 云端 TTS。 */
   static loadSpeakEngine(): string {
     return TalebookService.prefGet(KEY_SPEAK_ENGINE, 'system') === 'cloud' ? 'cloud' : 'system';
@@ -391,6 +411,8 @@ export const KEY_AUTO_SPEAK: string = 'ai_auto_speak';
 /** 语音通话的对话模型：独立服务商/模型；provider 键为空 = 跟随全局配置。 */
 export const KEY_VOICE_PROVIDER: string = 'ai_voice_provider';
 export const KEY_VOICE_MODEL: string = 'ai_voice_model';
+export const KEY_REALTIME_TIMBRE: string = 'ai_voice_timbre_realtime';
+export const KEY_TTS_TIMBRE: string = 'ai_voice_timbre_tts';
 /** AI 回复播报引擎：'system'（默认）/'cloud'（Token Plan TTS）。 */
 export const KEY_SPEAK_ENGINE: string = 'ai_speak_engine';
 /** 语音通话模式：'realtime'（默认，WS 全双工）/'turn'（轮转）。 */

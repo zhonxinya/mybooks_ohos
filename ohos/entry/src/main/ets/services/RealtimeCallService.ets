@@ -8,16 +8,22 @@ import { audio } from '@kit.AudioKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AiService } from './AiService';
+import type { AiMessage } from './AiService';
 
 const TAG: string = 'RealtimeCall';
 const REALTIME_MODEL: string = 'qwen-audio-3.0-realtime-plus';
-const REALTIME_VOICE: string = 'longanqian';
+// 音色可在设置页或 AI set_voice 更换（池见 AiVoiceKit.REALTIME_TIMBRES）
 /** 下行播放采样率：realtime 输出固定 24k s16le mono。 */
 const PLAY_RATE: number = 24000;
 
 export interface RealtimeCallCallbacks {
   /** 用户一句话的最终转写文本。 */
   onUserText: (text: string) => void;
+  /**
+   * ASR 中间结果（累计全文，非增量；speech_started 时先回调空串清占位）。
+   * 对话页内嵌语音用它做「实时信息流」；可选，通话页等旧消费方不实现即无行为变化。
+   */
+  onUserTextDelta?: (text: string) => void;
   /** AI 回复增量/完结字幕文本。 */
   onAiTextDelta: (delta: string) => void;
   onAiTextDone: (full: string) => void;
@@ -50,6 +56,8 @@ export class RealtimeCallService {
   private static playGen: number = 0;
   private static responding: boolean = false;
   private static aiTranscript: string = '';
+  /** 本句 ASR 中间结果累计（speech_started 清零，completed 后作废）。 */
+  private static userTranscript: string = '';
   private static closed: boolean = false;
   private static base64: util.Base64Helper = new util.Base64Helper();
   private static decoder: util.TextDecoder = util.TextDecoder.create('utf-8');
@@ -87,8 +95,10 @@ export class RealtimeCallService {
   /**
    * 连接并进入可对话状态；失败经 onError 汇报并抛错（页面提示回退）。
    * `tools` 传 AiTools.definitions()（OpenAI function 形态，网关实测接受）；空数组=不带工具。
+   * `history` 为可选文字对话历史：连接后逐条 conversation.item.create 注入，语音接得上上下文。
    */
-  static async connect(instructions: string, callbacks: RealtimeCallCallbacks, tools: Object[]): Promise<void> {
+  static async connect(instructions: string, callbacks: RealtimeCallCallbacks, tools: Object[],
+    history: AiMessage[] = []): Promise<void> {
     RealtimeCallService.disconnect();
     RealtimeCallService.callbacks = callbacks;
     RealtimeCallService.closed = false;
@@ -96,6 +106,7 @@ export class RealtimeCallService {
     RealtimeCallService.playBytes = 0;
     RealtimeCallService.responding = false;
     RealtimeCallService.aiTranscript = '';
+    RealtimeCallService.userTranscript = '';
     RealtimeCallService.muted = false;
     RealtimeCallService.toolWaitResponse = false;
 
@@ -110,19 +121,26 @@ export class RealtimeCallService {
       RealtimeCallService.handleEvent(text);
     });
     ws.on('close', (): void => {
+      RealtimeCallService.failCreated('实时连接被关闭');
       if (!RealtimeCallService.closed) {
         RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onClosed());
       }
     });
     ws.on('error', (err: BusinessError): void => {
       hilog.error(0x0000, TAG, 'ws error: %{public}s', err === undefined || err === null ? '' : err.message);
+      RealtimeCallService.failCreated('实时网关连接失败');
     });
 
     const url: string = `${RealtimeCallService.wsOrigin()}/api-ws/v1/realtime?model=${REALTIME_MODEL}`;
     const header: Record<string, string> = { 'Authorization': `Bearer ${RealtimeCallService.apiKey()}` };
     const options: webSocket.WebSocketRequestOptions = { header: header };
     await new Promise<void>((resolve: () => void, reject: (e: Error) => void): void => {
+      // 握手超时兜底：connect 回调可能因网络半开永不返回
+      const timer: number = setTimeout((): void => {
+        reject(new Error('实时网关握手超时'));
+      }, 20000);
       ws.connect(url, options, (err: BusinessError): void => {
+        clearTimeout(timer);
         if (err !== null && err !== undefined) {
           reject(new Error(`连接实时网关失败：${err.message}`));
           return;
@@ -139,7 +157,7 @@ export class RealtimeCallService {
     };
     const session: Record<string, Object> = {
       'modalities': ['audio', 'text'],
-      'voice': REALTIME_VOICE,
+      'voice': AiService.loadRealtimeTimbre(),
       'instructions': instructions,
       'input_audio_format': 'pcm',
       'output_audio_format': 'pcm',
@@ -150,12 +168,28 @@ export class RealtimeCallService {
     }
     const update: Record<string, Object> = { 'type': 'session.update', 'session': session };
     RealtimeCallService.sendJson(update);
+    // 文字历史注入：只带 user/assistant 非空文本，system/图片轮跳过
+    for (let i = 0; i < history.length; i++) {
+      const role: string = history[i].role;
+      const content: string = history[i].content;
+      if (content.length === 0 || (role !== 'user' && role !== 'assistant')) {
+        continue;
+      }
+      const part: Record<string, Object> = {
+        'type': role === 'user' ? 'input_text' : 'output_text',
+        'text': content,
+      };
+      const item: Record<string, Object> = { 'type': 'message', 'role': role, 'content': [part] };
+      const seed: Record<string, Object> = { 'type': 'conversation.item.create', 'item': item };
+      RealtimeCallService.sendJson(seed);
+    }
     await RealtimeCallService.startMic();
     await RealtimeCallService.startRenderer();
   }
 
   static disconnect(): void {
     RealtimeCallService.closed = true;
+    RealtimeCallService.failCreated('已挂断');
     const capturer: audio.AudioCapturer | null = RealtimeCallService.capturer;
     RealtimeCallService.capturer = null;
     if (capturer !== null) {
@@ -185,11 +219,28 @@ export class RealtimeCallService {
   // ————————————————— 事件分发 —————————————————
 
   private static createdResolve: (() => void) | null = null;
+  private static createdReject: ((e: Error) => void) | null = null;
 
   private static waitForCreated(): Promise<void> {
-    return new Promise<void>((resolve: () => void): void => {
+    return new Promise<void>((resolve: () => void, reject: (e: Error) => void): void => {
       RealtimeCallService.createdResolve = resolve;
+      RealtimeCallService.createdReject = reject;
+      // 超时兜底：TCP/WS 握手成功但网关不回 session.created（鉴权失败/网络半开）不能永挂
+      setTimeout((): void => {
+        RealtimeCallService.failCreated('实时网关无响应（超时）');
+      }, 15000);
     });
+  }
+
+  /** 连接建立期失败：让 waitForCreated 以错误收敛，页面 catch 复位横幅。 */
+  private static failCreated(reason: string): void {
+    const reject: ((e: Error) => void) | null = RealtimeCallService.createdReject;
+    if (reject === null) {
+      return;
+    }
+    RealtimeCallService.createdReject = null;
+    RealtimeCallService.createdResolve = null;
+    reject(new Error(reason));
   }
 
   private static handleEvent(text: string): void {
@@ -206,6 +257,7 @@ export class RealtimeCallService {
     if (type === 'session.created') {
       const resolve: (() => void) | null = RealtimeCallService.createdResolve;
       RealtimeCallService.createdResolve = null;
+      RealtimeCallService.createdReject = null;
       if (resolve !== null) {
         resolve();
       }
@@ -213,10 +265,26 @@ export class RealtimeCallService {
       // 打断：立刻丢队列，之后到达的本轮 audio.delta 也随 responding=false 丢弃入队但会被下次清空
       RealtimeCallService.bargeIn();
       RealtimeCallService.toolWaitResponse = false;
+      RealtimeCallService.userTranscript = '';
+      RealtimeCallService.notify((c: RealtimeCallCallbacks): void => {
+        if (c.onUserTextDelta !== undefined) {
+          c.onUserTextDelta('');
+        }
+      });
       RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onSpeechStarted());
     } else if (type === 'input_audio_buffer.speech_stopped') {
       RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onSpeechStopped());
+    } else if (type === 'conversation.item.input_audio_transcription.delta') {
+      // OpenAI 语义：text 为本段增量；页面拿累计全文实时刷新（final 以 completed 为准）
+      RealtimeCallService.userTranscript += String(event['text'] ?? '');
+      const acc: string = RealtimeCallService.userTranscript;
+      RealtimeCallService.notify((c: RealtimeCallCallbacks): void => {
+        if (c.onUserTextDelta !== undefined) {
+          c.onUserTextDelta(acc);
+        }
+      });
     } else if (type === 'conversation.item.input_audio_transcription.completed') {
+      RealtimeCallService.userTranscript = '';
       const transcript: string = String(event['transcript'] ?? '');
       if (transcript.length > 0) {
         RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onUserText(transcript));

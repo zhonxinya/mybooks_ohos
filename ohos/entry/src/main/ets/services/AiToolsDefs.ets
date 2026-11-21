@@ -314,6 +314,16 @@ export const TOOL_ASK_USER: AiToolDefinition = defineTool('ask_user',
     '用户的答复会作为本工具的结果返回，收到后再继续。不要用它闲聊或问与当前任务无关的信息。',
   ASK_USER_PROPS, ['question', 'options']);
 
+export const SET_VOICE_PROPS: Record<string, AiToolProperty> = {
+  'voice': prop('string', '目标音色 id：longanqian（女·默认）、longanlingxin（女·知心温暖）、' +
+    'longanlingxi（女·可爱甜美）、longanxiaoxin（女·亲切活泼）、longanlufeng（男·明亮开朗）'),
+};
+export const TOOL_SET_VOICE: AiToolDefinition = defineTool('set_voice',
+  '更换你在实时语音通话中的音色（声线）。适合场景明显需要另一种声音时调用：' +
+    '给孩子讲故事、用户点名要男声/甜美声/温柔声、角色扮演等。' +
+    '调用后当前会话会短暂重连（约一秒），新音色从下一句生效；语气变化不需要本工具，直接调整表达方式即可。',
+  SET_VOICE_PROPS, ['voice']);
+
 // 顺序有坑：OpenCode 网关实测会丢 tools 数组最后一项（2026-11-20 板上取证：模型枚举
 // 恰缺末位 get_novel_meta，报「最后一个工具是 search_meta」）。末位放最低频工具，
 // 新增工具一律插在中间，别放最后。

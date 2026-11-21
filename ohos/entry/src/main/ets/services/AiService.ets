@@ -408,6 +408,22 @@ export class AiService {
   static loadVoiceModel(): string {
     return AiServiceConfig.loadVoiceModel();
   }
+  /** 委托 AiServiceConfig.loadRealtimeTimbre（拆分：见文件头说明）。 */
+  static loadRealtimeTimbre(): string {
+    return AiServiceConfig.loadRealtimeTimbre();
+  }
+  /** 委托 AiServiceConfig.saveRealtimeTimbre（拆分：见文件头说明）。 */
+  static saveRealtimeTimbre(voice: string): void {
+    AiServiceConfig.saveRealtimeTimbre(voice);
+  }
+  /** 委托 AiServiceConfig.loadTtsTimbre（拆分：见文件头说明）。 */
+  static loadTtsTimbre(): string {
+    return AiServiceConfig.loadTtsTimbre();
+  }
+  /** 委托 AiServiceConfig.saveTtsTimbre（拆分：见文件头说明）。 */
+  static saveTtsTimbre(voice: string): void {
+    AiServiceConfig.saveTtsTimbre(voice);
+  }
   /** 委托 AiServiceConfig.loadSpeakEngine（拆分：见文件头说明）。 */
   static loadSpeakEngine(): string {
     return AiServiceConfig.loadSpeakEngine();

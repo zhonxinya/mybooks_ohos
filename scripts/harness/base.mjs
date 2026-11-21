@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { dir } from './paths.mjs';
 import { stagePure, stagePage, stageAiService, stageChatStore, stageAiPersona, stageMetaSearch,
-  stageEncyclopedia, stageMcp, stageQwenAudio, stageNovelMeta, stageReader3, stageAiTools } from './stages.mjs';
+  stageEncyclopedia, stageMcp, stageQwenAudio, stageNovelMeta, stageReader3, stageAiTools,
+  stageAiVoiceKit } from './stages.mjs';
 
 export const settingsDefaults = () => ({
   config: { providerId: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat',
@@ -105,6 +106,10 @@ export const AiService = {
   saveSpeakEngine: (e) => { state.settings.speakEngine = e === 'cloud' ? 'cloud' : 'system'; },
   loadCallMode: () => state.settings.callMode ?? 'realtime',
   saveCallMode: (m) => { state.settings.callMode = m === 'turn' ? 'turn' : 'realtime'; },
+  loadRealtimeTimbre: () => state.settings.rtTimbre ?? 'longanqian',
+  saveRealtimeTimbre: (v) => { state.settings.rtTimbre = v; },
+  loadTtsTimbre: () => state.settings.ttsTimbre ?? 'longanhuan_v3.6',
+  saveTtsTimbre: (v) => { state.settings.ttsTimbre = v; },
   loadVoiceConfig: () => {
     if (state.settings.voiceProviderId.length > 0) {
       const p = state.settings.providers.find((x) => x.id === state.settings.voiceProviderId);
@@ -511,6 +516,7 @@ export async function setup() {
   stageQwenAudio();
   stageReader3();
   stageAiTools();
+  stageAiVoiceKit();
   const load = async (name) => {
     try {
       return await import(pathToFileURL(join(dir, `${name}.ts`)).href);

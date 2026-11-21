@@ -474,6 +474,24 @@ export function stageAiTools() {
   writeFileSync(join(dir, 'AiToolsDefs.ts'), read('services/AiToolsDefs.ets'));
 }
 
+/** AiVoiceKit 真实入检：AbilityKit 权限桩；AiService/AiTools/Realtime 复用已 staged 模块。 */
+export function stageAiVoiceKit() {
+  writeFileSync(join(dir, 'voiceKitDeps.ts'), [
+    'export const abilityAccessCtrl = {',
+    '  createAtManager: () => ({ requestPermissionsFromUser: async () => ({ authResults: [0] }) }),',
+    '};',
+    'export const common = {};',
+    '',
+  ].join('\n'));
+  let source = read('services/AiVoiceKit.ets');
+  source = source
+    .replace(`from '@kit.AbilityKit'`, `from './voiceKitDeps.ts'`)
+    .replace(`from './AiService'`, `from './RealAiService.ts'`)
+    .replace(`from './AiTools'`, `from './RealAiTools.ts'`)
+    .replace(`from './RealtimeCallService'`, `from './RealtimeCall.ts'`);
+  writeFileSync(join(dir, 'RealAiVoiceKit.ts'), source);
+}
+
 export function stagePure(name, path, typeNames) {
   let source = read(path).replace(/from '\.\.\/services\/BookModels'/g, "from './BookModels.ts'");
   for (const type of typeNames) {
