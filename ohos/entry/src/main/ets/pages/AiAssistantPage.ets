@@ -1091,6 +1091,21 @@ struct AiAssistantPage {
           .textAlign(TextAlign.Start);
       }
 
+      // 失败轮只给「重试」：截掉该错误条连同其问题原样重发（#1512），不保留半截内容
+      if (bubble.error && !bubble.streaming) {
+        Row({ space: 12 }) {
+          TextButton({
+            label: '重试',
+            onTap: () => {
+              if (!this.store.retryFrom(index)) {
+                this.toast('生成中，请稍候');
+              }
+            },
+          });
+        }
+        .width('100%');
+      }
+
       if (bubble.role === 'assistant' && !bubble.streaming && !bubble.error && bubble.content.length > 0) {
         Row({ space: 12 }) {
           TextButton({ label: '复制', onTap: () => { void this.copyBubble(index); } });

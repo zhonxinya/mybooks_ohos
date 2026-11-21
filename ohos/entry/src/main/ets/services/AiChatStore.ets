@@ -934,11 +934,15 @@ export class AiChatStore {
   }
 
   /** 重新生成：抹掉最后一条用户消息及其后全部，原样重发该问题（原位替换答案）。 */
-  regenerate(): boolean {
+  /**
+   * 从指定位置重试（#1512）：向前找最近的用户问题，连同其后全部截掉原样重发。
+   * regenerate=anchor 在末尾的特例；错误气泡的重试传其自身 index（连同错误条一起截掉）。
+   */
+  retryFrom(anchor: number): boolean {
     if (this.thinking) {
       return false;
     }
-    for (let i = this.messages.length - 1; i >= 0; i--) {
+    for (let i = Math.min(anchor, this.messages.length) - 1; i >= 0; i--) {
       if (this.messages[i].role === 'user') {
         const question: ChatBubble = this.messages[i];
         this.messages = this.messages.slice(0, i);
@@ -952,6 +956,10 @@ export class AiChatStore {
       }
     }
     return false;
+  }
+
+  regenerate(): boolean {
+    return this.retryFrom(this.messages.length);
   }
 
   /** 仅离线回归用：隔离单例状态，避免用例串台。 */

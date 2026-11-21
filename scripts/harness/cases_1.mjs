@@ -663,4 +663,34 @@ export function register(ctx) {
     assert.notEqual(page.bubbleKey(page.messages[1], 1), kWith, '分隔态变化必须换 key');
   });
 
+  test('错误气泡重试：截掉错误条与其问题原样重发；regenerate 委托等价', async () => {
+    const page = chat();
+    const store = AiChatStore.instance();
+    await page.send('问题一');
+    state.handlers.onDone('答案一');
+    await page.send('问题二');
+    assert.equal(store.retryFrom(1), false, 'thinking 期拒绝重试');
+    state.handlers.onError('网络错误');
+    assert.equal(store.messages.length, 4);
+    assert.equal(store.messages[3].error, true, '失败轮固化为错误气泡');
+    // 从错误条位置重试：截掉 [问题二+错误条]，原样重发
+    assert.equal(store.retryFrom(3), true);
+    assert.equal(store.messages.length, 4, '错误条与问题截掉后，问题原样重新入列');
+    assert.equal(store.messages[2].role, 'user');
+    assert.equal(store.messages[2].content, '问题二', '重发的是原问题');
+    assert.equal(store.messages[3].role, 'assistant');
+    assert.equal(store.messages[3].streaming, true, '新一轮流式气泡就位');
+    // retryFrom 内 void send()：chatStream 在 await buildContext 之后才捕获 handlers，让出一拍
+    await new Promise((r) => setTimeout(r, 10));
+    state.handlers.onDone('答案二·重试');
+    assert.equal(store.messages.length, 4);
+    assert.equal(store.messages[3].content, '答案二·重试');
+    assert.equal(store.messages[3].error, false);
+    // 前方无用户问题时静默拒绝；regenerate=末尾锚点委托
+    assert.equal(store.retryFrom(0), false, '无问题可重发');
+    assert.equal(store.regenerate(), true, 'regenerate 走同一 retryFrom');
+    state.handlers.onDone('答案三');
+    assert.ok(JSON.parse(state.prefs.get('ai_chat_history')).length > 0, '重试轮落盘');
+  });
+
 }
