@@ -793,6 +793,12 @@ struct AiAssistantPage {
         Text(bubble.role === 'user' ? '你' : 'AI')
           .fontSize(11)
           .fontColor($r('app.color.text_tertiary'));
+        // 语音轮次角标：mic=用户口述，waveform=AI 语音字幕（与文字轮区分）
+        if (bubble.voice === true) {
+          SymbolGlyph(bubble.role === 'user' ? $r('sys.symbol.mic') : $r('sys.symbol.waveform'))
+            .fontSize(11)
+            .fontColor([$r('app.color.brand_primary')]);
+        }
         Blank();
       }
       .width('100%');
@@ -810,7 +816,10 @@ struct AiAssistantPage {
         .width('100%');
       }
 
-      if (bubble.role === 'assistant' && !bubble.error) {
+      if (bubble.role === 'assistant' && !bubble.error && bubble.voice === true) {
+        // 语音 AI 气泡：字幕增量直接累计在 bubble.content，不走文字轮镜像/思考/活动时间线
+        MarkdownText({ content: bubble.content });
+      } else if (bubble.role === 'assistant' && !bubble.error) {
         // 思考过程：流式挂 store 镜像实时显示，固化后挂气泡自身字段默认折叠
         if (bubble.streaming) {
           ReasoningBlock({ reasoning: this.streamingReasoning, live: true });
@@ -831,7 +840,8 @@ struct AiAssistantPage {
           MarkdownText({ content: bubble.content });
         }
       } else {
-        Text(bubble.streaming ? (this.streamingText.length > 0 ? this.streamingText : '思考中…') : bubble.content)
+        // 语音用户气泡的 ASR 中间结果也在 bubble.content，不能走文字轮 streamingText 镜像
+        Text(bubble.streaming && bubble.voice !== true ? (this.streamingText.length > 0 ? this.streamingText : '思考中…') : bubble.content)
           .fontSize(15)
           .lineHeight(23)
           .fontColor(bubble.error ? $r('app.color.error') : $r('app.color.text_primary'))
@@ -843,8 +853,8 @@ struct AiAssistantPage {
       if (bubble.role === 'assistant' && !bubble.streaming && !bubble.error && bubble.content.length > 0) {
         Row({ space: 12 }) {
           TextButton({ label: '复制', onTap: () => { void this.copyBubble(index); } });
-          if (index === this.messages.length - 1 && !this.thinking) {
-            // 重新生成只挂在最新一条回答上：重发最后一条用户消息、原位替换答案
+          if (index === this.messages.length - 1 && !this.thinking && bubble.voice !== true) {
+            // 重新生成只挂在最新一条回答上：重发最后一条用户消息、原位替换答案（语音轮不走文字重生成）
             TextButton({
               label: '重新生成',
               onTap: () => {
@@ -997,27 +1007,70 @@ struct AiAssistantPage {
     .margin({ left: $r('app.float.page_padding'), right: $r('app.float.page_padding'), bottom: 8 });
   }
 
-  /** 语音会话横幅：活跃期替换输入行——状态 + 静音 + 挂断。 */
+  /** 语音状态点配色：聆听=红（收音中）、思考=黄、说话=品牌色、其余（连接中等）=灰。 */
+  private voiceStatusDot(): ResourceColor {
+    if (this.voiceStatus === '聆听中') {
+      return $r('app.color.error');
+    }
+    if (this.voiceStatus === '思考中') {
+      return $r('app.color.warning');
+    }
+    if (this.voiceStatus === '说话中') {
+      return $r('app.color.brand_primary');
+    }
+    return $r('app.color.text_tertiary');
+  }
+
+  /** 语音会话横幅：活跃期替换输入行——状态卡（配色状态点 + 双行状态）+ 静音/挂断图标按钮。 */
   @Builder
   voiceBanner() {
     Row({ space: 10 }) {
-      SymbolGlyph(this.voiceMuted ? $r('sys.symbol.mic_slash') : $r('sys.symbol.mic'))
-        .fontSize(20)
-        .fontColor([this.voiceMuted ? $r('app.color.text_tertiary') : $r('app.color.error')]);
-      Text(`实时语音 · ${this.voiceStatus}`)
-        .fontSize(14)
-        .fontColor($r('app.color.text_primary'))
-        .layoutWeight(1);
-      TextButton({ label: this.voiceMuted ? '取消静音' : '静音', onTap: () => {
+      Circle()
+        .width(10)
+        .height(10)
+        .fill(this.voiceStatusDot());
+      Column({ space: 1 }) {
+        Text('实时语音')
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'));
+        Text(this.voiceStatus.length > 0 ? this.voiceStatus : '连接中…')
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'));
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1);
+      // 44vp Stack 自建热区（Circle Button 热区失效坑）
+      Stack() {
+        SymbolGlyph(this.voiceMuted ? $r('sys.symbol.mic_slash') : $r('sys.symbol.mic'))
+          .fontSize(20)
+          .fontColor([this.voiceMuted ? $r('app.color.text_tertiary') : $r('app.color.brand_primary')]);
+      }
+      .width(44)
+      .height(44)
+      .borderRadius(22)
+      .backgroundColor($r('app.color.card_background'))
+      .onClick(() => {
         this.toggleVoiceMute();
-      } });
-      TextButton({ label: '挂断', tone: 'danger', onTap: () => {
+      });
+      Stack() {
+        SymbolGlyph($r('sys.symbol.phone_down_fill'))
+          .fontSize(20)
+          .fontColor([Color.White]);
+      }
+      .width(44)
+      .height(44)
+      .borderRadius(22)
+      .backgroundColor($r('app.color.error'))
+      .onClick(() => {
         this.endVoiceSession();
-      } });
+      });
     }
     .width('100%')
-    .height(44)
-    .padding({ left: 8, right: 4 });
+    .padding({ left: 14, right: 8, top: 9, bottom: 9 })
+    .borderRadius($r('app.float.card_radius'))
+    .backgroundColor($r('app.color.brand_primary_light'))
+    .alignItems(VerticalAlign.Center);
   }
 
   @Builder

@@ -444,6 +444,7 @@ export function register(ctx) {
     store.voiceUser('你好。', true);
     assert.equal(store.messages[0].content, '你好。');
     assert.equal(store.messages[0].streaming, false);
+    assert.equal(store.messages[0].voice, true);
     store.voiceUser('嗯', false);
     store.voiceUser('', true);
     assert.equal(store.messages.length, 1);
@@ -455,6 +456,7 @@ export function register(ctx) {
     store.voiceAi('今天是晴天。', true);
     assert.equal(store.messages[1].content, '今天是晴天。');
     assert.equal(store.messages[1].streaming, false);
+    assert.equal(store.messages[1].voice, true);
     // done 空全文：保留已累计文本
     store.voiceAi('明', false);
     store.voiceAi('', true);
@@ -467,6 +469,26 @@ export function register(ctx) {
     assert.equal(store.messages[3].content, '后');
     assert.equal(store.messages[3].streaming, false);
     store.resetForTest();
+  });
+
+  test('语音轮 voice 标记落盘：loadHistory 白名单重建后仍带 voice，文字轮无标记为 false', () => {
+    state.prefs.clear();
+    const page = chat();
+    page.store.voiceUser('你好。', true);
+    page.store.voiceAi('今天晴天。', true);
+    const saved = JSON.parse(state.prefs.get('ai_chat_history'));
+    assert.equal(saved[0].voice, true);
+    assert.equal(saved[1].voice, true);
+    const page2 = reappear();
+    page2.store.loadHistory();
+    assert.equal(page2.messages.length, 2);
+    assert.equal(page2.messages[0].voice, true);
+    assert.equal(page2.messages[1].voice, true);
+    // 旧版存量文字轮记录无 voice 字段：重建后为 false，不误标语音角标
+    const page3 = chat();
+    state.prefs.set('ai_chat_history', '[{"role":"user","content":"hi"}]');
+    page3.store.loadHistory();
+    assert.equal(page3.messages[0].voice, false);
   });
 
 }

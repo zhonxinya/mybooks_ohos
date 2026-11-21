@@ -32,6 +32,8 @@ export interface ChatBubble {
   images?: string[];
   /** 推理模型的思考过程（reasoning_content）；完成固化后随历史持久化。 */
   reasoning?: string;
+  /** 语音轮次气泡（realtime 内嵌会话产生）：渲染时带 mic/播报角标，与文字轮区分。 */
+  voice?: boolean;
 }
 
 /** 写操作闸门确认弹窗；需要 UIContext，只有页面在场时可用。 */
@@ -343,6 +345,7 @@ export class AiChatStore {
           activities: activities,
           images: images,
           reasoning: typeof reasoningRaw === 'string' ? reasoningRaw : '',
+          voice: m['voice'] === true,
         });
       }
     return bubbles;
@@ -690,7 +693,7 @@ export class AiChatStore {
       this.messages.pop();
     }
     if (text.length > 0) {
-      this.messages.push({ role: 'user', content: text, streaming: !final, error: false, activities: [] });
+      this.messages.push({ role: 'user', content: text, streaming: !final, error: false, activities: [], voice: true });
     }
     this.messages = this.messages.slice();
     if (final) {
@@ -715,7 +718,8 @@ export class AiChatStore {
       }
     }
     if (content.length > 0) {
-      this.messages.push({ role: 'assistant', content: content, streaming: !final, error: false, activities: [] });
+      this.messages.push({ role: 'assistant', content: content, streaming: !final, error: false,
+        activities: [], voice: true });
     }
     this.messages = this.messages.slice();
     if (final) {
