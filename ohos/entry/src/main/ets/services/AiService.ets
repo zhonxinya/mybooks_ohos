@@ -66,6 +66,20 @@ export interface AiMessage {
   images?: string[];
 }
 
+/** AI 联网搜索引用的单条网页。 */
+export interface LlmSearchSource {
+  title: string;
+  url: string;
+}
+
+/** AI 联网问答结果：整合答案 + 检索引用；ok=false 时 error 说明原因。 */
+export interface LlmSearchResult {
+  ok: boolean;
+  answer: string;
+  sources: LlmSearchSource[];
+  error: string;
+}
+
 /** 运行时配置。 */
 export interface AiConfig {
   providerId: string;
@@ -480,6 +494,97 @@ export class AiService {
       throw new Error('模型列表解析失败，该服务可能不兼容 OpenAI 协议');
     }
     return ids;
+  }
+
+  /**
+   * 是否支持服务端内置联网搜索（enable_search 为通义 DashScope 兼容模式私有参数）。
+   * 按域名判定：dashscope / maas / token-plan 均落在 aliyuncs.com，自建 OpenAI 兼容服务不会误判。
+   */
+  static supportsNativeOnlineSearch(baseUrl: string): boolean {
+    return baseUrl.indexOf('aliyuncs.com') >= 0;
+  }
+
+  /**
+   * AI 联网问答：用当前模型开 enable_search + forced_search（强制联网、不让模型凭记忆作答），
+   * rcp 直连绕开 SDK 类型限制（同 fetchModels 通道形态）。
+   * 返回正文与 search_info.search_results 引用列表（≤6 条）；失败全部转 ok=false+error，不抛错。
+   */
+  static async aiSearchOnline(query: string): Promise<LlmSearchResult> {
+    const res: LlmSearchResult = { ok: false, answer: '', sources: [], error: '' };
+    const cfg: AiConfig = AiService.loadConfig();
+    const key: string = AiService.apiKeyFor(cfg.providerId);
+    if (key.length === 0) {
+      res.error = '请先在设置页填写该服务商的 API Key';
+      return res;
+    }
+    const base: string = AiService.normalizeBaseUrl(cfg.baseUrl);
+    try {
+      const messages: AiMessage[] = [
+        { role: 'system', content: '根据实时网页检索结果回答用户问题：先给关键事实，涉及时间请标注日期；检索结果互相矛盾时如实说明。' },
+        { role: 'user', content: query },
+      ];
+      const searchOpts: Record<string, Object> = { 'forced_search': true };
+      const payload: Record<string, Object> = {
+        'model': cfg.model,
+        'messages': messages,
+        'stream': false,
+        'max_tokens': 900,
+        'enable_search': true,
+        'search_options': searchOpts,
+      };
+      const headers: rcp.RequestHeaders = {
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      const session: rcp.Session = rcp.createSession();
+      let statusCode: number = 0;
+      let text: string = '';
+      try {
+        const request: rcp.Request = new rcp.Request(`${base}/chat/completions`, 'POST', headers, JSON.stringify(payload));
+        const response: rcp.Response = await session.fetch(request);
+        statusCode = response.statusCode;
+        text = AiService.responseBodyText(response.body);
+      } finally {
+        session.close();
+      }
+      if (statusCode < 200 || statusCode >= 300) {
+        res.error = AiService.httpErrorText(statusCode, text);
+        return res;
+      }
+      const root = JSON.parse(text) as Record<string, Object>;
+      const choices = root['choices'] as Object[] | undefined;
+      if (choices !== undefined && choices.length > 0) {
+        const msg = (choices[0] as Record<string, Object>)['message'] as Record<string, Object> | undefined;
+        if (msg !== undefined) {
+          const content: Object | undefined = msg['content'];
+          res.answer = content === undefined ? '' : String(content);
+        }
+      }
+      const info = root['search_info'] as Record<string, Object> | undefined;
+      if (info !== undefined) {
+        const hits = info['search_results'] as Object[] | undefined;
+        if (hits !== undefined) {
+          for (let i = 0; i < hits.length && res.sources.length < 6; i++) {
+            const h = hits[i] as Record<string, string>;
+            const title: string = h['title'] === undefined ? '' : h['title'];
+            const url: string = h['url'] === undefined ? '' : h['url'];
+            if (title.length > 0 && url.length > 0) {
+              res.sources.push({ title: title, url: url });
+            }
+          }
+        }
+      }
+      if (res.answer.trim().length === 0) {
+        res.error = '联网搜索返回了空答案';
+        return res;
+      }
+      res.ok = true;
+      return res;
+    } catch (error) {
+      res.error = error instanceof Error ? error.message : `${error}`;
+      return res;
+    }
   }
 
   /** rcp 的 body 可能是 string / ArrayBuffer / 已解析对象，统一转文本。 */

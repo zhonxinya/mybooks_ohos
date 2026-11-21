@@ -671,7 +671,9 @@ function stageAiTools() {
     .replace(`import { ReadingDevice, deviceTypeLabel } from '../models/DeviceModels';`,
       `import type { ReadingDevice } from './DeviceModels.ts';\nimport { deviceTypeLabel } from './DeviceModels.ts';`)
     .replace(`import { HomeBook, ReadingStatsSummary } from '../models/HomeModels';`,
-      `import type { HomeBook, ReadingStatsSummary } from './HomeModels.ts';`);
+      `import type { HomeBook, ReadingStatsSummary } from './HomeModels.ts';`)
+    .replace(`import { AiService, AiConfig, LlmSearchResult, LlmSearchSource } from './AiService';`,
+      `import { AiService } from './RealAiService.ts';`);
   writeFileSync(join(dir, 'RealAiTools.ts'), source);
 }
 
@@ -1077,7 +1079,7 @@ try {
     assert.equal(deps.state.chatCalls.length, 2, 'errs=' + JSON.stringify(errs));
     assert.equal(deps.state.chatCalls[0].body.stream, true);
     assert.ok(Array.isArray(deps.state.chatCalls[0].body.tools) &&
-      deps.state.chatCalls[0].body.tools.length === 27, 'SDK 通道请求体须挂全量 tools');
+      deps.state.chatCalls[0].body.tools.length === 28, 'SDK 通道请求体须挂全量 tools');
     // 第二轮：assistant tool_calls + tool 结果回填，终轮回答
     const msgs = deps.state.chatCalls[1].body.messages;
     const asst = msgs.find((m) => m.role === 'assistant' && m.tool_calls !== undefined);
@@ -1484,7 +1486,7 @@ try {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 27 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 28 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');
@@ -1818,11 +1820,11 @@ try {
     const WRITE = ['create_booklist', 'add_books_to_booklist', 'update_booklist', 'delete_booklist',
       'remove_book_from_booklist', 'add_sonovel_task', 'add_to_shelf', 'push_to_device',
       'update_book_meta', 'set_cover', 'forget_memory'];
-    assert.equal(RealAiTools.definitions().length, 27);
-    assert.equal(RealAiTools.definitions('confirm').length, 27);
-    assert.equal(RealAiTools.definitions('auto').length, 27);
+    assert.equal(RealAiTools.definitions().length, 28);
+    assert.equal(RealAiTools.definitions('confirm').length, 28);
+    assert.equal(RealAiTools.definitions('auto').length, 28);
     const ro = RealAiTools.definitions('readonly');
-    assert.equal(ro.length, 15);
+    assert.equal(ro.length, 16);
     assert.ok(ro.some((d) => d.function.name === 'list_categories'), 'list_categories 是只读工具须保留');
     for (const name of WRITE) {
       assert.ok(!ro.some((d) => d.function.name === name), `readonly 泄漏写工具 ${name}`);
@@ -1852,7 +1854,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 15);
+    assert.equal(b1.tools.length, 16);
     assert.ok(!b1.tools.some((d) => d.function.name === 'create_booklist'));
     assert.ok(b1.tools.some((d) => d.function.name === 'ask_user'), 'ask_user 是只读交互工具，只读档须保留');
     const b2 = JSON.parse(deps.state.requests[1].content);
@@ -1884,7 +1886,7 @@ try {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 27, 'auto 模式写工具须在 tools 里');
+    assert.equal(b1.tools.length, 28, 'auto 模式写工具须在 tools 里');
     assert.equal(asked, 0, 'auto 模式不该弹确认');
     assert.deepEqual(labels, [['create_booklist', '创建书单（自动执行）']]);
     assert.deepEqual(toolsState.booklistCreateCalls.map((c) => c.name), ['科幻入门']);
@@ -3269,6 +3271,57 @@ try {
     const none = await RealAiTools.execute('search_web', '{"query":"  "}');
     assert.ok(none.includes('query 为空'), none);
     deps.state.rcpError = null;
+  });
+
+  test('ai_search：通义 enable_search 请求形态、引用文案与非通义服务商回落', async () => {
+    // RealAiService 存储桩直配通义服务商（p:/s: 前缀=TalebookService pref/secure）
+    deps.state.store.set('p:ai_provider', 'qianwen');
+    deps.state.store.set('s:ai_base_url', 'https://dashscope.aliyuncs.com/compatible-mode/v1');
+    deps.state.store.set('p:ai_model', 'qwen-plus');
+    deps.state.store.set('s:ai_api_key_qianwen', 'sk-test');
+    try {
+      const body = {
+        choices: [{ message: { content: '2026 年雨果奖最佳小说为《地球大炮》。' } }],
+        search_info: { search_results: [
+          { title: '雨果奖官网', url: 'https://www.thehugoawards.org/' },
+          { title: '新闻报道', url: 'https://example.com/news' },
+          { title: '', url: 'https://no-title.com' },
+        ] },
+      };
+      deps.state.rcpResponses = [{ statusCode: 200, body: enc(JSON.stringify(body)) }];
+      const out = await RealAiTools.execute('ai_search', '{"query":"2026年雨果奖最佳小说"}');
+      const req = deps.state.lastRequest;
+      assert.equal(req.method, 'POST');
+      assert.ok(req.url === 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', req.url);
+      const sent = JSON.parse(req.content);
+      assert.equal(sent.enable_search, true, '须带 enable_search');
+      assert.equal(sent.search_options.forced_search, true, '强制联网防凭记忆作答');
+      assert.equal(sent.stream, false);
+      assert.equal(sent.model, 'qwen-plus');
+      assert.ok(out.includes('2026 年雨果奖最佳小说为《地球大炮》。') && out.includes('引用来源：')
+        && out.includes('1. 雨果奖官网 https://www.thehugoawards.org/') && !out.includes('no-title'), out);
+      // 无引用：纯答案
+      deps.state.rcpResponses = [{ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '只有答案' } }] })) }];
+      assert.equal(await RealAiTools.execute('ai_search', '{"query":"x"}'), '只有答案');
+      // 空答案 → 失败文案不抛错
+      deps.state.rcpResponses = [{ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '   ' } }] })) }];
+      assert.ok((await RealAiTools.execute('ai_search', '{"query":"x"}')).includes('空答案'));
+      // 非 2xx → 失败文案
+      deps.state.rcpResponses = [{ statusCode: 401, body: enc('bad key') }];
+      assert.ok((await RealAiTools.execute('ai_search', '{"query":"x"}')).includes('失败'));
+      // 非通义服务商：提示改用 search_web，且不发请求
+      deps.state.store.set('s:ai_base_url', 'https://api.deepseek.com/v1');
+      const before = deps.state.requests.length;
+      const unsupported = await RealAiTools.execute('ai_search', '{"query":"x"}');
+      assert.ok(unsupported.includes('改用 search_web'), unsupported);
+      assert.equal(deps.state.requests.length, before, '不支持时零请求');
+      // 空 query
+      assert.ok((await RealAiTools.execute('ai_search', '{"query":" "}')).includes('query 为空'));
+    } finally {
+      for (const k of ['p:ai_provider', 's:ai_base_url', 'p:ai_model', 's:ai_api_key_qianwen']) {
+        deps.state.store.delete(k);
+      }
+    }
   });
 
   test('对话页模型快切：徽标跟配置、菜单勾选+刷新、部分保存只动 model、失败退化重试', async () => {
