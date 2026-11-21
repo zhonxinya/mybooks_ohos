@@ -512,4 +512,47 @@ export function register(ctx) {
     assert.equal(page.bubbleKey(user, 3), 'bubble-3-user-d-0-1-0-0');
   });
 
+  test('智能跟滚：上滑离底暂停自动滚动；回底/浮钮/新消息恢复；微小滑动不误判', async () => {
+    const page = chat();
+    let scrolls = 0;
+    page.scrollToEnd = () => { scrolls++; };
+    page.scroller = { isAtEnd: () => false };
+    await page.send('问题');
+    assert.ok(scrolls >= 1, '发消息必须滚动跟随');
+    state.handlers.onDelta('字');
+    const following = scrolls;
+    assert.ok(following >= 2, '跟随时增量滚动');
+    // 手指明显下滑（内容上移露历史）→ 脱离跟随
+    page.onListTouch({ type: globalThis.TouchType.Down, touches: [{ y: 100 }] });
+    page.onListTouch({ type: globalThis.TouchType.Move, touches: [{ y: 200 }] });
+    assert.equal(page.followBottom, false, '上滑读历史应脱离跟随');
+    state.handlers.onDelta('字');
+    state.handlers.onDelta('字');
+    assert.equal(scrolls, following, '离底期生成不得抢滚');
+    state.handlers.onDone('全文');
+    assert.equal(scrolls, following, '离底期收尾也不得强滚');
+    // 停滚恢复：仅视图真在底缘才恢复
+    page.onListScrollStop();
+    assert.equal(page.followBottom, false, '未到底不误恢复');
+    page.scroller = { isAtEnd: () => true };
+    page.onListScrollStop();
+    assert.equal(page.followBottom, true, '滑回底部恢复跟随');
+    // 24px 噪声阈值内不脱跟随
+    page.onListTouch({ type: globalThis.TouchType.Down, touches: [{ y: 100 }] });
+    page.onListTouch({ type: globalThis.TouchType.Move, touches: [{ y: 120 }] });
+    assert.equal(page.followBottom, true, '轻微抖动不误判为读历史');
+    // 浮钮回底
+    page.onListTouch({ type: globalThis.TouchType.Move, touches: [{ y: 400 }] });
+    assert.equal(page.followBottom, false);
+    const before = scrolls;
+    page.backToBottom();
+    assert.equal(page.followBottom, true, '点浮钮立即恢复跟随');
+    assert.equal(scrolls, before + 1, '浮钮滚动不受门控');
+    // 离底期发新消息强制回跟随
+    page.onListTouch({ type: globalThis.TouchType.Move, touches: [{ y: 900 }] });
+    assert.equal(page.followBottom, false);
+    await page.send('再来');
+    assert.equal(page.followBottom, true, '新消息必回跟随最新');
+  });
+
 }
