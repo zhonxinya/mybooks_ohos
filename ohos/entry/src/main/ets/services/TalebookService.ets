@@ -11,6 +11,8 @@ import { ServerRegistry, ServerKind } from './ServerProfile';
 import { ACTIVE_ACCOUNT_KEY, AccountRecord, DISCARDED_PLAINTEXT_KEYS, identityDirFor,
   LEGACY_PASSWORD_ALIAS, LEGACY_PROFILE_ALIAS, LEGACY_USERNAME_ALIAS, passwordAliasFor,
   profileAliasFor, usernameAliasFor } from '../models/AccountModels';
+import { TalebookServiceStore } from './TalebookServiceStore';
+
 
 export interface ApiEnvelope {
   status: number;
@@ -126,21 +128,11 @@ const TAG: string = 'TalebookService';
 
 export class TalebookService {
   private static initialized: boolean = false;
-  private static downloadsCache: DownloadRecord[] | null = null;
-  private static historyCache: ReadingHistoryItem[] | null = null;
-  private static imageLoadTasks: Map<string, Promise<ApiEnvelope>> = new Map();
-  private static localCacheWarmPromise: Promise<void> | null = null;
   private static readonly LARGE_JSON_THRESHOLD: number = 32768;
-  /** 由 Asset Store Kit 加密保存的密码类键，不再写入明文 JSON。 */
-  private static readonly PASSWORD_KEYS: string[] = ['talebook_password'];
-  /** 应用数据根目录（全局根）；账号身份根在该目录下的 accounts/<id>。 */
-  private static dataDir_: string = '';
-  /** 最近一次自动登录失败原因（空串 = 无失败）；登录页已移除，该值仅用于提示。 */
-  private static authFailure_: string = '';
 
   /** 应用数据根目录（全局偏好所在位置）。 */
   static dataDir(): string {
-    return TalebookService.dataDir_;
+    return TalebookServiceStore.dataDir_;
   }
 
   static init(dataDir: string): void {
@@ -149,7 +141,7 @@ export class TalebookService {
     }
     try {
       entry.init(dataDir);
-      TalebookService.dataDir_ = dataDir;
+      TalebookServiceStore.dataDir_ = dataDir;
       TalebookService.initialized = true;
     } catch (error) {
       hilog.error(0x0000, TAG, 'init failed: %{public}s', String(error));
@@ -160,7 +152,7 @@ export class TalebookService {
     return TalebookService.parseEnvelope(raw);
   }
 
-  private static failedEnvelope(message: string): ApiEnvelope {
+  static failedEnvelope(message: string): ApiEnvelope {
     return { status: 0, body: null, error: message };
   }
 
@@ -201,46 +193,46 @@ export class TalebookService {
   }
 
   static warmLocalCaches(): Promise<void> {
-    if (TalebookService.localCacheWarmPromise !== null) {
-      return TalebookService.localCacheWarmPromise;
+    if (TalebookServiceStore.localCacheWarmPromise !== null) {
+      return TalebookServiceStore.localCacheWarmPromise;
     }
-    TalebookService.localCacheWarmPromise = TalebookService.warmLocalCachesInternal();
-    return TalebookService.localCacheWarmPromise;
+    TalebookServiceStore.localCacheWarmPromise = TalebookService.warmLocalCachesInternal();
+    return TalebookServiceStore.localCacheWarmPromise;
   }
 
   private static async warmLocalCachesInternal(): Promise<void> {
-    if (TalebookService.downloadsCache === null) {
+    if (TalebookServiceStore.downloadsCache === null) {
       const downloadsRaw: string = entry.getDownloads();
       try {
         if (downloadsRaw.length >= TalebookService.LARGE_JSON_THRESHOLD) {
           const parsed: Array<Object> =
             await (taskpool.execute(parseJsonArrayTask, downloadsRaw) as Promise<Array<Object>>);
-          TalebookService.downloadsCache = parsed as DownloadRecord[];
+          TalebookServiceStore.downloadsCache = parsed as DownloadRecord[];
         } else if (downloadsRaw.length > 0) {
-          TalebookService.downloadsCache = JSON.parse(downloadsRaw) as DownloadRecord[];
+          TalebookServiceStore.downloadsCache = JSON.parse(downloadsRaw) as DownloadRecord[];
         } else {
-          TalebookService.downloadsCache = [];
+          TalebookServiceStore.downloadsCache = [];
         }
       } catch (_error) {
-        TalebookService.downloadsCache = downloadsRaw.length > 0
+        TalebookServiceStore.downloadsCache = downloadsRaw.length > 0
           ? JSON.parse(downloadsRaw) as DownloadRecord[]
           : [];
       }
     }
-    if (TalebookService.historyCache === null) {
+    if (TalebookServiceStore.historyCache === null) {
       const historyRaw: string = entry.getReadingHistory();
       try {
         if (historyRaw.length >= TalebookService.LARGE_JSON_THRESHOLD) {
           const parsed: Array<Object> =
             await (taskpool.execute(parseJsonArrayTask, historyRaw) as Promise<Array<Object>>);
-          TalebookService.historyCache = parsed as ReadingHistoryItem[];
+          TalebookServiceStore.historyCache = parsed as ReadingHistoryItem[];
         } else if (historyRaw.length > 0) {
-          TalebookService.historyCache = JSON.parse(historyRaw) as ReadingHistoryItem[];
+          TalebookServiceStore.historyCache = JSON.parse(historyRaw) as ReadingHistoryItem[];
         } else {
-          TalebookService.historyCache = [];
+          TalebookServiceStore.historyCache = [];
         }
       } catch (_error) {
-        TalebookService.historyCache = historyRaw.length > 0
+        TalebookServiceStore.historyCache = historyRaw.length > 0
           ? JSON.parse(historyRaw) as ReadingHistoryItem[]
           : [];
       }
@@ -249,7 +241,7 @@ export class TalebookService {
 
   /** 预热 DNS/TCP/TLS，后续请求复用连接 */
   static warmConnection(): Promise<void> {
-    const url = TalebookService.secureGet('talebook_url');
+    const url = TalebookServiceStore.secureGet('talebook_url');
     if (url.length === 0) {
       return Promise.resolve();
     }
@@ -312,7 +304,7 @@ export class TalebookService {
   }
 
   static ensureTalebookConfigured(): boolean {
-    const url = TalebookService.secureGet('talebook_url');
+    const url = TalebookServiceStore.secureGet('talebook_url');
     if (url.length === 0) {
       return false;
     }
@@ -322,364 +314,6 @@ export class TalebookService {
     return true;
   }
 
-  static secureGet(key: string): string {
-    if (TalebookService.isAssetKey(key)) {
-      return PasswordStore.get(TalebookService.activeAliasFor(key));
-    }
-    if (TalebookService.isGlobalSecureKey(key)) {
-      return entry.secureGetGlobal(key);
-    }
-    return entry.secureGet(key);
-  }
-
-  static secureSet(key: string, value: string): void {
-    if (TalebookService.isAssetKey(key)) {
-      PasswordStore.set(TalebookService.activeAliasFor(key), value);
-      // 明文通道里可能还留着同一个键（升级前写入的），一并擦除，避免旧值继续可读
-      if (key !== 'talebook_password') {
-        entry.secureSet(key, '');
-      }
-      return;
-    }
-    if (key === 'talebook_url') {
-      // cover 拼接记忆的是旧地址：改地址后必须作废，否则新封面仍按旧 base 拼
-      TalebookService.coverBaseUrl = null;
-    }
-    if (TalebookService.isGlobalSecureKey(key)) {
-      entry.secureSetGlobal(key, value);
-      return;
-    }
-    entry.secureSet(key, value);
-  }
-
-  /**
-   * 必须进系统关键资产存储（Asset Store）的键：密码、用户名、用户资料。
-   *
-   * 用户资料里含 `podcast_token`（播客订阅凭据），用户名属账号身份信息，
-   * 三者都不允许明文落盘，因此统一走 Asset Store，只有连接受限的服务端地址等
-   * 非敏感配置才留在 native 的明文 JSON 里。
-   */
-  private static isAssetKey(key: string): boolean {
-    return TalebookService.PASSWORD_KEYS.indexOf(key) >= 0
-      || key === 'talebook_username' || key === 'talebook_user_profile';
-  }
-
-  /** 把对外的键名映射为「当前账号」在 Asset Store 中的别名。 */
-  private static activeAliasFor(key: string): string {
-    const id: string = entry.prefGet(ACTIVE_ACCOUNT_KEY);
-    if (key === 'talebook_password') {
-      return passwordAliasFor(id);
-    }
-    if (key === 'talebook_username') {
-      return usernameAliasFor(id);
-    }
-    return profileAliasFor(id);
-  }
-
-  /**
-   * 全局（不随账号）凭据键前缀：SoNovel 是独立第三方服务，其地址不随账号切换。
-   * 升级前的单账号安装其身份根就是全局根，因此历史值无需迁移即可被读到。
-   */
-  private static isGlobalSecureKey(key: string): boolean {
-    return key.startsWith('sonovel_');
-  }
-
-  /** 当前账号对应的密码别名；默认（历史）账号沿用旧别名以复用已保存的密码。 */
-  private static activePasswordAlias(): string {
-    return passwordAliasFor(entry.prefGet(ACTIVE_ACCOUNT_KEY));
-  }
-
-  /**
-   * 凭据明文存储迁移：把历史版本写在 native 明文 JSON 里的密码/用户名/用户资料
-   * 搬进 Asset Store，并立刻从明文通道删除。
-   *
-   * 旧版只是「读到密码时才迁移」，若用户升级后一直能自动登录（读到的是 Asset Store 里的值），
-   * 明文副本就会长期留在 secure 目录里。这里在启动时无条件清一次。
-   *
-   * 明文里还残留密码时，说明 Asset Store 里多半没有值，需要先搬再删，避免登录失败。
-   */
-  static migratePlaintextSecrets(): void {
-    const alias: string = TalebookService.activePasswordAlias();
-    const plaintextPassword: string = entry.secureGet(LEGACY_PASSWORD_ALIAS);
-    const plaintextUsername: string = entry.secureGet(LEGACY_USERNAME_ALIAS);
-    const plaintextProfile: string = entry.secureGet(LEGACY_PROFILE_ALIAS);
-    if (plaintextPassword.length > 0) {
-      PasswordStore.ensure(alias, plaintextPassword);
-    }
-    if (plaintextUsername.length > 0) {
-      PasswordStore.ensure(TalebookService.activeAliasFor('talebook_username'), plaintextUsername);
-    }
-    if (plaintextProfile.length > 0) {
-      PasswordStore.ensure(TalebookService.activeAliasFor('talebook_user_profile'), plaintextProfile);
-    }
-    // 现有账号各自的旧别名（多账号升级路径）
-    const records: AccountRecord[] = AccountStore.list();
-    for (let i = 0; i < records.length; i++) {
-      const id: string = records[i].id;
-      const legacyUser: string = entry.secureGet(`account_${id}_username`);
-      if (legacyUser.length > 0) {
-        PasswordStore.ensure(usernameAliasFor(id), legacyUser);
-      }
-      const legacyProfile: string = entry.secureGet(`account_${id}_profile`);
-      if (legacyProfile.length > 0) {
-        PasswordStore.ensure(profileAliasFor(id), legacyProfile);
-      }
-      const recordUser: string = records[i].username;
-      if (recordUser.length > 0) {
-        PasswordStore.ensure(usernameAliasFor(id), recordUser);
-      }
-    }
-    for (let i = 0; i < DISCARDED_PLAINTEXT_KEYS.length; i++) {
-      entry.secureSet(DISCARDED_PLAINTEXT_KEYS[i], '');
-    }
-    // 仅记录「是否还存在明文」与键数量，绝不输出任何凭据内容
-    let remaining: number = 0;
-    for (let i = 0; i < DISCARDED_PLAINTEXT_KEYS.length; i++) {
-      if (entry.secureGet(DISCARDED_PLAINTEXT_KEYS[i]).length > 0) {
-        remaining++;
-      }
-    }
-    // 明文清空后，自动登录仍要能从 Asset Store 取到密码/用户名（只记存在与否）
-    const pwdInStore: number = PasswordStore.get(alias).length > 0 ? 1 : 0;
-    const userInStore: number =
-      PasswordStore.get(TalebookService.activeAliasFor('talebook_username')).length > 0 ? 1 : 0;
-    const profileInStore: number =
-      PasswordStore.get(TalebookService.activeAliasFor('talebook_user_profile')).length > 0 ? 1 : 0;
-    hilog.info(0x0000, TAG,
-      'plaintext secret migration done: had=%{public}d/%{public}d/%{public}d residual=%{public}d '
-        + 'assetStore=%{public}d/%{public}d/%{public}d accounts=%{public}d',
-      plaintextPassword.length > 0 ? 1 : 0, plaintextUsername.length > 0 ? 1 : 0,
-      plaintextProfile.length > 0 ? 1 : 0, remaining, pwdInStore, userInStore, profileInStore,
-      records.length);
-  }
-
-  static prefGet(key: string, defaultValue: string = ''): string {
-    const value: string = entry.prefGet(key);
-    return value.length > 0 ? value : defaultValue;
-  }
-
-  static prefSet(key: string, value: string): void {
-    entry.prefSet(key, value);
-    if (key === 'allow_insecure_ssl') {
-      TalebookCoreService.setSslVerify(value === 'true');
-    }
-    if (key === 'http_perf_log') {
-      TalebookCoreService.setHttpMetrics(value === 'true');
-    }
-  }
-
-  static prefSetBatch(values: Record<string, string>): void {
-    entry.prefSetBatch(JSON.stringify(values));
-    const allowInsecure = values['allow_insecure_ssl'];
-    if (allowInsecure !== undefined) {
-      TalebookCoreService.setSslVerify(allowInsecure === 'true');
-    }
-    const perfLog = values['http_perf_log'];
-    if (perfLog !== undefined) {
-      TalebookCoreService.setHttpMetrics(perfLog === 'true');
-    }
-  }
-
-  static getDownloads(): DownloadRecord[] {
-    if (TalebookService.downloadsCache !== null) {
-      return TalebookService.downloadsCache;
-    }
-    TalebookService.downloadsCache = JSON.parse(entry.getDownloads()) as DownloadRecord[];
-    return TalebookService.downloadsCache;
-  }
-
-  static saveDownloads(records: DownloadRecord[], notify: boolean = true, persist: boolean = true): void {
-    TalebookService.downloadsCache = records;
-    if (persist) {
-      entry.saveDownloads(JSON.stringify(records));
-    }
-    if (notify) {
-      BookshelfRefresh.notify();
-    }
-  }
-
-  static getReadingHistory(): ReadingHistoryItem[] {
-    if (TalebookService.historyCache !== null) {
-      return TalebookService.historyCache;
-    }
-    TalebookService.historyCache = JSON.parse(entry.getReadingHistory()) as ReadingHistoryItem[];
-    return TalebookService.historyCache;
-  }
-
-  static saveReadingHistory(records: ReadingHistoryItem[]): void {
-    entry.saveReadingHistory(JSON.stringify(records));
-    TalebookService.historyCache = records;
-  }
-
-  static replaceReadingHistory(records: ReadingHistoryItem[], persist: boolean = true): void {
-    TalebookService.historyCache = records;
-    if (persist) {
-      entry.saveReadingHistory(JSON.stringify(records));
-    }
-  }
-
-  /** 将内存中的下载/历史缓存落盘（不触发书架刷新） */
-  static persistLocalCaches(): void {
-    if (TalebookService.downloadsCache !== null) {
-      entry.saveDownloads(JSON.stringify(TalebookService.downloadsCache));
-    }
-    if (TalebookService.historyCache !== null) {
-      entry.saveReadingHistory(JSON.stringify(TalebookService.historyCache));
-    }
-  }
-
-  static invalidateLocalCaches(): void {
-    TalebookService.downloadsCache = null;
-    TalebookService.historyCache = null;
-    // 允许下一次 warmLocalCaches() 按新账号重新预热
-    TalebookService.localCacheWarmPromise = null;
-  }
-
-  static getBookmarks(): Record<string, Object>[] {
-    return JSON.parse(entry.getBookmarks()) as Record<string, Object>[];
-  }
-
-  static saveBookmarks(records: Record<string, Object>[]): void {
-    entry.saveBookmarks(JSON.stringify(records));
-  }
-
-  static getLoginCredentials(): LoginCredentials {
-    return {
-      username: TalebookService.secureGet('talebook_username'),
-      password: TalebookService.secureGet('talebook_password'),
-    };
-  }
-
-  static saveLoginCredentials(username: string, password: string): void {
-    TalebookService.secureSet('talebook_username', username);
-    TalebookService.secureSet('talebook_password', password);
-  }
-
-  /**
-   * 记录/响应里的 `is_login` 是否表示「已登录」。
-   *
-   * 服务端现在给布尔，但历史上有过 0/1 与字符串写法，故按真值判断（对外来数据宽容）。
-   * 判定口径统一走这里，避免各处 `Boolean(...)` 与 `=== true` 各写一套。
-   */
-  static isLoggedInUser(record: Record<string, Object>): boolean {
-    const raw: Object | undefined = record['is_login'];
-    if (raw === undefined || raw === null) {
-      return false;
-    }
-    if (typeof raw === 'boolean') {
-      return raw;
-    }
-    const text: string = String(raw);
-    return text === '1' || text === 'true';
-  }
-
-  static saveUserProfile(user: Record<string, Object>): void {
-    // 登录前（匿名/访客）的 user/info 响应同样带 `is_login:false`，也满足 isUserProfile 的
-    // 字段存在性检查；一旦把它缓存成资料，「个人中心」会按未登录渲染且**不再刷新**。
-    if (user['is_login'] !== undefined && !TalebookService.isLoggedInUser(user)) {
-      return;
-    }
-    TalebookService.secureSet('talebook_user_profile', JSON.stringify(user));
-  }
-
-  /**
-   * 判断响应体/缓存是否真的是用户资料。
-   *
-   * 上游 `POST /api/user/sign_in` 只返回 `{err:'ok',msg:'ok'}`，不含用户对象；
-   * 若把它当资料保存，「个人中心」会读到非用户对象而恒显示「未登录」（且隐藏登录后菜单）。
-   */
-  private static isUserProfile(record: Record<string, Object>): boolean {
-    return record['is_login'] !== undefined || record['username'] !== undefined
-      || record['nickname'] !== undefined || record['avatar'] !== undefined;
-  }
-
-  static getSavedUserProfile(): Record<string, Object> | null {
-    const raw = TalebookService.secureGet('talebook_user_profile');
-    if (raw.length === 0) {
-      return null;
-    }
-    let parsed: Record<string, Object>;
-    try {
-      parsed = JSON.parse(raw) as Record<string, Object>;
-    } catch (_error) {
-      return null;
-    }
-    if (!TalebookService.isUserProfile(parsed)) {
-      // 历史版本曾把 sign_in 响应误存为资料：丢弃，避免「个人中心」永久停在未登录态
-      TalebookService.secureSet('talebook_user_profile', '');
-      return null;
-    }
-    return parsed;
-  }
-
-  static saveUserProfileFromEnvelope(envelope: ApiEnvelope): void {
-    if (!TalebookService.isApiSuccess(envelope) || envelope.body === null) {
-      return;
-    }
-    const user = (envelope.body['user'] as Record<string, Object> | undefined) ?? envelope.body;
-    // 非用户资料（如登录响应的 {err,msg}）不得写入，否则会覆盖真实资料
-    if (!TalebookService.isUserProfile(user)) {
-      return;
-    }
-    TalebookService.saveUserProfile(user);
-  }
-
-  static refreshUserProfile(): void {
-    const envelope = TalebookService.parseEnvelope(entry.apiGetUserInfo());
-    if (!TalebookService.isApiSuccess(envelope) || envelope.body === null) {
-      return;
-    }
-    const user = (envelope.body['user'] as Record<string, Object> | undefined) ?? envelope.body;
-    if (!TalebookService.isUserProfile(user)) {
-      return;
-    }
-    TalebookService.saveUserProfile(user);
-  }
-
-  static applyLocalConfig(): void {
-    // 本地配置（身份根/服务器地址/TLS）可能刚被改动：作废会话通过结果，
-    // 让下一次 ensureAuthenticated 重新按新配置校验，而不是复用旧窗口
-    TalebookService.sessionOk = false;
-    TalebookService.sessionCheckedAt = 0;
-    // 切账号后 talebook_url 随身份根变化且不经过 secureSet，cover 拼接记忆一并作废
-    TalebookService.coverBaseUrl = null;
-    // 先恢复当前账号的身份根：凭据/下载记录/历史/书签与其 Cookie 都随账号隔离
-    const identityDir = identityDirFor(TalebookService.dataDir_, entry.prefGet(ACTIVE_ACCOUNT_KEY));
-    TalebookService.setIdentityDir(identityDir);
-    TalebookCoreService.setIdentityDir(identityDir);
-    // 再恢复服务端类型，后续端点/分页/能力判定均依赖它
-    const kind = TalebookService.prefGet(ServerRegistry.PREF_KEY, ServerKind.MYBOOKS);
-    ServerRegistry.setKind(ServerRegistry.parse(kind));
-    const url = TalebookService.secureGet('talebook_url');
-    if (url.length > 0) {
-      TalebookService.setBaseUrl('talebook', url);
-      TalebookCoreService.syncBaseUrl('talebook', url);
-    }
-    const sonovelUrl = TalebookService.secureGet('sonovel_url');
-    if (sonovelUrl.length > 0) {
-      TalebookCoreService.syncBaseUrl('sonovel', sonovelUrl);
-    }
-    const allowInsecure = TalebookService.prefGet('allow_insecure_ssl', 'false');
-    TalebookService.prefSet('allow_insecure_ssl', allowInsecure);
-  }
-
-  static hasAuthCredentials(): boolean {
-    const url = TalebookService.secureGet('talebook_url');
-    const creds = TalebookService.getLoginCredentials();
-    return url.length > 0 && creds.username.length > 0 && creds.password.length > 0;
-  }
-
-  /**
-   * 应用 SoNovel 服务地址。
-   *
-   * SoNovel 是全局第三方服务（不随书库账号切换），因此只写全局键与两套 native 的 sonovel 通道；
-   * 缺任一处都会导致搜索仍走旧地址（`secureGet('sonovel_url')` 是 `sonovel_` 前缀的全局键）。
-   */
-  static applySonovelUrl(url: string): void {
-    TalebookService.setBaseUrl('sonovel', url);
-    TalebookService.secureSet('sonovel_url', url);
-    TalebookCoreService.syncBaseUrl('sonovel', url);
-  }
 
   static isLoggedInEnvelope(envelope: ApiEnvelope): boolean {
     if (!TalebookService.isApiSuccess(envelope) || envelope.body === null) {
@@ -687,65 +321,54 @@ export class TalebookService {
     }
     const user = (envelope.body['user'] as Record<string, Object> | undefined) ?? envelope.body;
     if (user['is_login'] !== undefined) {
-      return TalebookService.isLoggedInUser(user);
+      return TalebookServiceStore.isLoggedInUser(user);
     }
     return true;
   }
 
-  private static sessionRestorePromise: Promise<boolean> | null = null;
   /**
    * resolveCoverUrl 用的服务器根地址记忆：AuthImage 逐图、BookMapper 逐本都会调
    * resolveCoverUrl，逐次同步 NAPI 读 secure 是纯浪费；值随账号身份根/改地址变化，
    * 由 applyLocalConfig 与 secureSet('talebook_url') 作废。
    */
-  private static coverBaseUrl: string | null = null;
-  /** 会话校验通过结果的复用窗口：进页高频，逐页 whoami 会把每次进页都串行卡在一个网络往返之后。 */
-  private static sessionOk: boolean = false;
-  private static sessionCheckedAt: number = 0;
-  private static readonly SESSION_RECHECK_TTL_MS: number = 60000;
-  private static navCacheEnvelope: ApiEnvelope | null = null;
-  private static navCacheAt: number = 0;
-  private static siteInfoCacheEnvelope: ApiEnvelope | null = null;
-  private static siteInfoCacheAt: number = 0;
-  private static readonly NAV_CACHE_TTL_MS: number = 60000;
 
   static invalidateSession(): void {
-    TalebookService.sessionRestorePromise = null;
+    TalebookServiceStore.sessionRestorePromise = null;
     // 切换/保存账号后会话必须重新校验，不能复用上一个账号的通过结果
-    TalebookService.sessionOk = false;
-    TalebookService.sessionCheckedAt = 0;
+    TalebookServiceStore.sessionOk = false;
+    TalebookServiceStore.sessionCheckedAt = 0;
     TalebookService.invalidateNavCache();
   }
 
   static invalidateNavCache(): void {
-    TalebookService.navCacheEnvelope = null;
-    TalebookService.navCacheAt = 0;
-    TalebookService.siteInfoCacheEnvelope = null;
-    TalebookService.siteInfoCacheAt = 0;
+    TalebookServiceStore.navCacheEnvelope = null;
+    TalebookServiceStore.navCacheAt = 0;
+    TalebookServiceStore.siteInfoCacheEnvelope = null;
+    TalebookServiceStore.siteInfoCacheAt = 0;
   }
 
   static getBookNavCachedAsync(): Promise<ApiEnvelope> {
     const now = Date.now();
-    if (TalebookService.navCacheEnvelope !== null &&
-      now - TalebookService.navCacheAt < TalebookService.NAV_CACHE_TTL_MS) {
-      return Promise.resolve(TalebookService.navCacheEnvelope);
+    if (TalebookServiceStore.navCacheEnvelope !== null &&
+      now - TalebookServiceStore.navCacheAt < TalebookServiceStore.NAV_CACHE_TTL_MS) {
+      return Promise.resolve(TalebookServiceStore.navCacheEnvelope);
     }
     return TalebookService.getBookNavAsync().then((envelope: ApiEnvelope) => {
-      TalebookService.navCacheEnvelope = envelope;
-      TalebookService.navCacheAt = Date.now();
+      TalebookServiceStore.navCacheEnvelope = envelope;
+      TalebookServiceStore.navCacheAt = Date.now();
       return envelope;
     });
   }
 
   static getUserInfoCachedAsync(): Promise<ApiEnvelope> {
     const now = Date.now();
-    if (TalebookService.siteInfoCacheEnvelope !== null &&
-      now - TalebookService.siteInfoCacheAt < TalebookService.NAV_CACHE_TTL_MS) {
-      return Promise.resolve(TalebookService.siteInfoCacheEnvelope);
+    if (TalebookServiceStore.siteInfoCacheEnvelope !== null &&
+      now - TalebookServiceStore.siteInfoCacheAt < TalebookServiceStore.NAV_CACHE_TTL_MS) {
+      return Promise.resolve(TalebookServiceStore.siteInfoCacheEnvelope);
     }
     return TalebookService.getUserInfoAsync().then((envelope: ApiEnvelope) => {
-      TalebookService.siteInfoCacheEnvelope = envelope;
-      TalebookService.siteInfoCacheAt = Date.now();
+      TalebookServiceStore.siteInfoCacheEnvelope = envelope;
+      TalebookServiceStore.siteInfoCacheAt = Date.now();
       return envelope;
     });
   }
@@ -773,33 +396,33 @@ export class TalebookService {
 
   static ensureAuthenticated(): Promise<boolean> {
     // 每轮会话校验前重置失败原因，避免把上一轮（或切换账号时）的旧原因当成启动结果
-    TalebookService.authFailure_ = '';
-    if (TalebookService.sessionRestorePromise !== null) {
-      return TalebookService.sessionRestorePromise;
+    TalebookServiceStore.authFailure_ = '';
+    if (TalebookServiceStore.sessionRestorePromise !== null) {
+      return TalebookServiceStore.sessionRestorePromise;
     }
     // 刚校验通过的复用窗口内直接返回：60+ 页面的 aboutToAppear 都会进来，逐页 whoami
     // 会把每次进页都串行卡在一个网络往返之后。失败不缓存，仍逐页重试（保住过期/断网时的恢复语义）
-    if (TalebookService.sessionOk &&
-      Date.now() - TalebookService.sessionCheckedAt < TalebookService.SESSION_RECHECK_TTL_MS) {
+    if (TalebookServiceStore.sessionOk &&
+      Date.now() - TalebookServiceStore.sessionCheckedAt < TalebookServiceStore.SESSION_RECHECK_TTL_MS) {
       return Promise.resolve(true);
     }
     // 先套用本地配置（身份根 + 两套模块的 base URL + TLS），
     // 否则新账号/未登录场景下两模块地址为空，请求会以 curl 的 malformed URL 报错
-    TalebookService.applyLocalConfig();
-    const url = TalebookService.secureGet('talebook_url');
+    TalebookServiceStore.applyLocalConfig();
+    const url = TalebookServiceStore.secureGet('talebook_url');
     if (url.length === 0) {
       return Promise.resolve(false);
     }
-    TalebookService.sessionRestorePromise = TalebookService.restoreSessionAsync()
+    TalebookServiceStore.sessionRestorePromise = TalebookService.restoreSessionAsync()
       .then((ok: boolean): boolean => {
-        TalebookService.sessionOk = ok;
-        TalebookService.sessionCheckedAt = Date.now();
+        TalebookServiceStore.sessionOk = ok;
+        TalebookServiceStore.sessionCheckedAt = Date.now();
         return ok;
       })
       .finally((): void => {
-        TalebookService.sessionRestorePromise = null;
+        TalebookServiceStore.sessionRestorePromise = null;
       });
-    return TalebookService.sessionRestorePromise;
+    return TalebookServiceStore.sessionRestorePromise;
   }
 
   static restoreSessionIfNeeded(): Promise<void> {
@@ -829,31 +452,31 @@ export class TalebookService {
   static async tryAutoLogin(): Promise<AuthAttempt> {
     const attempt = await TalebookService.autoLoginInternal();
     // 记录本轮结果：登录页已移除，失败原因只在此汇总，由启动流程或账号页取走展示
-    TalebookService.authFailure_ = attempt.ok ? '' : attempt.reason;
+    TalebookServiceStore.authFailure_ = attempt.ok ? '' : attempt.reason;
     return attempt;
   }
 
   /** 取走最近一次自动登录失败原因（读取后清空），供启动提示只报一次。 */
   static consumeAuthFailure(): string {
-    const reason: string = TalebookService.authFailure_;
-    TalebookService.authFailure_ = '';
+    const reason: string = TalebookServiceStore.authFailure_;
+    TalebookServiceStore.authFailure_ = '';
     return reason;
   }
 
   private static async autoLoginInternal(): Promise<AuthAttempt> {
-    TalebookService.applyLocalConfig();
-    const url = TalebookService.secureGet('talebook_url');
+    TalebookServiceStore.applyLocalConfig();
+    const url = TalebookServiceStore.secureGet('talebook_url');
     if (url.length === 0) {
       const noUrl: AuthAttempt = { ok: false, reason: '未配置服务器地址' };
       return noUrl;
     }
     const info = await TalebookService.getUserInfoAsync();
     if (TalebookService.isLoggedInEnvelope(info)) {
-      TalebookService.saveUserProfileFromEnvelope(info);
+      TalebookServiceStore.saveUserProfileFromEnvelope(info);
       const already: AuthAttempt = { ok: true, reason: '' };
       return already;
     }
-    const creds = TalebookService.getLoginCredentials();
+    const creds = TalebookServiceStore.getLoginCredentials();
     if (creds.username.length === 0 || creds.password.length === 0) {
       const noCreds: AuthAttempt = {
         ok: false,
@@ -871,18 +494,18 @@ export class TalebookService {
   }
 
   static restoreSession(): boolean {
-    const url = TalebookService.secureGet('talebook_url');
+    const url = TalebookServiceStore.secureGet('talebook_url');
     if (url.length === 0) {
       return false;
     }
     TalebookService.setBaseUrl('talebook', url);
-    const allowInsecure = TalebookService.prefGet('allow_insecure_ssl', 'false');
-    TalebookService.prefSet('allow_insecure_ssl', allowInsecure);
+    const allowInsecure = TalebookServiceStore.prefGet('allow_insecure_ssl', 'false');
+    TalebookServiceStore.prefSet('allow_insecure_ssl', allowInsecure);
     if (TalebookService.isApiSuccess(TalebookService.getUserInfo())) {
-      TalebookService.refreshUserProfile();
+      TalebookServiceStore.refreshUserProfile();
       return true;
     }
-    const creds = TalebookService.getLoginCredentials();
+    const creds = TalebookServiceStore.getLoginCredentials();
     if (creds.username.length === 0 || creds.password.length === 0) {
       return false;
     }
@@ -894,7 +517,7 @@ export class TalebookService {
       const envelope = TalebookService.parseNative(entry.apiSignIn(username, password));
       if (TalebookService.isApiSuccess(envelope)) {
         // 登录响应不含用户对象，单独拉一次 user/info 写入真实资料
-        TalebookService.refreshUserProfile();
+        TalebookServiceStore.refreshUserProfile();
       }
       return envelope;
     } catch (error) {
@@ -916,15 +539,15 @@ export class TalebookService {
       return Promise.resolve(loginEnvelope);
     }
     return TalebookService.getUserInfoAsync().then((info: ApiEnvelope) => {
-      TalebookService.saveUserProfileFromEnvelope(info);
+      TalebookServiceStore.saveUserProfileFromEnvelope(info);
       return loginEnvelope;
     });
   }
 
   static signOut(): ApiEnvelope {
     // 登出后会话不再有效：作废通过结果，下次进页按原语义重新校验（含凭据自动重登）
-    TalebookService.sessionOk = false;
-    TalebookService.sessionCheckedAt = 0;
+    TalebookServiceStore.sessionOk = false;
+    TalebookServiceStore.sessionCheckedAt = 0;
     return TalebookService.parseEnvelope(entry.apiSignOut());
   }
 
@@ -1148,122 +771,137 @@ export class TalebookService {
       .catch((error: Object) => TalebookService.failedEnvelope(`${error}`));
   }
 
+  /** 委托 TalebookServiceStore.secureGet（本地持久化域）。 */
+  static secureGet(key: string): string {
+    return TalebookServiceStore.secureGet(key);
+  }
+  /** 委托 TalebookServiceStore.secureSet（本地持久化域）。 */
+  static secureSet(key: string, value: string): void {
+    TalebookServiceStore.secureSet(key, value);
+  }
+  /** 委托 TalebookServiceStore.migratePlaintextSecrets（本地持久化域）。 */
+  static migratePlaintextSecrets(): void {
+    TalebookServiceStore.migratePlaintextSecrets();
+  }
+  /** 委托 TalebookServiceStore.prefGet（本地持久化域）。 */
+  static prefGet(key: string, defaultValue: string = ''): string {
+    return TalebookServiceStore.prefGet(key, defaultValue);
+  }
+  /** 委托 TalebookServiceStore.prefSet（本地持久化域）。 */
+  static prefSet(key: string, value: string): void {
+    TalebookServiceStore.prefSet(key, value);
+  }
+  /** 委托 TalebookServiceStore.prefSetBatch（本地持久化域）。 */
+  static prefSetBatch(values: Record<string, string>): void {
+    TalebookServiceStore.prefSetBatch(values);
+  }
+  /** 委托 TalebookServiceStore.getDownloads（本地持久化域）。 */
+  static getDownloads(): DownloadRecord[] {
+    return TalebookServiceStore.getDownloads();
+  }
+  /** 委托 TalebookServiceStore.saveDownloads（本地持久化域）。 */
+  static saveDownloads(records: DownloadRecord[], notify: boolean = true, persist: boolean = true): void {
+    TalebookServiceStore.saveDownloads(records, notify, persist);
+  }
+  /** 委托 TalebookServiceStore.getReadingHistory（本地持久化域）。 */
+  static getReadingHistory(): ReadingHistoryItem[] {
+    return TalebookServiceStore.getReadingHistory();
+  }
+  /** 委托 TalebookServiceStore.saveReadingHistory（本地持久化域）。 */
+  static saveReadingHistory(records: ReadingHistoryItem[]): void {
+    TalebookServiceStore.saveReadingHistory(records);
+  }
+  /** 委托 TalebookServiceStore.replaceReadingHistory（本地持久化域）。 */
+  static replaceReadingHistory(records: ReadingHistoryItem[], persist: boolean = true): void {
+    TalebookServiceStore.replaceReadingHistory(records, persist);
+  }
+  /** 委托 TalebookServiceStore.persistLocalCaches（本地持久化域）。 */
+  static persistLocalCaches(): void {
+    TalebookServiceStore.persistLocalCaches();
+  }
+  /** 委托 TalebookServiceStore.invalidateLocalCaches（本地持久化域）。 */
+  static invalidateLocalCaches(): void {
+    TalebookServiceStore.invalidateLocalCaches();
+  }
+  /** 委托 TalebookServiceStore.getBookmarks（本地持久化域）。 */
+  static getBookmarks(): Record<string, Object>[] {
+    return TalebookServiceStore.getBookmarks();
+  }
+  /** 委托 TalebookServiceStore.saveBookmarks（本地持久化域）。 */
+  static saveBookmarks(records: Record<string, Object>[]): void {
+    TalebookServiceStore.saveBookmarks(records);
+  }
+  /** 委托 TalebookServiceStore.getLoginCredentials（本地持久化域）。 */
+  static getLoginCredentials(): LoginCredentials {
+    return TalebookServiceStore.getLoginCredentials();
+  }
+  /** 委托 TalebookServiceStore.saveLoginCredentials（本地持久化域）。 */
+  static saveLoginCredentials(username: string, password: string): void {
+    TalebookServiceStore.saveLoginCredentials(username, password);
+  }
+  /** 委托 TalebookServiceStore.isLoggedInUser（本地持久化域）。 */
+  static isLoggedInUser(record: Record<string, Object>): boolean {
+    return TalebookServiceStore.isLoggedInUser(record);
+  }
+  /** 委托 TalebookServiceStore.saveUserProfile（本地持久化域）。 */
+  static saveUserProfile(user: Record<string, Object>): void {
+    TalebookServiceStore.saveUserProfile(user);
+  }
+  /** 委托 TalebookServiceStore.getSavedUserProfile（本地持久化域）。 */
+  static getSavedUserProfile(): Record<string, Object> | null {
+    return TalebookServiceStore.getSavedUserProfile();
+  }
+  /** 委托 TalebookServiceStore.saveUserProfileFromEnvelope（本地持久化域）。 */
+  static saveUserProfileFromEnvelope(envelope: ApiEnvelope): void {
+    TalebookServiceStore.saveUserProfileFromEnvelope(envelope);
+  }
+  /** 委托 TalebookServiceStore.refreshUserProfile（本地持久化域）。 */
+  static refreshUserProfile(): void {
+    TalebookServiceStore.refreshUserProfile();
+  }
+  /** 委托 TalebookServiceStore.applyLocalConfig（本地持久化域）。 */
+  static applyLocalConfig(): void {
+    TalebookServiceStore.applyLocalConfig();
+  }
+  /** 委托 TalebookServiceStore.hasAuthCredentials（本地持久化域）。 */
+  static hasAuthCredentials(): boolean {
+    return TalebookServiceStore.hasAuthCredentials();
+  }
+  /** 委托 TalebookServiceStore.applySonovelUrl（本地持久化域）。 */
+  static applySonovelUrl(url: string): void {
+    TalebookServiceStore.applySonovelUrl(url);
+  }
+  /** 委托 TalebookServiceStore.fetchImageCache（本地持久化域）。 */
   static fetchImageCache(url: string, destPath: string): ApiEnvelope {
-    return TalebookService.parseEnvelope(entry.fetchImageCache(url, destPath));
+    return TalebookServiceStore.fetchImageCache(url, destPath);
   }
-
+  /** 委托 TalebookServiceStore.fetchImageCacheAsync（本地持久化域）。 */
   static fetchImageCacheAsync(url: string, destPath: string): Promise<ApiEnvelope> {
-    const existing = TalebookService.imageLoadTasks.get(destPath);
-    if (existing !== undefined) {
-      return existing;
-    }
-    const task: Promise<ApiEnvelope> = entry.fetchImageCacheAsync(url, destPath).then((raw: string) => {
-      TalebookService.imageLoadTasks.delete(destPath);
-      return TalebookService.parseEnvelopeAsync(raw);
-    }).catch((error: Object): ApiEnvelope => {
-      TalebookService.imageLoadTasks.delete(destPath);
-      return TalebookService.failedEnvelope(`${error}`);
-    });
-    TalebookService.imageLoadTasks.set(destPath, task);
-    return task;
+    return TalebookServiceStore.fetchImageCacheAsync(url, destPath);
   }
-
+  /** 委托 TalebookServiceStore.resolveCoverUrl（本地持久化域）。 */
   static resolveCoverUrl(cover: string): string {
-    if (cover.length === 0) {
-      return '';
-    }
-    if (cover.startsWith('http://') || cover.startsWith('https://')) {
-      return cover;
-    }
-    if (TalebookService.coverBaseUrl === null) {
-      TalebookService.coverBaseUrl = TalebookService.secureGet('talebook_url');
-    }
-    const base = TalebookService.coverBaseUrl;
-    if (base.length === 0) {
-      return cover;
-    }
-    return base + (cover.startsWith('/') ? cover : `/${cover}`);
+    return TalebookServiceStore.resolveCoverUrl(cover);
   }
-
+  /** 委托 TalebookServiceStore.upsertDownloadRecord（本地持久化域）。 */
   static upsertDownloadRecord(record: DownloadRecord): void {
-    const records = TalebookService.getDownloads();
-    const index = records.findIndex((item) => item.bookId === record.bookId);
-    if (index >= 0) {
-      records[index] = record;
-    } else {
-      records.unshift(record);
-    }
-    TalebookService.saveDownloads(records);
-    BookshelfRefresh.notify();
+    TalebookServiceStore.upsertDownloadRecord(record);
   }
-
+  /** 委托 TalebookServiceStore.removeDownloadRecord（本地持久化域）。 */
   static removeDownloadRecord(bookId: string, deleteFile: boolean = true): void {
-    const records = TalebookService.getDownloads();
-    const target = records.find((item) => item.bookId === bookId);
-    const filtered = records.filter((item) => item.bookId !== bookId);
-    TalebookService.saveDownloads(filtered);
-    if (deleteFile && target?.filePath !== undefined && target.filePath.length > 0) {
-      try {
-        if (fs.accessSync(target.filePath)) {
-          fs.unlinkSync(target.filePath);
-        }
-      } catch (_error) {
-      }
-    }
-    TalebookService.removeHistoryItem(bookId, target?.filePath ?? '');
-    BookshelfRefresh.notify();
+    TalebookServiceStore.removeDownloadRecord(bookId, deleteFile);
   }
-
+  /** 委托 TalebookServiceStore.removeHistoryItem（本地持久化域）。 */
   static removeHistoryItem(bookId: string, filePath: string = ''): void {
-    const records = TalebookService.getReadingHistory().filter((item) => {
-      if (item.bookId === bookId && bookId.length > 0) {
-        return false;
-      }
-      if (filePath.length > 0 && item.filePath === filePath) {
-        return false;
-      }
-      return true;
-    });
-    TalebookService.saveReadingHistory(records);
+    TalebookServiceStore.removeHistoryItem(bookId, filePath);
   }
-
+  /** 委托 TalebookServiceStore.upsertHistoryItem（本地持久化域）。 */
   static upsertHistoryItem(item: ReadingHistoryItem, persist: boolean = true): void {
-    const records = TalebookService.getReadingHistory();
-    const index = records.findIndex((r) =>
-      r.bookId === item.bookId ||
-      (item.filePath !== undefined && item.filePath.length > 0 && r.filePath === item.filePath));
-    if (index >= 0) {
-      // 进度条目每次新建，别把累计阅读时长冲掉
-      if (item.readSeconds === undefined && records[index].readSeconds !== undefined) {
-        item.readSeconds = records[index].readSeconds;
-      }
-      records.splice(index, 1);
-    }
-    records.unshift(item);
-    if (records.length > 200) {
-      records.length = 200;
-    }
-    if (persist) {
-      TalebookService.saveReadingHistory(records);
-    } else {
-      TalebookService.historyCache = records;
-    }
+    TalebookServiceStore.upsertHistoryItem(item, persist);
   }
-
+  /** 委托 TalebookServiceStore.resolveSavedLocation（本地持久化域）。 */
   static resolveSavedLocation(bookId: string, filePath: string = ''): string {
-    const downloads = TalebookService.getDownloads();
-    let local = downloads.find((item) => item.bookId === bookId && bookId.length > 0);
-    if (local === undefined && filePath.length > 0) {
-      local = downloads.find((item) => item.filePath === filePath);
-    }
-    if (local?.progress?.location !== undefined && local.progress.location.length > 0) {
-      return local.progress.location;
-    }
-    const history = TalebookService.getReadingHistory();
-    let item = history.find((entry: ReadingHistoryItem) => entry.bookId === bookId && bookId.length > 0);
-    if (item === undefined && filePath.length > 0) {
-      item = history.find((entry: ReadingHistoryItem) => entry.filePath === filePath);
-    }
-    return item?.location ?? '';
+    return TalebookServiceStore.resolveSavedLocation(bookId, filePath);
   }
 }
+
