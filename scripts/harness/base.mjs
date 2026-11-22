@@ -116,6 +116,10 @@ export const AiService = {
     { id: 'custom', name: '自定义', baseUrl: '', model: '', vision: false },
   hasKeyFor: (id) => state.settings.keys.has(id),
   addCustomProvider: (name, baseUrl, model) => {
+    // 与真实 AiServiceConfig 对齐：名称/地址空即抛错
+    if (name.trim().length === 0 || baseUrl.trim().length === 0) {
+      throw new Error('服务商名称与接口地址不能为空');
+    }
     const preset = { id: 'custom-' + Date.now(), name: name.trim(), baseUrl: baseUrl.trim(),
       model: model.trim(), vision: false };
     state.settings.providers.push(preset);
