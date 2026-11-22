@@ -9,7 +9,7 @@ import { ChatCompletionContentPartText } from '@iuroc/openai/src/main/ets/openai
 import { ChatCompletionContentPartImage } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { TalebookService } from './TalebookService';
 import { AiTools, AiPermissionMode } from './AiTools';
-import { AiToolDefinition } from './AiToolsDefs';
+import { AiToolDefinition, AiToolGroup } from './AiToolsDefs';
 import { McpService, McpServer } from './McpService';
 import { AiServiceConfig } from './AiServiceConfig';
 import { AiServiceHttp } from './AiServiceHttp';
@@ -704,6 +704,17 @@ export class AiService {
     McpService.setApiKey(tag, apiKey);
   }
   /** 委托 AiServiceHttp.toolLabelFor（拆分：见文件头说明）。 */
+  /** 结构化工具目录（设置页工具清单）。 */
+  static toolCatalog(): AiToolGroup[] {
+    return AiTools.catalogGroups();
+  }
+  static toolTotal(): number {
+    return AiTools.toolCount();
+  }
+  /** 当前权限模式下实际可用的工具数（readonly 去掉写工具）。 */
+  static toolAvailableCount(mode: AiPermissionMode): number {
+    return AiTools.definitions(mode).length;
+  }
   static toolLabelFor(name: string): string {
     return AiServiceHttp.toolLabelFor(name);
   }

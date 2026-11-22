@@ -34,3 +34,4 @@ export { LegalDocument, LegalSection } from './LegalDocument';
 export { DownloadFloatingBar } from './DownloadFloatingBar';
 export { AiMcpSection } from './AiMcpSection';
 export { AiSearchEngineSection } from './AiSearchEngineSection';
+export { AiToolsSection } from './AiToolsSection';

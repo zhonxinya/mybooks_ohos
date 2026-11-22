@@ -107,6 +107,11 @@ export const AiService = {
     }
   },
   loadFeatureEntry: (feature) => state.settings.featureEntry[feature] ?? '',
+  // #1618 工具目录（设置页工具清单）
+  toolCatalog: () => state.settings.toolCatalog ?? [],
+  toolTotal: () => (state.settings.toolCatalog ?? []).reduce((n, g) => n + g.items.length, 0),
+  toolAvailableCount: (mode) => (state.settings.toolCatalog ?? []).reduce(
+    (n, g) => n + g.items.filter((it) => mode !== 'readonly' || !it.write).length, 0),
   presetOf: (id) => state.settings.providers.find((p) => p.id === id) ??
     { id: 'custom', name: '自定义', baseUrl: '', model: '', vision: false },
   hasKeyFor: (id) => state.settings.keys.has(id),

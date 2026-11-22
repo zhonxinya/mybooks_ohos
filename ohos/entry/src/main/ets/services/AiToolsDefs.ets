@@ -63,6 +63,20 @@ export interface AiToolDefinition {
   function: AiToolFunctionBody;
 }
 
+/** 工具目录条目（设置页渲染用）。 */
+export interface AiToolItem {
+  name: string;
+  summary: string;
+  /** 是否写操作（执行前需用户确认）。 */
+  write: boolean;
+}
+
+/** 工具目录分组。 */
+export interface AiToolGroup {
+  title: string;
+  items: AiToolItem[];
+}
+
 export const SEARCH_LIMIT: number = 8;
 export const NOTE_LIMIT: number = 20;
 export const HISTORY_LIMIT: number = 10;

@@ -17,7 +17,7 @@ import { AiPersona } from './AiPersona';
 import { AiToolsCore } from './AiToolsCore';
 import { AiToolsExecMeta } from './AiToolsExecMeta';
 import { AiToolsExecShelf } from './AiToolsExecShelf';
-import { TOOL_DEFS, TOOL_SET_VOICE, ToolBookLine, AiToolDefinition } from './AiToolsDefs';
+import { TOOL_DEFS, TOOL_SET_VOICE, ToolBookLine, AiToolDefinition, AiToolGroup, AiToolItem } from './AiToolsDefs';
 import { McpService, McpServer } from './McpService';
 
 /**
@@ -92,6 +92,42 @@ export class AiTools {
     ['记忆与配置', 'save_memory', 'forget_memory', 'add_mcp_server'],
     ['交互', 'ask_user', 'list_ai_tools'],
   ];
+
+  /** 结构化工具目录（设置页渲染用）：分组 → 工具条目。 */
+  static catalogGroups(): AiToolGroup[] {
+    const byName: Map<string, AiToolDefinition> = new Map();
+    for (let i = 0; i < TOOL_DEFS.length; i++) {
+      byName.set(TOOL_DEFS[i].function.name, TOOL_DEFS[i]);
+    }
+    const groups: AiToolGroup[] = [];
+    for (let g = 0; g < AiTools.TOOL_GROUPS.length; g++) {
+      const group: string[] = AiTools.TOOL_GROUPS[g];
+      const items: AiToolItem[] = [];
+      for (let i = 1; i < group.length; i++) {
+        const name: string = group[i];
+        const def: AiToolDefinition | undefined = byName.get(name);
+        if (def === undefined) {
+          continue;
+        }
+        const item: AiToolItem = {
+          name: name,
+          summary: AiToolsCore.clip(def.function.description, 48),
+          write: AiTools.needsConfirm(name),
+        };
+        items.push(item);
+      }
+      if (items.length > 0) {
+        const grp: AiToolGroup = { title: group[0], items: items };
+        groups.push(grp);
+      }
+    }
+    return groups;
+  }
+
+  /** 工具总数（设置页标题用）。 */
+  static toolCount(): number {
+    return TOOL_DEFS.length;
+  }
 
   /** 工具目录文本：按分组列出名称+说明+是否写操作，帮助模型避免盲猜工具名。 */
   static catalog(): string {
@@ -380,6 +416,10 @@ export class AiTools {
   private static async dispatch(name: string, argsJson: string, callId: string = ''): Promise<string> {
     AiToolsCore.lastBooks = [];
     const args: Record<string, Object> = AiToolsCore.parseArgs(argsJson);
+    if (AiToolsCore.lastParseError.length > 0) {
+      // 参数解析失败要如实回报（否则工具报「query 为空」会误导模型改参数而非改 JSON）
+      return `工具 ${name} 的参数解析失败：${AiToolsCore.lastParseError}。请按工具 schema 重新生成 JSON。`;
+    }
       if (name === 'search_books') {
         return await AiToolsExecShelf.searchBooks(AiToolsCore.argString(args, 'query'), callId);
       }

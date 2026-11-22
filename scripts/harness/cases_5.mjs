@@ -489,4 +489,30 @@ export function register(ctx) {
     toolsState.favorites = [];
     toolsState.history = [];
   });
+
+  test('工具执行质量（#1618）：坏 JSON 如实回报、非对象参数、工具目录结构化', async () => {
+    const { RealAiTools, toolsState } = ctx;
+    toolsState.search = async () => [];
+    // 坏 JSON：不再伪装成「query 为空」，而是明确指出参数解析失败
+    const badJson = await RealAiTools.execute('search_books', '{bad json');
+    assert.ok(badJson.includes('参数解析失败'), badJson);
+    assert.ok(badJson.includes('重新生成 JSON'), '给出可行动的下一步');
+    assert.ok(!badJson.includes('query 为空'), '不得误导为参数为空');
+    // 非对象参数（数组/标量）
+    const arr = await RealAiTools.execute('search_books', '[1,2]');
+    assert.ok(arr.includes('必须是 JSON 对象'), arr);
+    const scalar = await RealAiTools.execute('search_books', '\"abc\"');
+    assert.ok(scalar.includes('必须是 JSON 对象'), scalar);
+    // 合法 JSON 照常执行（回归：修复不得误伤正常路径）
+    const ok = await RealAiTools.execute('search_books', '{\"query\":\"三体\"}');
+    assert.ok(ok.includes('没有找到'), ok);
+    // 结构化目录：分组/条目/写标记与文本目录同源
+    const groups = RealAiTools.catalogGroups();
+    assert.ok(groups.length >= 6, '至少 6 个分组');
+    const shelf = groups.find((g) => g.title === '书架检索');
+    assert.ok(shelf !== undefined && shelf.items.some((it) => it.name === 'shelf_list'), '新工具进目录');
+    const booklist = groups.find((g) => g.title === '书单管理');
+    assert.ok(booklist.items.find((it) => it.name === 'create_booklist').write === true, '写工具标记');
+    assert.ok(RealAiTools.toolCount() === 33, '总数与定义表一致');
+  });
 }

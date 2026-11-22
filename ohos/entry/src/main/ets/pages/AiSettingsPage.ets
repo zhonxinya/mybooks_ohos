@@ -1,5 +1,5 @@
 import { PageScaffold, PrimaryButton, SecondaryButton, SectionTitle, FilterChips, FilterChipItem,
-  ChipButton, AiMcpSection, AiSearchEngineSection } from '../components';
+  ChipButton, AiMcpSection, AiSearchEngineSection, AiToolsSection } from '../components';
 import { AiService, AiConfig, AiProviderPreset, AiMessage, CONTEXT_LENGTH_OPTIONS } from '../services/AiService';
 import { SpeakService } from '../services/SpeakService';
 import { AppRouter } from '../utils/AppRouter';
@@ -20,7 +20,7 @@ interface AiFieldParams {
 /**
  * AI 模型设置：本地配置，不依赖服务端。
  *
- * 「服务商与模型 / 语音 / MCP / 说明」四档 TAB 分开，每档只装本类设置；
+ * 「服务商与模型 / 语音 / MCP / 工具 / 说明」五档 TAB 分开，每档只装本类设置；
  * 各功能单独绑定的服务商/模型在「功能模型」页（pages/AiFeatureModelsPage）。
  */
 @Entry
@@ -57,7 +57,7 @@ struct AiSettingsPage {
   @State ttsTimbre: string = 'longanhuan_v3.6';
   /** 思考强度：'default'/'low'/'medium'/'high'（见请求体 reasoning_effort）。 */
   @State reasoningEffort: string = 'default';
-  /** TAB 档位：0 服务商与模型 / 1 语音 / 2 MCP / 3 说明。变量名避讳 CustomComponent.tabIndex 属性方法。 */
+  /** TAB 档位：0 服务商与模型 / 1 语音 / 2 MCP / 3 工具 / 4 说明。变量名避讳 CustomComponent.tabIndex 属性方法。 */
   @State activeTab: number = 0;
   /** 当前服务商的本地常用模型清单（对话页快切菜单数据源）。 */
   @State providerModels: string[] = [];
@@ -459,6 +459,11 @@ struct AiSettingsPage {
         this.tabMcp();
       }
       .tabBar('MCP')
+
+      TabContent() {
+        this.tabTools();
+      }
+      .tabBar('工具')
 
       TabContent() {
         this.tabAbout();
@@ -955,7 +960,23 @@ struct AiSettingsPage {
     .align(Alignment.Top);
   }
 
-  /** TAB 4 说明：灵魂入口、使用说明、打开助手。 */
+  /** TAB 4 工具：按用途分组的工具清单（AiToolsSection 自持状态）。 */
+  @Builder
+  tabTools() {
+    Scroll() {
+      Column() {
+        AiToolsSection();
+      }
+      .width('100%')
+      .padding($r('app.float.page_padding'))
+      .alignItems(HorizontalAlign.Start);
+    }
+    .width('100%')
+    .height('100%')
+    .align(Alignment.Top);
+  }
+
+  /** TAB 5 说明：灵魂入口、使用说明、打开助手。 */
   @Builder
   tabAbout() {
     Scroll() {
