@@ -447,4 +447,72 @@ export function register(ctx) {
     deps.state.rcpResponse = null;
   });
 
+
+  test('基础工具新增（#1617）：shelf_list 状态与过滤、book_progress 进度、list_ai_tools 目录', async () => {
+    const { RealAiTools, toolsState } = ctx;
+    // shelf_list：在读清单 + 关键词过滤
+    toolsState.readingBooks = [
+      { id: 1, title: '三体', authors: ['刘慈欣'], coverUrl: '', rating: 9, tags: [] },
+      { id: 2, title: '球状闪电', authors: ['刘慈欣'], coverUrl: '', rating: 8, tags: [] },
+      { id: 3, title: '活着', authors: ['余华'], coverUrl: '', rating: 9, tags: [] },
+    ];
+    toolsState.favorites = [
+      { id: 9, title: '收藏的书', authors: ['某作者'], coverUrl: '', rating: 7, tags: [] },
+    ];
+    const reading = await RealAiTools.execute('shelf_list', '{}');
+    assert.ok(reading.includes('书架在读共 3 本'), reading);
+    assert.ok(reading.includes('《三体》') && reading.includes('id=1'), reading);
+    const filtered = await RealAiTools.execute('shelf_list', '{"keyword":"刘慈欣"}');
+    assert.ok(filtered.includes('共 2 本'), filtered);
+    assert.ok(!filtered.includes('活着'), '关键词过滤掉不匹配项');
+    const favs = await RealAiTools.execute('shelf_list', '{"kind":"favorites"}');
+    assert.ok(favs.includes('书架收藏共 1 本') && favs.includes('收藏的书'), favs);
+    const empty = await RealAiTools.execute('shelf_list', '{"kind":"favorites","keyword":"不存在"}');
+    assert.ok(empty.includes('没有'), empty);
+    // book_progress：本机记录命中 / 无记录
+    toolsState.history = [
+      { bookId: '1', title: '三体', chapterName: '第 12 章 红岸之谜', progressPercent: 42.6, lastReadTime: Date.now() },
+    ];
+    const prog = await RealAiTools.execute('book_progress', '{"book_id":1}');
+    assert.ok(prog.includes('第 12 章') && prog.includes('43%'), prog);
+    const noProg = await RealAiTools.execute('book_progress', '{"book_id":99}');
+    assert.ok(noProg.includes('没有'), noProg);
+    const badId = await RealAiTools.execute('book_progress', '{}');
+    assert.ok(badId.includes('正整数'), badId);
+    // list_ai_tools：分组目录、含写标记、含新工具
+    const cat = await RealAiTools.execute('list_ai_tools', '{}');
+    assert.ok(cat.includes('【书架检索】') && cat.includes('【联网检索】'), cat);
+    assert.ok(cat.includes('shelf_list') && cat.includes('book_progress') && cat.includes('list_ai_tools'), cat);
+    assert.ok(cat.includes('create_booklist [写]'), '写操作有标记');
+    assert.ok(cat.includes('共 33 个'), cat);
+    toolsState.readingBooks = [];
+    toolsState.favorites = [];
+    toolsState.history = [];
+  });
+
+  test('工具执行质量（#1618）：坏 JSON 如实回报、非对象参数、工具目录结构化', async () => {
+    const { RealAiTools, toolsState } = ctx;
+    toolsState.search = async () => [];
+    // 坏 JSON：不再伪装成「query 为空」，而是明确指出参数解析失败
+    const badJson = await RealAiTools.execute('search_books', '{bad json');
+    assert.ok(badJson.includes('参数解析失败'), badJson);
+    assert.ok(badJson.includes('重新生成 JSON'), '给出可行动的下一步');
+    assert.ok(!badJson.includes('query 为空'), '不得误导为参数为空');
+    // 非对象参数（数组/标量）
+    const arr = await RealAiTools.execute('search_books', '[1,2]');
+    assert.ok(arr.includes('必须是 JSON 对象'), arr);
+    const scalar = await RealAiTools.execute('search_books', '\"abc\"');
+    assert.ok(scalar.includes('必须是 JSON 对象'), scalar);
+    // 合法 JSON 照常执行（回归：修复不得误伤正常路径）
+    const ok = await RealAiTools.execute('search_books', '{\"query\":\"三体\"}');
+    assert.ok(ok.includes('没有找到'), ok);
+    // 结构化目录：分组/条目/写标记与文本目录同源
+    const groups = RealAiTools.catalogGroups();
+    assert.ok(groups.length >= 6, '至少 6 个分组');
+    const shelf = groups.find((g) => g.title === '书架检索');
+    assert.ok(shelf !== undefined && shelf.items.some((it) => it.name === 'shelf_list'), '新工具进目录');
+    const booklist = groups.find((g) => g.title === '书单管理');
+    assert.ok(booklist.items.find((it) => it.name === 'create_booklist').write === true, '写工具标记');
+    assert.ok(RealAiTools.toolCount() === 33, '总数与定义表一致');
+  });
 }

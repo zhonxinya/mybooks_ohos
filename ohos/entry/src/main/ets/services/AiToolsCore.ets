@@ -26,13 +26,23 @@ export class AiToolsCore {
   static lastCoverCandidates: ReferBook[] = [];
   static lastCoverBookId: number = 0;
 
+  /** 最近一次参数解析失败的原因（''=成功）；dispatch 据此回准确的错误而不是「参数为空」。 */
+  static lastParseError: string = '';
+
   static parseArgs(json: string): Record<string, Object> {
+    AiToolsCore.lastParseError = '';
     if (json.length === 0) {
       return {};
     }
     try {
-      return JSON.parse(json) as Record<string, Object>;
+      const parsed: Object = JSON.parse(json) as Object;
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        AiToolsCore.lastParseError = '参数必须是 JSON 对象';
+        return {};
+      }
+      return parsed as Record<string, Object>;
     } catch (_error) {
+      AiToolsCore.lastParseError = `参数不是合法 JSON（${AiToolsCore.clip(json, 60)}）`;
       return {};
     }
   }

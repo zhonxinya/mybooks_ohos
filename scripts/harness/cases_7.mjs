@@ -5,7 +5,7 @@ import { test, state, settingsDefaults, enc, rtB64, deferred, tick, flush } from
 import { dir, read, ETS, ROOT } from './paths.mjs';
 
 export function register(ctx) {
-  const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, featurePage, chat, reappear } = ctx;
+  const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, featurePage, libraryPage, chat, reappear } = ctx;
   test('设置页模型清单：手动添加去重即存、删除、拉取勾选合并、切服务商重载', () => {
     resetSettings();
     const page = settingsPage();
@@ -209,58 +209,57 @@ export function register(ctx) {
     deps.state.store.delete('s:ai_base_url');
   });
 
-  test('功能模型页：档位读取、绑定即存、模型列表、跟随恢复、音频档约束', async () => {
+  test('功能模型页（模型库版）：从库条目挑选、绑定写槽、恢复跟随、删除退回跟随', async () => {
     resetSettings();
+    // 空库：页面给出提示，下拉禁用
     let page = featurePage();
     assert.deepEqual(page.features, ['vision', 'summary', 'voice', 'tts', 'asr', 'realtime']);
-    assert.equal(page.editFeature, 'vision', '默认展开第一档');
-    assert.equal(page.editFollow, true);
-    assert.equal(page.providerSelectedIndex('vision'), 0);
-    assert.equal(page.providerItems('vision').length, 3, '跟随全局 + 2 个服务商');
-    // 看图档绑 opencode：立即写槽、模型清空
-    page.selectProvider('vision', 2);
-    assert.equal(page.editFollow, false);
-    assert.equal(page.providerSelectedIndex('vision'), 2);
+    assert.equal(page.entries.length, 0, '空模型库');
+    assert.ok(page.featureSummary('vision').includes('跟随全局'), '未绑=跟随全局');
+    // 建两条库条目（服务商+模型自由组合）——走模型库页自身方法
+    let lib = libraryPage();
+    lib.startAdd();
+    lib.editName = '便宜摘要';
+    lib.editProviderIndex = 0;
+    lib.editModel = 'deepseek-chat';
+    lib.commit();
+    lib.startAdd();
+    lib.editName = '本地视觉';
+    lib.editProviderIndex = 1;
+    lib.editModel = 'big-pickle';
+    lib.commit();
+    assert.equal(lib.entries.length, 2, '模型库页新增两条');
+    const e1 = lib.entries[0];
+    const e2 = lib.entries[1];
+    page = featurePage();
+    assert.equal(page.entries.length, 2);
+    assert.equal(page.optionItems('vision').length, 3, '跟随 + 2 条目');
+    assert.ok(page.optionItems('vision')[1].value.includes('便宜摘要'));
+    // 绑定条目：写 entry 键并同步 provider/model（消费链零改动）
+    page.selectEntry('vision', 2);
+    assert.equal(state.settings.featureEntry.vision, e2.id);
     assert.equal(state.settings.featureSlots.vision.providerId, 'opencode');
-    assert.equal(state.settings.featureSlots.vision.model, '');
-    // 模型列表：未拉取时给服务商默认；拉取后可点选、选中即存
-    assert.ok(page.modelItems('vision').some((it) => it.value === 'big-pickle'));
-    state.settings.models = ['vision-m'];
-    await page.fetchFeatureModels('vision');
-    assert.deepEqual(page.editModelOptions, ['vision-m']);
-    page.chooseModel('vision', 'vision-m');
-    assert.equal(state.settings.featureSlots.vision.model, 'vision-m');
-    assert.ok(page.featureSummary('vision').includes('vision-m'));
+    assert.equal(state.settings.featureSlots.vision.model, 'big-pickle');
+    assert.equal(page.selectedIndex('vision'), 2);
+    assert.ok(page.featureSummary('vision').includes('本地视觉'));
     assert.ok(page.featureSummary('vision').includes('已绑定'));
-    // 恢复跟随：清空绑定槽
-    page.selectProvider('vision', 0);
-    assert.equal(page.editFollow, true);
-    assert.equal(state.settings.featureSlots.vision.providerId, '');
+    // 同一模型可被多个功能复用（不是独占）
+    page.selectEntry('summary', 1);
+    assert.equal(state.settings.featureEntry.summary, e1.id);
+    assert.equal(state.settings.featureEntry.vision, e2.id, '两功能各绑各的，互不干扰');
+    // 恢复跟随
+    page.selectEntry('vision', 0);
+    assert.equal(state.settings.featureEntry.vision, '');
     assert.ok(page.featureSummary('vision').includes('跟随全局'));
-    // 重进页面读回已存绑定
-    state.settings.featureSlots.summary = { providerId: 'opencode', model: 'sum-m' };
-    page = featurePage();
-    page.enterFeature('summary');
-    assert.equal(page.editFollow, false);
-    assert.equal(page.editModel, 'sum-m');
-    assert.equal(page.providerSelectedIndex('summary'), 2);
-    // 音频三档：首项「跟随语音档」，且仅 Token Plan 可绑（协议约束）
-    page.enterFeature('tts');
-    assert.equal(page.providerItems('asr').length, 1, 'providers 无 Token Plan → 仅剩跟随项');
+    // 音频档首项文案为「跟随语音档」
     assert.equal(page.followLabel('asr'), '跟随语音档');
-    state.settings.providers.push({ id: 'qwen-tokenplan', name: 'Token Plan',
-      baseUrl: 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1', model: 'qwen3.6-flash' });
-    // 服务商目录是进场快照（新增在设置页完成后才会出现在列表）→ 重进页面刷新
-    page = featurePage();
-    page.enterFeature('asr');
-    assert.equal(page.providerItems('asr').length, 2);
-    page.selectProvider('asr', 1);
-    assert.equal(state.settings.featureSlots.asr.providerId, 'qwen-tokenplan');
-    // 音频档模型列表以协议固定默认模型打头
-    assert.equal(page.modelItems('asr')[0].value, 'qwen-audio-3.0-asr-flash');
-    // 未绑的 tts 退语音档显示，摘要标注来源
-    page.enterFeature('tts');
-    assert.ok(page.featureSummary('tts').includes('跟随语音档'));
+    assert.equal(page.followLabel('vision').startsWith('跟随全局'), true);
+    // 删条目：引用它的功能退回跟随
+    // 删条目：走页面删除路径（确认弹窗由 stub 直接执行 action）
+    lib = libraryPage();
+    lib.confirmRemove(lib.entries[0]);
+    assert.equal(state.settings.featureEntry.summary, '', '删除后退回跟随');
+    assert.equal(state.settings.modelEntries.length, 1);
     resetSettings();
   });
 
@@ -507,12 +506,12 @@ export function register(ctx) {
     Kit.AiVoiceKit.voiceSwitcher = null;
     // realtimeDefinitions：全集−ask_user+set_voice，set_voice 不占末位（OpenCode 丢末项护栏）
     const defs = RealAiTools.realtimeDefinitions('confirm');
-    assert.equal(defs.length, 29, '29 全集−ask_user（语音无卡片）+set_voice');
+    assert.equal(defs.length, 33, '33 全集−ask_user（语音无卡片）+set_voice');
     assert.equal(defs[defs.length - 1].function.name, 'forget_memory');
     assert.ok(defs.some((d) => d.function.name === 'set_voice'));
     assert.ok(!defs.some((d) => d.function.name === 'ask_user'), 'ask_user 不得暴露给语音');
     const ro = RealAiTools.realtimeDefinitions('readonly');
-    assert.equal(ro.length, 17, 'set_voice 非写工具，只读模式保留（16 只读含 fetch_url 去 ask_user + set_voice）');
+    assert.equal(ro.length, 20, 'set_voice 非写工具，只读模式保留（19 只读去 ask_user + set_voice）');
     assert.ok(ro[ro.length - 1].function.name !== 'set_voice', '末位护栏：set_voice 不得占尾');
     // 文字回路 dispatch 兜底：误调给出引导而非未知工具
     const guide = await RealAiTools.execute('set_voice', '{"voice":"longanqian"}');
@@ -525,11 +524,11 @@ export function register(ctx) {
   test('语音工具面与文字统一：realtimeDefinitions 并入 MCP 动态工具，mcp_ 调用走统一路由', async () => {
     const mcp = [{ type: 'function', function: { name: 'mcp_es_search', description: '增强搜索', parameters: { type: 'object', properties: {} } } }];
     const defs = RealAiTools.realtimeDefinitions('confirm', mcp);
-    assert.equal(defs.length, 30, '29（含 set_voice）+1 MCP');
+    assert.equal(defs.length, 34, '33（含 set_voice）+1 MCP');
     assert.equal(defs[defs.length - 1].function.name, 'mcp_es_search', 'MCP 并尾；set_voice 护栏位不前移');
     assert.ok(defs.some((d) => d.function.name === 'set_voice'));
     const ro = RealAiTools.realtimeDefinitions('readonly', mcp);
-    assert.equal(ro.length, 18, '17+1 MCP');
+    assert.equal(ro.length, 21, '20+1 MCP');
     // 统一路由：语音 runTool 与文字回路同源 AiService.toolRunFor——mcp_ 前缀进 MCP 容错分支，
     // 不再落 dispatch 的「未知工具」（旧语音链路 mcp 调用必然失败的根因）
     const out = await RealAiService.toolRunFor('mcp_es_search', '{}', 'c1');

@@ -1,5 +1,5 @@
 import { PageScaffold, PrimaryButton, SecondaryButton, SectionTitle, FilterChips, FilterChipItem,
-  ChipButton, AiMcpSection } from '../components';
+  AiMcpSection, AiSearchEngineSection, AiToolsSection } from '../components';
 import { AiService, AiConfig, AiProviderPreset, AiMessage, CONTEXT_LENGTH_OPTIONS } from '../services/AiService';
 import { SpeakService } from '../services/SpeakService';
 import { AppRouter } from '../utils/AppRouter';
@@ -20,7 +20,7 @@ interface AiFieldParams {
 /**
  * AI 模型设置：本地配置，不依赖服务端。
  *
- * 「服务商与模型 / 语音 / MCP / 说明」四档 TAB 分开，每档只装本类设置；
+ * 「服务商与模型 / 语音 / MCP / 工具 / 说明」五档 TAB 分开，每档只装本类设置；
  * 各功能单独绑定的服务商/模型在「功能模型」页（pages/AiFeatureModelsPage）。
  */
 @Entry
@@ -30,10 +30,6 @@ struct AiSettingsPage {
   /** FilterChips 的 selected 是 @Link，必须绑可写状态，不能传函数返回值。 */
   @State providerIndex: number = 0;
   @State providers: AiProviderPreset[] = [];
-  @State showAddForm: boolean = false;
-  @State newName: string = '';
-  @State newBaseUrl: string = '';
-  @State newModel: string = '';
   /** 「拉取模型」返回的模型 id；空表示还没拉过。 */
   @State modelOptions: string[] = [];
   @State fetchingModels: boolean = false;
@@ -57,7 +53,7 @@ struct AiSettingsPage {
   @State ttsTimbre: string = 'longanhuan_v3.6';
   /** 思考强度：'default'/'low'/'medium'/'high'（见请求体 reasoning_effort）。 */
   @State reasoningEffort: string = 'default';
-  /** TAB 档位：0 服务商与模型 / 1 语音 / 2 MCP / 3 说明。变量名避讳 CustomComponent.tabIndex 属性方法。 */
+  /** TAB 档位：0 服务商与模型 / 1 语音 / 2 MCP / 3 工具 / 4 说明。变量名避讳 CustomComponent.tabIndex 属性方法。 */
   @State activeTab: number = 0;
   /** 当前服务商的本地常用模型清单（对话页快切菜单数据源）。 */
   @State providerModels: string[] = [];
@@ -73,7 +69,7 @@ struct AiSettingsPage {
     this.rtTimbre = AiService.loadRealtimeTimbre();
     this.ttsTimbre = AiService.loadTtsTimbre();
     this.reasoningEffort = AiService.loadReasoningEffort();
-    this.providers = AiService.listProviders();
+    this.providers = AiService.listEnabledProviders();
     const config: AiConfig = AiService.loadConfig();
     this.providerId = config.providerId;
     this.providerIndex = this.indexOfProvider(config.providerId);
@@ -110,11 +106,10 @@ struct AiSettingsPage {
     }
     this.providerId = id;
     this.providerIndex = this.indexOfProvider(id);
-    const preset: AiProviderPreset = AiService.presetOf(id);
-    // 切换服务商时地址回填该服务商已保存的槽位（没存过回落预设），模型跟随预设；
+    // 切换服务商时地址/模型回填该服务商自己的槽位（没存过回落预设）；
     // Key 各家不通用，但按服务商分开存过就不用重填
     this.baseUrl = AiService.baseUrlFor(id);
-    this.model = preset.model;
+    this.model = AiService.modelFor(id);
     this.apiKey = '';
     this.hasKey = AiService.hasKeyFor(id);
     this.testResult = '';
@@ -122,52 +117,6 @@ struct AiSettingsPage {
     this.providerModels = AiService.loadProviderModels(id);
     this.pickedModels = [];
     this.newModelName = '';
-  }
-
-  private isCustomSelected(): boolean {
-    return this.providerId.startsWith('custom-');
-  }
-
-  /** 添加本机自定义服务商：只登记名字/地址/默认模型，Key 走下方主表单保存。 */
-  private addProvider(): void {
-    if (this.newName.trim().length === 0) {
-      this.toast('请填写服务商名称');
-      return;
-    }
-    if (this.newBaseUrl.trim().length === 0) {
-      this.toast('请填写接口地址');
-      return;
-    }
-    try {
-      const preset: AiProviderPreset = AiService.addCustomProvider(this.newName, this.newBaseUrl, this.newModel);
-      this.providers = AiService.listProviders();
-      this.showAddForm = false;
-      this.newName = '';
-      this.newBaseUrl = '';
-      this.newModel = '';
-      this.selectProvider(preset.id);
-      this.toast(`已添加「${preset.name}」`);
-    } catch (error) {
-      this.toast(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  private confirmDeleteProvider(): void {
-    const name: string = AiService.presetOf(this.providerId).name;
-    this.getUIContext().showAlertDialog({
-      title: '删除服务商',
-      message: `确定删除「${name}」吗？其保存的 API Key 会一并清除。`,
-      primaryButton: {
-        value: '删除',
-        action: () => {
-          AiService.removeCustomProvider(this.providerId);
-          this.providers = AiService.listProviders();
-          this.selectProvider('deepseek');
-          this.toast('已删除');
-        },
-      },
-      secondaryButton: { value: '取消', action: () => {} },
-    });
   }
 
   // ———— 本地常用模型清单（对话页快切菜单数据源，按服务商持久化） ————
@@ -462,6 +411,11 @@ struct AiSettingsPage {
       .tabBar('MCP')
 
       TabContent() {
+        this.tabTools();
+      }
+      .tabBar('工具')
+
+      TabContent() {
         this.tabAbout();
       }
       .tabBar('说明')
@@ -477,6 +431,18 @@ struct AiSettingsPage {
   tabProvider() {
     Scroll() {
       Column({ space: 16 }) {
+        Row() {
+          Text('服务商管理')
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'));
+          Blank();
+          Text('›')
+            .fontSize(16)
+            .fontColor($r('app.color.text_tertiary'));
+        }
+        .width('100%')
+        .onClick(() => AppRouter.pushUrl(this.getUIContext(), { url: 'pages/AiProvidersPage' }));
+
         SectionTitle({ title: '服务商' });
         Scroll() {
           FilterChips({
@@ -484,53 +450,11 @@ struct AiSettingsPage {
             selected: $providerIndex,
             scrollable: true,
             onChange: (index: number) => this.selectProvider(this.providers[index].id),
-            trailing: () => {
-              this.addProviderChip();
-            },
           });
         }
         .scrollable(ScrollDirection.Horizontal)
         .scrollBar(BarState.Off)
         .width('100%');
-
-        if (this.isCustomSelected()) {
-          Text('删除该服务商')
-            .fontSize(12)
-            .fontColor($r('app.color.error'))
-            .onClick(() => {
-              this.confirmDeleteProvider();
-            });
-        }
-
-        if (this.showAddForm) {
-          Column({ space: 12 }) {
-            this.field({ label: '名称', value: this.newName, placeholder: '如：公司网关',
-              onChange: (v: string) => this.newName = v });
-            this.field({ label: '接口地址', value: this.newBaseUrl, placeholder: 'https://example.com/v1',
-              onChange: (v: string) => this.newBaseUrl = v });
-            this.field({ label: '默认模型', value: this.newModel, placeholder: '可留空，保存后用「拉取模型列表」选择',
-              onChange: (v: string) => this.newModel = v });
-            Row({ space: 12 }) {
-              PrimaryButton({
-                label: '添加',
-                onTap: () => {
-                  this.addProvider();
-                },
-              }).layoutWeight(1);
-              SecondaryButton({
-                label: '取消',
-                onTap: () => {
-                  this.showAddForm = false;
-                },
-              }).layoutWeight(1);
-            }
-            .width('100%');
-          }
-          .width('100%')
-          .padding($r('app.float.page_padding'))
-          .borderRadius($r('app.float.card_radius'))
-          .backgroundColor($r('app.color.card_background'));
-        }
 
         Column({ space: 12 }) {
           this.field({ label: '接口地址', value: this.baseUrl, placeholder: 'https://api.deepseek.com/v1',
@@ -602,7 +526,7 @@ struct AiSettingsPage {
         .backgroundColor($r('app.color.card_background'));
 
         SectionTitle({ title: '常用模型清单' });
-        Text('对话页顶栏快切菜单用这份清单；不用每次现拉全量列表。')
+        Text('对话页顶栏快切用这份清单')
           .fontSize(12)
           .fontColor($r('app.color.text_secondary'))
           .width('100%');
@@ -698,7 +622,7 @@ struct AiSettingsPage {
             .width('100%');
             Slider({ value: this.temperature, min: 0, max: 1.5, step: 0.1 })
               .onChange((value: number) => this.temperature = value);
-            Text('越低越稳定（适合摘要/元数据），越高越发散（适合推荐/书评）')
+            Text('低=稳定（摘要），高=发散（推荐）')
               .fontSize(11)
               .fontColor($r('app.color.text_tertiary'))
               .width('100%');
@@ -737,7 +661,7 @@ struct AiSettingsPage {
                 this.reasoningEffort = REASONING_EFFORT_OPTIONS[index];
                 AiService.saveReasoningEffort(this.reasoningEffort);
               });
-            Text('仅对思考型模型生效（OpenAI 兼容 reasoning_effort 透传）；「跟随模型默认」不发送该参数')
+            Text('仅思考型模型生效；默认不干预')
               .fontSize(11)
               .fontColor($r('app.color.text_tertiary'))
               .width('100%');
@@ -798,7 +722,7 @@ struct AiSettingsPage {
         }
         .width('100%');
 
-        Text('系统语音免流量、离线可播；模拟器没有系统语音引擎，播报报错时请切「Token Plan 云端语音」（需服务商为 Token Plan）。')
+        Text('系统语音离线可播；模拟器无系统引擎，报错时切云端（需 Token Plan）。')
           .fontSize(12)
           .fontColor($r('app.color.text_secondary'))
           .width('100%');
@@ -850,7 +774,7 @@ struct AiSettingsPage {
         }
         .width('100%');
 
-        Text('实时模式走 qwen-audio 实时服务（VAD 自动断句、开口即打断，需 Token Plan 服务商）；轮转模式按「功能模型」页绑定的对话模型+下方播报引擎逐轮对话。')
+        Text('实时模式需 Token Plan；轮转模式用「功能模型」绑定的模型逐轮对话。')
           .fontSize(12)
           .fontColor($r('app.color.text_secondary'))
           .width('100%');
@@ -859,10 +783,6 @@ struct AiSettingsPage {
           Text('功能模型')
             .fontSize(13)
             .fontColor($r('app.color.text_secondary'));
-          Text('语音/TTS/ASR 等六档单独绑定服务商')
-            .fontSize(11)
-            .fontColor($r('app.color.text_tertiary'))
-            .margin({ left: 8 });
           Blank();
           Text('›')
             .fontSize(16)
@@ -876,7 +796,7 @@ struct AiSettingsPage {
             .fontSize(13)
             .fontColor($r('app.color.text_secondary'))
             .width('100%');
-          Text('实时通话中 AI 也可调用 set_voice 自主更换音色（会话会短暂重连）。')
+          Text('通话中 AI 可自主换音色（会短暂重连）')
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
             .width('100%');
@@ -922,12 +842,14 @@ struct AiSettingsPage {
     .align(Alignment.Top);
   }
 
-  /** TAB 3 MCP：四家百炼服务开关+探测（内容在 AiMcpSection 组件，自持状态）。 */
+  /** TAB 3 MCP：百炼服务开关+探测（AiMcpSection）+ 搜索引擎配置（AiSearchEngineSection）。 */
   @Builder
   tabMcp() {
     Scroll() {
-      Column() {
+      Column({ space: 16 }) {
         AiMcpSection();
+        Divider().color($r('app.color.divider')).strokeWidth(0.5);
+        AiSearchEngineSection();
       }
       .width('100%')
       .padding($r('app.float.page_padding'))
@@ -938,7 +860,23 @@ struct AiSettingsPage {
     .align(Alignment.Top);
   }
 
-  /** TAB 4 说明：灵魂入口、使用说明、打开助手。 */
+  /** TAB 4 工具：按用途分组的工具清单（AiToolsSection 自持状态）。 */
+  @Builder
+  tabTools() {
+    Scroll() {
+      Column() {
+        AiToolsSection();
+      }
+      .width('100%')
+      .padding($r('app.float.page_padding'))
+      .alignItems(HorizontalAlign.Start);
+    }
+    .width('100%')
+    .height('100%')
+    .align(Alignment.Top);
+  }
+
+  /** TAB 5 说明：灵魂入口、使用说明、打开助手。 */
   @Builder
   tabAbout() {
     Scroll() {
@@ -972,23 +910,11 @@ struct AiSettingsPage {
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
             .width('100%');
-          Text('• 兼容任何 OpenAI 协议服务：OpenAI、DeepSeek、Kimi、智谱、通义、硅基流动、Ollama、LM Studio、OpenCode (Go)、OneAPI 等。')
-            .fontSize(12)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%');
-          Text('• 用「＋ 添加」可把常用服务存成本机服务商，各自的 API Key 独立保存，来回切换不用重填。')
+          Text('• 兼容任何 OpenAI 协议服务（OpenAI/DeepSeek/通义/Ollama/OpenCode 等）。')
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
             .width('100%');
           Text('• 接口地址填到 /v1 层即可，程序会自动补 /chat/completions。')
-            .fontSize(12)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%');
-          Text('• 开启图片能力后，对话页可附图发送，模型能看懂图片内容（需视觉模型，如 gpt-4o、qwen-vl、claude、gemini）。')
-            .fontSize(12)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%');
-          Text('• 「服务商与模型」档的常用模型清单按服务商保存，对话页顶栏快切菜单优先用它。')
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
             .width('100%');
@@ -1042,18 +968,6 @@ struct AiSettingsPage {
       }).layoutWeight(1);
     }
     .width('100%');
-  }
-
-  /** chips 行尾部的「＋ 添加」：展开/收起本机服务商添加表单。 */
-  @Builder
-  addProviderChip() {
-    ChipButton({
-      label: this.showAddForm ? '收起' : '＋ 添加',
-      selected: false,
-      onTap: () => {
-        this.showAddForm = !this.showAddForm;
-      },
-    });
   }
 
   @Builder

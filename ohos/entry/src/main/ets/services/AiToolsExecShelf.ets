@@ -13,7 +13,7 @@ import { BookListAddResponse, BookListApi, BookListDetailResponse, BookListMutat
 import { BookListSummary, parseBookListSummary, parseBookListSummaries } from '../models/BookListModels';
 import { ReadingDevice, deviceTypeLabel } from '../models/DeviceModels';
 import { HomeBook, ReadingStatsSummary } from '../models/HomeModels';
-import { BookDetail } from './BookModels';
+import { BookDetail, BookItem } from './BookModels';
 import { ServerFeature, ServerRegistry } from './ServerProfile';
 import { AccountManager } from './AccountManager';
 import { fileIo as fs } from '@kit.CoreFileKit';
@@ -139,6 +139,69 @@ export class AiToolsExecShelf {
       lines.push(line);
     }
     return `最近阅读 ${cap} 本：\n${lines.join('\n')}`;
+  }
+
+  /** 按状态列书架（在读/收藏），可按关键词过滤。 */
+  static async shelfList(kind: string, limit: number, keyword: string): Promise<string> {
+    const mode: string = kind.length > 0 ? kind : 'reading';
+    const cap: number = Math.min(50, Math.max(1, limit > 0 ? limit : 20));
+    let books: BookItem[];
+    let label: string;
+    if (mode === 'favorites') {
+      books = await TalebookApi.getFavorites(cap);
+      label = '收藏';
+    } else {
+      books = await TalebookApi.getReadingBooks(cap);
+      label = '在读';
+    }
+    const kw: string = keyword.trim().toLowerCase();
+    if (kw.length > 0) {
+      books = books.filter((b: BookItem): boolean =>
+        b.title.toLowerCase().indexOf(kw) >= 0 ||
+        b.authors.join('、').toLowerCase().indexOf(kw) >= 0);
+    }
+    if (books.length === 0) {
+      const suffix: string = kw.length > 0 ? `（关键词「${keyword}」）` : '';
+      return `书架${label}里没有${suffix}书。`;
+    }
+    const lines: string[] = [];
+    for (let i = 0; i < books.length; i++) {
+      const b: BookItem = books[i];
+      lines.push(`- 《${b.title}》（${b.authors.length > 0 ? b.authors.join('、') : '佚名'}） id=${b.id}`);
+    }
+    const more: string = books.length >= cap ? `\n（已按上限 ${cap} 本截断，可调 limit）` : '';
+    return `书架${label}共 ${books.length} 本：\n${lines.join('\n')}${more}`;
+  }
+
+  /** 某本书的本机阅读进度（本机记录为准）。 */
+  static bookProgress(bookId: number): string {
+    if (bookId <= 0) {
+      return '参数 book_id 需要是正整数（可先用 search_books 查到 id）。';
+    }
+    const items = TalebookService.getReadingHistory();
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (String(it.bookId) !== `${bookId}`) {
+        continue;
+      }
+      const parts: string[] = [];
+      if (it.chapterName !== undefined && it.chapterName.length > 0) {
+        parts.push(`读到「${it.chapterName}」`);
+      }
+      if (it.progressPercent !== undefined) {
+        parts.push(`进度 ${Math.round(it.progressPercent)}%`);
+      }
+      if (it.currentPage !== undefined && it.totalPages !== undefined && it.totalPages > 0) {
+        parts.push(`第 ${it.currentPage}/${it.totalPages} 页`);
+      }
+      if (it.lastReadTime !== undefined) {
+        parts.push(`最近阅读 ${AiToolsCore.formatDate(it.lastReadTime)}`);
+      }
+      return parts.length > 0
+        ? `id=${bookId} 的阅读进度：${parts.join('，')}`
+        : `id=${bookId} 有阅读记录但没有进度信息。`;
+    }
+    return `本机没有 id=${bookId} 的阅读记录（可能还没在本机打开过，或已清除记录）。`;
   }
 
   static async searchSoNovel(query: string): Promise<string> {

@@ -9,7 +9,7 @@ import { ChatCompletionContentPartText } from '@iuroc/openai/src/main/ets/openai
 import { ChatCompletionContentPartImage } from '@iuroc/openai/src/main/ets/openai@4.73.1/resources/chat/completions';
 import { TalebookService } from './TalebookService';
 import { AiTools, AiPermissionMode } from './AiTools';
-import { AiToolDefinition } from './AiToolsDefs';
+import { AiToolDefinition, AiToolGroup } from './AiToolsDefs';
 import { McpService, McpServer } from './McpService';
 import { AiServiceConfig } from './AiServiceConfig';
 import { AiServiceHttp } from './AiServiceHttp';
@@ -69,6 +69,16 @@ export interface LlmSearchResult {
   answer: string;
   sources: LlmSearchSource[];
   error: string;
+}
+
+/** 模型库条目：一个「服务商 + 模型 id」的自由组合，可被任意功能复用。 */
+export interface AiModelEntry {
+  id: string;
+  /** 用户可读名称（空则按「服务商 · 模型」兜底）。 */
+  name: string;
+  providerId: string;
+  /** 模型 id；'' = 用该服务商默认模型。 */
+  model: string;
 }
 
 /** 运行时配置。 */
@@ -444,6 +454,29 @@ export class AiService {
   static loadFeatureModel(feature: string): string {
     return AiServiceConfig.loadFeatureModel(feature);
   }
+  // ———— 模型库：模型条目 = 名称 + 服务商 + 模型 id 的自由组合 ————
+  static listModelEntries(): AiModelEntry[] {
+    return AiServiceConfig.listModelEntries();
+  }
+  static addModelEntry(name: string, providerId: string, model: string): AiModelEntry {
+    return AiServiceConfig.addModelEntry(name, providerId, model);
+  }
+  static updateModelEntry(id: string, name: string, providerId: string, model: string): boolean {
+    return AiServiceConfig.updateModelEntry(id, name, providerId, model);
+  }
+  static removeModelEntry(id: string): boolean {
+    return AiServiceConfig.removeModelEntry(id);
+  }
+  static modelEntryOf(id: string): AiModelEntry | null {
+    return AiServiceConfig.modelEntryOf(id);
+  }
+  /** 功能绑定库条目（''=恢复跟随）。 */
+  static bindFeatureEntry(feature: string, entryId: string): void {
+    AiServiceConfig.bindFeatureEntry(feature, entryId);
+  }
+  static loadFeatureEntry(feature: string): string {
+    return AiServiceConfig.loadFeatureEntry(feature);
+  }
   /** 功能槽目录（功能模型页数据源）。 */
   static featureIds(): string[] {
     return AiServiceConfig.FEATURES;
@@ -531,6 +564,28 @@ export class AiService {
   /** 委托 AiServiceConfig.listProviders（拆分：见文件头说明）。 */
   static listProviders(): AiProviderPreset[] {
     return AiServiceConfig.listProviders();
+  }
+  /** 委托 AiServiceConfig.listEnabledProviders：停用的服务商不出现（chips/功能槽数据源）。 */
+  static listEnabledProviders(): AiProviderPreset[] {
+    return AiServiceConfig.listEnabledProviders();
+  }
+  static isProviderEnabled(providerId: string): boolean {
+    return AiServiceConfig.isProviderEnabled(providerId);
+  }
+  static setProviderEnabled(providerId: string, on: boolean): void {
+    AiServiceConfig.setProviderEnabled(providerId, on);
+  }
+  /** 指定服务商的「上次使用模型」（本槽没有回落预设默认）。 */
+  static modelFor(providerId: string): string {
+    return AiServiceConfig.modelFor(providerId);
+  }
+  /** 编辑服务商资产但不切当前默认（管理页保存）。 */
+  static updateProviderProfile(providerId: string, baseUrl: string, model: string, apiKey: string): void {
+    AiServiceConfig.updateProviderProfile(providerId, baseUrl, model, apiKey);
+  }
+  /** 设为对话默认服务商。 */
+  static setDefaultProvider(providerId: string): void {
+    AiServiceConfig.setDefaultProvider(providerId);
   }
   /** 委托 AiServiceConfig.addCustomProvider（拆分：见文件头说明）。 */
   static addCustomProvider(name: string, baseUrl: string, model: string): AiProviderPreset {
@@ -624,7 +679,42 @@ export class AiService {
   static mcpSummary(): string {
     return McpService.summaryBrief();
   }
+  /** 该家是否已配 Key（内置与自定义家一视同仁，各用各的槽）。 */
+  static mcpHasKey(server: McpServer): boolean {
+    return McpService.hasApiKey(server);
+  }
+  /** 该家是否已启用（UI 开关回显）。 */
+  static mcpEnabled(tag: string): boolean {
+    return McpService.isServerEnabled(tag);
+  }
+  /** 新增自定义 MCP server（含可选 Key）。 */
+  static mcpAddServer(label: string, url: string, apiKey: string): McpServer {
+    return McpService.addServer(label, url, apiKey);
+  }
+  /** 改自定义家名称/URL/Key。 */
+  static mcpUpdateServer(tag: string, label: string, url: string, apiKey: string): boolean {
+    return McpService.updateServer(tag, label, url, apiKey);
+  }
+  /** 删自定义家（内置家不可删）。 */
+  static mcpRemoveServer(tag: string): boolean {
+    return McpService.removeServer(tag);
+  }
+  /** 设置自定义家 Key。 */
+  static mcpSetKey(tag: string, apiKey: string): void {
+    McpService.setApiKey(tag, apiKey);
+  }
   /** 委托 AiServiceHttp.toolLabelFor（拆分：见文件头说明）。 */
+  /** 结构化工具目录（设置页工具清单）。 */
+  static toolCatalog(): AiToolGroup[] {
+    return AiTools.catalogGroups();
+  }
+  static toolTotal(): number {
+    return AiTools.toolCount();
+  }
+  /** 当前权限模式下实际可用的工具数（readonly 去掉写工具）。 */
+  static toolAvailableCount(mode: AiPermissionMode): number {
+    return AiTools.definitions(mode).length;
+  }
   static toolLabelFor(name: string): string {
     return AiServiceHttp.toolLabelFor(name);
   }

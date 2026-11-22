@@ -18,6 +18,8 @@ export interface McpServer {
   tag: string;
   label: string;
   url: string;
+  /** 是否内置四家（内置家的鉴权回落到 Token Plan Key；自定义家用自己的 Key）。 */
+  builtin?: boolean;
 }
 
 /** 单个 server 的握手产物（会话 id + 工具清单）。 */
@@ -35,11 +37,16 @@ interface McpRpcReply {
 }
 
 const MCP_SERVERS: McpServer[] = [
-  { tag: 'es', label: '百炼增强搜索', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/EnhancedSearch/mcp' },
-  { tag: 'ws', label: '百炼联网搜索', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/WebSearch/mcp' },
-  { tag: 'wf', label: '百炼网页解析', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/WebFetch/mcp' },
-  { tag: 'sg', label: '百炼语音转写', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/SpeechGenerateText/mcp' },
+  { tag: 'es', label: '百炼增强搜索', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/EnhancedSearch/mcp', builtin: true },
+  { tag: 'ws', label: '百炼联网搜索', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/WebSearch/mcp', builtin: true },
+  { tag: 'wf', label: '百炼网页解析', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/WebFetch/mcp', builtin: true },
+  { tag: 'sg', label: '百炼语音转写', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/SpeechGenerateText/mcp', builtin: true },
 ];
+
+/** 自定义 MCP server 的持久化键：值为 JSON 数组 `[{tag,label,url}]`。 */
+const MCP_CUSTOM_KEY: string = 'ai_mcp_servers';
+/** 单个 MCP server 的 Key 槽前缀（+tag）：自定义家各用各的，内置家回落 Token Plan。 */
+const MCP_KEY_PREFIX: string = 'ai_mcp_key_';
 
 /** MCP 鉴权即 Token Plan 服务商的 Key（用户明确：复用已填写的）。 */
 const MCP_PROVIDER_ID: string = 'qwen-tokenplan';
@@ -55,9 +62,131 @@ export class McpService {
   private static cacheAt: number = 0;
   private static states: McpServerState[] = [];
 
-  /** 当前服务商是否启用 MCP。 */
-  static enabledFor(providerId: string, apiKey: string): boolean {
-    return providerId === MCP_PROVIDER_ID && apiKey.length > 0;
+  /** 当前是否至少有一家启用且配了 Key（MCP 门控）。 */
+  static enabledFor(): boolean {
+    const all: McpServer[] = McpService.servers();
+    for (let i = 0; i < all.length; i++) {
+      if (McpService.isServerEnabled(all[i].tag) && McpService.apiKeyFor(all[i]).length > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** 当前全部 MCP server：内置四家 + 用户新增的自定义家。 */
+  static servers(): McpServer[] {
+    const out: McpServer[] = MCP_SERVERS.slice();
+    const raw: string = TalebookService.prefGet(MCP_CUSTOM_KEY);
+    if (raw.length === 0) {
+      return out;
+    }
+    try {
+      const list: Object[] = JSON.parse(raw) as Object[];
+      for (let i = 0; i < list.length; i++) {
+        const item: Object = list[i];
+        if (item === null || typeof item !== 'object') {
+          continue;
+        }
+        const rec: Record<string, Object> = item as Record<string, Object>;
+        const tag: Object | undefined = rec['tag'];
+        const label: Object | undefined = rec['label'];
+        const url: Object | undefined = rec['url'];
+        if (typeof tag !== 'string' || tag.length === 0 || typeof url !== 'string' ||
+          url.length === 0) {
+          continue;
+        }
+        out.push({
+          tag: tag,
+          label: typeof label === 'string' && label.length > 0 ? label : tag,
+          url: url,
+        });
+      }
+    } catch (_error) {
+      // 存储损坏：只用内置家
+    }
+    return out;
+  }
+
+  /**
+   * 单家鉴权 Key：一律用该家自己的槽位（内置家也需单独填写，不复用服务商 Key）。
+   * 不反向 import AiServiceConfig（Config 已 import McpService，会成环）。
+   */
+  static apiKeyFor(server: McpServer): string {
+    return TalebookService.secureGet(MCP_KEY_PREFIX + server.tag);
+  }
+
+  /** 设置某家 Key（内置与自定义家一视同仁）。 */
+  static setApiKey(tag: string, apiKey: string): void {
+    TalebookService.secureSet(MCP_KEY_PREFIX + tag, apiKey.trim());
+    McpService.reset();
+  }
+
+  /** 该家是否已有 Key（UI 展示「已配置/未配置」）。 */
+  static hasApiKey(server: McpServer): boolean {
+    return McpService.apiKeyFor(server).length > 0;
+  }
+
+  /** 新增自定义 MCP server：tag 由 label 归一化（去重加序号），返回落库后的条目。 */
+  static addServer(label: string, url: string, apiKey: string): McpServer {
+    const name: string = label.trim();
+    const endpoint: string = url.trim();
+    if (name.length === 0 || endpoint.length === 0) {
+      throw new Error('名称和 URL 都不能为空');
+    }
+    const all: McpServer[] = McpService.servers();
+    let tag: string = McpService.normalizeTag(name);
+    let seq: number = 2;
+    while (McpService.tagTaken(all, tag)) {
+      tag = `${McpService.normalizeTag(name)}${seq}`;
+      seq++;
+    }
+    const server: McpServer = { tag: tag, label: name, url: endpoint };
+    McpService.saveCustom(all, server);
+    if (apiKey.trim().length > 0) {
+      McpService.setApiKey(tag, apiKey);
+    }
+    McpService.reset();
+    return server;
+  }
+
+  /** 改自定义家的名称/URL/Key（内置家不可改，返回 false）。 */
+  static updateServer(tag: string, label: string, url: string, apiKey: string): boolean {
+    const all: McpServer[] = McpService.servers();
+    const target: McpServer | null = McpService.findByTag(all, tag);
+    if (target === null || target.builtin === true) {
+      return false;
+    }
+    const next: McpServer = {
+      tag: tag,
+      label: label.trim().length > 0 ? label.trim() : target.label,
+      url: url.trim().length > 0 ? url.trim() : target.url,
+    };
+    McpService.saveCustom(all, next);
+    if (apiKey.trim().length > 0) {
+      McpService.setApiKey(tag, apiKey);
+    }
+    McpService.reset();
+    return true;
+  }
+
+  /** 删自定义家（内置家不可删，返回 false）；连带清 Key 与启用开关。 */
+  static removeServer(tag: string): boolean {
+    const all: McpServer[] = McpService.servers();
+    const target: McpServer | null = McpService.findByTag(all, tag);
+    if (target === null || target.builtin === true) {
+      return false;
+    }
+    const kept: McpServer[] = [];
+    for (let i = 0; i < all.length; i++) {
+      if (all[i].tag !== tag) {
+        kept.push(all[i]);
+      }
+    }
+    McpService.writeCustom(kept);
+    TalebookService.secureSet(MCP_KEY_PREFIX + tag, '');
+    TalebookService.prefSet(MCP_ENABLED_KEY + tag, '');
+    McpService.reset();
+    return true;
   }
 
   /** 清空缓存（服务商/Key 变更后调用，下次发送重新握手）。 */
@@ -79,18 +208,20 @@ export class McpService {
   }
 
   /**
-   * 取全量 MCP 工具定义（合并各家）：命中缓存零请求；设置页禁用的家不握手，
+   * 取全量 MCP 工具定义（合并各家）：命中缓存零请求；设置页禁用的家与未配 Key 的家不握手，
    * 单家失败静默跳过，全挂返回空数组——聊天照常走内置工具。
+   * Key 由各家自取（内置家也需单独填写），参数仅用于缓存归属（服务商切换后重新握手）。
    */
-  static async ensureToolset(apiKey: string): Promise<AiToolDefinition[]> {
-    if (apiKey.length === 0) {
-      return [];
-    }
+  static async ensureToolset(cacheOwner: string): Promise<AiToolDefinition[]> {
+    const all: McpServer[] = McpService.servers();
     const now: number = Date.now();
-    if (McpService.cacheKey !== apiKey || now - McpService.cacheAt >= MCP_CACHE_TTL_MS) {
+    if (McpService.cacheKey !== cacheOwner || now - McpService.cacheAt >= MCP_CACHE_TTL_MS) {
       const fresh: (McpServerState | null)[] = await Promise.all(
-        MCP_SERVERS.map((s: McpServer): Promise<McpServerState | null> =>
-          McpService.isServerEnabled(s.tag) ? McpService.handshake(s, apiKey) : Promise.resolve(null)));
+        all.map((s: McpServer): Promise<McpServerState | null> => {
+          const key: string = McpService.apiKeyFor(s);
+          return McpService.isServerEnabled(s.tag) && key.length > 0 ?
+            McpService.handshake(s, key) : Promise.resolve(null);
+        }));
       const states: McpServerState[] = [];
       for (let i = 0; i < fresh.length; i++) {
         const st: McpServerState | null = fresh[i];
@@ -99,7 +230,7 @@ export class McpService {
         }
       }
       McpService.states = states;
-      McpService.cacheKey = apiKey;
+      McpService.cacheKey = cacheOwner;
       McpService.cacheAt = now;
     }
     const out: AiToolDefinition[] = [];
@@ -123,16 +254,17 @@ export class McpService {
     return server === null ? name : server.label;
   }
 
-  /** 登记清单（设置页「MCP」档数据源）。 */
+  /** 登记清单（设置页「MCP」档数据源）：内置 + 自定义。 */
   static serverList(): McpServer[] {
-    return MCP_SERVERS.slice();
+    return McpService.servers();
   }
 
   /** 探测摘要：每家一行——已禁用 / 已挂载 N 工具 / 未挂载（握手失败或还没试）。 */
   static summaryBrief(): string {
+    const all: McpServer[] = McpService.servers();
     const parts: string[] = [];
-    for (let i = 0; i < MCP_SERVERS.length; i++) {
-      const s: McpServer = MCP_SERVERS[i];
+    for (let i = 0; i < all.length; i++) {
+      const s: McpServer = all[i];
       if (!McpService.isServerEnabled(s.tag)) {
         parts.push(`${s.label}：已禁用`);
         continue;
@@ -144,7 +276,7 @@ export class McpService {
   }
 
   /** 执行一个 MCP 工具。契约同 AiTools.execute：永不抛异常，失败返回说明文本。 */
-  static async callTool(fullName: string, argsJson: string, apiKey: string): Promise<string> {
+  static async callTool(fullName: string, argsJson: string): Promise<string> {
     const server: McpServer | null = McpService.serverOf(fullName);
     if (server === null) {
       return `未知的 MCP 工具：${fullName}`;
@@ -152,8 +284,9 @@ export class McpService {
     if (!McpService.isServerEnabled(server.tag)) {
       return `${server.label}已在设置页的 MCP 档中禁用`;
     }
-    if (apiKey.length === 0) {
-      return 'MCP 不可用：未配置 Token Plan API Key';
+    const key: string = McpService.apiKeyFor(server);
+    if (key.length === 0) {
+      return `${server.label} 不可用：未配置 API Key`;
     }
     const orig: string = fullName.substring(MCP_PREFIX.length + server.tag.length + 1);
     // 参数以字符串形态校验+透传（ArkTS 禁裸 {}；重新序列化反而丢模型给的键序）
@@ -165,7 +298,7 @@ export class McpService {
     }
     let state: McpServerState | null = McpService.stateOf(server);
     if (state === null) {
-      state = await McpService.handshake(server, apiKey);
+      state = await McpService.handshake(server, key);
       if (state !== null) {
         McpService.states = McpService.states.concat([state]);
       }
@@ -175,13 +308,13 @@ export class McpService {
     }
     const body: string = `{"jsonrpc":"2.0","id":3,"method":"tools/call",` +
       `"params":{"name":"${McpService.esc(orig)}","arguments":${argsText}}}`;
-    let reply: McpRpcReply = await McpService.rpc(server, apiKey, state.sessionId, body, true);
+    let reply: McpRpcReply = await McpService.rpc(server, key, state.sessionId, body, true);
     if (reply.error.length > 0 && state.sessionId.length > 0) {
       // 会话可能已被服务端回收：重新握手再试一次
-      const retry: McpServerState | null = await McpService.handshake(server, apiKey);
+      const retry: McpServerState | null = await McpService.handshake(server, key);
       if (retry !== null) {
         McpService.replaceState(retry);
-        reply = await McpService.rpc(server, apiKey, retry.sessionId, body, true);
+        reply = await McpService.rpc(server, key, retry.sessionId, body, true);
       }
     }
     if (reply.error.length > 0) {
@@ -218,12 +351,73 @@ export class McpService {
     if (!name.startsWith(MCP_PREFIX)) {
       return null;
     }
-    for (let i = 0; i < MCP_SERVERS.length; i++) {
-      if (name.startsWith(`${MCP_PREFIX}${MCP_SERVERS[i].tag}_`)) {
-        return MCP_SERVERS[i];
+    const all: McpServer[] = McpService.servers();
+    for (let i = 0; i < all.length; i++) {
+      if (name.startsWith(`${MCP_PREFIX}${all[i].tag}_`)) {
+        return all[i];
       }
     }
     return null;
+  }
+
+  private static findByTag(all: McpServer[], tag: string): McpServer | null {
+    for (let i = 0; i < all.length; i++) {
+      if (all[i].tag === tag) {
+        return all[i];
+      }
+    }
+    return null;
+  }
+
+  private static tagTaken(all: McpServer[], tag: string): boolean {
+    return McpService.findByTag(all, tag) !== null;
+  }
+
+  /** 名称归一化成 tag：非字母数字转下划线、小写、限长 12（工具名前缀要短）。 */
+  private static normalizeTag(label: string): string {
+    const lowered: string = label.toLowerCase();
+    let out: string = '';
+    for (let i = 0; i < lowered.length && out.length < 12; i++) {
+      const c: string = lowered.charAt(i);
+      out += (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ? c : '_';
+    }
+    while (out.length > 0 && out.charAt(0) === '_') {
+      out = out.substring(1);
+    }
+    return out.length > 0 ? out : 'srv';
+  }
+
+  /** 增/改：把 next 合并进自定义清单（同 tag 覆盖，其余保持）并落库。 */
+  private static saveCustom(all: McpServer[], next: McpServer): void {
+    const merged: McpServer[] = [];
+    let replaced: boolean = false;
+    for (let i = 0; i < all.length; i++) {
+      if (all[i].builtin === true) {
+        continue;
+      }
+      if (all[i].tag === next.tag) {
+        merged.push(next);
+        replaced = true;
+      } else {
+        merged.push(all[i]);
+      }
+    }
+    if (!replaced) {
+      merged.push(next);
+    }
+    McpService.writeCustom(merged);
+  }
+
+  /** 落库自定义清单（只存 tag/label/url，Key 走 secure 槽）。 */
+  private static writeCustom(custom: McpServer[]): void {
+    const items: Record<string, Object>[] = [];
+    for (let i = 0; i < custom.length; i++) {
+      const rec: Record<string, Object> = {
+        'tag': custom[i].tag, 'label': custom[i].label, 'url': custom[i].url,
+      };
+      items.push(rec);
+    }
+    TalebookService.prefSet(MCP_CUSTOM_KEY, JSON.stringify(items));
   }
 
   private static stateOf(server: McpServer): McpServerState | null {

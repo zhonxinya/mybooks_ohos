@@ -5,7 +5,7 @@ import { test, state, settingsDefaults, enc, rtB64, deferred, tick, flush } from
 import { dir, read, ETS, ROOT } from './paths.mjs';
 
 export function register(ctx) {
-  const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, chat, reappear } = ctx;
+  const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, providersPage, chat, reappear } = ctx;
   test('从模型设置返回时刷新三个 AI 页面的可用状态', () => {
     for (const Page of [AiAssistantPage, AiBookPanelPage, AiRecommendPage]) {
       const page = new Page();
@@ -298,7 +298,7 @@ export function register(ctx) {
     assert.equal(deps.state.chatCalls.length, 2, 'errs=' + JSON.stringify(errs));
     assert.equal(deps.state.chatCalls[0].body.stream, true);
     assert.ok(Array.isArray(deps.state.chatCalls[0].body.tools) &&
-      deps.state.chatCalls[0].body.tools.length === 29, 'SDK 通道请求体须挂全量 tools');
+      deps.state.chatCalls[0].body.tools.length === 33, 'SDK 通道请求体须挂全量 tools');
     // 第二轮：assistant tool_calls + tool 结果回填，终轮回答
     const msgs = deps.state.chatCalls[1].body.messages;
     const asst = msgs.find((m) => m.role === 'assistant' && m.tool_calls !== undefined);
@@ -428,25 +428,24 @@ export function register(ctx) {
     // 无 href 的旧样式段不进清单（历史数据/裸着色段不炸）
     assert.deepEqual(collectLinks([[{ text: '裸链样式', style: 3 }]]), []);
   });
-  test('设置页：添加本地服务商有校验，成功后选中为当前编辑对象', () => {
+  test('服务商管理页：添加自定义服务商有校验，成功后出现在清单', () => {
     resetSettings();
-    const page = settingsPage();
+    // 增删服务商已从 AI 设置页迁到「服务商管理」页（设置页只留快切与编辑）
+    const page = providersPage();
     page.newName = '';
     page.newBaseUrl = 'https://gw.example.com/v1';
     page.addProvider();
-    assert.equal(page.providers.length, 2);
+    assert.equal(page.all.length, 2, '名称为空不添加');
     page.newName = '我的网关';
     page.newBaseUrl = '';
     page.addProvider();
-    assert.equal(page.providers.length, 2);
+    assert.equal(page.all.length, 2, '地址为空不添加');
     page.newBaseUrl = 'https://gw.example.com/v1';
     page.newModel = 'qwen3';
     page.addProvider();
-    assert.equal(page.providers.length, 3);
-    assert.ok(page.isCustomSelected());
-    assert.equal(page.baseUrl, 'https://gw.example.com/v1');
-    assert.equal(page.model, 'qwen3');
-    assert.equal(page.showAddForm, false);
+    assert.equal(page.all.length, 3, '合法输入后加入清单');
+    assert.ok(page.all.some((p) => p.name === '我的网关'), '新服务商在清单里');
+    assert.equal(page.showAdd, false, '表单收起');
   });
   test('设置页：切换服务商时已存 Key 保持、未存 Key 不误标', () => {
     resetSettings();

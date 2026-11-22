@@ -73,6 +73,8 @@
     "pages/UpdatePage",
     "pages/AiSettingsPage",
     "pages/AiFeatureModelsPage",
+    "pages/AiModelLibraryPage",
+    "pages/AiProvidersPage",
     "pages/AiVoiceCallPage",
     "pages/AiPersonaPage",
     "pages/AiAssistantPage",

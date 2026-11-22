@@ -200,6 +200,9 @@ export function register(ctx) {
     const { EncyclopediaService } = await load('RealEncyclopedia');
     deps.state.rcpThrowQueue.length = 0;
     deps.state.rcpError = null;
+    deps.state.store.clear();
+    // #1616 起引擎可配置：本用例只启用旧三通道，断言其解析/去重/降级行为不变
+    for (const id of ['sogou', 'wikipedia']) { EncyclopediaService.setEngineEnabled(id, false); }
     // 百度结构取自 2026-11-21 真实 SERP 样本（c-container/mu/s-text/summary-text_<hash>）；
     // Bing=b_algo+h2 直链+b_lineclamp；360=res-list+h3 直链+res-list-summary
     const baiduHtml = '<html><body>' +
@@ -233,17 +236,22 @@ export function register(ctx) {
     ];
     const r = await EncyclopediaService.searchWeb('三体 小说');
     assert.ok(r.ok, r.error);
-    assert.equal(r.items.length, 6, '3+2+1（Bing 首条与百度同名题去重）');
-    assert.equal(r.items[0].source, '百度');
-    assert.equal(r.items[0].title, '三体全集在线阅读-起点中文网', 'stripHtml 去标签不补空格（项目语义）');
-    assert.equal(r.items[0].url, 'https://www.qidian.com/book/123');
-    assert.ok(r.items[0].summary.includes('敬畏') && !r.items[0].summary.includes('<em>'), r.items[0].summary);
-    assert.equal(r.items[1].summary, '', '纯标题卡片保留、摘要为空');
-    assert.equal(r.items[2].title, '三体（长篇小说）', '无 s-text 时 h3 兜底');
-    assert.equal(r.items[3].source, 'Bing', '去重后 Bing 第二条顶上');
-    assert.ok(r.items[3].summary.includes('雨果奖') && !r.items[3].summary.endsWith('阅读更多'), r.items[3].summary);
-    assert.equal(r.items[4].source, '360');
-    assert.ok(r.items[4].summary.includes('系列'), r.items[4].summary);
+    // #1616 去重键改为「标题+域名」：同标题不同站视为不同结果（旧逻辑按标题会误合并）
+    assert.equal(r.items.length, 7, '百度 3 + Bing 2 + 360 2，无同站同名冲突');
+    const byTitle = (t) => r.items.find((x) => x.title === t);
+    assert.ok(byTitle('三体全集在线阅读-起点中文网'), '百度起点条目在');
+    const qidian = byTitle('三体全集在线阅读-起点中文网');
+    assert.equal(qidian.url, 'https://www.qidian.com/book/123');
+    assert.ok(qidian.summary.includes('敬畏') && !qidian.summary.includes('<em>'), qidian.summary);
+    assert.ok(byTitle('三体全集免费阅读_番茄小说官网'), '纯标题卡片保留');
+    assert.equal(byTitle('三体（长篇小说）') !== undefined, true, '无 s-text 时 h3 兜底');
+    // 重排序：来源权重高的（百度/维基=2-3）排在 360（1）之前；有摘要的优先
+    const first360 = r.items.findIndex((x) => x.source === '360');
+    const firstBaidu = r.items.findIndex((x) => x.source === '百度');
+    assert.ok(firstBaidu < first360, '百度权重高于 360，排在前面');
+    const bing = byTitle('三体（刘慈欣创作的系列小说）_百度百科');
+    assert.ok(bing !== undefined && bing.summary.includes('雨果奖') &&
+      !bing.summary.endsWith('阅读更多'), 'Bing 摘要清洗');
     // 单通道非 2xx：跳过该引擎，其余照常
     deps.state.rcpResponses = [
       { statusCode: 200, body: enc(baiduHtml) },
@@ -267,16 +275,81 @@ export function register(ctx) {
       { statusCode: 200, body: enc(so360Html) },
     ];
     const out = await RealAiTools.execute('search_web', '{"query":"三体"}');
-    assert.ok(out.includes('1. [百度] 三体全集在线阅读-起点中文网') &&
-      out.includes('链接：https://www.qidian.com/book/123') &&
-      out.includes('2. [百度] 三体全集免费阅读_番茄小说官网') &&
-      out.includes('4. [Bing] 三体（刘慈欣创作的系列小说）_百度百科'), out);
-    assert.ok(out.indexOf('2. [百度] 三体全集免费阅读_番茄小说官网\n链接：https://fanqienovel.com/page/698\n\n3') > 0,
-      '第二条无摘要：链接行后空行接第三条');
+    // 重排序后顺序按来源权重；断言内容存在与格式（编号+来源标签+链接行）
+    assert.ok(out.includes('1. [百度] 三体全集在线阅读-起点中文网'), out);
+    assert.ok(out.includes('链接：https://www.qidian.com/book/123'), out);
+    assert.ok(out.includes('[百度] 三体全集免费阅读_番茄小说官网'), out);
+    assert.ok(out.includes('[Bing] 三体（刘慈欣创作的系列小说）_百度百科'), out);
+    // 无摘要条目：链接行后紧跟空行（不占摘要行）
+    assert.ok(/链接：https:\/\/fanqienovel\.com\/page\/698\n\n/.test(out), out);
     // 空 query 直接回文案
     const none = await RealAiTools.execute('search_web', '{"query":"  "}');
     assert.ok(none.includes('query 为空'), none);
     deps.state.rcpError = null;
+  });
+
+  test('搜索引擎可配置（#1616）：引擎启停/至少留一/条数夹取/维基 API 通道/重排序', async () => {
+    const { EncyclopediaService, SEARCH_ENGINES } = await load('RealEncyclopedia');
+    deps.state.store.clear();
+    deps.state.rcpResponses = [];
+    // 默认：全部启用、条数 8
+    assert.equal(EncyclopediaService.enabledEngines().length, SEARCH_ENGINES.length, '默认全开');
+    assert.equal(EncyclopediaService.searchLimit(), 8, '默认 8 条');
+    // 停用后清单收敛；至少保留一个（全关被拒）
+    assert.equal(EncyclopediaService.setEngineEnabled('sogou', false), true);
+    assert.equal(EncyclopediaService.isEngineEnabled('sogou'), false);
+    assert.equal(EncyclopediaService.enabledEngines().indexOf('sogou') < 0, true);
+    for (const e of SEARCH_ENGINES) {
+      if (e.id !== 'baidu') { EncyclopediaService.setEngineEnabled(e.id, false); }
+    }
+    assert.equal(EncyclopediaService.setEngineEnabled('baidu', false), false, '最后一个不能停用');
+    assert.deepEqual(EncyclopediaService.enabledEngines(), ['baidu'], '只剩百度');
+    // 条数夹取 3–20
+    EncyclopediaService.setSearchLimit(1);
+    assert.equal(EncyclopediaService.searchLimit(), 3, '下限 3');
+    EncyclopediaService.setSearchLimit(99);
+    assert.equal(EncyclopediaService.searchLimit(), 20, '上限 20');
+    EncyclopediaService.setSearchLimit(5);
+    assert.equal(EncyclopediaService.searchLimit(), 5);
+    // 全关（人为清空配置）→ 明确错误文案，不发请求
+    deps.state.store.set('p:ai_search_engines', '[]');
+    deps.state.rcpResponses = [];
+    const none = await EncyclopediaService.searchWeb('三体');
+    assert.ok(!none.ok && none.error.includes('没有启用任何搜索引擎'), none.error);
+    // 维基百科走官方 API：JSON 直出解析（source=维基百科，url 拼条目页）
+    deps.state.store.clear();
+    for (const e of SEARCH_ENGINES) {
+      if (e.id !== 'wikipedia') { EncyclopediaService.setEngineEnabled(e.id, false); }
+    }
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(JSON.stringify({
+      query: { search: [
+        { title: '三体', snippet: '<span class="searchmatch">三体</span>是刘慈欣的科幻小说' },
+        { title: '刘慈欣', snippet: '中国科幻作家' },
+      ] } })) }];
+    const wk = await EncyclopediaService.searchWeb('三体');
+    assert.ok(wk.ok, wk.error);
+    assert.equal(wk.items.length, 2);
+    assert.equal(wk.items[0].source, '维基百科');
+    assert.equal(wk.items[0].title, '三体');
+    assert.equal(wk.items[0].url, 'https://zh.wikipedia.org/wiki/' + encodeURIComponent('三体'));
+    assert.ok(wk.items[0].summary.includes('刘慈欣') && !wk.items[0].summary.includes('<span'), wk.items[0].summary);
+    // 重排序：高权重来源在前，有摘要的同类在前
+    deps.state.store.clear();
+    for (const e of SEARCH_ENGINES) {
+      if (e.id !== 'baidu' && e.id !== 'so360') { EncyclopediaService.setEngineEnabled(e.id, false); }
+    }
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc('<div class="result c-container" mu="https://a.example/1">' +
+        '<h3><a><!--s-text-->无摘要条目<!--/s-text--></a></h3></div>') },
+      { statusCode: 200, body: enc('<li class="res-list"><h3><a href="https://b.example/2">' +
+        '360 有摘要</a></h3><span class="res-list-summary">这是一段足够长的摘要内容，用于验证相关度加分。</span></li>') },
+    ];
+    const ranked = await EncyclopediaService.searchWeb('x');
+    assert.ok(ranked.ok, ranked.error);
+    assert.equal(ranked.items[0].source, '百度', '百度权重高于 360，即便其条目无摘要');
+    // 清理
+    deps.state.store.clear();
+    deps.state.rcpResponses = [];
   });
 
   test('fetch_url：正文提取纯函数、抓取请求形态、非法 URL/非 2xx/截断与工具文案', async () => {

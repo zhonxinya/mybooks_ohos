@@ -16,10 +16,12 @@ export const settingsDefaults = () => ({
   ],
   keys: new Set(['deepseek']), saved: null, models: [], fetchError: '', completeReply: 'ok', mcpTools: [],
   providerModels: {},
+  modelSlots: {}, providerDisabled: {}, defaultProviderId: '', // #1612 模型分槽/启停/设默认
   voiceProviderId: '', voiceModel: '', voiceConfig: null, lastCompleteConfig: null, lastCompleteMessages: null,
   lastChatOverride: null, // #1600：chatStream 第 5 参捕获（vision 档）
   speakEngine: 'system', speakCalls: [], speakStops: 0, callMode: 'realtime',
   featureSlots: {}, // #1600 功能档：{feature:{providerId,model}}
+  modelEntries: [], featureEntry: {}, // #1615 模型库与功能绑定
 });
 export const state = {
   ready: true, handlers: null, copied: '', cancel: null,
@@ -49,10 +51,75 @@ export const AiService = {
   },
   loadConfig: () => state.settings.config,
   listProviders: () => state.settings.providers.slice(),
+  // #1612 服务商并行管理：模型分槽、启停、profile 编辑不切默认
+  listEnabledProviders: () => state.settings.providers.filter(
+    (p) => !(state.settings.providerDisabled && state.settings.providerDisabled[p.id] === true)),
+  isProviderEnabled: (id) => !(state.settings.providerDisabled && state.settings.providerDisabled[id] === true),
+  setProviderEnabled: (id, on) => {
+    if (!state.settings.providerDisabled) { state.settings.providerDisabled = {}; }
+    state.settings.providerDisabled[id] = !on;
+  },
+  modelFor: (id) => {
+    const saved = state.settings.modelSlots && state.settings.modelSlots[id];
+    if (saved !== undefined && saved.length > 0) { return saved; }
+    const p = state.settings.providers.find((x) => x.id === id);
+    return p !== undefined ? p.model : '';
+  },
+  updateProviderProfile: (id, baseUrl, model, apiKey) => {
+    if (!state.settings.baseUrlByProvider) { state.settings.baseUrlByProvider = {}; }
+    if (!state.settings.modelSlots) { state.settings.modelSlots = {}; }
+    if (baseUrl.length > 0) { state.settings.baseUrlByProvider[id] = baseUrl; }
+    state.settings.modelSlots[id] = model;
+    if (apiKey.length > 0) { state.settings.keys.add(id); }
+  },
+  setDefaultProvider: (id) => { state.settings.defaultProviderId = id; },
+  // #1615 模型库：条目 CRUD 与功能绑定（featureEntry 断言面）
+  listModelEntries: () => state.settings.modelEntries.slice(),
+  addModelEntry: (name, providerId, model) => {
+    const entry = { id: 'm' + (state.settings.modelEntries.length + 1),
+      name: name.length > 0 ? name : providerId, providerId: providerId, model: model };
+    state.settings.modelEntries.push(entry);
+    return entry;
+  },
+  updateModelEntry: (id, name, providerId, model) => {
+    const e = state.settings.modelEntries.find((x) => x.id === id);
+    if (e === undefined) { return false; }
+    if (name.length > 0) { e.name = name; }
+    if (providerId.length > 0) { e.providerId = providerId; }
+    e.model = model;
+    return true;
+  },
+  removeModelEntry: (id) => {
+    const before = state.settings.modelEntries.length;
+    state.settings.modelEntries = state.settings.modelEntries.filter((x) => x.id !== id);
+    for (const f of Object.keys(state.settings.featureEntry)) {
+      if (state.settings.featureEntry[f] === id) { state.settings.featureEntry[f] = ''; }
+    }
+    return state.settings.modelEntries.length < before;
+  },
+  modelEntryOf: (id) => state.settings.modelEntries.find((x) => x.id === id) ?? null,
+  bindFeatureEntry: (feature, entryId) => {
+    state.settings.featureEntry[feature] = entryId;
+    if (entryId.length === 0) { state.settings.featureSlots[feature] = undefined; return; }
+    const e = state.settings.modelEntries.find((x) => x.id === entryId);
+    if (e !== undefined) {
+      state.settings.featureSlots[feature] = { providerId: e.providerId, model: e.model };
+    }
+  },
+  loadFeatureEntry: (feature) => state.settings.featureEntry[feature] ?? '',
+  // #1618 工具目录（设置页工具清单）
+  toolCatalog: () => state.settings.toolCatalog ?? [],
+  toolTotal: () => (state.settings.toolCatalog ?? []).reduce((n, g) => n + g.items.length, 0),
+  toolAvailableCount: (mode) => (state.settings.toolCatalog ?? []).reduce(
+    (n, g) => n + g.items.filter((it) => mode !== 'readonly' || !it.write).length, 0),
   presetOf: (id) => state.settings.providers.find((p) => p.id === id) ??
     { id: 'custom', name: '自定义', baseUrl: '', model: '', vision: false },
   hasKeyFor: (id) => state.settings.keys.has(id),
   addCustomProvider: (name, baseUrl, model) => {
+    // 与真实 AiServiceConfig 对齐：名称/地址空即抛错
+    if (name.trim().length === 0 || baseUrl.trim().length === 0) {
+      throw new Error('服务商名称与接口地址不能为空');
+    }
     const preset = { id: 'custom-' + Date.now(), name: name.trim(), baseUrl: baseUrl.trim(),
       model: model.trim(), vision: false };
     state.settings.providers.push(preset);
@@ -72,11 +139,13 @@ export const AiService = {
   saveConfig: (providerId, baseUrl, model, apiKey, temperature, visionOverride, contextLength) => {
     state.settings.saved = { providerId, baseUrl, model, apiKey, temperature, visionOverride, contextLength };
     if (apiKey.length > 0) { state.settings.keys.add(providerId); }
-    // 与真实 AiServiceConfig 对齐：地址按服务商分槽，互不覆盖
+    // 与真实 AiServiceConfig 对齐：地址/模型按服务商分槽，互不覆盖（#1612）
     if (baseUrl.length > 0) {
       if (!state.settings.baseUrlByProvider) { state.settings.baseUrlByProvider = {}; }
       state.settings.baseUrlByProvider[providerId] = baseUrl;
     }
+    if (!state.settings.modelSlots) { state.settings.modelSlots = {}; }
+    if (model.length > 0) { state.settings.modelSlots[providerId] = model; }
     state.settings.config = { providerId, baseUrl, model,
       hasKey: state.settings.keys.has(providerId), temperature,
       visionOverride, contextLength,
@@ -462,6 +531,9 @@ export const TalebookApi = {
     return toolsState.search ? await toolsState.search(q) : [];
   },
   getBookDetail: async (id) => (toolsState.detail ? await toolsState.detail(id) : null),
+  // #1617 shelf_list：在读/收藏清单（可编程）
+  getReadingBooks: async (limit) => (toolsState.readingBooks ?? []).slice(0, limit ?? 20),
+  getFavorites: async (limit) => (toolsState.favorites ?? []).slice(0, limit ?? 20),
   searchRefer: async (id, opts) => {
     toolsState.referSearchCalls.push({ id, opts });
     return { books: toolsState.referBooks ?? [] };
@@ -552,7 +624,7 @@ export async function setup() {
   stagePure('AiChatPrompts', 'services/AiChatPrompts.ets', ['AiPermissionMode']);
   stagePure('AiSkills', 'services/AiSkills.ets', []);
   for (const name of ['AiAssistantPage', 'AiBookPanelPage', 'AiRecommendPage', 'AiSettingsPage',
-    'AiPersonaPage', 'AiFeatureModelsPage']) {
+    'AiPersonaPage', 'AiFeatureModelsPage', 'AiProvidersPage', 'AiModelLibraryPage']) {
     stagePage(name);
   }
   stageAiService();
@@ -580,6 +652,8 @@ export async function setup() {
   const { AiRecommendPage } = await load('AiRecommendPage');
   const { AiSettingsPage } = await load('AiSettingsPage');
   const { AiFeatureModelsPage } = await load('AiFeatureModelsPage');
+  const { AiProvidersPage } = await load('AiProvidersPage');
+  const { AiModelLibraryPage } = await load('AiModelLibraryPage');
   const { AiPersonaPage } = await load('AiPersonaPage');
   const { AiPersona, DEFAULT_SOUL } = await load('RealAiPersona');
   const { AiChatStore } = await load('RealAiChatStore');
@@ -609,6 +683,25 @@ export async function setup() {
     page.aboutToAppear();
     return page;
   };
+  // #1615 模型库页：条目 CRUD 直测
+  const libraryPage = () => {
+    const page = new AiModelLibraryPage();
+    page.toast = () => {};
+    // 删除确认弹窗：直接执行 primaryButton.action（等价用户点「删除」）
+    page.getUIContext = () => ({
+      showAlertDialog: (opt) => { if (opt && opt.primaryButton) { opt.primaryButton.action(); } },
+      getPromptAction: () => ({ showToast: () => {} }),
+    });
+    page.aboutToAppear();
+    return page;
+  };
+  // #1612 服务商管理页：启停守卫与 profile 编辑直测
+  const providersPage = () => {
+    const page = new AiProvidersPage();
+    page.toast = () => {};
+    page.aboutToAppear();
+    return page;
+  };
   const chat = () => {
     AiChatStore.instance().resetForTest();
     const page = new AiAssistantPage();
@@ -632,6 +725,6 @@ export async function setup() {
     page.aboutToAppear();
     return page;
   };
-  return { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiFeatureModelsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, featurePage, chat, reappear };
+  return { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiFeatureModelsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, featurePage, providersPage, libraryPage, chat, reappear };
 }
 

@@ -7,19 +7,20 @@ import { rcp } from '@kit.RemoteCommunicationKit';
 import { TalebookService } from './TalebookService';
 import type { AiPermissionMode } from './AiTools';
 import { McpService } from './McpService';
-import type { AiProviderPreset, AiConfig } from './AiService';
+import type { AiProviderPreset, AiConfig, AiModelEntry } from './AiService';
 import { AiServiceHttp } from './AiServiceHttp';
+
+/** 模型库持久化键：值为 JSON 数组 `[{id,name,providerId,model}]`。 */
+const MODEL_ENTRY_KEY: string = 'ai_model_entries';
 
 export class AiServiceConfig {
   /** 读取当前配置（Key 只回传是否存在）。 */
   static loadConfig(): AiConfig {
     AiServiceConfig.migrateLegacyKey();
     const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
-    const preset: AiProviderPreset = AiServiceConfig.presetOf(providerId);
-    const model: string = TalebookService.prefGet(KEY_MODEL);
     const temperatureText: string = TalebookService.prefGet(KEY_TEMPERATURE);
     const temperature: number = temperatureText.length > 0 ? Number(temperatureText) : DEFAULT_TEMPERATURE;
-    const finalModel: string = model.length > 0 ? model : preset.model;
+    const finalModel: string = AiServiceConfig.modelFor(providerId);
     const visionOverride: string = TalebookService.prefGet(KEY_VISION);
     const contextText: string = TalebookService.prefGet(KEY_CONTEXT);
     const contextK: number = contextText.length > 0 ? Number(contextText) : DEFAULT_CONTEXT_K;
@@ -149,6 +150,160 @@ export class AiServiceConfig {
     return TalebookService.prefGet(AiServiceConfig.featureModelKey(feature));
   }
 
+  // ———— 模型库：模型条目 = 名称 + 服务商 + 模型 id 的自由组合 ————
+  /**
+   * 功能槽改存库条目 id（`ai_<feature>_entry`）：选中条目即写 provider/model 两个旧键，
+   * 消费链（loadFeatureConfig）无需改动；条目被改名/删除时旧键仍可用，只是摘要会显示未命名。
+   */
+  private static featureEntryKey(feature: string): string {
+    return `ai_${feature}_entry`;
+  }
+
+  /** 已绑定的模型库条目 id（''=未用库条目，可能仍绑着旧的服务商+模型）。 */
+  static loadFeatureEntry(feature: string): string {
+    return TalebookService.prefGet(AiServiceConfig.featureEntryKey(feature));
+  }
+
+  /** 全部模型条目（模型库页与功能模型页共用）。 */
+  static listModelEntries(): AiModelEntry[] {
+    const raw: string = TalebookService.prefGet(MODEL_ENTRY_KEY);
+    if (raw.length === 0) {
+      return [];
+    }
+    const out: AiModelEntry[] = [];
+    try {
+      const list: Object[] = JSON.parse(raw) as Object[];
+      for (let i = 0; i < list.length; i++) {
+        const item: Object = list[i];
+        if (item === null || typeof item !== 'object') {
+          continue;
+        }
+        const rec: Record<string, Object> = item as Record<string, Object>;
+        const id: Object | undefined = rec['id'];
+        const name: Object | undefined = rec['name'];
+        const providerId: Object | undefined = rec['providerId'];
+        const model: Object | undefined = rec['model'];
+        if (typeof id !== 'string' || id.length === 0 || typeof providerId !== 'string' ||
+          providerId.length === 0) {
+          continue;
+        }
+        out.push({
+          id: id,
+          name: typeof name === 'string' && name.length > 0 ? name : providerId,
+          providerId: providerId,
+          model: typeof model === 'string' ? model : '',
+        });
+      }
+    } catch (_error) {
+      // 存储损坏：当作空库
+    }
+    return out;
+  }
+
+  /** 新增条目；同名允许（用 id 区分），名称空则用「服务商·模型」兜底。 */
+  static addModelEntry(name: string, providerId: string, model: string): AiModelEntry {
+    if (providerId.trim().length === 0) {
+      throw new Error('请选择服务商');
+    }
+    const modelText: string = model.trim();
+    const preset: AiProviderPreset = AiServiceConfig.presetOf(providerId);
+    const entry: AiModelEntry = {
+      id: `m${Date.now()}${Math.floor(Math.random() * 1000)}`,
+      name: name.trim().length > 0 ? name.trim() :
+        `${preset.name}${modelText.length > 0 ? ' · ' + modelText : ''}`,
+      providerId: providerId,
+      model: modelText,
+    };
+    const all: AiModelEntry[] = AiServiceConfig.listModelEntries();
+    all.push(entry);
+    AiServiceConfig.writeModelEntries(all);
+    return entry;
+  }
+
+  /** 改条目（服务商/模型/名称都可改）；返回是否找到。 */
+  static updateModelEntry(id: string, name: string, providerId: string, model: string): boolean {
+    const all: AiModelEntry[] = AiServiceConfig.listModelEntries();
+    let hit: boolean = false;
+    for (let i = 0; i < all.length; i++) {
+      if (all[i].id === id) {
+        all[i].name = name.trim().length > 0 ? name.trim() : all[i].name;
+        if (providerId.trim().length > 0) {
+          all[i].providerId = providerId.trim();
+        }
+        all[i].model = model.trim();
+        hit = true;
+      }
+    }
+    if (hit) {
+      AiServiceConfig.writeModelEntries(all);
+    }
+    return hit;
+  }
+
+  /** 删条目：引用它的功能槽退回「跟随」语义（清 provider/model/entry 三键）。 */
+  static removeModelEntry(id: string): boolean {
+    const all: AiModelEntry[] = AiServiceConfig.listModelEntries();
+    const kept: AiModelEntry[] = [];
+    let hit: boolean = false;
+    for (let i = 0; i < all.length; i++) {
+      if (all[i].id === id) {
+        hit = true;
+      } else {
+        kept.push(all[i]);
+      }
+    }
+    if (!hit) {
+      return false;
+    }
+    AiServiceConfig.writeModelEntries(kept);
+    for (let i = 0; i < AiServiceConfig.FEATURES.length; i++) {
+      const feature: string = AiServiceConfig.FEATURES[i];
+      if (AiServiceConfig.loadFeatureEntry(feature) === id) {
+        AiServiceConfig.saveFeatureConfig(feature, '', '');
+      }
+    }
+    return true;
+  }
+
+  /** 按 id 取条目（功能页回显用）；不存在返回 null。 */
+  static modelEntryOf(id: string): AiModelEntry | null {
+    const all: AiModelEntry[] = AiServiceConfig.listModelEntries();
+    for (let i = 0; i < all.length; i++) {
+      if (all[i].id === id) {
+        return all[i];
+      }
+    }
+    return null;
+  }
+
+  /** 功能绑定模型库条目：写 entry 键 + 同步 provider/model 旧键；id 空 = 恢复跟随。 */
+  static bindFeatureEntry(feature: string, entryId: string): void {
+    if (entryId.length === 0) {
+      AiServiceConfig.saveFeatureConfig(feature, '', '');
+      TalebookService.prefSet(AiServiceConfig.featureEntryKey(feature), '');
+      return;
+    }
+    const entry: AiModelEntry | null = AiServiceConfig.modelEntryOf(entryId);
+    if (entry === null) {
+      return;
+    }
+    TalebookService.prefSet(AiServiceConfig.featureEntryKey(feature), entryId);
+    TalebookService.prefSet(AiServiceConfig.featureProviderKey(feature), entry.providerId);
+    TalebookService.prefSet(AiServiceConfig.featureModelKey(feature), entry.model);
+  }
+
+  private static writeModelEntries(entries: AiModelEntry[]): void {
+    const items: Record<string, Object>[] = [];
+    for (let i = 0; i < entries.length; i++) {
+      const rec: Record<string, Object> = {
+        'id': entries[i].id, 'name': entries[i].name,
+        'providerId': entries[i].providerId, 'model': entries[i].model,
+      };
+      items.push(rec);
+    }
+    TalebookService.prefSet(MODEL_ENTRY_KEY, JSON.stringify(items));
+  }
+
   // ———— 语音档兼容层（历史 API，转委托功能槽） ————
 
   /** 语音档位配置：同 loadFeatureConfig('voice')。 */
@@ -234,6 +389,31 @@ export class AiServiceConfig {
     return KEY_BASE_URL_PREFIX + providerId;
   }
 
+  /** 各服务商「上次使用模型」槽位：并行工作时每家记住自己的模型，切回不丢。 */
+  static modelKey(providerId: string): string {
+    return 'ai_model_' + providerId;
+  }
+
+  /** 指定服务商的模型：本槽存过用本槽，否则回落预设默认。 */
+  static modelFor(providerId: string): string {
+    AiServiceConfig.migrateLegacyModel();
+    const saved: string = TalebookService.prefGet(AiServiceConfig.modelKey(providerId));
+    return saved.length > 0 ? saved : AiServiceConfig.presetOf(providerId).model;
+  }
+
+  /** 旧版全局单槽模型一次性迁移：挪进当前服务商槽后清空。 */
+  static migrateLegacyModel(): void {
+    const legacy: string = TalebookService.prefGet(KEY_MODEL);
+    if (legacy.length === 0) {
+      return;
+    }
+    const providerId: string = TalebookService.prefGet(KEY_PROVIDER, 'deepseek');
+    if (TalebookService.prefGet(AiServiceConfig.modelKey(providerId)).length === 0) {
+      TalebookService.prefSet(AiServiceConfig.modelKey(providerId), legacy);
+    }
+    TalebookService.prefSet(KEY_MODEL, '');
+  }
+
   /** 指定服务商的接口地址：本槽存过用本槽，否则回落预设（自定义商预设即注册地址）。 */
   static baseUrlFor(providerId: string): string {
     AiServiceConfig.migrateLegacyBaseUrl();
@@ -306,7 +486,7 @@ export class AiServiceConfig {
     return out;
   }
 
-  /** 全部可选服务商：预设 + 本机关加的自定义。 */
+  /** 全部可选服务商：预设 + 本机关加的自定义（含已停用，管理页数据源）。 */
   static listProviders(): AiProviderPreset[] {
     const out: AiProviderPreset[] = [];
     for (let i = 0; i < AI_PROVIDERS.length; i++) {
@@ -317,6 +497,54 @@ export class AiServiceConfig {
       out.push(custom[i]);
     }
     return out;
+  }
+
+  // ———— 每家服务商启停（并行管理页；默认=启用，老配置零变化） ————
+
+  /** 停用标记键 `ai_provider_disabled_<id>`='1'。 */
+  static disabledKey(providerId: string): string {
+    return 'ai_provider_disabled_' + providerId;
+  }
+
+  static isProviderEnabled(providerId: string): boolean {
+    return TalebookService.prefGet(AiServiceConfig.disabledKey(providerId)) !== '1';
+  }
+
+  /** 启停改动让 MCP 工具集缓存作废（网关按服务商现取配置，无需额外失效）。 */
+  static setProviderEnabled(providerId: string, on: boolean): void {
+    TalebookService.prefSet(AiServiceConfig.disabledKey(providerId), on ? '' : '1');
+    McpService.reset();
+  }
+
+  /** 启用的服务商清单：chips / 功能模型页下拉 / 快切菜单数据源——停用的家不出现。 */
+  static listEnabledProviders(): AiProviderPreset[] {
+    const out: AiProviderPreset[] = [];
+    const all: AiProviderPreset[] = AiServiceConfig.listProviders();
+    for (let i = 0; i < all.length; i++) {
+      if (AiServiceConfig.isProviderEnabled(all[i].id)) {
+        out.push(all[i]);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 编辑服务商自身资产（地址/模型/Key），**不动当前默认选择**——管理页用。
+   * `apiKey` 传空串=保持已存值不变（占位「已保存，留空不修改」语义）。
+   */
+  static updateProviderProfile(providerId: string, baseUrl: string, model: string, apiKey: string): void {
+    TalebookService.secureSet(AiServiceConfig.baseUrlKey(providerId), AiServiceHttp.normalizeBaseUrl(baseUrl));
+    TalebookService.prefSet(AiServiceConfig.modelKey(providerId), model.trim());
+    if (apiKey.length > 0) {
+      TalebookService.secureSet(AiServiceConfig.apiKeyKey(providerId), apiKey.trim());
+    }
+    McpService.reset();
+  }
+
+  /** 设为对话默认服务商：只切选择；地址/模型/Key 各家分槽，切回即恢复。 */
+  static setDefaultProvider(providerId: string): void {
+    TalebookService.prefSet(KEY_PROVIDER, providerId);
+    McpService.reset();
   }
 
   /** 添加一个本地自定义服务商并返回其预设。 */
@@ -402,7 +630,7 @@ export class AiServiceConfig {
     temperature: number, visionOverride: string = '', contextLength: number = DEFAULT_CONTEXT_K): void {
     TalebookService.prefSet(KEY_PROVIDER, providerId);
     TalebookService.secureSet(AiServiceConfig.baseUrlKey(providerId), AiServiceHttp.normalizeBaseUrl(baseUrl));
-    TalebookService.prefSet(KEY_MODEL, model.trim());
+    TalebookService.prefSet(AiServiceConfig.modelKey(providerId), model.trim());
     TalebookService.prefSet(KEY_TEMPERATURE, `${temperature}`);
     TalebookService.prefSet(KEY_VISION, visionOverride);
     TalebookService.prefSet(KEY_CONTEXT, `${contextLength}`);

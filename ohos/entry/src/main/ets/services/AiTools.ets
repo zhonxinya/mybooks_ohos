@@ -17,7 +17,8 @@ import { AiPersona } from './AiPersona';
 import { AiToolsCore } from './AiToolsCore';
 import { AiToolsExecMeta } from './AiToolsExecMeta';
 import { AiToolsExecShelf } from './AiToolsExecShelf';
-import { TOOL_DEFS, TOOL_SET_VOICE, ToolBookLine, AiToolDefinition } from './AiToolsDefs';
+import { TOOL_DEFS, TOOL_SET_VOICE, ToolBookLine, AiToolDefinition, AiToolGroup, AiToolItem } from './AiToolsDefs';
+import { McpService, McpServer } from './McpService';
 
 /**
  * AI 助手的本地工具集（OpenAI function calling 协议）。
@@ -73,10 +74,104 @@ export class AiTools {
   private static readonly WRITE_TOOLS: string[] =
     ['create_booklist', 'add_books_to_booklist', 'update_booklist', 'delete_booklist',
       'remove_book_from_booklist', 'add_sonovel_task', 'add_to_shelf', 'push_to_device',
-      'update_book_meta', 'set_cover', 'save_memory', 'forget_memory'];
+      'update_book_meta', 'set_cover', 'save_memory', 'forget_memory', 'add_mcp_server'];
 
   static needsConfirm(name: string): boolean {
     return AiTools.WRITE_TOOLS.indexOf(name) >= 0;
+  }
+
+  /** 工具目录分组：按用途归类，供 list_ai_tools 输出与设置页展示。 */
+  private static readonly TOOL_GROUPS: string[][] = [
+    ['书架检索', 'search_books', 'book_detail', 'shelf_list', 'book_progress', 'reading_history', 'reading_stats'],
+    ['书单管理', 'list_booklists', 'create_booklist', 'add_books_to_booklist', 'update_booklist',
+      'delete_booklist', 'remove_book_from_booklist'],
+    ['书籍入库', 'search_sonovel', 'add_sonovel_task', 'list_download_tasks', 'add_to_shelf', 'push_to_device'],
+    ['元数据与封面', 'search_meta', 'get_novel_meta', 'update_book_meta', 'list_categories',
+      'search_cover', 'set_cover'],
+    ['联网检索', 'search_web', 'fetch_url', 'ai_search', 'search_encyclopedia'],
+    ['记忆与配置', 'save_memory', 'forget_memory', 'add_mcp_server'],
+    ['交互', 'ask_user', 'list_ai_tools'],
+  ];
+
+  /** 结构化工具目录（设置页渲染用）：分组 → 工具条目。 */
+  static catalogGroups(): AiToolGroup[] {
+    const byName: Map<string, AiToolDefinition> = new Map();
+    for (let i = 0; i < TOOL_DEFS.length; i++) {
+      byName.set(TOOL_DEFS[i].function.name, TOOL_DEFS[i]);
+    }
+    const groups: AiToolGroup[] = [];
+    for (let g = 0; g < AiTools.TOOL_GROUPS.length; g++) {
+      const group: string[] = AiTools.TOOL_GROUPS[g];
+      const items: AiToolItem[] = [];
+      for (let i = 1; i < group.length; i++) {
+        const name: string = group[i];
+        const def: AiToolDefinition | undefined = byName.get(name);
+        if (def === undefined) {
+          continue;
+        }
+        const item: AiToolItem = {
+          name: name,
+          summary: AiToolsCore.clip(def.function.description, 48),
+          write: AiTools.needsConfirm(name),
+        };
+        items.push(item);
+      }
+      if (items.length > 0) {
+        const grp: AiToolGroup = { title: group[0], items: items };
+        groups.push(grp);
+      }
+    }
+    return groups;
+  }
+
+  /** 工具总数（设置页标题用）。 */
+  static toolCount(): number {
+    return TOOL_DEFS.length;
+  }
+
+  /** 工具目录文本：按分组列出名称+说明+是否写操作，帮助模型避免盲猜工具名。 */
+  static catalog(): string {
+    const byName: Map<string, AiToolDefinition> = new Map();
+    for (let i = 0; i < TOOL_DEFS.length; i++) {
+      byName.set(TOOL_DEFS[i].function.name, TOOL_DEFS[i]);
+    }
+    const lines: string[] = [];
+    for (let g = 0; g < AiTools.TOOL_GROUPS.length; g++) {
+      const group: string[] = AiTools.TOOL_GROUPS[g];
+      const title: string = group[0];
+      const rows: string[] = [];
+      for (let i = 1; i < group.length; i++) {
+        const name: string = group[i];
+        const def: AiToolDefinition | undefined = byName.get(name);
+        if (def === undefined) {
+          continue;
+        }
+        const write: string = AiTools.needsConfirm(name) ? ' [写]' : '';
+        rows.push(`· ${name}${write} — ${AiToolsCore.clip(def.function.description, 60)}`);
+      }
+      if (rows.length > 0) {
+        lines.push(`【${title}】`, ...rows);
+      }
+    }
+    return `当前可用工具（共 ${TOOL_DEFS.length} 个，[写] 表示执行前需用户确认）：\n${lines.join('\n')}`;
+  }
+
+  /**
+   * add_mcp_server 执行：新增自定义 MCP 服务（含可选 Key）。
+   * 返回文案**不回显 Key**（对话历史会落盘），只报告是否已配。
+   */
+  private static addMcpServer(args: Record<string, Object>): string {
+    const label: string = AiToolsCore.argString(args, 'label');
+    const url: string = AiToolsCore.argString(args, 'url');
+    const apiKey: string = AiToolsCore.argString(args, 'api_key');
+    try {
+      const server: McpServer = McpService.addServer(label, url, apiKey);
+      const keyNote: string = apiKey.trim().length > 0 ? '已配置 Key' : '未配置 Key（如该服务需鉴权请补填）';
+      return `已新增 MCP 服务「${server.label}」（${server.url}），${keyNote}。` +
+        '下一轮对话会自动挂载其工具；若未出现可在设置页 MCP 档点「立即探测挂载状态」查看原因。';
+    } catch (error) {
+      return `新增 MCP 服务失败：${error instanceof Error ? error.message : `${error}`}`;
+    }
   }
 
   // ———— 只读工具结果缓存（#1517）：进程级内存，不落盘、重启即清 ————
@@ -238,6 +333,18 @@ export class AiTools {
     if (name === 'ask_user') {
       return '向用户提问';
     }
+    if (name === 'add_mcp_server') {
+      return '新增 MCP 服务';
+    }
+    if (name === 'shelf_list') {
+      return '列书架书单';
+    }
+    if (name === 'book_progress') {
+      return '查阅读进度';
+    }
+    if (name === 'list_ai_tools') {
+      return '查看可用工具';
+    }
     if (name === 'set_voice') {
       return '更换通话音色';
     }
@@ -309,6 +416,10 @@ export class AiTools {
   private static async dispatch(name: string, argsJson: string, callId: string = ''): Promise<string> {
     AiToolsCore.lastBooks = [];
     const args: Record<string, Object> = AiToolsCore.parseArgs(argsJson);
+    if (AiToolsCore.lastParseError.length > 0) {
+      // 参数解析失败要如实回报（否则工具报「query 为空」会误导模型改参数而非改 JSON）
+      return `工具 ${name} 的参数解析失败：${AiToolsCore.lastParseError}。请按工具 schema 重新生成 JSON。`;
+    }
       if (name === 'search_books') {
         return await AiToolsExecShelf.searchBooks(AiToolsCore.argString(args, 'query'), callId);
       }
@@ -392,6 +503,19 @@ export class AiTools {
       }
       if (name === 'forget_memory') {
         return AiPersona.removeMemory(AiToolsCore.argNumber(args, 'index'));
+      }
+      if (name === 'add_mcp_server') {
+        return AiTools.addMcpServer(args);
+      }
+      if (name === 'shelf_list') {
+        return await AiToolsExecShelf.shelfList(AiToolsCore.argString(args, 'kind'),
+          AiToolsCore.argNumber(args, 'limit'), AiToolsCore.argString(args, 'keyword'));
+      }
+      if (name === 'book_progress') {
+        return AiToolsExecShelf.bookProgress(AiToolsCore.argNumber(args, 'book_id'));
+      }
+      if (name === 'list_ai_tools') {
+        return AiTools.catalog();
       }
       if (name === 'ask_user') {
         // 文字对话页由回路层（AiService.runToolLoop）拦截执行反问交互；

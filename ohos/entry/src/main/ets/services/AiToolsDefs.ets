@@ -63,6 +63,20 @@ export interface AiToolDefinition {
   function: AiToolFunctionBody;
 }
 
+/** 工具目录条目（设置页渲染用）。 */
+export interface AiToolItem {
+  name: string;
+  summary: string;
+  /** 是否写操作（执行前需用户确认）。 */
+  write: boolean;
+}
+
+/** 工具目录分组。 */
+export interface AiToolGroup {
+  title: string;
+  items: AiToolItem[];
+}
+
 export const SEARCH_LIMIT: number = 8;
 export const NOTE_LIMIT: number = 20;
 export const HISTORY_LIMIT: number = 10;
@@ -184,6 +198,29 @@ export const TOOL_PUSH_TO_DEVICE: AiToolDefinition = defineTool('push_to_device'
     'dangdang/purelibro/koreader）。kindle 的 target 是 Kindle 邮箱；其他设备 target 是设备地址，' +
     '留空则自动匹配服务器「发送到设备」里已登记的同类型设备。FTP 推送不支持，请引导用户到书籍详情页操作。',
   PUSH_DEVICE_PROPS, ['book_id', 'device_type']);
+export const SHELF_LIST_PROPS: Record<string, AiToolProperty> = {
+  'kind': prop('string', "'reading'=在读（默认）、'favorites'=收藏"),
+  'limit': prop('number', '最多返回几本（默认 20，上限 50）'),
+  'keyword': prop('string', '可选：按书名/作者关键词过滤（服务端结果内过滤）'),
+};
+export const TOOL_SHELF_LIST: AiToolDefinition = defineTool('shelf_list',
+  '按状态列出书架里的书：在读 / 收藏，可按关键词过滤。' +
+    '回答「我在读哪些书」「我的收藏有哪些」时用它；找某本具体的书用 search_books。',
+  SHELF_LIST_PROPS, []);
+
+export const BOOK_PROGRESS_PROPS: Record<string, AiToolProperty> = {
+  'book_id': prop('number', '书籍 id（可先用 search_books 查到）'),
+};
+export const TOOL_BOOK_PROGRESS: AiToolDefinition = defineTool('book_progress',
+  '查看某本书的阅读进度：本机记录里的当前章节与百分比（没有本机记录时说明未在本机读过）。' +
+    '回答「这本书我读到哪了」时用它；需要全书目录结构用 book_notes 或 book_detail。',
+  BOOK_PROGRESS_PROPS, ['book_id']);
+
+export const TOOL_LIST_AI_TOOLS: AiToolDefinition = defineTool('list_ai_tools',
+  '列出你当前可用的全部工具（按用途分组，含一句话说明与是否写操作）。' +
+    '不确定该用哪个工具、或用户问「你能做什么/有哪些工具」时先调它，避免盲猜工具名。',
+  EMPTY_PROPS, NO_REQUIRED);
+
 export const TOOL_READING_STATS: AiToolDefinition = defineTool('reading_stats',
   '返回用户的阅读统计：累计在读/累计读完/本月在读/本月读完的书数，并列出当前在读的书。' +
     '回答「我最近读了多少书/这个月读完几本」类问题时使用。无需参数。',
@@ -256,6 +293,17 @@ export const TOOL_SAVE_MEMORY: AiToolDefinition = defineTool('save_memory',
 export const TOOL_FORGET_MEMORY: AiToolDefinition = defineTool('forget_memory',
   '按序号删除一条用户记忆（用户说「别记得/忘掉第 N 条」时用）。序号来自系统提示记忆列表的编号。',
   MEMORY_FORGET_PROPS, ['index']);
+
+export const MCP_ADD_PROPS: Record<string, AiToolProperty> = {
+  'label': prop('string', 'MCP 服务名称（用户可见），如「我的搜索服务」'),
+  'url': prop('string', 'MCP 端点 URL（Streamable HTTP，通常以 /mcp 结尾）'),
+  'api_key': prop('string', '该服务的 API Key（需要鉴权时给；不需要则留空）'),
+};
+export const TOOL_MCP_ADD_SERVER: AiToolDefinition = defineTool('add_mcp_server',
+  '为用户新增一个 MCP 服务（模型上下文协议服务），添加后其工具在下一轮对话自动可用。' +
+    '用户说「帮我加个 MCP 服务」「配置这个 MCP 地址」时用；名称与 URL 必填，需要鉴权就把 Key 一起给。' +
+    'URL/Key 不确定时先用 ask_user 问清楚，不要猜。',
+  MCP_ADD_PROPS, ['label', 'url']);
 
 export const META_SEARCH_PROPS: Record<string, AiToolProperty> = {
   'query': prop('string', '书名或「书名 作者」关键词；也用于网文源检索'),
@@ -339,12 +387,12 @@ export const TOOL_SET_VOICE: AiToolDefinition = defineTool('set_voice',
 export const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SEARCH_BOOKS, TOOL_BOOK_DETAIL, TOOL_BOOK_NOTES, TOOL_READING_HISTORY,
   TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS, TOOL_ADD_TO_SHELF,
-  TOOL_PUSH_TO_DEVICE, TOOL_READING_STATS,
+  TOOL_PUSH_TO_DEVICE, TOOL_READING_STATS, TOOL_SHELF_LIST, TOOL_BOOK_PROGRESS, TOOL_LIST_AI_TOOLS,
   TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_LIST_BOOKLISTS, TOOL_UPDATE_BOOKLIST,
   TOOL_DELETE_BOOKLIST, TOOL_REMOVE_BOOK_FROM_BOOKLIST,
   TOOL_UPDATE_BOOK_META, TOOL_LIST_CATEGORIES,
   TOOL_SEARCH_COVER, TOOL_SET_COVER,
   TOOL_SAVE_MEMORY, TOOL_SEARCH_META, TOOL_GET_NOVEL_META, TOOL_SEARCH_ENCYCLOPEDIA,
-  TOOL_SEARCH_WEB, TOOL_FETCH_URL, TOOL_AI_SEARCH, TOOL_ASK_USER, TOOL_FORGET_MEMORY,
+  TOOL_SEARCH_WEB, TOOL_FETCH_URL, TOOL_AI_SEARCH, TOOL_MCP_ADD_SERVER, TOOL_ASK_USER, TOOL_FORGET_MEMORY,
 ];
 

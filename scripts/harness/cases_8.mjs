@@ -9,6 +9,8 @@ export function register(ctx) {
   test('MCP 客户端：四家握手合并、SSE 解析、单家降级与会话缓存', async () => {
     const { McpService } = await load('RealMcp');
     McpService.reset();
+    // #1613 新语义：内置家也需各自填 Key（不再复用服务商 Key）
+    for (const t of ['es', 'ws', 'wf', 'sg']) { McpService.setApiKey(t, 'sk-sp-test'); }
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
     const ok = (sid) => ({ statusCode: 200, headers: { 'mcp-session-id': sid },
@@ -51,9 +53,11 @@ export function register(ctx) {
     await McpService.ensureToolset('sk-sp-other');
     assert.ok(deps.state.requests.length > before, '换 Key 强制重握手');
     McpService.reset();
-    assert.equal(McpService.enabledFor('deepseek', 'sk-d'), false, '非 Token Plan 不启用');
-    assert.equal(McpService.enabledFor('qwen-tokenplan', ''), false, '无 Key 不启用');
-    assert.equal(McpService.enabledFor('qwen-tokenplan', 'sk-sp-x'), true);
+    // #1613 新语义：门控只看「是否至少一家启用且配了 Key」，与当前服务商无关
+    assert.equal(McpService.enabledFor(), true, '已配 Key 的启用家 → 启用');
+    for (const t of ['es', 'ws', 'wf', 'sg']) { McpService.setApiKey(t, ''); }
+    assert.equal(McpService.enabledFor(), false, '全部无 Key → 不启用');
+    for (const t of ['es', 'ws', 'wf', 'sg']) { McpService.setApiKey(t, 'sk-sp-x'); }
     assert.equal(McpService.isMcpTool('mcp_es_x'), true);
     assert.equal(McpService.isMcpTool('mcp_ws_x'), true, '第四家前缀同样路由');
     assert.equal(McpService.isMcpTool('search_books'), false);
@@ -66,6 +70,7 @@ export function register(ctx) {
   test('MCP 执行：tools/call 内容拼接、isError、非法参数与坏会话重试', async () => {
     const { McpService } = await load('RealMcp');
     McpService.reset();
+    for (const t of ['es', 'ws', 'wf', 'sg']) { McpService.setApiKey(t, 'k'); }
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
     const init = { statusCode: 200, headers: { 'mcp-session-id': 'sid1' },
@@ -82,7 +87,7 @@ export function register(ctx) {
     // 正常调用：多段 text 拼接
     deps.state.rcpResponses.push({ statusCode: 200, headers: {}, body: enc(JSON.stringify({
       jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: '第一段' }, { type: 'image' }, { type: 'text', text: '第二段' }] } })) });
-    const text = await McpService.callTool('mcp_es_search', '{"q":"三体"}', 'k');
+    const text = await McpService.callTool('mcp_es_search', '{"q":"三体"}');
     assert.equal(text, '第一段\n第二段');
     const call = deps.state.requests[deps.state.requests.length - 1];
     assert.ok(call.content.includes('"name":"search"'), '剥前缀还原服务端原名');
@@ -91,19 +96,22 @@ export function register(ctx) {
     // isError 前缀
     deps.state.rcpResponses.push({ statusCode: 200, headers: {}, body: enc(JSON.stringify({
       jsonrpc: '2.0', id: 3, result: { isError: true, content: [{ type: 'text', text: '配额用尽' }] } })) });
-    assert.ok((await McpService.callTool('mcp_es_search', '{}', 'k')).startsWith('MCP 工具返回错误：'));
+    assert.ok((await McpService.callTool('mcp_es_search', '{}')).startsWith('MCP 工具返回错误：'));
     // 非法参数 JSON：不发请求
-    assert.ok((await McpService.callTool('mcp_es_search', '{bad', 'k')).includes('合法 JSON'));
+    assert.ok((await McpService.callTool('mcp_es_search', '{bad')).includes('合法 JSON'));
     // 未知工具/空 Key 容错
-    assert.ok((await McpService.callTool('mcp_zz_x', '{}', 'k')).includes('未知'));
-    assert.ok((await McpService.callTool('mcp_es_search', '{}', '')).includes('未配置'));
+    assert.ok((await McpService.callTool('mcp_zz_x', '{}')).includes('未知'));
+    // 直接清槽位（不调 setApiKey，避免 reset 缓存打乱后续响应队列顺序）
+    deps.state.store.delete('s:ai_mcp_key_es');
+    assert.ok((await McpService.callTool('mcp_es_search', '{}')).includes('未配置'));
+    deps.state.store.set('s:ai_mcp_key_es', 'k');
     // 会话失效：error → 重新握手 → 重试成功（es 无 sg：init/notify/list + call）
     deps.state.rcpResponses.push(
       { statusCode: 200, headers: {}, body: enc('{"jsonrpc":"2.0","id":3,"error":{"code":-32001,"message":"session expired"}}') },
       { statusCode: 200, headers: { 'mcp-session-id': 'sid2' }, body: enc('{"jsonrpc":"2.0","id":1,"result":{}}') },
       notify, list,
       { statusCode: 200, headers: {}, body: enc(JSON.stringify({ jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: '重试成功' }] } })) });
-    assert.equal(await McpService.callTool('mcp_es_search', '{}', 'k'), '重试成功');
+    assert.equal(await McpService.callTool('mcp_es_search', '{}'), '重试成功');
     const retry = deps.state.requests[deps.state.requests.length - 1];
     assert.equal(retry.headers['mcp-session-id'], 'sid2', '重握手后用新会话');
     McpService.reset();
@@ -113,12 +121,15 @@ export function register(ctx) {
 
   test('MCP 集成：chatStream 第四参并入 tools，回路 mcp_ 路由执行并回填', async () => {
     const RealAiService = (await load('RealAiService')).AiService;
+    const { McpService } = await load('RealMcp');
     deps.state.store.clear();
     deps.state.chatCalls.length = 0;
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
     deps.state.chatStreamRounds = null;
     RealAiService.saveConfig('deepseek', 'https://api.deepseek.com/v1', 'deepseek-chat', 'sk-d', 0.5);
+    // #1613：内置家需自填 Key（不再复用服务商 Key）
+    McpService.setApiKey('es', 'sk-mcp-es');
     const fake = { type: 'function', function: { name: 'mcp_es_probe', description: 'd',
       parameters: { type: 'object', properties: {} } } };
     const handlers = { onDelta: () => {}, onDone: () => {}, onError: () => {},
@@ -189,6 +200,8 @@ export function register(ctx) {
   test('MCP 每家开关：默认开、禁用家不握手与调用防御、切换即时失效缓存', async () => {
     const { McpService } = await load('RealMcp');
     McpService.reset();
+    for (const t of ['es', 'ws', 'wf', 'sg']) { McpService.setApiKey(t, 'sk-sp-x'); }
+    McpService.reset();
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
     assert.equal(McpService.isServerEnabled('es'), true, '未设置=启用（默认行为不变）');
@@ -210,7 +223,7 @@ export function register(ctx) {
       '禁用家零请求');
     // 模型幻觉调用禁用家：文案拒绝，不发请求
     const before = deps.state.requests.length;
-    const denied = await McpService.callTool('mcp_es_bailian_web_search', '{"query":"x"}', 'sk-sp-x');
+    const denied = await McpService.callTool('mcp_es_bailian_web_search', '{"query":"x"}');
     assert.ok(denied.includes('禁用'), denied);
     assert.equal(deps.state.requests.length, before, '禁用家调用不触网');
     // 重新启用：setServerEnabled 已 reset 缓存，本轮握手含 es
@@ -229,6 +242,78 @@ export function register(ctx) {
     deps.state.store.clear();
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
+  });
+
+  test('MCP 可新增服务（#1613）：自定义家落库、自带 Key 独立鉴权、tag 去重、删除清 Key', async () => {
+    const { McpService } = await load('RealMcp');
+    McpService.reset();
+    deps.state.store.clear();
+    // 内置四家仍在，自定义家初始为空
+    assert.equal(McpService.serverList().length, 4);
+    // 新增：名称归一化 tag、落库、自带 Key
+    const s1 = McpService.addServer('我的搜索 服务', 'https://mcp.example.com/mcp', 'sk-mcp-1');
+    assert.equal(s1.tag, 'srv', '中文名归一为空 → srv');
+    assert.equal(McpService.serverList().length, 5);
+    assert.equal(McpService.apiKeyFor(s1), 'sk-mcp-1', '自定义家用自己 Key');
+    assert.equal(McpService.hasApiKey(s1), true, '有 Key 即算已配');
+    // 同名再建：tag 去重加序号
+    const s2 = McpService.addServer('我的搜索 服务', 'https://mcp2.example.com/mcp', '');
+    assert.equal(s2.tag, 'srv2', '重名加序号');
+    // 持久化往返：新实例读回自定义家
+    assert.equal(McpService.serverList().length, 6);
+    // 内置家不走自定义 Key 槽
+    const builtin = McpService.serverList().find((s) => s.tag === 'es');
+    assert.equal(McpService.apiKeyFor(builtin), '', '内置家不回落服务商 Key，需单独填写');
+    // 编辑：改 URL/Key，不动 tag
+    assert.equal(McpService.updateServer('srv', '我的搜索 服务', 'https://mcp-new.example.com/mcp', 'sk-mcp-2'), true);
+    const edited = McpService.serverList().find((s) => s.tag === 'srv');
+    assert.equal(edited.url, 'https://mcp-new.example.com/mcp');
+    assert.equal(McpService.apiKeyFor(edited), 'sk-mcp-2', 'Key 已更新');
+    // 内置家不可改/不可删
+    assert.equal(McpService.updateServer('es', 'x', 'y', ''), false);
+    assert.equal(McpService.removeServer('es'), false);
+    // 删除自定义家：连带清 Key 与启用开关
+    assert.equal(McpService.removeServer('srv'), true);
+    assert.equal(McpService.serverList().some((s) => s.tag === 'srv'), false);
+    assert.equal(deps.state.store.has('s:ai_mcp_key_srv'), false, 'Key 一并清除');
+    // 名称/URL 空 → 抛错
+    assert.throws(() => McpService.addServer('', 'https://x/mcp', ''), /不能为空/);
+    assert.throws(() => McpService.addServer('名', '', ''), /不能为空/);
+    // 自定义家自带 Key 时，非 Token Plan 服务商也能启用 MCP（srv2 无 Key，先给它补一个）
+    McpService.setApiKey('srv2', 'sk-mcp-3');
+    assert.equal(McpService.enabledFor(), true, '自定义家有 Key 即启用');
+    McpService.removeServer('srv2');
+    assert.equal(McpService.enabledFor(), false, '删完后回到不启用');
+    McpService.reset();
+    deps.state.store.clear();
+  });
+
+  test('AI 代配置 MCP（#1613）：add_mcp_server 工具定义、写工具确认、执行落库不回显 Key', async () => {
+    const AiTools = ctx.RealAiTools;
+    const { McpService } = await load('RealMcp');
+    deps.state.store.clear();
+    McpService.reset();
+    // 工具已进全集，且在中间位置（网关丢末项护栏）
+    const defs = AiTools.definitions();
+    const idx = defs.findIndex((d) => d.function.name === 'add_mcp_server');
+    assert.ok(idx >= 0, '工具已注册');
+    assert.ok(idx < defs.length - 1, '不在末位（网关丢末项）');
+    // 写工具：readonly 不出现、需确认
+    assert.equal(AiTools.needsConfirm('add_mcp_server'), true, '写工具须过确认闸门');
+    assert.equal(AiTools.definitions('readonly').some((d) => d.function.name === 'add_mcp_server'), false);
+    // 执行：落库 + 文案不回显 Key
+    const out = await AiTools.execute('add_mcp_server',
+      JSON.stringify({ label: 'AI 配的服务', url: 'https://ai.example.com/mcp', api_key: 'sk-secret-xyz' }), 'c1');
+    assert.ok(out.includes('已新增 MCP 服务'), out);
+    assert.equal(out.includes('sk-secret-xyz'), false, '文案不回显 Key（会落盘）');
+    const added = McpService.serverList().find((s) => s.url === 'https://ai.example.com/mcp');
+    assert.ok(added !== undefined, '已落库');
+    assert.equal(McpService.apiKeyFor(added), 'sk-secret-xyz', 'Key 已存 secure 槽');
+    // 缺 URL：失败文案而非抛异常
+    const bad = await AiTools.execute('add_mcp_server', JSON.stringify({ label: '只有名字' }), 'c2');
+    assert.ok(bad.includes('失败'), bad);
+    deps.state.store.clear();
+    McpService.reset();
   });
 
 }
