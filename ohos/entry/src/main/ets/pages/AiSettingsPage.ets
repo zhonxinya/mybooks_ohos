@@ -1,5 +1,5 @@
 import { PageScaffold, PrimaryButton, SecondaryButton, SectionTitle, FilterChips, FilterChipItem,
-  ChipButton, AiMcpSection } from '../components';
+  ChipButton, AiMcpSection, AiSearchEngineSection } from '../components';
 import { AiService, AiConfig, AiProviderPreset, AiMessage, CONTEXT_LENGTH_OPTIONS } from '../services/AiService';
 import { SpeakService } from '../services/SpeakService';
 import { AppRouter } from '../utils/AppRouter';
@@ -937,12 +937,14 @@ struct AiSettingsPage {
     .align(Alignment.Top);
   }
 
-  /** TAB 3 MCP：四家百炼服务开关+探测（内容在 AiMcpSection 组件，自持状态）。 */
+  /** TAB 3 MCP：百炼服务开关+探测（AiMcpSection）+ 搜索引擎配置（AiSearchEngineSection）。 */
   @Builder
   tabMcp() {
     Scroll() {
-      Column() {
+      Column({ space: 16 }) {
         AiMcpSection();
+        Divider().color($r('app.color.divider')).strokeWidth(0.5);
+        AiSearchEngineSection();
       }
       .width('100%')
       .padding($r('app.float.page_padding'))

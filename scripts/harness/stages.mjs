@@ -286,7 +286,8 @@ export function stageEncyclopedia() {
   let source = read('services/EncyclopediaService.ets');
   source = source
     .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
-    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`);
+    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
+    .replace(`from './TalebookService'`, `from './aiServiceDeps.ts'`);
   writeFileSync(join(dir, 'RealEncyclopedia.ts'), source);
 }
 
