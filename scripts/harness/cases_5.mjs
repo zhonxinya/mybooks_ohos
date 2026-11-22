@@ -447,4 +447,46 @@ export function register(ctx) {
     deps.state.rcpResponse = null;
   });
 
+
+  test('基础工具新增（#1617）：shelf_list 状态与过滤、book_progress 进度、list_ai_tools 目录', async () => {
+    const { RealAiTools, toolsState } = ctx;
+    // shelf_list：在读清单 + 关键词过滤
+    toolsState.readingBooks = [
+      { id: 1, title: '三体', authors: ['刘慈欣'], coverUrl: '', rating: 9, tags: [] },
+      { id: 2, title: '球状闪电', authors: ['刘慈欣'], coverUrl: '', rating: 8, tags: [] },
+      { id: 3, title: '活着', authors: ['余华'], coverUrl: '', rating: 9, tags: [] },
+    ];
+    toolsState.favorites = [
+      { id: 9, title: '收藏的书', authors: ['某作者'], coverUrl: '', rating: 7, tags: [] },
+    ];
+    const reading = await RealAiTools.execute('shelf_list', '{}');
+    assert.ok(reading.includes('书架在读共 3 本'), reading);
+    assert.ok(reading.includes('《三体》') && reading.includes('id=1'), reading);
+    const filtered = await RealAiTools.execute('shelf_list', '{"keyword":"刘慈欣"}');
+    assert.ok(filtered.includes('共 2 本'), filtered);
+    assert.ok(!filtered.includes('活着'), '关键词过滤掉不匹配项');
+    const favs = await RealAiTools.execute('shelf_list', '{"kind":"favorites"}');
+    assert.ok(favs.includes('书架收藏共 1 本') && favs.includes('收藏的书'), favs);
+    const empty = await RealAiTools.execute('shelf_list', '{"kind":"favorites","keyword":"不存在"}');
+    assert.ok(empty.includes('没有'), empty);
+    // book_progress：本机记录命中 / 无记录
+    toolsState.history = [
+      { bookId: '1', title: '三体', chapterName: '第 12 章 红岸之谜', progressPercent: 42.6, lastReadTime: Date.now() },
+    ];
+    const prog = await RealAiTools.execute('book_progress', '{"book_id":1}');
+    assert.ok(prog.includes('第 12 章') && prog.includes('43%'), prog);
+    const noProg = await RealAiTools.execute('book_progress', '{"book_id":99}');
+    assert.ok(noProg.includes('没有'), noProg);
+    const badId = await RealAiTools.execute('book_progress', '{}');
+    assert.ok(badId.includes('正整数'), badId);
+    // list_ai_tools：分组目录、含写标记、含新工具
+    const cat = await RealAiTools.execute('list_ai_tools', '{}');
+    assert.ok(cat.includes('【书架检索】') && cat.includes('【联网检索】'), cat);
+    assert.ok(cat.includes('shelf_list') && cat.includes('book_progress') && cat.includes('list_ai_tools'), cat);
+    assert.ok(cat.includes('create_booklist [写]'), '写操作有标记');
+    assert.ok(cat.includes('共 33 个'), cat);
+    toolsState.readingBooks = [];
+    toolsState.favorites = [];
+    toolsState.history = [];
+  });
 }

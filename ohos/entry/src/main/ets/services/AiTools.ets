@@ -80,6 +80,46 @@ export class AiTools {
     return AiTools.WRITE_TOOLS.indexOf(name) >= 0;
   }
 
+  /** 工具目录分组：按用途归类，供 list_ai_tools 输出与设置页展示。 */
+  private static readonly TOOL_GROUPS: string[][] = [
+    ['书架检索', 'search_books', 'book_detail', 'shelf_list', 'book_progress', 'reading_history', 'reading_stats'],
+    ['书单管理', 'list_booklists', 'create_booklist', 'add_books_to_booklist', 'update_booklist',
+      'delete_booklist', 'remove_book_from_booklist'],
+    ['书籍入库', 'search_sonovel', 'add_sonovel_task', 'list_download_tasks', 'add_to_shelf', 'push_to_device'],
+    ['元数据与封面', 'search_meta', 'get_novel_meta', 'update_book_meta', 'list_categories',
+      'search_cover', 'set_cover'],
+    ['联网检索', 'search_web', 'fetch_url', 'ai_search', 'search_encyclopedia'],
+    ['记忆与配置', 'save_memory', 'forget_memory', 'add_mcp_server'],
+    ['交互', 'ask_user', 'list_ai_tools'],
+  ];
+
+  /** 工具目录文本：按分组列出名称+说明+是否写操作，帮助模型避免盲猜工具名。 */
+  static catalog(): string {
+    const byName: Map<string, AiToolDefinition> = new Map();
+    for (let i = 0; i < TOOL_DEFS.length; i++) {
+      byName.set(TOOL_DEFS[i].function.name, TOOL_DEFS[i]);
+    }
+    const lines: string[] = [];
+    for (let g = 0; g < AiTools.TOOL_GROUPS.length; g++) {
+      const group: string[] = AiTools.TOOL_GROUPS[g];
+      const title: string = group[0];
+      const rows: string[] = [];
+      for (let i = 1; i < group.length; i++) {
+        const name: string = group[i];
+        const def: AiToolDefinition | undefined = byName.get(name);
+        if (def === undefined) {
+          continue;
+        }
+        const write: string = AiTools.needsConfirm(name) ? ' [写]' : '';
+        rows.push(`· ${name}${write} — ${AiToolsCore.clip(def.function.description, 60)}`);
+      }
+      if (rows.length > 0) {
+        lines.push(`【${title}】`, ...rows);
+      }
+    }
+    return `当前可用工具（共 ${TOOL_DEFS.length} 个，[写] 表示执行前需用户确认）：\n${lines.join('\n')}`;
+  }
+
   /**
    * add_mcp_server 执行：新增自定义 MCP 服务（含可选 Key）。
    * 返回文案**不回显 Key**（对话历史会落盘），只报告是否已配。
@@ -260,6 +300,15 @@ export class AiTools {
     if (name === 'add_mcp_server') {
       return '新增 MCP 服务';
     }
+    if (name === 'shelf_list') {
+      return '列书架书单';
+    }
+    if (name === 'book_progress') {
+      return '查阅读进度';
+    }
+    if (name === 'list_ai_tools') {
+      return '查看可用工具';
+    }
     if (name === 'set_voice') {
       return '更换通话音色';
     }
@@ -417,6 +466,16 @@ export class AiTools {
       }
       if (name === 'add_mcp_server') {
         return AiTools.addMcpServer(args);
+      }
+      if (name === 'shelf_list') {
+        return await AiToolsExecShelf.shelfList(AiToolsCore.argString(args, 'kind'),
+          AiToolsCore.argNumber(args, 'limit'), AiToolsCore.argString(args, 'keyword'));
+      }
+      if (name === 'book_progress') {
+        return AiToolsExecShelf.bookProgress(AiToolsCore.argNumber(args, 'book_id'));
+      }
+      if (name === 'list_ai_tools') {
+        return AiTools.catalog();
       }
       if (name === 'ask_user') {
         // 文字对话页由回路层（AiService.runToolLoop）拦截执行反问交互；

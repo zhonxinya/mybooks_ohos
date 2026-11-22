@@ -57,7 +57,7 @@ export function stageAiService() {
 // AiTools 的运行时依赖桩：书架/详情/笔记/历史全部可编程，不落真实服务
 writeFileSync(join(dir, 'aiToolsDeps.ts'), `
 export const toolsState = {
-  search: null, detail: null, notes: [], notesError: '', history: [],
+  search: null, detail: null, notes: [], notesError: '', history: [], readingBooks: [], favorites: [],
   sonovelEnvelope: null, tasks: [], processed: 0,
   booklistCreateResult: null, booklistAddResult: null, booklistCreateCalls: [], booklistAddCalls: [],
   bookDetailAsync: null, editCalls: [], editResult: null, bookNavAsync: null,
@@ -184,6 +184,9 @@ export const TalebookApi = {
   },
   getReadingStats: async () => toolsState.readingStats,
   getCurrentReadingBooks: async () => toolsState.currentReading ?? [],
+  // #1617 shelf_list：在读/收藏清单（可编程）
+  getReadingBooks: async (limit) => (toolsState.readingBooks ?? []).slice(0, limit ?? 20),
+  getFavorites: async (limit) => (toolsState.favorites ?? []).slice(0, limit ?? 20),
 };
 export const ReferBook = undefined;
 export const ReferSearchOpts = undefined;
@@ -492,7 +495,7 @@ export function stageAiTools() {
     'BookListSummary', 'ReadingDevice', 'HomeBook', 'ReadingStatsSummary', 'DoubanDetail', 'DoubanHit',
     'NovelMeta', 'EncyclopediaHit', 'WebSearchHit', 'WebSearchResult', 'WebFetchResult', 'AiConfig', 'LlmSearchResult',
     'LlmSearchSource', 'ToolBookLine', 'AiToolDefinition', 'AiToolParameters', 'AiToolFunctionBody',
-    'AiToolProperty', 'AiPermissionMode', 'McpServer']);
+    'AiToolProperty', 'AiPermissionMode', 'McpServer', 'BookItem', 'BookDetail']);
   for (const [out, ets] of [['RealAiTools.ts', 'services/AiTools.ets'],
     ['AiToolsCore.ts', 'services/AiToolsCore.ets'],
     ['RealAiToolsExecMeta.ts', 'services/AiToolsExecMeta.ets'],

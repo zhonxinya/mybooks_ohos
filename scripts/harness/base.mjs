@@ -522,6 +522,9 @@ export const TalebookApi = {
     return toolsState.search ? await toolsState.search(q) : [];
   },
   getBookDetail: async (id) => (toolsState.detail ? await toolsState.detail(id) : null),
+  // #1617 shelf_list：在读/收藏清单（可编程）
+  getReadingBooks: async (limit) => (toolsState.readingBooks ?? []).slice(0, limit ?? 20),
+  getFavorites: async (limit) => (toolsState.favorites ?? []).slice(0, limit ?? 20),
   searchRefer: async (id, opts) => {
     toolsState.referSearchCalls.push({ id, opts });
     return { books: toolsState.referBooks ?? [] };

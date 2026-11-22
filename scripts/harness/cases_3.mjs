@@ -172,11 +172,11 @@ export function register(ctx) {
     const WRITE = ['create_booklist', 'add_books_to_booklist', 'update_booklist', 'delete_booklist',
       'remove_book_from_booklist', 'add_sonovel_task', 'add_to_shelf', 'push_to_device',
       'update_book_meta', 'set_cover', 'forget_memory'];
-    assert.equal(RealAiTools.definitions().length, 30);
-    assert.equal(RealAiTools.definitions('confirm').length, 30);
-    assert.equal(RealAiTools.definitions('auto').length, 30);
+    assert.equal(RealAiTools.definitions().length, 33);
+    assert.equal(RealAiTools.definitions('confirm').length, 33);
+    assert.equal(RealAiTools.definitions('auto').length, 33);
     const ro = RealAiTools.definitions('readonly');
-    assert.equal(ro.length, 17);
+    assert.equal(ro.length, 20);
     assert.ok(ro.some((d) => d.function.name === 'list_categories'), 'list_categories 是只读工具须保留');
     for (const name of WRITE) {
       assert.ok(!ro.some((d) => d.function.name === name), `readonly 泄漏写工具 ${name}`);
@@ -206,7 +206,7 @@ export function register(ctx) {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 17);
+    assert.equal(b1.tools.length, 20);
     assert.ok(!b1.tools.some((d) => d.function.name === 'create_booklist'));
     assert.ok(b1.tools.some((d) => d.function.name === 'ask_user'), 'ask_user 是只读交互工具，只读档须保留');
     const b2 = JSON.parse(deps.state.requests[1].content);
@@ -238,7 +238,7 @@ export function register(ctx) {
     }, 128);
     await flush();
     const b1 = JSON.parse(deps.state.requests[0].content);
-    assert.equal(b1.tools.length, 30, 'auto 模式写工具须在 tools 里');
+    assert.equal(b1.tools.length, 33, 'auto 模式写工具须在 tools 里');
     assert.equal(asked, 0, 'auto 模式不该弹确认');
     assert.deepEqual(labels, [['create_booklist', '创建书单（自动执行）']]);
     assert.deepEqual(toolsState.booklistCreateCalls.map((c) => c.name), ['科幻入门']);
