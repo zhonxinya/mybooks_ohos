@@ -7,7 +7,7 @@ import { AiService, AiConfig, AiMessage, AiStreamHandlers, AiAbortHandle } from 
 import { AiPersona } from './AiPersona';
 import { TalebookService } from './TalebookService';
 
-import { AiTokenUsage, AskRequest, buildSessionMd, ChatActivity, ChatBubble, ChatSession, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, COMPRESS_MIN_DROPPED, HistorySummary, parseBubbles, sessionMatches, sessionTitle } from './AiChatModel';
+import { AiTokenUsage, AskRequest, buildSessionMd, ChatActivity, ChatBubble, ChatSession, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, COMPRESS_MIN_DROPPED, HistorySummary, parseBubbles, sessionMatches, sessionTitle, ToolTraceRound } from './AiChatModel';
 import { permissionPromptNote, SUMMARY_SYSTEM_PROMPT, SYSTEM_PROMPT, SYSTEM_PROMPT_LEARN, SYSTEM_PROMPT_TOOLS } from './AiChatPrompts';
 
 export { AskRequest, ChatActivity, ChatBubble, ChatSession, HistorySummary } from './AiChatModel';
@@ -207,6 +207,8 @@ export class AiChatStore {
       last.error = this.streamingText.length === 0;
       last.activities = this.liveActivities;
       last.reasoning = this.streamingReasoning;
+      // 中断轮也留痕（#1623）：否则模型下轮重复执行已做过的工具；半轮由回放按已记录 calls 截断
+      last.toolTrace = handle !== null && handle.traceBox !== undefined && handle.traceBox.length > 0 ? handle.traceBox : undefined;
       this.messages = this.messages.slice();
       this.saveHistory();
     }
@@ -310,6 +312,7 @@ export class AiChatStore {
     }
     for (let i = start; i < bubbles.length; i++) {
       const msg: AiMessage = { role: bubbles[i].role, content: bubbles[i].content };
+      if (bubbles[i].toolTrace !== undefined) msg.toolTrace = bubbles[i].toolTrace; // #1623 回放素材
       const imgs: string[] = this.visionEnabled ? (bubbles[i].images ?? []) : [];
       if (imgs.length > 0) {
         const urls: string[] = [];
@@ -515,10 +518,9 @@ export class AiChatStore {
           this.notify();
         });
       },
-      onDone: (full: string, usage?: AiTokenUsage) => {
-        if (requestId === this.requestId && this.thinking) {
-          this.finishBubble(full, false, usage);
-        }
+      // trace=#1623 工具痕迹
+      onDone: (full: string, usage?: AiTokenUsage, trace?: ToolTraceRound[]) => {
+        if (requestId === this.requestId && this.thinking) this.finishBubble(full, false, usage, trace);
       },
       onError: (message: string) => {
         if (requestId === this.requestId && this.thinking) {
@@ -541,12 +543,10 @@ export class AiChatStore {
     const visionCfg: AiConfig | undefined = bubbleImages.length > 0 ? AiService.loadFeatureConfig('vision') : undefined;
     const handle: AiAbortHandle = AiService.chatStream(context, handlers, 2048,
       mcpTools.length > 0 ? mcpTools : null, visionCfg);
-    if (requestId === this.requestId && this.thinking) {
-      this.abort = handle;
-    }
+    if (requestId === this.requestId && this.thinking) this.abort = handle;
   }
 
-  finishBubble(text: string, isError: boolean, usage?: AiTokenUsage): void {
+  finishBubble(text: string, isError: boolean, usage?: AiTokenUsage, trace?: ToolTraceRound[]): void {
     const last: ChatBubble = this.messages[this.messages.length - 1];
     last.streaming = false;
     last.error = isError;
@@ -555,6 +555,7 @@ export class AiChatStore {
     last.reasoning = this.streamingReasoning;
     // 复用泡显式覆盖：重试轮不带 usage 时清掉旧计量（#1514）
     last.usage = usage;
+    last.toolTrace = !isError && trace !== undefined && trace.length > 0 ? trace : undefined; // #1623；错误轮不留（重试=当没做过）
     // 思考耗时在 saveHistory 之前结算，随本轮一起落盘；错误轮/无打点=undefined 不显示
     last.thinkMs = !isError && this.thinkStartAt > 0 ? Date.now() - this.thinkStartAt : undefined;
     this.thinkStartAt = 0;

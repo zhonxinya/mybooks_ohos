@@ -392,4 +392,76 @@ export function register(ctx) {
     toolsState.bookNavAsync = null;
   });
 
+  test('#1623 工具痕迹：traceBox 采集（并行轮+挡写轮），下轮回放 assistant.tool_calls+tool 历史', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    RealAiService.savePermission('readonly');
+    toolsState.search = async (q) => [{ id: q.length, title: q, authors: ['作者'] }];
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '', tool_calls: [
+        { id: 'q1', type: 'function', function: { name: 'search_books', arguments: '{"query":"三体"}' } },
+        { id: 'q2', type: 'function', function: { name: 'search_books', arguments: '{"query":"玫瑰星球"}' } },
+      ] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '', tool_calls: [
+        { id: 'w1', type: 'function', function: { name: 'add_to_shelf', arguments: '{"bookId":1}' } },
+      ] } }] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '查到了，加书架被挡。' } }] })) },
+    ];
+    let trace = null;
+    let error = '';
+    RealAiService.chatStream([{ role: 'user', content: '查两本并加书架' }], {
+      onDelta: () => {}, onDone: (f, u, tr) => { trace = tr; }, onError: (m) => { error = m; },
+    }, 256);
+    await flush();
+    assert.equal(error, '');
+    assert.ok(trace !== null && trace.length === 2, `trace 应 2 轮：${JSON.stringify(trace)}`);
+    assert.equal(trace[0].calls.length, 2);
+    assert.equal(trace[0].calls[0].id, 'q1');
+    assert.equal(trace[0].calls[0].name, 'search_books');
+    assert.equal(trace[0].calls[0].args, '{"query":"三体"}');
+    assert.ok(trace[0].calls[0].result.includes('三体') && trace[0].calls[1].result.includes('玫瑰星球'));
+    // 挡写轮也留痕：模型下轮看得到「被挡过」，不反复撞闸门
+    assert.equal(trace[1].calls[0].id, 'w1');
+    assert.ok(trace[1].calls[0].result.includes('只读权限模式'), trace[1].calls[0].result);
+    // 回放：下一轮历史带 toolTrace → 请求体展开为 assistant(tool_calls)+tool×N，且在末文本之前
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '嗯' } }] })) }];
+    RealAiService.chatStream([
+      { role: 'user', content: '查两本并加书架' },
+      { role: 'assistant', content: '查到了，加书架被挡。', toolTrace: trace },
+      { role: 'user', content: '你刚才是不是没真加' },
+    ], { onDelta: () => {}, onDone: () => {}, onError: () => {} }, 256);
+    await flush();
+    const sent = JSON.parse(deps.state.requests[0].content).messages;
+    const withTc = sent.filter((m) => m.tool_calls !== undefined);
+    assert.equal(withTc.length, 2);
+    assert.deepEqual(withTc[0].tool_calls.map((c) => c.id), ['q1', 'q2']);
+    assert.deepEqual(sent.filter((m) => m.role === 'tool').map((m) => m.tool_call_id), ['q1', 'q2', 'w1']);
+    const firstTc = sent.findIndex((m) => m.tool_calls !== undefined);
+    const finalText = sent.findIndex((m) => m.role === 'assistant' && m.content === '查到了，加书架被挡。');
+    assert.ok(firstTc >= 0 && finalText > firstTc, '回放顺序：工具历史在前、末文本在后（协议合法）');
+    // 回放消息不带 toolTrace 键（界面层字段不进协议体）
+    assert.equal(withTc[0].toolTrace, undefined);
+  });
+
+  test('#1623 工具痕迹持久化：parseBubbles 读 toolTrace，坏项过滤、旧存档兼容', async () => {
+    const { parseBubbles } = await load('AiChatModel');
+    const raw = [
+      { role: 'assistant', content: '完成', streaming: false, error: false, activities: [], toolTrace: [
+        { text: '前言', calls: [{ id: 'a', name: 'search_books', args: '{}', result: 'ok' }] },
+        { text: '', calls: [] },
+        { text: '', calls: [{ name: '缺 id' }] },
+        '非对象项',
+      ] },
+      { role: 'user', content: 'hi', streaming: false, error: false, activities: [] },
+    ];
+    const bubbles = parseBubbles(JSON.parse(JSON.stringify(raw)));
+    assert.equal(bubbles[0].toolTrace.length, 1, '空 calls/缺 id/非对象轮全部过滤');
+    assert.equal(bubbles[0].toolTrace[0].text, '前言');
+    assert.equal(bubbles[0].toolTrace[0].calls[0].id, 'a');
+    assert.equal(bubbles[1].toolTrace, undefined, '无键=undefined（旧存档兼容）');
+  });
+
 }
