@@ -6,7 +6,7 @@
 
 export interface MdInline {
   text: string;
-  /** 0 普通 1 粗体 2 行内代码 3 链接 4 斜体 */
+  /** 0 普通 1 粗体 2 行内代码 3 链接 4 斜体 5 打字光标（#1622，渲染层控颜色闪烁） */
   style: number;
   /** style=3 链接目标 url（#1511 起解析保留） */
   href?: string;
@@ -211,6 +211,30 @@ export function mdParseBlocks(content: string): MdBlock[] {
     blocks.push({ kind: 'code', level: 0, segs: [], raw: codeLines.join('\n'), rows: [] });
   }
   return blocks;
+}
+
+/**
+ * 打字光标注入（#1622）：把光标 seg（style=5，文本恒为 '▌'）追加到末块尾行行尾。
+ * 闪烁由渲染层切换颜色实现——宽度恒占，光标绝不影响文本布局，
+ * 根治旧实现「把 ▌ 拼进 content 致每 530ms 长度±1：末行回绕抖动 + 段落整体重建」。
+ * 仅注入走 inlineText 的块（p/ul/ol/quote）；h/code/table/hr 或空文档不注入
+ * （标题分支不带颜色逻辑会显黑光标；流式收尾恰在代码/表格内时宁可不显示光标，
+ * 也不污染其解析结果）。
+ */
+export function mdAppendCaret(blocks: MdBlock[]): void {
+  if (blocks.length === 0) {
+    return;
+  }
+  const last: MdBlock = blocks[blocks.length - 1];
+  if (last.kind !== 'p' && last.kind !== 'ul' && last.kind !== 'ol' && last.kind !== 'quote') {
+    return;
+  }
+  const lines: MdInline[][] = last.segs;
+  if (lines.length === 0) {
+    return;
+  }
+  const tail: MdInline[] = lines[lines.length - 1];
+  tail.push({ text: '▌', style: 5 });
 }
 
 /** 链接展示用主机名：去协议与路径（https://a.b/c?d → a.b），供可点链接清单副标。 */

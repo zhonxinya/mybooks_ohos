@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
-import { collectLinks, linkHost, MdBlock, MdInline, mdParseBlocks } from '../services/MdParse';
+import { collectLinks, linkHost, MdBlock, MdInline, mdAppendCaret, mdParseBlocks } from '../services/MdParse';
 import { ExternalLinkOpener } from '../services/ExternalLinkOpener';
 
 /**
@@ -10,6 +10,9 @@ import { ExternalLinkOpener } from '../services/ExternalLinkOpener';
 @Component
 export struct MarkdownText {
   @Prop @Watch('reparse') content: string = '';
+  /** 打字光标（#1622）：showCaret=流式期在尾行注入光标 seg；caretOn=闪烁相位（只切颜色）。 */
+  @Prop @Watch('reparse') showCaret: boolean = false;
+  @Prop caretOn: boolean = false;
   @State blocks: MdBlock[] = [];
 
   aboutToAppear(): void {
@@ -18,6 +21,9 @@ export struct MarkdownText {
 
   reparse(): void {
     this.blocks = mdParseBlocks(this.content);
+    if (this.showCaret) {
+      mdAppendCaret(this.blocks);
+    }
   }
 
   private headSize(level: number): number {
@@ -52,7 +58,8 @@ export struct MarkdownText {
           .fontWeight(seg.style === 1 ? FontWeight.Bold : FontWeight.Normal)
           .fontStyle(seg.style === 4 ? FontStyle.Italic : FontStyle.Normal)
           .fontFamily(seg.style === 2 ? 'monospace' : undefined)
-          .fontColor(seg.style === 2 || seg.style === 3 ? $r('app.color.brand_primary') : undefined)
+          .fontColor(seg.style === 5 ? (this.caretOn ? $r('app.color.brand_primary') : Color.Transparent) :
+            (seg.style === 2 || seg.style === 3 ? $r('app.color.brand_primary') : undefined))
           .decoration({
             type: seg.style === 3 ? TextDecorationType.Underline : TextDecorationType.None,
             color: $r('app.color.brand_primary'),

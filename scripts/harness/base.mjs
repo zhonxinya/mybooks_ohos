@@ -667,7 +667,7 @@ export async function setup() {
   RealAiTools.cacheDisabled = true;
   const { parseToolBookLines } = await load('AiToolsDefs');
   const { toolsState } = await load('aiToolsDeps');
-  const { mdParseBlocks, mdParseInline, collectLinks, linkHost } = await load('MdParse');
+  const { mdParseBlocks, mdParseInline, collectLinks, linkHost, mdAppendCaret } = await load('MdParse');
   const { AI_SKILLS } = await load('AiSkills');
   const resetSettings = () => { state.settings = settingsDefaults(); };
   const settingsPage = () => {
@@ -725,6 +725,6 @@ export async function setup() {
     page.aboutToAppear();
     return page;
   };
-  return { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiFeatureModelsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, featurePage, providersPage, libraryPage, chat, reappear };
+  return { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, mdAppendCaret, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiFeatureModelsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, featurePage, providersPage, libraryPage, chat, reappear };
 }
 
