@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.zhonxinya.mybooks.harmonyos",
     "vendor": "zhonxinya",
-    "versionCode": 1090000,
-    "versionName": "1.9.0",
+    "versionCode": 1090100,
+    "versionName": "1.9.1",
     "icon": "$media:app_icon",
     "label": "$string:app_name"
   }
