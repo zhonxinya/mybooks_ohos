@@ -1,6 +1,5 @@
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { common, wantAgent, WantAgent } from '@kit.AbilityKit';
-import { deviceInfo } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TAG: string = 'AiKeepAlive';
@@ -85,16 +84,10 @@ export class AiKeepAlive {
     if (agent === null) {
       return false;
     }
-    if (deviceInfo.sdkApiVersion >= 22) {
-      // API 22+ 数组形态（同 AudioPlatformOhos 先例）；dataTransfer 无 submode
-      const request = new backgroundTaskManager.ContinuousTaskRequest();
-      request.backgroundTaskModes = [backgroundTaskManager.BackgroundTaskMode.MODE_DATA_TRANSFER];
-      request.wantAgent = agent;
-      await backgroundTaskManager.startBackgroundRunning(ctx, request);
-    } else {
-      await backgroundTaskManager.startBackgroundRunning(ctx,
-        backgroundTaskManager.BackgroundMode.DATA_TRANSFER, agent);
-    }
+    // 板上实测（API 24 模拟器镜像）：dataTransfer 三种登记形态均被系统拒绝
+    // （9800005），真机支持；申请失败仅记日志，功能优雅降级为修复前行为
+    await backgroundTaskManager.startBackgroundRunning(ctx,
+      backgroundTaskManager.BackgroundMode.DATA_TRANSFER, agent);
     hilog.info(0x0000, TAG, 'dataTransfer keep-alive started');
     return true;
   }
