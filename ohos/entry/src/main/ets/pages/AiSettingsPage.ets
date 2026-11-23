@@ -20,7 +20,7 @@ interface AiFieldParams {
 /**
  * AI 模型设置：本地配置，不依赖服务端。
  *
- * 「服务商与模型 / 语音 / MCP / 工具 / 说明」五档 TAB 分开，每档只装本类设置；
+ * 「服务商 / 语音 / MCP / 工具 / 说明」五档 TAB 分开，每档只装本类设置；
  * 各功能单独绑定的服务商/模型在「功能模型」页（pages/AiFeatureModelsPage）。
  */
 @Entry
@@ -53,7 +53,7 @@ struct AiSettingsPage {
   @State ttsTimbre: string = 'longanhuan_v3.6';
   /** 思考强度：'default'/'low'/'medium'/'high'（见请求体 reasoning_effort）。 */
   @State reasoningEffort: string = 'default';
-  /** TAB 档位：0 服务商与模型 / 1 语音 / 2 MCP / 3 工具 / 4 说明。变量名避讳 CustomComponent.tabIndex 属性方法。 */
+  /** TAB 档位：0 服务商 / 1 语音 / 2 MCP / 3 工具 / 4 说明。变量名避讳 CustomComponent.tabIndex 属性方法。 */
   @State activeTab: number = 0;
   /** 当前服务商的本地常用模型清单（对话页快切菜单数据源）。 */
   @State providerModels: string[] = [];
@@ -398,7 +398,7 @@ struct AiSettingsPage {
       TabContent() {
         this.tabProvider();
       }
-      .tabBar('服务商与模型')
+      .tabBar('服务商')
 
       TabContent() {
         this.tabVoice();
@@ -420,13 +420,14 @@ struct AiSettingsPage {
       }
       .tabBar('说明')
     }
-    .barMode(BarMode.Fixed)
+    // 五档用 Fixed 时每档仅 ~1/5 宽，长标题会被截断成「服务...」；Scrollable 按内容宽排布
+    .barMode(BarMode.Scrollable)
     .width('100%')
     .height('100%')
     .onChange((index: number) => this.activeTab = index);
   }
 
-  /** TAB 1 服务商与模型：chips 选择/添加/删除 + 地址 + Key + 模型区 + 保存测试。 */
+  /** TAB 1 服务商：chips 快切 + 地址 + Key + 模型区 + 保存测试（增删在服务商管理页）。 */
   @Builder
   tabProvider() {
     Scroll() {
@@ -938,7 +939,7 @@ struct AiSettingsPage {
     .align(Alignment.Top);
   }
 
-  /** 保存/测试结果行（服务商与模型两档共用同一状态）。 */
+  /** 保存/测试结果行（本档内服务商与模型区共用同一状态）。 */
   @Builder
   testResultLine() {
     if (this.testResult.length > 0) {
