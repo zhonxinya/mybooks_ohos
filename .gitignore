@@ -111,3 +111,6 @@ docs/automation/
 docs/screenshots/
 .Trash-0/
 ohos/entry/src/main/resources/rawfile/bookmeta_sources.json
+
+# 本地验证证据文档（不入库）
+reference/
