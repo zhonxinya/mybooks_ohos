@@ -62,8 +62,10 @@ export const SEARCH_ENGINES: SearchEngine[] = [
   { id: 'deepseek', label: 'DeepSeek', source: 'DeepSeek' },
 ];
 
-/** 启用的引擎 id 列表（JSON 数组）；未设置=全部启用。 */
+/** 启用的引擎 id 列表（JSON 数组）；旧「启用清单」语义，仅作迁移源（#1636）。 */
 const ENGINES_KEY: string = 'ai_search_engines';
+/** 禁用的引擎 id 列表（反语义）：新注册引擎默认启用，不受历史配置遮蔽。 */
+const ENGINES_OFF_KEY: string = 'ai_search_engines_off';
 /** 结果条数上限（默认 8）。 */
 const SEARCH_LIMIT_KEY: string = 'ai_search_limit';
 /** 单引擎抓取条数下限（比最终条数多取，供去重与重排序筛选；#1634 按 limit 动态放大）。 */
@@ -318,15 +320,10 @@ export class EncyclopediaService {
 
   // ———— 搜索引擎配置（设置页「搜索引擎」区） ————
 
-  /** 已启用的引擎 id 清单；未设置=全部启用。 */
-  static enabledEngines(): string[] {
-    const raw: string = TalebookService.prefGet(ENGINES_KEY);
+  /** pref 存的 id JSON 数组；未设置=null，坏值=空数组。 */
+  private static readIdList(raw: string): string[] | null {
     if (raw.length === 0) {
-      const all: string[] = [];
-      for (let i = 0; i < SEARCH_ENGINES.length; i++) {
-        all.push(SEARCH_ENGINES[i].id);
-      }
-      return all;
+      return null;
     }
     try {
       const list: Object[] = JSON.parse(raw) as Object[];
@@ -342,11 +339,47 @@ export class EncyclopediaService {
     }
   }
 
+  /** 禁用 id 清单（内部）：读 off 键；缺省时从旧「启用清单」键迁移（老配置用户的新注册引擎默认启用）。 */
+  private static disabledEngines(): string[] {
+    const off: string[] | null = EncyclopediaService.readIdList(TalebookService.prefGet(ENGINES_OFF_KEY));
+    if (off !== null) {
+      return off;
+    }
+    const legacy: string[] | null = EncyclopediaService.readIdList(TalebookService.prefGet(ENGINES_KEY));
+    if (legacy === null) {
+      return [];
+    }
+    // 只在「旧清单时代已知引擎」内推导禁用项；之后新增的引擎（如 deepseek）不在旧清单
+    // 是「当时不存在」而非「用户停用」，保持默认启用。新增引擎时勿再动此表。
+    const knownBefore: string[] = ['baidu', 'bing', 'so360', 'sogou', 'wikipedia'];
+    const migrated: string[] = [];
+    for (let i = 0; i < SEARCH_ENGINES.length; i++) {
+      const id: string = SEARCH_ENGINES[i].id;
+      if (knownBefore.indexOf(id) >= 0 && legacy.indexOf(id) < 0) {
+        migrated.push(id);
+      }
+    }
+    TalebookService.prefSet(ENGINES_OFF_KEY, JSON.stringify(migrated));
+    return migrated;
+  }
+
+  /** 已启用的引擎 id 清单（注册表序）；未设置=全部启用。 */
+  static enabledEngines(): string[] {
+    const off: string[] = EncyclopediaService.disabledEngines();
+    const out: string[] = [];
+    for (let i = 0; i < SEARCH_ENGINES.length; i++) {
+      if (off.indexOf(SEARCH_ENGINES[i].id) < 0) {
+        out.push(SEARCH_ENGINES[i].id);
+      }
+    }
+    return out;
+  }
+
   static isEngineEnabled(id: string): boolean {
     return EncyclopediaService.enabledEngines().indexOf(id) >= 0;
   }
 
-  /** 勾选/取消某引擎；至少保留一个（全关时拒绝并返回 false）。 */
+  /** 勾选/取消某引擎；至少保留一个（全关时拒绝并返回 false）。存禁用清单（反语义，#1636）。 */
   static setEngineEnabled(id: string, on: boolean): boolean {
     const cur: string[] = EncyclopediaService.enabledEngines();
     const idx: number = cur.indexOf(id);
@@ -362,14 +395,13 @@ export class EncyclopediaService {
         cur.splice(idx, 1);
       }
     }
-    // 按注册表顺序归一，保证优先级稳定
-    const ordered: string[] = [];
+    const off: string[] = [];
     for (let i = 0; i < SEARCH_ENGINES.length; i++) {
-      if (cur.indexOf(SEARCH_ENGINES[i].id) >= 0) {
-        ordered.push(SEARCH_ENGINES[i].id);
+      if (cur.indexOf(SEARCH_ENGINES[i].id) < 0) {
+        off.push(SEARCH_ENGINES[i].id);
       }
     }
-    TalebookService.prefSet(ENGINES_KEY, JSON.stringify(ordered));
+    TalebookService.prefSet(ENGINES_OFF_KEY, JSON.stringify(off));
     return true;
   }
 

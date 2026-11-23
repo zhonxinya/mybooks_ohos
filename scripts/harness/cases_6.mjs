@@ -313,8 +313,18 @@ export function register(ctx) {
     assert.equal(EncyclopediaService.searchLimit(), 20, '上限 20');
     EncyclopediaService.setSearchLimit(5);
     assert.equal(EncyclopediaService.searchLimit(), 5);
-    // 全关（人为清空配置）→ 明确错误文案，不发请求
-    deps.state.store.set('p:ai_search_engines', '[]');
+    // 旧「启用清单」键迁移（#1636）：老配置=5 引擎启用（无 deepseek）→ 新引擎自动启用、旧启用保持
+    deps.state.store.clear();
+    deps.state.store.set('p:ai_search_engines', JSON.stringify(['baidu', 'bing', 'so360', 'sogou', 'wikipedia']));
+    assert.deepEqual(EncyclopediaService.enabledEngines(),
+      ['baidu', 'bing', 'so360', 'sogou', 'wikipedia', 'deepseek'], '迁移后 deepseek 默认启用');
+    assert.deepEqual(JSON.parse(deps.state.store.get('p:ai_search_engines_off')), [], '迁移落盘 off 键（无停用项）');
+    // 老配置里被停用的引擎迁移后仍停用；deepseek 不属「旧时代已知引擎」保持默认启用
+    deps.state.store.clear();
+    deps.state.store.set('p:ai_search_engines', JSON.stringify(['baidu', 'bing']));
+    assert.deepEqual(EncyclopediaService.enabledEngines(), ['baidu', 'bing', 'deepseek']);
+    // 全关（人为写空启用清单）→ 明确错误文案，不发请求
+    deps.state.store.set('p:ai_search_engines_off', JSON.stringify(['baidu', 'bing', 'so360', 'sogou', 'wikipedia', 'deepseek']));
     deps.state.rcpResponses = [];
     const none = await EncyclopediaService.searchWeb('三体');
     assert.ok(!none.ok && none.error.includes('没有启用任何搜索引擎'), none.error);
