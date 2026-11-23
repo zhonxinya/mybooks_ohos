@@ -382,8 +382,10 @@ export function register(ctx) {
       call_id: 'c1', name: 'search_books', arguments: '{"query":"三体"}' }));
     await flush();
     assert.ok(ev.includes('call:search_books:c1'));
+    assert.equal(Rt.isToolBusy(), true, 'args.done 即计入在途工具');
     Rt.sendToolResult('c1', '找到《三体》');
     await flush();
+    assert.equal(Rt.isToolBusy(), false, '回填销账');
     assert.equal(rtState.sends.length, sendsBeforeCall + 2);
     const toolOut = JSON.parse(rtState.sends[sendsBeforeCall]);
     assert.equal(toolOut.item.type, 'function_call_output');
@@ -394,11 +396,14 @@ export function register(ctx) {
     rtState.socket.emitEvent(JSON.stringify({ type: 'response.function_call_arguments.done',
       call_id: 'c2', name: 'search_books', arguments: '{}' }));
     await flush();
+    assert.equal(Rt.isToolBusy(), true);
     rtState.socket.emitEvent(JSON.stringify({ type: 'input_audio_buffer.speech_started' }));
     await flush();
+    assert.equal(Rt.isToolBusy(), true, '打断不销账：结果未回填仍算在途');
     const sendsBefore2 = rtState.sends.length;
     Rt.sendToolResult('c2', '结果');
     await flush();
+    assert.equal(Rt.isToolBusy(), false);
     assert.equal(rtState.sends.length, sendsBefore2 + 1);
     assert.equal(JSON.parse(rtState.sends[sendsBefore2]).item.call_id, 'c2');
     // 静音=停上行帧（不断采集），取消静音恢复 append
@@ -411,7 +416,13 @@ export function register(ctx) {
     rtState.capturer.feedMic(mic);
     await flush();
     assert.equal(rtState.sends.length, sendsBefore + 1);
+    // 挂断清零：在途工具不随会话残留（否则新会话轮次守卫被旧账误伤）
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.function_call_arguments.done',
+      call_id: 'c3', name: 'search_books', arguments: '{}' }));
+    await flush();
+    assert.equal(Rt.isToolBusy(), true);
     Rt.disconnect();
+    assert.equal(Rt.isToolBusy(), false, 'disconnect 归零在途计数');
     await flush();
     await connecting;
     // 缺 Key：连接即抛（页面提示配置）
@@ -519,6 +530,44 @@ export function register(ctx) {
     // 语音侧自我学习规程（与文字共用 save_memory 记忆通道）
     assert.ok(Kit.VOICE_TOOL_NOTE.indexOf('save_memory') >= 0, '语音缺自我学习指引');
     assert.ok(Kit.VOICE_TOOL_NOTE.indexOf('同一份长期记忆') >= 0, '语音指引未点明记忆共享');
+  });
+
+  test('语音工具过程显示：runTool 经 onActivity 上报 doing→done/rejected，set_voice 带切换音色活动', async () => {
+    const Kit = await load('RealAiVoiceKit');
+    resetSettings();
+    const events = [];
+    const spy = (label, state) => events.push(`${state}:${label}`);
+    // 只读工具（confirm 默认档、无需闸门）：首尾各一条，标签与 toolLabelFor 同源
+    await Kit.AiVoiceKit.runTool('search_books', '{"query":"三体"}', 'c1', null, spy);
+    const sb = RealAiService.toolLabelFor('search_books');
+    assert.deepEqual(events, [`doing:${sb}`, `done:${sb}`], events.join('|'));
+    // 写工具 + readonly 权限：不执行（sendToolResult 仍回填拒绝文案），上报 rejected
+    events.length = 0;
+    RealAiService.savePermission('readonly');
+    await Kit.AiVoiceKit.runTool('add_to_shelf', '{"bookId":1}', 'c2', null, spy);
+    const shelf = RealAiService.toolLabelFor('add_to_shelf');
+    assert.deepEqual(events, [`doing:${shelf}`, `rejected:${shelf}`], events.join('|'));
+    // 写工具 + confirm 权限、uiContext=null（弹窗必失败=按拒绝收敛）：同样 rejected
+    events.length = 0;
+    RealAiService.savePermission('confirm');
+    await Kit.AiVoiceKit.runTool('add_to_shelf', '{"bookId":1}', 'c3', null, spy);
+    assert.deepEqual(events, [`doing:${shelf}`, `rejected:${shelf}`], events.join('|'));
+    // 不传回调零影响（旧调用点兼容）：set_voice 无第五参仍可执行
+    await Kit.AiVoiceKit.runTool('set_voice', '{"voice":"longanqian"}', 'c4', null);
+    // set_voice 走活动上报：成功=doing/done，非法=doing/failed 且重建钩子不被触发
+    events.length = 0;
+    let switched = 0;
+    Kit.AiVoiceKit.voiceSwitcher = () => { switched++; };
+    await Kit.AiVoiceKit.runTool('set_voice', '{"voice":"longanlufeng"}', 'c5', null, spy);
+    assert.deepEqual(events, ['doing:切换音色', 'done:切换音色'], events.join('|'));
+    assert.equal(switched, 1);
+    events.length = 0;
+    switched = 0;
+    await Kit.AiVoiceKit.runTool('set_voice', '{"voice":"bogus"}', 'c6', null, spy);
+    assert.deepEqual(events, ['doing:切换音色', 'failed:切换音色'], events.join('|'));
+    assert.equal(switched, 0);
+    Kit.AiVoiceKit.voiceSwitcher = null;
+    RealAiService.savePermission('confirm');
   });
 
   test('语音工具面与文字统一：realtimeDefinitions 并入 MCP 动态工具，mcp_ 调用走统一路由', async () => {
