@@ -727,6 +727,9 @@ export const TIMEOUT_MS: number = 180000;
  *  上限按「长任务」定：批量场景如 4 本书×（搜+下载）=8 轮，12 轮留余量；
  *  同时兜住模型死循环烧 token。退出对话页不打断回路（后台完成落盘），分钟级任务可行。 */
 export const MAX_TOOL_ROUNDS: number = 12;
+/** 轮次上限触顶后的自动续段次数：每段仍是 12 轮预算+1 轮收尾，触顶自动续接
+ *  而不是报废半截任务让用户「再发一条消息」。硬上限 12×(4+1)=60 轮兜死循环。 */
+export const MAX_AUTO_CONTINUES: number = 4;
 /** 网关单轮请求最多尝试次数（1 次原始 + 2 次重试）：网络抖动/429/5xx 不该报废整条回复。 */
 export const MAX_GATEWAY_ATTEMPTS: number = 3;
 /** 单轮流式 tool_calls 槽位上限（OpenAI 标准 index 从 0 连续）：异常 index 钳制于此，防无界扩容。 */

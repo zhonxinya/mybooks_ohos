@@ -94,28 +94,36 @@ export function register(ctx) {
     const hinted = (msgs) => msgs.filter((m) => m.role === 'user' && `${m.content}`.includes('仅剩 3 轮')).length;
     assert.equal(hinted(b8.messages), 0, '前 9 轮不得注入');
     assert.equal(hinted(b9.messages), 1, 'round==MAX-3 注入一次收敛提示');
-    // ② 上限轮模型带正文+幻觉 tool_calls → 软着陆返回部分成果，不报废整条回复
+    // ② 上限轮模型仍调工具 → 自动续段：预算重开、tools 重新挂上、任务延续，
+    //    不再把半截结果甩回用户（旧「12 轮上限」截断已废除）
     deps.state.requests.length = 0;
     deps.state.rcpResponses = [...Array(12).fill(0).map(mk),
       { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '已查到部分内容。',
-        tool_calls: [{ id: 'y', type: 'function', function: { name: 'search_books', arguments: '{"query":"q"}' } }] } }] })) }];
+        tool_calls: [{ id: 'y', type: 'function', function: { name: 'search_books', arguments: '{"query":"q"}' } }] } }] })) },
+      final('续段后查完了。')];
     error = '';
     full = '';
     RealAiService.chatStream([{ role: 'user', content: '无限查' }], {
       onDelta: (t) => { full += t; }, onDone: () => {}, onError: (m) => { error = m; },
     }, 256);
     await flush();
-    assert.equal(error, '', '上限轮有正文不得报错');
-    assert.ok(full.includes('已查到部分内容。') && full.includes('12 轮上限'), full);
-    // ③ 上限轮纯工具无正文 → 仍按旧语义报错（没有可交付内容）
+    assert.equal(error, '', '触顶自动续段不得报错');
+    assert.ok(full.includes('续段后查完了。') && !full.includes('轮上限'), full);
+    const b12 = JSON.parse(deps.state.requests[12].content);
+    const b13 = JSON.parse(deps.state.requests[13].content);
+    assert.equal(b12.tools === undefined, true, '段一上限轮不带 tools（逼收尾）');
+    assert.ok(b13.tools !== undefined && b13.tools.length > 0, '续段首轮回带 tools');
+    const continued = (msgs) => msgs.filter((m) => m.role === 'user' && `${m.content}`.includes('已自动续期')).length;
+    assert.equal(continued(b13.messages), 1, '续段注入内部提示一次');
+    // ③ 连续 5 段（12×5 轮）全调工具 → 硬上限报错（防死循环烧 token）
     deps.state.requests.length = 0;
-    deps.state.rcpResponses = [...Array(13).fill(0).map(mk)];
+    deps.state.rcpResponses = [...Array(65).fill(0).map(mk)];
     error = '';
     RealAiService.chatStream([{ role: 'user', content: '光查不说' }], {
       onDelta: () => {}, onDone: () => {}, onError: (m) => { error = m; },
     }, 256);
     await flush();
-    assert.match(error, /达到上限/, '无正文时仍提示达到上限');
+    assert.match(error, /硬上限/, '超 4 次自动续段后按硬上限报错');
   });
 
   test('写工具确认闸门：拒绝/无确认方不执行，批准才执行', async () => {
