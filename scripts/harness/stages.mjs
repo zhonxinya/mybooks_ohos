@@ -30,9 +30,9 @@ export function stageAiService() {
     'mergeUsage', 'parseUsage', 'TRACE_FULL_ROUNDS',
     // #1639 AiKeepAlive 与其 kit 依赖全是运行时值（WantAgent 是唯一类型，走 import type 擦除）
     'AiKeepAlive', 'backgroundTaskManager', 'common', 'wantAgent', 'deviceInfo', 'hilog']);
-  // Config 下沉的常量（KEY_*/DEFAULT_*/MAX_*/TIMEOUT_MS/AI_PROVIDERS）都是运行时值
+  // Config 下沉的常量（KEY_*/DEFAULT_*/MAX_*/TIMEOUT_MS/AI_PROVIDERS/TOOL_FOLD_*）都是运行时值
   const isValue = (n) => VALUE_NAMES.has(n.replace(/.* as /, '')) ||
-    /^(KEY_|DEFAULT_|MAX_|TIMEOUT_MS|CONTEXT_LENGTH_OPTIONS|AI_PROVIDERS)/.test(n);
+    /^(KEY_|DEFAULT_|MAX_|TIMEOUT_MS|CONTEXT_LENGTH_OPTIONS|AI_PROVIDERS|TOOL_FOLD_)/.test(n);
   for (const [out, ets] of [['RealAiService.ts', 'services/AiService.ets'],
     ['RealAiServiceConfig.ts', 'services/AiServiceConfig.ets'],
     ['RealAiServiceHttp.ts', 'services/AiServiceHttp.ets'],

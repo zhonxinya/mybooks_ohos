@@ -11,7 +11,7 @@ import type { AiPermissionMode } from './AiTools';
 import type { AiToolDefinition } from './AiToolsDefs';
 import type { AiMessage, AiConfig, AiAbortHandle } from './AiService';
 import type { AiSessionHolder } from './AiServiceHttp';
-import { AiServiceConfig, MAX_TOOL_ROUNDS, MAX_AUTO_CONTINUES, MAX_GATEWAY_ATTEMPTS, MAX_TOOL_SLOTS } from './AiServiceConfig';
+import { AiServiceConfig, MAX_TOOL_ROUNDS, MAX_AUTO_CONTINUES, MAX_GATEWAY_ATTEMPTS, MAX_TOOL_SLOTS, TOOL_FOLD_KEEP, TOOL_FOLD_HEAD } from './AiServiceConfig';
 import { AiServiceHttp } from './AiServiceHttp';
 import { mergeUsage, parseUsage, TRACE_FULL_ROUNDS } from './AiChatModel';
 import type { AiTokenUsage, ToolTraceCall, ToolTraceRound } from './AiChatModel';
@@ -164,6 +164,32 @@ export class AiServiceGateway {
   }
 
   /**
+   * 上下文预算：折叠旧 tool 结果。回路每轮全量重发 gwMessages，tool 结果随轮次线性堆积
+   * （板上实测 3 本书逐本搜索单轮入 token 11 万+，自动续段后更甚）。最近 TOOL_FOLD_KEEP
+   * 条保持全文，更早的截到 TOOL_FOLD_HEAD 字符并附「可重查」提示——旧结果模型已消化，
+   * 头部片段足够引用 id/关键行；确需全文时重新调用工具即可。幂等：已折叠条目跳过；
+   * 只动字符串 content，多模态数组原样保留。
+   */
+  static foldStaleToolResults(gwMessages: GatewayMessage[]): void {
+    let seen: number = 0;
+    for (let i = gwMessages.length - 1; i >= 0; i--) {
+      const m: GatewayMessage = gwMessages[i];
+      if (m.role !== 'tool') {
+        continue;
+      }
+      seen++;
+      if (seen <= TOOL_FOLD_KEEP || typeof m.content !== 'string') {
+        continue;
+      }
+      const content: string = m.content;
+      if (content.length <= TOOL_FOLD_HEAD || content.indexOf('…（已折叠 ') >= 0) {
+        continue;
+      }
+      m.content = `${content.substring(0, TOOL_FOLD_HEAD)}…（已折叠 ${content.length - TOOL_FOLD_HEAD} 字符，如需完整内容可重新调用工具查询）`;
+    }
+  }
+
+  /**
    * function calling 回路主体（网关整包与 SDK 流式两个传输层共用）：
    * 请求 → 有 tool_calls 则执行并回填上下文 → 再请求，直到文本回答或轮次上限。
    * transport 返回 null 表示用户已中断。
@@ -187,6 +213,8 @@ export class AiServiceGateway {
       if (isAborted !== null && isAborted()) {
         return '';
       }
+      // 本轮发送前折叠过期 tool 结果（上下文预算；幂等操作，仅改写旧条目尾部）
+      AiServiceGateway.foldStaleToolResults(gwMessages);
       // 每段剩 3 轮时提醒模型收敛：多数截断本可避免（软着陆只是兜底，别靠它）
       if (round - segmentStart === MAX_TOOL_ROUNDS - 3) {
         gwMessages.push({
