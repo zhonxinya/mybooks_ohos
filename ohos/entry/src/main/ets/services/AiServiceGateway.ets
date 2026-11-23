@@ -28,6 +28,10 @@ export class AiServiceGateway {
     for (let i = 0; i < messages.length; i++) {
       const m: AiMessage = messages[i];
       const trace: ToolTraceRound[] | undefined = m.toolTrace;
+      // #1624：user 泡的痕迹=该问题之后的工具轮，展开排在问题文本后
+      if (m.role === 'user') {
+        out.push({ role: m.role, content: AiServiceHttp.gatewayContent(m) });
+      }
       if (trace !== undefined) {
         for (let r = 0; r < trace.length; r++) {
           const rt: ToolTraceRound = trace[r];
@@ -42,7 +46,11 @@ export class AiServiceGateway {
           }
         }
       }
-      out.push({ role: m.role, content: AiServiceHttp.gatewayContent(m) });
+      const finalText: string = AiServiceHttp.gatewayContent(m);
+      // 错误泡回放 content 为空：有痕迹时不再推空 assistant 文本消息
+      if (m.role !== 'user' && (finalText.length > 0 || trace === undefined)) {
+        out.push({ role: m.role, content: finalText });
+      }
     }
     return out;
   }

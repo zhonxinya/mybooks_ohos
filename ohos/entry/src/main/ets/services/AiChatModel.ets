@@ -221,6 +221,20 @@ export function parseBubbles(parsed: Object): ChatBubble[] {
   return bubbles;
 }
 
+/** 收集 from 起所有气泡的工具痕迹并拼接（#1624：retryFrom 截掉错误泡时带走已执行痕迹）。 */
+export function collectTraces(bubbles: ChatBubble[], from: number): ToolTraceRound[] {
+  const out: ToolTraceRound[] = [];
+  for (let i = Math.max(0, from); i < bubbles.length; i++) {
+    const t: ToolTraceRound[] | undefined = bubbles[i].toolTrace;
+    if (t !== undefined) {
+      for (let k = 0; k < t.length; k++) {
+        out.push(t[k]);
+      }
+    }
+  }
+  return out;
+}
+
 /** 会话标题：取首条用户消息前 20 字；没有则空串（调用侧兜底「新对话」）。 */
 export function sessionTitle(bubbles: ChatBubble[]): string {
   for (const b of bubbles) {
