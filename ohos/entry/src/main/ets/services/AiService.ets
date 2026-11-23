@@ -18,7 +18,7 @@ import { KEY_PROVIDER, KEY_BASE_URL, KEY_MODEL, KEY_AUTO_SPEAK, KEY_VOICE_PROVID
 import type { GatewayMessage, GatewayToolCall, GatewayReply, AskPayload } from './AiServiceGateway';
 import type { AiSessionHolder } from './AiServiceHttp';
 import { mergeUsage, parseUsage } from './AiChatModel';
-import type { AiTokenUsage } from './AiChatModel';
+import type { AiTokenUsage, ToolTraceRound } from './AiChatModel';
 export { CONTEXT_LENGTH_OPTIONS } from './AiServiceConfig';
 
 /**
@@ -55,6 +55,9 @@ export interface AiMessage {
   content: string;
   /** 随消息附带的图片（data URL 列表）；非空且服务商 vision 开启时按多模态 content 数组发送。 */
   images?: string[];
+  /** 工具痕迹（#1623，assistant 专有）：由 buildContext 从气泡透传，
+   * messagesToGw 回放成 assistant.tool_calls + tool 历史，防跨轮重复执行。 */
+  toolTrace?: ToolTraceRound[];
 }
 
 /** AI 联网搜索引用的单条网页。 */
@@ -99,8 +102,9 @@ export interface AiConfig {
 /** 流式回调：`delta` 为本次增量文本，`done` 表示结束。 */
 export interface AiStreamHandlers {
   onDelta: (delta: string) => void;
-  /** usage=本轮全部请求的 token 用量合计（#1514）；服务商没回传时 undefined。 */
-  onDone: (fullText: string, usage?: AiTokenUsage) => void;
+  /** usage=本轮全部请求的 token 用量合计（#1514）；服务商没回传时 undefined。
+   * trace=本轮工具调用痕迹（#1623）：store 落到气泡随历史持久化，无工具轮为 undefined。 */
+  onDone: (fullText: string, usage?: AiTokenUsage, trace?: ToolTraceRound[]) => void;
   onError: (message: string) => void;
   /** 可选：推理模型（qwen/deepseek 等）的思考过程增量，OpenAI 兼容字段 reasoning_content。 */
   onReasoning?: (delta: string) => void;
@@ -143,6 +147,10 @@ export class AiService {
     let settled: boolean = false;
     // 三通道共用的用量盒（#1514）：长度 0/1，传输层累加，finish 时带给 onDone
     const usageBox: AiTokenUsage[] = [];
+    // 工具痕迹箱（#1623）：回路逐轮 push，finish 时带给 onDone 落气泡；
+    // 挂到 handle 让中断收尾（stopStreaming 不走 onDone）也能取到已执行轮
+    const traceBox: ToolTraceRound[] = [];
+    handle.traceBox = traceBox;
     const noteUsage = (u: AiTokenUsage | null): void => {
       if (u !== null) {
         if (usageBox.length === 0) {
@@ -159,7 +167,8 @@ export class AiService {
       if (errorText.length > 0) {
         handlers.onError(errorText);
       } else {
-        handlers.onDone(full, usageBox.length > 0 ? usageBox[0] : undefined);
+        handlers.onDone(full, usageBox.length > 0 ? usageBox[0] : undefined,
+          traceBox.length > 0 ? traceBox : undefined);
       }
     };
 
@@ -185,7 +194,7 @@ export class AiService {
         done === undefined ? null : done,
         think === undefined ? null : think,
         handlers.onAsk === undefined ? null : handlers.onAsk,
-        usageBox).then((content: string): void => {
+        usageBox, traceBox).then((content: string): void => {
         if (handle.aborted) {
           return;
         }
@@ -206,10 +215,8 @@ export class AiService {
     if (sdkTools.length > 0) {
       // 非网关通道同样走 function calling 回路：传输换成 SDK 流式
       // （sdkStreamRound 打字机保留 + 运行时累积 tool_calls），回路主体与网关共用。
-      const gwMessages: GatewayMessage[] = [];
-      for (let i = 0; i < messages.length; i++) {
-        gwMessages.push({ role: messages[i].role, content: AiServiceHttp.gatewayContent(messages[i]) });
-      }
+      // #1623：与网关通道共用回放转换（assistant.toolTrace → tool_calls+tool 历史）
+      const gwMessages: GatewayMessage[] = AiServiceGateway.messagesToGw(messages);
       const sessionBox: AiSessionHolder[] = [];
       handle.destroy = (): void => {
         handle.aborted = true;
@@ -238,7 +245,7 @@ export class AiService {
         ask === undefined ? null : ask,
         done === undefined ? null : done,
         think === undefined ? null : think,
-        handlers.onAsk === undefined ? null : handlers.onAsk).then((content: string): void => {
+        handlers.onAsk === undefined ? null : handlers.onAsk, traceBox).then((content: string): void => {
         if (handle.aborted) {
           return;
         }
@@ -369,7 +376,7 @@ export class AiService {
     if (AiServiceHttp.isOpenCodeGateway(config.baseUrl)) {
       // 结构化输出（书单 JSON 等）不需要工具，避免模型中途改去查数据
       return AiServiceGateway.chatViaGateway(config, apiKey, messages, maxTokens, rcp.createSession(),
-        null, AiServiceConfig.loadPermission(), null, null, null, null, null, null, null);
+        null, AiServiceConfig.loadPermission(), null, null, null, null, null, null, null, null);
     }
     const client: OpenAI = AiServiceHttp.client(config.baseUrl, apiKey);
     const params: ChatCompletionCreateParamsBase = {
@@ -760,12 +767,12 @@ export class AiService {
   }
 
   /** 委托 AiServiceGateway.chatViaGateway（拆分：见文件头说明）。 */
-  static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[], maxTokens: number, session: rcp.Session, tools: AiToolDefinition[] | null, permission: AiPermissionMode, isAborted: (() => boolean) | null, onTool: ((label: string, name: string) => void) | null, onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null, onResult: ((name: string, label: string, text: string, callId: string) => void) | null, onReasoning: ((text: string) => void) | null, onAsk: ((question: string, options: string[]) => Promise<string>) | null, usageBox: AiTokenUsage[] | null): Promise<string> {
-    return AiServiceGateway.chatViaGateway(config, apiKey, messages, maxTokens, session, tools, permission, isAborted, onTool, onConfirm, onResult, onReasoning, onAsk, usageBox);
+  static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[], maxTokens: number, session: rcp.Session, tools: AiToolDefinition[] | null, permission: AiPermissionMode, isAborted: (() => boolean) | null, onTool: ((label: string, name: string) => void) | null, onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null, onResult: ((name: string, label: string, text: string, callId: string) => void) | null, onReasoning: ((text: string) => void) | null, onAsk: ((question: string, options: string[]) => Promise<string>) | null, usageBox: AiTokenUsage[] | null, traceBox: ToolTraceRound[] | null): Promise<string> {
+    return AiServiceGateway.chatViaGateway(config, apiKey, messages, maxTokens, session, tools, permission, isAborted, onTool, onConfirm, onResult, onReasoning, onAsk, usageBox, traceBox);
   }
   /** 委托 AiServiceGateway.runToolLoop（拆分：见文件头说明）。 */
-  static async runToolLoop(gwMessages: GatewayMessage[], transport: (attach: AiToolDefinition[] | null) => Promise<GatewayReply | null>, tools: AiToolDefinition[] | null, permission: AiPermissionMode, isAborted: (() => boolean) | null, onTool: ((label: string, name: string) => void) | null, onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null, onResult: ((name: string, label: string, text: string, callId: string) => void) | null, onReasoning: ((text: string) => void) | null, onAsk: ((question: string, options: string[]) => Promise<string>) | null): Promise<string> {
-    return AiServiceGateway.runToolLoop(gwMessages, transport, tools, permission, isAborted, onTool, onConfirm, onResult, onReasoning, onAsk);
+  static async runToolLoop(gwMessages: GatewayMessage[], transport: (attach: AiToolDefinition[] | null) => Promise<GatewayReply | null>, tools: AiToolDefinition[] | null, permission: AiPermissionMode, isAborted: (() => boolean) | null, onTool: ((label: string, name: string) => void) | null, onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null, onResult: ((name: string, label: string, text: string, callId: string) => void) | null, onReasoning: ((text: string) => void) | null, onAsk: ((question: string, options: string[]) => Promise<string>) | null, traceBox: ToolTraceRound[] | null): Promise<string> {
+    return AiServiceGateway.runToolLoop(gwMessages, transport, tools, permission, isAborted, onTool, onConfirm, onResult, onReasoning, onAsk, traceBox);
   }
   /** 委托 AiServiceGateway.parseAskArgs（拆分：见文件头说明）。 */
   static parseAskArgs(argsJson: string): AskPayload {
@@ -789,5 +796,7 @@ export class AiService {
 export interface AiAbortHandle {
   aborted: boolean;
   destroy?: () => void;
+  /** 工具痕迹箱引用（#1623）：中断收尾时 store 直接读已执行轮，不必等 onDone。 */
+  traceBox?: ToolTraceRound[];
 }
 

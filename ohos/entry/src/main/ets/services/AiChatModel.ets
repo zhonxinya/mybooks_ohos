@@ -14,6 +14,20 @@ export interface ChatActivity {
   summary: string;
 }
 
+/** 一次工具调用的完整痕迹（#1623）：结果落会话，历史回放时模型才看得到「已经做过」。 */
+export interface ToolTraceCall {
+  id: string;
+  name: string;
+  args: string;
+  result: string;
+}
+
+/** 一轮工具调用（assistant 发起 + N 个结果回填）；text=该轮随调用产出的正文（通常为空）。 */
+export interface ToolTraceRound {
+  text: string;
+  calls: ToolTraceCall[];
+}
+
 /** 界面上的消息：与协议层 AiMessage 分开，因为要额外带状态。 */
 export interface ChatBubble {
   role: string;
@@ -33,6 +47,9 @@ export interface ChatBubble {
   ts?: number;
   /** 本轮 token 用量（#1514）；旧存档/服务商不回传=undefined 不显示。 */
   usage?: AiTokenUsage;
+  /** 工具调用痕迹（#1623）：assistant 气泡专有，随历史持久化；
+   * buildContext 回放成 assistant.tool_calls + tool 消息，防跨轮重复执行。 */
+  toolTrace?: ToolTraceRound[];
   /** 思考耗时毫秒（#1515）：由页面在 thinking 边沿打点；旧存档=undefined 不显示。 */
   thinkMs?: number;
 }
@@ -163,6 +180,41 @@ export function parseBubbles(parsed: Object): ChatBubble[] {
     }
     if (typeof m['thinkMs'] === 'number') {
       bubble.thinkMs = m['thinkMs'];
+    }
+    // 工具痕迹（#1623）：可选键，旧存档无=undefined（回放退化为纯文本，行为同修复前）
+    const traceRaw: Object = m['toolTrace'];
+    if (Array.isArray(traceRaw)) {
+      const rounds: ToolTraceRound[] = [];
+      for (const r of traceRaw as Object[]) {
+        if (r === null || typeof r !== 'object') {
+          continue;
+        }
+        const rr: Record<string, Object> = r as Record<string, Object>;
+        const callsRaw: Object = rr['calls'];
+        const calls: ToolTraceCall[] = [];
+        if (Array.isArray(callsRaw)) {
+          for (const c of callsRaw as Object[]) {
+            if (c === null || typeof c !== 'object') {
+              continue;
+            }
+            const cr: Record<string, Object> = c as Record<string, Object>;
+            if (typeof cr['id'] !== 'string' || typeof cr['name'] !== 'string') {
+              continue;
+            }
+            calls.push({
+              id: cr['id'], name: cr['name'],
+              args: typeof cr['args'] === 'string' ? cr['args'] : '',
+              result: typeof cr['result'] === 'string' ? cr['result'] : '',
+            });
+          }
+        }
+        if (calls.length > 0) {
+          rounds.push({ text: typeof rr['text'] === 'string' ? rr['text'] : '', calls: calls });
+        }
+      }
+      if (rounds.length > 0) {
+        bubble.toolTrace = rounds;
+      }
     }
     bubbles.push(bubble);
   }

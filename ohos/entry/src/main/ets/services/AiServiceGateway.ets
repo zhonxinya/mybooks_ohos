@@ -14,9 +14,39 @@ import type { AiSessionHolder } from './AiServiceHttp';
 import { AiServiceConfig, MAX_TOOL_ROUNDS, MAX_GATEWAY_ATTEMPTS, MAX_TOOL_SLOTS } from './AiServiceConfig';
 import { AiServiceHttp } from './AiServiceHttp';
 import { mergeUsage, parseUsage } from './AiChatModel';
-import type { AiTokenUsage } from './AiChatModel';
+import type { AiTokenUsage, ToolTraceCall, ToolTraceRound } from './AiChatModel';
 
 export class AiServiceGateway {
+  /**
+   * AiMessage → 协议消息（#1623 统一回放点，两通道共用）：带 toolTrace 的 assistant
+   * 气泡展开为 assistant(tool_calls)+tool×N 历史，再跟最终文本 assistant——模型因此
+   * 看得到「上一轮已经做过什么」，不会重复执行写操作。
+   * 中断轮次可能缺尾部 result，tool_calls 按已记录的 calls 生成（天然截断，协议合法）。
+   */
+  static messagesToGw(messages: AiMessage[]): GatewayMessage[] {
+    const out: GatewayMessage[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      const m: AiMessage = messages[i];
+      const trace: ToolTraceRound[] | undefined = m.toolTrace;
+      if (trace !== undefined) {
+        for (let r = 0; r < trace.length; r++) {
+          const rt: ToolTraceRound = trace[r];
+          const calls: Record<string, Object>[] = [];
+          for (let c = 0; c < rt.calls.length; c++) {
+            const fn: Record<string, Object> = { 'name': rt.calls[c].name, 'arguments': rt.calls[c].args };
+            calls.push({ 'id': rt.calls[c].id, 'type': 'function', 'function': fn });
+          }
+          out.push({ role: 'assistant', content: rt.text, tool_calls: calls });
+          for (let c = 0; c < rt.calls.length; c++) {
+            out.push({ role: 'tool', content: rt.calls[c].result, tool_call_id: rt.calls[c].id });
+          }
+        }
+      }
+      out.push({ role: m.role, content: AiServiceHttp.gatewayContent(m) });
+    }
+    return out;
+  }
+
   static async chatViaGateway(config: AiConfig, apiKey: string, messages: AiMessage[],
     maxTokens: number, session: rcp.Session, tools: AiToolDefinition[] | null,
     permission: AiPermissionMode,
@@ -26,17 +56,15 @@ export class AiServiceGateway {
     onResult: ((name: string, label: string, text: string, callId: string) => void) | null,
     onReasoning: ((text: string) => void) | null,
     onAsk: ((question: string, options: string[]) => Promise<string>) | null,
-    usageBox: AiTokenUsage[] | null): Promise<string> {
+    usageBox: AiTokenUsage[] | null,
+    traceBox: ToolTraceRound[] | null): Promise<string> {
     const headers: rcp.RequestHeaders = {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
       'Accept': 'application/json',
       'x-opencode-session': AiServiceHttp.opencodeSessionId(),
     };
-    const gwMessages: GatewayMessage[] = [];
-    for (let i = 0; i < messages.length; i++) {
-      gwMessages.push({ role: messages[i].role, content: AiServiceHttp.gatewayContent(messages[i]) });
-    }
+    const gwMessages: GatewayMessage[] = AiServiceGateway.messagesToGw(messages);
     const url: string = `${AiServiceHttp.normalizeBaseUrl(config.baseUrl)}/chat/completions`;
     // 网关传输：整包 fetch + 退避重试（网络抖动/429/5xx），null=用户中断
     const transport = async (attach: AiToolDefinition[] | null): Promise<GatewayReply | null> => {
@@ -98,7 +126,7 @@ export class AiServiceGateway {
     };
     try {
       return await AiServiceGateway.runToolLoop(gwMessages, transport, tools, permission, isAborted,
-        onTool, onConfirm, onResult, onReasoning, onAsk);
+        onTool, onConfirm, onResult, onReasoning, onAsk, traceBox);
     } finally {
       session.close();
       // 中断/异常可能留下未取配对条目，回路收尾一律清理
@@ -119,7 +147,8 @@ export class AiServiceGateway {
     onConfirm: ((label: string, argsSummary: string) => Promise<boolean>) | null,
     onResult: ((name: string, label: string, text: string, callId: string) => void) | null,
     onReasoning: ((text: string) => void) | null,
-    onAsk: ((question: string, options: string[]) => Promise<string>) | null): Promise<string> {
+    onAsk: ((question: string, options: string[]) => Promise<string>) | null,
+    traceBox: ToolTraceRound[] | null): Promise<string> {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
       if (isAborted !== null && isAborted()) {
         return '';
@@ -158,6 +187,12 @@ export class AiServiceGateway {
           calls.push(call);
         }
         gwMessages.push({ role: 'assistant', content: reply.content, tool_calls: calls });
+        // #1623 痕迹登记：round 随轮开始入箱，calls 逐项补 result；
+        // 中断产生的半轮在回放时按已记录 calls 截断，协议仍合法。
+        const rt: ToolTraceRound = { text: reply.content, calls: [] };
+        if (traceBox !== null) {
+          traceBox.push(rt);
+        }
         // 同轮全是免确认（只读）工具 → Promise.all 并发：网络类工具单项要几秒，
         // 串行白白叠加等待。含写工具保持串行——确认闸门与执行顺序必须和模型输出一致。
         let allAuto: boolean = true;
@@ -183,6 +218,8 @@ export class AiServiceGateway {
           const results: string[] = await Promise.all(tasks);
           for (let i = 0; i < results.length; i++) {
             gwMessages.push({ role: 'tool', content: results[i], tool_call_id: reply.calls[i].id });
+            rt.calls.push({ id: reply.calls[i].id, name: reply.calls[i].name,
+              args: reply.calls[i].arguments, result: results[i] });
             if (onResult !== null) {
               onResult(reply.calls[i].name, labels[i], results[i], reply.calls[i].id);
             }
@@ -214,6 +251,7 @@ export class AiServiceGateway {
               ? `用户选择了「${answer}」`
               : '用户跳过了该问题（未作答）。请基于已有信息谨慎继续，不要反复追问';
             gwMessages.push({ role: 'tool', content: askResult, tool_call_id: c.id });
+            rt.calls.push({ id: c.id, name: c.name, args: c.arguments, result: askResult });
             if (onResult !== null) {
               onResult(c.name, label, askResult, c.id);
             }
@@ -227,6 +265,7 @@ export class AiServiceGateway {
               // 只读模式 tools 里本就没有写工具；走到这里说明模型幻觉调用，回路层同样挡下
               const blocked: string = '当前为只读权限模式，写操作不可执行';
               gwMessages.push({ role: 'tool', content: blocked, tool_call_id: c.id });
+              rt.calls.push({ id: c.id, name: c.name, args: c.arguments, result: blocked });
               if (onResult !== null) {
                 onResult(c.name, label, blocked, c.id);
               }
@@ -240,6 +279,7 @@ export class AiServiceGateway {
               }
               if (!approved) {
                 gwMessages.push({ role: 'tool', content: '用户拒绝了该操作', tool_call_id: c.id });
+                rt.calls.push({ id: c.id, name: c.name, args: c.arguments, result: '用户拒绝了该操作' });
                 if (onResult !== null) {
                   onResult(c.name, label, '用户拒绝了该操作', c.id);
                 }
@@ -255,6 +295,7 @@ export class AiServiceGateway {
           }
           const result: string = await AiServiceHttp.toolRunFor(c.name, c.arguments, '');
           gwMessages.push({ role: 'tool', content: result, tool_call_id: c.id });
+          rt.calls.push({ id: c.id, name: c.name, args: c.arguments, result: result });
           if (onResult !== null) {
             onResult(c.name, label, result, c.id);
           }
