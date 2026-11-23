@@ -74,6 +74,8 @@ struct AiAssistantPage {
   private voiceGen: number = 0;
   /** #1627：语音轮工具痕迹盒——runTool 写入，随语音气泡固化/收尾挂上并进会话历史。 */
   private voiceTrace: ToolTraceRound[] = [];
+  /** #1626：「本轮全部允许」授权位——仅当前回路有效，thinking 落定即复位。 */
+  private allowAllRound: boolean = false;
   /** 会话状态机在全局单例里：退出页面不中断流式回复，后台照常完成并落盘。 */
   private store: AiChatStore = AiChatStore.instance();
   /** attachView 凭据：disappear 只解绑自己这一份视图。 */
@@ -217,6 +219,10 @@ struct AiAssistantPage {
 
   /** store 状态变化回调：拉齐页面镜像（attachView 时注册）。 */
   private requestConfirm(label: string, args: string): Promise<boolean> {
+    // #1626：本轮已选「全部允许」——后续写操作直接放行（回路结束由 syncFromStore 复位）
+    if (this.allowAllRound) {
+      return Promise.resolve(true);
+    }
     const summary: string = args.length > 200 ? `${args.substring(0, 200)}…` : args;
     // showDialog 的 Promise 结果是按钮下标；异常路径（返回键等）统一按拒绝兜底
     return this.getUIContext().getPromptAction().showDialog({
@@ -224,15 +230,24 @@ struct AiAssistantPage {
       message: `操作：${label}\n参数：${summary}`,
       buttons: [
         { text: '拒绝', color: '#E5484D' },
+        { text: '本轮全部允许', color: '#1890FF' },
         { text: '允许', color: '#1890FF' },
       ],
       alignment: DialogAlignment.Center,
-    }).then((res: promptAction.ShowDialogSuccessResponse): boolean => res.index === 1)
+    }).then((res: promptAction.ShowDialogSuccessResponse): boolean => {
+      if (res.index === 1) {
+        this.allowAllRound = true;
+      }
+      return res.index >= 1;
+    })
       .catch((): boolean => false);
   }
 
   /** 把 store 状态机拉到本页面 @State 镜像；渲染只读镜像，不直接碰单例。 */
   private syncFromStore(): void {
+    if (!this.store.thinking) {
+      this.allowAllRound = false; // #1626：回路结束，批量授权随之失效
+    }
     this.messages = this.store.messages.slice();
     this.streamingText = this.store.streamingText;
     this.streamingReasoning = this.store.streamingReasoning;
