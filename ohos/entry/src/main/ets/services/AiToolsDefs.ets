@@ -338,8 +338,8 @@ export const WEB_SEARCH_PROPS: Record<string, AiToolProperty> = {
   'query': prop('string', '搜索关键词（书名、人名、事件、规格参数等任意信息），尽量精炼，不要整句问话'),
 };
 export const TOOL_SEARCH_WEB: AiToolDefinition = defineTool('search_web',
-  '通用网页搜索（百度/Bing/360 三引擎并行聚合）：查书籍之外的任意信息——作者近况、作品改编、价格评测、' +
-    '新闻事件、名词解释等。返回若干条结果的来源、标题、链接与摘要（已跨引擎去重）。' +
+  '通用网页搜索（多引擎并行聚合，含 DeepSeek 官方搜索通道）：查书籍之外的任意信息——作者近况、作品改编、价格评测、' +
+    '新闻事件、名词解释等。返回若干条结果的来源、标题、链接与摘要（已跨引擎去重）及逐引擎通道统计。' +
     '百科类词条优先用 search_encyclopedia；摘要不够时可把候选链接讲给用户自行查看。',
   WEB_SEARCH_PROPS, ['query']);
 

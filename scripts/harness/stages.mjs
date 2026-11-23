@@ -284,13 +284,14 @@ export function stageMetaSearch() {
   writeFileSync(join(dir, 'RealMetaSearch.ts'), source);
 }
 
-/** EncyclopediaService 真实入检：rcp/util 复用 aiServiceDeps 桩（双通道都走 fetchText）。 */
+/** EncyclopediaService 真实入检：rcp/util 复用 aiServiceDeps 桩（双通道都走 fetchText）；#1636 DeepSeek 通道用真实 staged Config（槽语义实测）。 */
 export function stageEncyclopedia() {
   let source = read('services/EncyclopediaService.ets');
   source = source
     .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
     .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
-    .replace(`from './TalebookService'`, `from './aiServiceDeps.ts'`);
+    .replace(`from './TalebookService'`, `from './aiServiceDeps.ts'`)
+    .replace(`from './AiServiceConfig'`, `from './RealAiServiceConfig.ts'`);
   writeFileSync(join(dir, 'RealEncyclopedia.ts'), source);
 }
 

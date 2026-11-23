@@ -1,6 +1,7 @@
 import { rcp } from '@kit.RemoteCommunicationKit';
 import { util } from '@kit.ArkTS';
 import { TalebookService } from './TalebookService';
+import { AiServiceConfig } from './AiServiceConfig';
 
 /** 百科单通道检索结果。ok=false 时 error 说明原因（供工具层如实回传）。 */
 export interface EncyclopediaHit {
@@ -58,6 +59,7 @@ export const SEARCH_ENGINES: SearchEngine[] = [
   { id: 'so360', label: '360 搜索', source: '360' },
   { id: 'sogou', label: '搜狗', source: '搜狗' },
   { id: 'wikipedia', label: '维基百科', source: '维基百科' },
+  { id: 'deepseek', label: 'DeepSeek', source: 'DeepSeek' },
 ];
 
 /** 启用的引擎 id 列表（JSON 数组）；未设置=全部启用。 */
@@ -70,7 +72,7 @@ const PER_ENGINE_FETCH: number = 8;
 const ENGINE_TIMEOUT_MS: number = 8000;
 /** 来源可信度权重：百科/主搜高于聚合站，用于重排序。 */
 const SOURCE_WEIGHT: Record<string, number> = {
-  '百度百科': 3, '维基百科': 3, '百度': 2, 'Bing': 2, '360': 1, '搜狗': 1,
+  '百度百科': 3, '维基百科': 3, 'DeepSeek': 3, '百度': 2, 'Bing': 2, '360': 1, '搜狗': 1,
 };
 
 /** 百度主搜 UA：百科卡走 SERP 内嵌 JSON（baike item 页被安全验证挡，SERP 是唯一可用公开入口）。 */
@@ -413,6 +415,80 @@ export class EncyclopediaService {
     return items;
   }
 
+  /** POST JSON 取文本响应（DeepSeek Search API 用）；非 2xx 抛错（通道层收敛）。 */
+  private static async fetchTextPost(url: string, json: string, bearer: string): Promise<string> {
+    const headers: rcp.RequestHeaders = {
+      'User-Agent': BAIDU_UA,
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${bearer}`,
+    };
+    const session: rcp.Session = rcp.createSession({
+      requestConfiguration: { transfer: { timeout: { connectMs: 10000, transferMs: 20000 } } },
+    });
+    try {
+      const request: rcp.Request = new rcp.Request(url, 'POST', headers, json);
+      const response: rcp.Response = await session.fetch(request);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw new Error(`HTTP ${response.statusCode}`);
+      }
+      const body: ArrayBuffer | undefined = response.body;
+      if (body === undefined) {
+        return '';
+      }
+      const decoder: util.TextDecoder = util.TextDecoder.create('utf-8', { ignoreBOM: true });
+      return decoder.decodeToString(new Uint8Array(body));
+    } finally {
+      session.close();
+    }
+  }
+
+  /**
+   * DeepSeek 官方 Search API（#1636）：POST {baseUrl}/tools/search，Bearer=DeepSeek 服务商 Key。
+   * 官方接口无 SERP 反爬顾虑，summary（600–800 字）优先、snippet 兜底；query 限 1–128 字符先截。
+   */
+  private static async searchDeepseekWeb(query: string, limit: number): Promise<WebSearchHit[]> {
+    const q: string = query.length > 128 ? query.substring(0, 128) : query;
+    const count: number = Math.min(50, Math.max(1, limit));
+    const url: string = `${AiServiceConfig.baseUrlFor('deepseek')}/tools/search`;
+    const text: string = await EncyclopediaService.fetchTextPost(
+      url, JSON.stringify({ query: q, count: count, need_content: false }),
+      AiServiceConfig.apiKeyFor('deepseek'));
+    const items: WebSearchHit[] = [];
+    try {
+      const root: Record<string, Object> = JSON.parse(text) as Record<string, Object>;
+      const list: Object | undefined = root['results'];
+      if (!Array.isArray(list)) {
+        return items;
+      }
+      const arr: Object[] = list as Object[];
+      for (let i = 0; i < arr.length && items.length < limit; i++) {
+        const item: Object = arr[i];
+        if (item === null || typeof item !== 'object') {
+          continue;
+        }
+        const rec: Record<string, Object> = item as Record<string, Object>;
+        const title: Object | undefined = rec['title'];
+        const link: Object | undefined = rec['url'];
+        if (typeof title !== 'string' || title.length === 0 || typeof link !== 'string') {
+          continue;
+        }
+        const summary: Object | undefined = rec['summary'];
+        const snippet: Object | undefined = rec['snippet'];
+        const rawSum: string = typeof summary === 'string' && summary.length > 0 ? summary :
+          typeof snippet === 'string' ? snippet : '';
+        items.push({
+          source: 'DeepSeek',
+          title: title,
+          url: link,
+          summary: EncyclopediaService.trimSummary(rawSum),
+        });
+      }
+    } catch (_error) {
+      // 解析失败：该通道算空（同维基 API 风格）
+    }
+    return items;
+  }
+
   /** 维基百科检索 API（中文站）：JSON 直出，比抓 HTML 稳。 */
   private static async searchWikipediaWeb(query: string, limit: number): Promise<WebSearchHit[]> {
     const url: string = 'https://zh.wikipedia.org/w/api.php?action=query&list=search&format=json' +
@@ -653,6 +729,15 @@ export class EncyclopediaService {
       } else if (id === 'wikipedia') {
         tasks.push(EncyclopediaService.withTimeout(
           EncyclopediaService.searchWikipediaWeb(query, perEngine), EncyclopediaService.engineTimeoutMs, stat));
+      } else if (id === 'deepseek') {
+        // #1636：无 DeepSeek 服务商 Key 就不发请求（不占超时、不烧配额），诊断行明标
+        if (AiServiceConfig.apiKeyFor('deepseek').length === 0) {
+          stat.state = '无Key';
+          tasks.push(Promise.resolve<WebSearchHit[]>([]));
+        } else {
+          tasks.push(EncyclopediaService.withTimeout(
+            EncyclopediaService.searchDeepseekWeb(query, perEngine), EncyclopediaService.engineTimeoutMs, stat));
+        }
       }
     }
     if (tasks.length === 0) {

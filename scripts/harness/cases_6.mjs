@@ -643,4 +643,53 @@ export function register(ctx) {
     deps.state.rcpResponses = [];
   });
 
+  test('DeepSeek 官方搜索通道（#1636）：无 Key 不发请求、POST 结构、summary 优先解析', async () => {
+    const { EncyclopediaService, SEARCH_ENGINES } = await load('RealEncyclopedia');
+    deps.state.rcpThrowQueue.length = 0;
+    deps.state.rcpError = null;
+    deps.state.store.clear();
+    deps.state.rcpResponses = [];
+    deps.state.requests.length = 0;
+    for (const e of SEARCH_ENGINES) {
+      if (e.id !== 'deepseek') { EncyclopediaService.setEngineEnabled(e.id, false); }
+    }
+    // ① 无 Key：零请求（不烧配额不占超时），诊断行明标「无Key」
+    const noKey = await EncyclopediaService.searchWeb('三体');
+    assert.equal(deps.state.requests.length, 0, '无 Key 不发 HTTP');
+    assert.ok(noKey.stats.includes('DeepSeek 0(无Key)'), noKey.stats);
+    assert.ok(!noKey.ok && noKey.error.includes('均无结果'), noKey.error);
+    // ② 配 Key：POST /tools/search 结构 + Bearer 头 + 请求体字段
+    deps.state.store.set('s:ai_api_key_deepseek', 'sk-test');
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(JSON.stringify({ results: [
+      { title: '三体', url: 'https://ds.example/1', summary: '刘慈欣长篇科幻小说，雨果奖作品。', snippet: '短摘要', authority: 4 },
+      { title: '球状闪电', url: 'https://ds.example/2', snippet: '同作者早期长篇', rerank_score: 2.1 },
+      { title: '', url: 'https://ds.example/skip', snippet: '无标题应被跳过' },
+    ] })) }];
+    const r = await EncyclopediaService.searchWeb('三体 刘慈欣', 5);
+    assert.ok(r.ok, r.error);
+    const req = deps.state.requests[deps.state.requests.length - 1];
+    assert.equal(req.method, 'POST');
+    assert.equal(req.url, 'https://api.deepseek.com/v1/tools/search');
+    assert.equal(req.headers['Authorization'], 'Bearer sk-test');
+    assert.equal(req.headers['Content-Type'], 'application/json');
+    const body = JSON.parse(req.content);
+    assert.equal(body.query, '三体 刘慈欣');
+    assert.equal(body.count, 9, 'count=perEngine（limit+4 去重余量，#1634 联动）');
+    assert.equal(body.need_content, false);
+    assert.equal(r.items.length, 2, '无标题条目被跳过');
+    assert.equal(r.items[0].source, 'DeepSeek');
+    assert.equal(r.items[0].summary, '刘慈欣长篇科幻小说，雨果奖作品。', 'summary 优先于 snippet');
+    assert.equal(r.items[1].summary, '同作者早期长篇', '无 summary 回退 snippet');
+    assert.ok(r.stats.includes('DeepSeek 2'), r.stats);
+    // ③ count 夹取上限 50 + 查询超长截 128（API 硬约束）
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc('{"results":[]}') }];
+    await EncyclopediaService.searchWeb('长'.repeat(200), 60);
+    const req2 = deps.state.requests[deps.state.requests.length - 1];
+    const body2 = JSON.parse(req2.content);
+    assert.equal(body2.count, 50, 'count 上限 50');
+    assert.equal(body2.query.length, 128, 'query 截 128');
+    deps.state.store.clear();
+    deps.state.rcpResponses = [];
+  });
+
 }
