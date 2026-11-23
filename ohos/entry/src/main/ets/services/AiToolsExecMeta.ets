@@ -137,6 +137,8 @@ export class AiToolsExecMeta {
     if (rsp.status < 200 || rsp.status >= 300) {
       return `更新失败（${rsp.error.length > 0 ? rsp.error : `HTTP ${rsp.status}`}）。`;
     }
+    // #1638：同步本地书架快照——更新元数据不再需要重新下载整本书才生效
+    TalebookService.syncDownloadMeta(`${bookId}`, newTitle, authors.length > 0 ? authors[0] : '', '');
     return `已更新《${newTitle}》：${changes.join('；')}`;
   }
 

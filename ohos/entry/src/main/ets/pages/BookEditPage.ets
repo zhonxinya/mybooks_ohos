@@ -137,6 +137,10 @@ struct BookEditPage {
     }
     const envelope = await TalebookService.editBookAsync(this.bookId, payload);
     if (envelope.status >= 200 && envelope.status < 300) {
+      // #1638：同步本地书架快照，改元数据无需重新下载整本书
+      const editAuthors: string[] = this.splitToList(this.author);
+      TalebookService.syncDownloadMeta(`${this.bookId}`, this.title.trim(),
+        editAuthors.length > 0 ? editAuthors[0] : '', '');
       this.getUIContext().getPromptAction().showToast({ message: '保存成功' });
       AppRouter.back(this.getUIContext());
     } else {

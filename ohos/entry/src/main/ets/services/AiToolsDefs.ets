@@ -249,6 +249,7 @@ export const BOOK_META_REQUIRED: string[] = ['book_id'];
 
 export const TOOL_UPDATE_BOOK_META: AiToolDefinition = defineTool('update_book_meta',
   '更新服务器上某本书的元数据（书籍 id 来自 search_books）。只传要修改的字段，未传字段保持原值。' +
+    '更新成功后本地书架的书名/作者会自动同步，无需重新下载该书。' +
     '改前先 book_detail 核对现值并向用户复述目标改动。更换封面图片用 search_cover + set_cover。' +
     '分类(category)与标签(tags)是两套体系：分类单选、标签可多个，动分类前先用 list_categories 看现有分类。',
   BOOK_META_PROPS, BOOK_META_REQUIRED);

@@ -605,6 +605,8 @@ struct BookDetailPage {
       }
       this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : 'AI 更新成功');
       await this.loadDetail();
+      // #1638：AI 补全可能改标题/作者/封面，重取 detail 同步本地书架快照（免重新下载）
+      await TalebookService.syncLocalBookMeta(this.bookId);
     } catch (error) {
       this.toast(`AI 补全失败：${error}`);
     } finally {
