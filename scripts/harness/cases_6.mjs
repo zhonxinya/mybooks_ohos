@@ -317,14 +317,16 @@ export function register(ctx) {
     deps.state.store.clear();
     deps.state.store.set('p:ai_search_engines', JSON.stringify(['baidu', 'bing', 'so360', 'sogou', 'wikipedia']));
     assert.deepEqual(EncyclopediaService.enabledEngines(),
-      ['baidu', 'bing', 'so360', 'sogou', 'wikipedia', 'deepseek'], '迁移后 deepseek 默认启用');
+      ['baidu', 'bing', 'so360', 'sogou', 'wikipedia', 'deepseek', 'openalex', 'crossref'],
+      '迁移后 deepseek/openalex/crossref（非旧时代引擎）默认启用');
     assert.deepEqual(JSON.parse(deps.state.store.get('p:ai_search_engines_off')), [], '迁移落盘 off 键（无停用项）');
     // 老配置里被停用的引擎迁移后仍停用；deepseek 不属「旧时代已知引擎」保持默认启用
     deps.state.store.clear();
     deps.state.store.set('p:ai_search_engines', JSON.stringify(['baidu', 'bing']));
-    assert.deepEqual(EncyclopediaService.enabledEngines(), ['baidu', 'bing', 'deepseek']);
+    assert.deepEqual(EncyclopediaService.enabledEngines(), ['baidu', 'bing', 'deepseek', 'openalex', 'crossref']);
     // 全关（人为写空启用清单）→ 明确错误文案，不发请求
-    deps.state.store.set('p:ai_search_engines_off', JSON.stringify(['baidu', 'bing', 'so360', 'sogou', 'wikipedia', 'deepseek']));
+    deps.state.store.set('p:ai_search_engines_off',
+      JSON.stringify(['baidu', 'bing', 'so360', 'sogou', 'wikipedia', 'deepseek', 'openalex', 'crossref']));
     deps.state.rcpResponses = [];
     const none = await EncyclopediaService.searchWeb('三体');
     assert.ok(!none.ok && none.error.includes('没有启用任何搜索引擎'), none.error);
@@ -698,6 +700,62 @@ export function register(ctx) {
     const body2 = JSON.parse(req2.content);
     assert.equal(body2.count, 50, 'count 上限 50');
     assert.equal(body2.query.length, 128, 'query 截 128');
+    deps.state.store.clear();
+    deps.state.rcpResponses = [];
+  });
+
+  test('OpenAlex/Crossref 免费学术通道（#1637）：请求结构、倒排摘要重建、DOI 回退、降级摘要', async () => {
+    const { EncyclopediaService, SEARCH_ENGINES } = await load('RealEncyclopedia');
+    deps.state.rcpThrowQueue.length = 0;
+    deps.state.rcpError = null;
+    deps.state.store.clear();
+    deps.state.requests.length = 0;
+    for (const e of SEARCH_ENGINES) {
+      if (e.id !== 'openalex' && e.id !== 'crossref') { EncyclopediaService.setEngineEnabled(e.id, false); }
+    }
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ meta: { count: 100 }, results: [
+        { display_name: '量子三体问题', publication_year: 2000, doi: 'https://doi.org/10.1360/x',
+          primary_location: { landing_page_url: 'https://wap.example/a' },
+          abstract_inverted_index: { 一个: [0], 行星: [1], 系统: [2] },
+          authorships: [{ author: { display_name: '张三' } }] },
+        { display_name: '三体出版研究', doi: 'https://doi.org/10.2/y', publication_year: 2008,
+          authorships: [{ author: { display_name: '李四' } }] },
+        { display_name: '', doi: 'https://doi.org/10.3/z' },
+        { display_name: '无链接条目' },
+      ] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ message: { items: [
+        { title: ['试析《三体》成功之路'], DOI: '10.6/a', URL: 'https://doi.org/10.6/a',
+          abstract: '<jats:p>本文分析科幻叙事。</jats:p>', author: [{ name: '王五' }],
+          issued: { 'date-parts': [[2026, 2]] }, type: 'journal-article' },
+        { title: ['三体英译本研究'], DOI: '10.7/b', author: [{ name: '赵六' }],
+          issued: { 'date-parts': [[2015]] }, type: 'book-chapter' },
+        { title: [], DOI: '10.8/c' },
+      ] } })) },
+    ];
+    const r = await EncyclopediaService.searchWeb('三体', 5);
+    assert.ok(r.ok, r.error);
+    // 请求结构：GET + 编码查询 + 条数联动（perEngine=limit+4=9）+ crossref select 省流量
+    const oa = deps.state.requests.find((q) => q.url.includes('openalex.org'));
+    const cr = deps.state.requests.find((q) => q.url.includes('crossref.org'));
+    assert.equal(oa.method, 'GET');
+    assert.ok(oa.url.includes('search=%E4%B8%89%E4%BD%93') && oa.url.includes('per-page=9'), oa.url);
+    assert.ok(cr.url.includes('rows=9') && cr.url.includes('select='), cr.url);
+    // OpenAlex：倒排摘要重建、landing_page_url 优先、无 landing 回退 DOI、无标题/无链接跳过、无摘要退化「作者 (年份)」
+    const oaHits = r.items.filter((h) => h.source === 'OpenAlex');
+    assert.equal(oaHits.length, 2, '空标题与无链接条目被跳过');
+    assert.equal(oaHits[0].url, 'https://wap.example/a', 'landing_page_url 优先于 doi');
+    assert.equal(oaHits[0].summary, '一个 行星 系统', 'abstract_inverted_index 按位置重建');
+    assert.equal(oaHits[1].url, 'https://doi.org/10.2/y', '无 landing_page_url 回退 doi');
+    assert.equal(oaHits[1].summary, '李四 (2008)', '无摘要退化为作者+年份');
+    // Crossref：title[0]、URL 字段、abstract 去 XML 标签、缺摘要退化「作者 (年份) · 类型」
+    const crHits = r.items.filter((h) => h.source === 'Crossref');
+    assert.equal(crHits.length, 2, '空 title 数组被跳过');
+    assert.equal(crHits[0].title, '试析《三体》成功之路');
+    assert.ok(crHits[0].summary.includes('本文分析科幻叙事'), crHits[0].summary);
+    assert.ok(!crHits[0].summary.includes('jats'), 'XML 标签已剥离');
+    assert.equal(crHits[1].summary, '赵六 (2015) · book-chapter');
+    assert.ok(r.stats.includes('OpenAlex 2') && r.stats.includes('Crossref 2'), r.stats);
     deps.state.store.clear();
     deps.state.rcpResponses = [];
   });

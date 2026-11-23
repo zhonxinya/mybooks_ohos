@@ -1,7 +1,6 @@
-import { rcp } from '@kit.RemoteCommunicationKit';
-import { util } from '@kit.ArkTS';
 import { TalebookService } from './TalebookService';
 import { AiServiceConfig } from './AiServiceConfig';
+import { WebSearchChannels, WebSearchHit, BAIDU_UA, ABSTRACT_MAX } from './WebSearchChannels';
 
 /** 百科单通道检索结果。ok=false 时 error 说明原因（供工具层如实回传）。 */
 export interface EncyclopediaHit {
@@ -11,14 +10,6 @@ export interface EncyclopediaHit {
   abstract: string;
   url: string;
   error: string;
-}
-
-/** 通用网页搜索单条结果。summary 可能为空（纯标题卡片）。 */
-export interface WebSearchHit {
-  source: string;
-  title: string;
-  url: string;
-  summary: string;
 }
 
 /** 通用网页搜索整体结果：ok=false 时 error 说明原因（同百科通道容错风格）。 */
@@ -60,6 +51,8 @@ export const SEARCH_ENGINES: SearchEngine[] = [
   { id: 'sogou', label: '搜狗', source: '搜狗' },
   { id: 'wikipedia', label: '维基百科', source: '维基百科' },
   { id: 'deepseek', label: 'DeepSeek', source: 'DeepSeek' },
+  { id: 'openalex', label: 'OpenAlex', source: 'OpenAlex' },
+  { id: 'crossref', label: 'Crossref', source: 'Crossref' },
 ];
 
 /** 启用的引擎 id 列表（JSON 数组）；旧「启用清单」语义，仅作迁移源（#1636）。 */
@@ -74,64 +67,18 @@ const PER_ENGINE_FETCH: number = 8;
 const ENGINE_TIMEOUT_MS: number = 8000;
 /** 来源可信度权重：百科/主搜高于聚合站，用于重排序。 */
 const SOURCE_WEIGHT: Record<string, number> = {
-  '百度百科': 3, '维基百科': 3, 'DeepSeek': 3, '百度': 2, 'Bing': 2, '360': 1, '搜狗': 1,
+  '百度百科': 3, '维基百科': 3, 'DeepSeek': 3, 'OpenAlex': 3, 'Crossref': 3,
+  '百度': 2, 'Bing': 2, '360': 1, '搜狗': 1,
 };
-
-/** 百度主搜 UA：百科卡走 SERP 内嵌 JSON（baike item 页被安全验证挡，SERP 是唯一可用公开入口）。 */
-const BAIDU_UA: string =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
-/** 摘要截断长度：够模型引用背景，又不吃掉对话上下文。 */
-const ABSTRACT_MAX: number = 600;
 
 export class EncyclopediaService {
   /** 单引擎硬超时毫秒（#1633）；harness 用例临时调小避免真实等待 8s。 */
   static engineTimeoutMs: number = ENGINE_TIMEOUT_MS;
-  /** GET 文本响应；非 2xx 抛错（通道层捕获转 ok=false）。 */
-  private static async fetchText(url: string, ua: string): Promise<string> {
-    const headers: rcp.RequestHeaders = {
-      'User-Agent': ua,
-      'Accept-Language': 'zh-CN,zh;q=0.9',
-    };
-    // 连接超时压到 10s：zh.wikipedia 在局域网常被 DNS 污染到不可达 IP，
-    // 默认 60s 会 TCP 挂等，拖死整个工具调用。
-    const session: rcp.Session = rcp.createSession({
-      requestConfiguration: { transfer: { timeout: { connectMs: 10000, transferMs: 20000 } } },
-    });
-    try {
-      const request: rcp.Request = new rcp.Request(url, 'GET', headers);
-      const response: rcp.Response = await session.fetch(request);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw new Error(`HTTP ${response.statusCode}`);
-      }
-      const body: ArrayBuffer | undefined = response.body;
-      if (body === undefined) {
-        return '';
-      }
-      const decoder: util.TextDecoder = util.TextDecoder.create('utf-8', { ignoreBOM: true });
-      return decoder.decodeToString(new Uint8Array(body));
-    } finally {
-      session.close();
-    }
-  }
-
-  /** JSON 字符串字面量反转义（SERP 内嵌 JSON 里的 \" \\ \u 序列）。 */
-  private static unescapeJsonString(raw: string): string {
-    try {
-      return JSON.parse(`"${raw}"`) as string;
-    } catch (_error) {
-      return raw;
-    }
-  }
-
-  private static stripHtml(text: string): string {
-    return text.replace(/<[^>]*>/g, '').replace(/&[a-z]+;|&#\d+;/g, ' ').replace(/\s+/g, ' ').trim();
-  }
-
   /** 百度百科：抓百度主搜结果页里的百科卡（title/url/abstract 内嵌 JSON）。 */
   static async searchBaike(query: string): Promise<EncyclopediaHit> {
     const hit: EncyclopediaHit = { source: '百度百科', ok: false, title: '', abstract: '', url: '', error: '' };
     try {
-      const html: string = await EncyclopediaService.fetchText(
+      const html: string = await WebSearchChannels.fetchText(
         `https://www.baidu.com/s?wd=${encodeURIComponent(query)}`, BAIDU_UA);
       // SERP 有两种百科卡形态且随 query 变化：词条卡（"tools"，多见于「词 百科」）、
       // AI 问答卡内引用项（url/text/source+abstract，纯词与整句均有）。先前者，不中则后者。
@@ -156,9 +103,9 @@ export class EncyclopediaService {
         rawAbstract = cite[4];
       }
       hit.ok = true;
-      hit.title = EncyclopediaService.unescapeJsonString(title);
+      hit.title = WebSearchChannels.unescapeJsonString(title);
       hit.url = url;
-      hit.abstract = EncyclopediaService.unescapeJsonString(rawAbstract);
+      hit.abstract = WebSearchChannels.unescapeJsonString(rawAbstract);
       if (hit.abstract.length > ABSTRACT_MAX) {
         hit.abstract = `${hit.abstract.substring(0, ABSTRACT_MAX)}…`;
       }
@@ -173,7 +120,7 @@ export class EncyclopediaService {
   static async searchWikipedia(query: string): Promise<EncyclopediaHit> {
     const hit: EncyclopediaHit = { source: '维基百科', ok: false, title: '', abstract: '', url: '', error: '' };
     try {
-      const text: string = await EncyclopediaService.fetchText(
+      const text: string = await WebSearchChannels.fetchText(
         `https://zh.wikipedia.org/w/api.php?action=query&list=search&srlimit=2&format=json&formatversion=2&srsearch=${encodeURIComponent(query)}`,
         BAIDU_UA);
       const root = JSON.parse(text) as Record<string, Object>;
@@ -192,7 +139,7 @@ export class EncyclopediaService {
       }
       hit.ok = true;
       hit.title = title;
-      hit.abstract = EncyclopediaService.stripHtml(snippet);
+      hit.abstract = WebSearchChannels.stripHtml(snippet);
       if (hit.abstract.length > ABSTRACT_MAX) {
         hit.abstract = `${hit.abstract.substring(0, ABSTRACT_MAX)}…`;
       }
@@ -202,120 +149,6 @@ export class EncyclopediaService {
       hit.error = error instanceof Error ? error.message : `${error}`;
       return hit;
     }
-  }
-
-  /** organic 容器切段：按引擎锚点返回各容器起始下标（最多扫 30 个）。 */
-  private static containerStarts(html: string, anchorRe: RegExp): number[] {
-    const starts: number[] = [];
-    let pos: RegExpExecArray | null = anchorRe.exec(html);
-    while (pos !== null && starts.length < 30) {
-      starts.push(pos.index);
-      pos = anchorRe.exec(html);
-    }
-    return starts;
-  }
-
-  /** 摘要统一截断。 */
-  private static trimSummary(text: string): string {
-    return text.length > ABSTRACT_MAX ? `${text.substring(0, ABSTRACT_MAX)}…` : text;
-  }
-
-  /**
-   * 百度 organic：容器 `class="result c-container"`。
-   * mu=属性为原站直链（比 link 跳转可靠；recommend_list 榜单推广排除）、
-   * <!--s-text--> 标记标题（含 <em> 高亮，h3 兜底）、summary-text_* 为摘要（CSS Modules 哈希后缀会变）。
-   */
-  private static parseWebBaidu(html: string, limit: number): WebSearchHit[] {
-    const items: WebSearchHit[] = [];
-    const starts: number[] = EncyclopediaService.containerStarts(html, /class="result c-container/g);
-    for (let i = 0; i < starts.length && items.length < limit; i++) {
-      const from: number = starts[i];
-      const to: number = i + 1 < starts.length ? starts[i + 1] : Math.min(html.length, from + 9000);
-      const seg: string = html.substring(from, to);
-      const mu: RegExpExecArray | null = /mu="(https?:\/\/[^"]{1,300})"/.exec(seg.substring(0, 900));
-      if (mu === null || mu[1].indexOf('recommend_list') >= 0) {
-        continue;
-      }
-      let rawTitle: string = '';
-      const stext: RegExpExecArray | null = /<!--s-text-->([\s\S]{1,300}?)<!--\/s-text-->/.exec(seg);
-      if (stext !== null) {
-        rawTitle = stext[1];
-      } else {
-        const h3: RegExpExecArray | null = /<h3[^>]*>([\s\S]{1,300}?)<\/h3>/.exec(seg);
-        if (h3 !== null) {
-          rawTitle = h3[1];
-        }
-      }
-      const title: string = EncyclopediaService.stripHtml(rawTitle);
-      if (title.length === 0) {
-        continue;
-      }
-      let summary: string = '';
-      const sum: RegExpExecArray | null = /class="[^"]*summary-text_[^"]*">([\s\S]{1,600}?)<\/span>/.exec(seg);
-      if (sum !== null) {
-        summary = EncyclopediaService.stripHtml(sum[1]);
-      }
-      items.push({ source: '百度', title: title, url: mu[1], summary: EncyclopediaService.trimSummary(summary) });
-    }
-    return items;
-  }
-
-  /** Bing organic：`<li class="b_algo">` 容器，h2>a href 即原站直链，b_lineclamp_* 为摘要（尾部「阅读更多」去掉）。 */
-  private static parseWebBing(html: string, limit: number): WebSearchHit[] {
-    const items: WebSearchHit[] = [];
-    const starts: number[] = EncyclopediaService.containerStarts(html, /<li class="b_algo"/g);
-    for (let i = 0; i < starts.length && items.length < limit; i++) {
-      const from: number = starts[i];
-      const to: number = i + 1 < starts.length ? starts[i + 1] : Math.min(html.length, from + 6000);
-      const seg: string = html.substring(from, to);
-      const a: RegExpExecArray | null =
-        /<h2[^>]*><a[^>]*href="(https?:\/\/[^"]{1,300})"[^>]*>([\s\S]{1,300}?)<\/a>/.exec(seg);
-      if (a === null) {
-        continue;
-      }
-      const title: string = EncyclopediaService.stripHtml(a[2]);
-      if (title.length === 0) {
-        continue;
-      }
-      let summary: string = '';
-      const cap: RegExpExecArray | null = /class="b[^"]*lineclamp[^"]*"[^>]*>([\s\S]{1,600}?)<\/p>/.exec(seg);
-      if (cap !== null) {
-        summary = EncyclopediaService.stripHtml(cap[1]);
-        // 页脚「阅读更多」链接文本与句尾重复出现，循环剥离
-        while (summary.endsWith('阅读更多')) {
-          summary = summary.substring(0, summary.length - 4);
-        }
-      }
-      items.push({ source: 'Bing', title: title, url: a[1], summary: EncyclopediaService.trimSummary(summary) });
-    }
-    return items;
-  }
-
-  /** 360 organic：`<li class="res-list">` 容器，h3>a 链接（书站卡是 so.com/link 跳转，仍可点开），res-list-summary 为摘要。 */
-  private static parseWeb360(html: string, limit: number): WebSearchHit[] {
-    const items: WebSearchHit[] = [];
-    const starts: number[] = EncyclopediaService.containerStarts(html, /<li class="res-list"/g);
-    for (let i = 0; i < starts.length && items.length < limit; i++) {
-      const from: number = starts[i];
-      const to: number = i + 1 < starts.length ? starts[i + 1] : Math.min(html.length, from + 6000);
-      const seg: string = html.substring(from, to);
-      const a: RegExpExecArray | null =
-        /<h3[^>]*><a[^>]*href="(https?:\/\/[^"]{1,300})"[^>]*>([\s\S]{1,300}?)<\/a>/.exec(seg);
-      if (a === null) {
-        continue;
-      }
-      const title: string = EncyclopediaService.stripHtml(a[2]);
-      if (title.length === 0) {
-        continue;
-      }
-      let summary: string = '';
-      const cap: RegExpExecArray | null = /class="res-list-summary"[^>]*>([\s\S]{1,600}?)<\/span>/.exec(seg);
-      if (cap !== null) {
-        summary = EncyclopediaService.stripHtml(cap[1]);
-      }
-      items.push({ source: '360', title: title, url: a[1], summary: EncyclopediaService.trimSummary(summary) });
-    }
-    return items;
   }
 
   // ———— 搜索引擎配置（设置页「搜索引擎」区） ————
@@ -417,150 +250,6 @@ export class EncyclopediaService {
 
   static setSearchLimit(n: number): void {
     TalebookService.prefSet(SEARCH_LIMIT_KEY, `${Math.min(20, Math.max(3, Math.floor(n)))}`);
-  }
-
-  /** 搜狗 organic：`<div class="vrwrap">` 容器，h3>a 为跳转链，str-text-info 为摘要。 */
-  private static parseWebSogou(html: string, limit: number): WebSearchHit[] {
-    const items: WebSearchHit[] = [];
-    const starts: number[] = EncyclopediaService.containerStarts(html, /class="(?:vrwrap|rb)"/g);
-    for (let i = 0; i < starts.length && items.length < limit; i++) {
-      const from: number = starts[i];
-      const to: number = i + 1 < starts.length ? starts[i + 1] : Math.min(html.length, from + 6000);
-      const seg: string = html.substring(from, to);
-      const a: RegExpExecArray | null =
-        /<h3[^>]*>[\s\S]{0,200}?<a[^>]*href="(https?:\/\/[^"]{1,300})"[^>]*>([\s\S]{1,300}?)<\/a>/.exec(seg);
-      if (a === null) {
-        continue;
-      }
-      const title: string = EncyclopediaService.stripHtml(a[2]);
-      if (title.length === 0) {
-        continue;
-      }
-      let summary: string = '';
-      const cap: RegExpExecArray | null =
-        /class="[^"]*(?:str-text-info|text-layout)[^"]*"[^>]*>([\s\S]{1,600}?)<\/(?:div|span|p)>/.exec(seg);
-      if (cap !== null) {
-        summary = EncyclopediaService.stripHtml(cap[1]);
-      }
-      items.push({ source: '搜狗', title: title, url: a[1], summary: EncyclopediaService.trimSummary(summary) });
-    }
-    return items;
-  }
-
-  /** POST JSON 取文本响应（DeepSeek Search API 用）；非 2xx 抛错（通道层收敛）。 */
-  private static async fetchTextPost(url: string, json: string, bearer: string): Promise<string> {
-    const headers: rcp.RequestHeaders = {
-      'User-Agent': BAIDU_UA,
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${bearer}`,
-    };
-    const session: rcp.Session = rcp.createSession({
-      requestConfiguration: { transfer: { timeout: { connectMs: 10000, transferMs: 20000 } } },
-    });
-    try {
-      const request: rcp.Request = new rcp.Request(url, 'POST', headers, json);
-      const response: rcp.Response = await session.fetch(request);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw new Error(`HTTP ${response.statusCode}`);
-      }
-      const body: ArrayBuffer | undefined = response.body;
-      if (body === undefined) {
-        return '';
-      }
-      const decoder: util.TextDecoder = util.TextDecoder.create('utf-8', { ignoreBOM: true });
-      return decoder.decodeToString(new Uint8Array(body));
-    } finally {
-      session.close();
-    }
-  }
-
-  /**
-   * DeepSeek 官方 Search API（#1636）：POST {baseUrl}/tools/search，Bearer=DeepSeek 服务商 Key。
-   * 官方接口无 SERP 反爬顾虑，summary（600–800 字）优先、snippet 兜底；query 限 1–128 字符先截。
-   */
-  private static async searchDeepseekWeb(query: string, limit: number): Promise<WebSearchHit[]> {
-    const q: string = query.length > 128 ? query.substring(0, 128) : query;
-    const count: number = Math.min(50, Math.max(1, limit));
-    const url: string = `${AiServiceConfig.baseUrlFor('deepseek')}/tools/search`;
-    const text: string = await EncyclopediaService.fetchTextPost(
-      url, JSON.stringify({ query: q, count: count, need_content: false }),
-      AiServiceConfig.apiKeyFor('deepseek'));
-    const items: WebSearchHit[] = [];
-    try {
-      const root: Record<string, Object> = JSON.parse(text) as Record<string, Object>;
-      const list: Object | undefined = root['results'];
-      if (!Array.isArray(list)) {
-        return items;
-      }
-      const arr: Object[] = list as Object[];
-      for (let i = 0; i < arr.length && items.length < limit; i++) {
-        const item: Object = arr[i];
-        if (item === null || typeof item !== 'object') {
-          continue;
-        }
-        const rec: Record<string, Object> = item as Record<string, Object>;
-        const title: Object | undefined = rec['title'];
-        const link: Object | undefined = rec['url'];
-        if (typeof title !== 'string' || title.length === 0 || typeof link !== 'string') {
-          continue;
-        }
-        const summary: Object | undefined = rec['summary'];
-        const snippet: Object | undefined = rec['snippet'];
-        const rawSum: string = typeof summary === 'string' && summary.length > 0 ? summary :
-          typeof snippet === 'string' ? snippet : '';
-        items.push({
-          source: 'DeepSeek',
-          title: title,
-          url: link,
-          summary: EncyclopediaService.trimSummary(rawSum),
-        });
-      }
-    } catch (_error) {
-      // 解析失败：该通道算空（同维基 API 风格）
-    }
-    return items;
-  }
-
-  /** 维基百科检索 API（中文站）：JSON 直出，比抓 HTML 稳。 */
-  private static async searchWikipediaWeb(query: string, limit: number): Promise<WebSearchHit[]> {
-    const url: string = 'https://zh.wikipedia.org/w/api.php?action=query&list=search&format=json' +
-      `&srlimit=${limit}&srsearch=${encodeURIComponent(query)}`;
-    const text: string = await EncyclopediaService.fetchText(url, BAIDU_UA);
-    const items: WebSearchHit[] = [];
-    try {
-      const root: Record<string, Object> = JSON.parse(text) as Record<string, Object>;
-      const q: Object | undefined = root['query'];
-      if (q === undefined || q === null || typeof q !== 'object') {
-        return items;
-      }
-      const list: Object | undefined = (q as Record<string, Object>)['search'];
-      if (!Array.isArray(list)) {
-        return items;
-      }
-      const arr: Object[] = list as Object[];
-      for (let i = 0; i < arr.length && items.length < limit; i++) {
-        const item: Object = arr[i];
-        if (item === null || typeof item !== 'object') {
-          continue;
-        }
-        const rec: Record<string, Object> = item as Record<string, Object>;
-        const title: Object | undefined = rec['title'];
-        const snippet: Object | undefined = rec['snippet'];
-        if (typeof title !== 'string' || title.length === 0) {
-          continue;
-        }
-        items.push({
-          source: '维基百科',
-          title: title,
-          url: `https://zh.wikipedia.org/wiki/${encodeURIComponent(title)}`,
-          summary: EncyclopediaService.trimSummary(
-            typeof snippet === 'string' ? EncyclopediaService.stripHtml(snippet) : ''),
-        });
-      }
-    } catch (_error) {
-      // 解析失败：该通道算空
-    }
-    return items;
   }
 
   /** 词段发射（#1632）：非 CJK 整词需 ≥2 字符；CJK 单字成词、多字切二元组。 */
@@ -740,27 +429,27 @@ export class EncyclopediaService {
       stats.push(stat);
       if (id === 'baidu') {
         tasks.push(EncyclopediaService.withTimeout(
-          EncyclopediaService.fetchText(`https://www.baidu.com/s?wd=${enc}`, BAIDU_UA)
-            .then((h: string): WebSearchHit[] => EncyclopediaService.parseWebBaidu(h, perEngine)),
+          WebSearchChannels.fetchText(`https://www.baidu.com/s?wd=${enc}`, BAIDU_UA)
+            .then((h: string): WebSearchHit[] => WebSearchChannels.parseWebBaidu(h, perEngine)),
           EncyclopediaService.engineTimeoutMs, stat));
       } else if (id === 'bing') {
         tasks.push(EncyclopediaService.withTimeout(
-          EncyclopediaService.fetchText(`https://cn.bing.com/search?q=${enc}&setlang=zh-hans`, BAIDU_UA)
-            .then((h: string): WebSearchHit[] => EncyclopediaService.parseWebBing(h, perEngine)),
+          WebSearchChannels.fetchText(`https://cn.bing.com/search?q=${enc}&setlang=zh-hans`, BAIDU_UA)
+            .then((h: string): WebSearchHit[] => WebSearchChannels.parseWebBing(h, perEngine)),
           EncyclopediaService.engineTimeoutMs, stat));
       } else if (id === 'so360') {
         tasks.push(EncyclopediaService.withTimeout(
-          EncyclopediaService.fetchText(`https://www.so.com/s?q=${enc}`, BAIDU_UA)
-            .then((h: string): WebSearchHit[] => EncyclopediaService.parseWeb360(h, perEngine)),
+          WebSearchChannels.fetchText(`https://www.so.com/s?q=${enc}`, BAIDU_UA)
+            .then((h: string): WebSearchHit[] => WebSearchChannels.parseWeb360(h, perEngine)),
           EncyclopediaService.engineTimeoutMs, stat));
       } else if (id === 'sogou') {
         tasks.push(EncyclopediaService.withTimeout(
-          EncyclopediaService.fetchText(`https://www.sogou.com/web?query=${enc}`, BAIDU_UA)
-            .then((h: string): WebSearchHit[] => EncyclopediaService.parseWebSogou(h, perEngine)),
+          WebSearchChannels.fetchText(`https://www.sogou.com/web?query=${enc}`, BAIDU_UA)
+            .then((h: string): WebSearchHit[] => WebSearchChannels.parseWebSogou(h, perEngine)),
           EncyclopediaService.engineTimeoutMs, stat));
       } else if (id === 'wikipedia') {
         tasks.push(EncyclopediaService.withTimeout(
-          EncyclopediaService.searchWikipediaWeb(query, perEngine), EncyclopediaService.engineTimeoutMs, stat));
+          WebSearchChannels.searchWikipediaWeb(query, perEngine), EncyclopediaService.engineTimeoutMs, stat));
       } else if (id === 'deepseek') {
         // #1636：无 DeepSeek 服务商 Key 就不发请求（不占超时、不烧配额），诊断行明标
         if (AiServiceConfig.apiKeyFor('deepseek').length === 0) {
@@ -768,8 +457,14 @@ export class EncyclopediaService {
           tasks.push(Promise.resolve<WebSearchHit[]>([]));
         } else {
           tasks.push(EncyclopediaService.withTimeout(
-            EncyclopediaService.searchDeepseekWeb(query, perEngine), EncyclopediaService.engineTimeoutMs, stat));
+            WebSearchChannels.searchDeepseekWeb(query, perEngine), EncyclopediaService.engineTimeoutMs, stat));
         }
+      } else if (id === 'openalex') {
+        tasks.push(EncyclopediaService.withTimeout(
+          WebSearchChannels.searchOpenalexWeb(query, perEngine), EncyclopediaService.engineTimeoutMs, stat));
+      } else if (id === 'crossref') {
+        tasks.push(EncyclopediaService.withTimeout(
+          WebSearchChannels.searchCrossrefWeb(query, perEngine), EncyclopediaService.engineTimeoutMs, stat));
       }
     }
     if (tasks.length === 0) {
