@@ -17,7 +17,8 @@ import { AiPersona } from './AiPersona';
 import { AiToolsCore } from './AiToolsCore';
 import { AiToolsExecMeta } from './AiToolsExecMeta';
 import { AiToolsExecShelf } from './AiToolsExecShelf';
-import { TOOL_DEFS, TOOL_SET_VOICE, ToolBookLine, AiToolDefinition, AiToolGroup, AiToolItem } from './AiToolsDefs';
+import { TOOL_DEFS, TOOL_SET_VOICE, ToolBookLine, AiToolDefinition, AiToolGroup, AiToolItem,
+  formatPlanList } from './AiToolsDefs';
 import { McpService, McpServer } from './McpService';
 
 /**
@@ -90,7 +91,7 @@ export class AiTools {
       'search_cover', 'set_cover'],
     ['联网检索', 'search_web', 'fetch_url', 'ai_search', 'search_encyclopedia'],
     ['记忆与配置', 'save_memory', 'forget_memory', 'add_mcp_server'],
-    ['交互', 'ask_user', 'list_ai_tools'],
+    ['交互', 'ask_user', 'plan', 'list_ai_tools'],
   ];
 
   /** 结构化工具目录（设置页渲染用）：分组 → 工具条目。 */
@@ -345,6 +346,9 @@ export class AiTools {
     if (name === 'list_ai_tools') {
       return '查看可用工具';
     }
+    if (name === 'plan') {
+      return '梳理任务计划';
+    }
     if (name === 'set_voice') {
       return '更换通话音色';
     }
@@ -516,6 +520,9 @@ export class AiTools {
       }
       if (name === 'list_ai_tools') {
         return AiTools.catalog();
+      }
+      if (name === 'plan') {
+        return formatPlanList(AiToolsCore.argString(args, 'items'));
       }
       if (name === 'ask_user') {
         // 文字对话页由回路层（AiService.runToolLoop）拦截执行反问交互；

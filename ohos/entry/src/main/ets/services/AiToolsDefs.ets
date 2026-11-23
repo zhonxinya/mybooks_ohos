@@ -1,6 +1,6 @@
 /**
  * AI 工具定义区（拆分自 AiTools.ets）：结构化行解析、OpenAI function schema 接口、
- * 28 个工具的 define 常量与 TOOL_DEFS 登记表。本文件无运行时依赖（纯数据 + 小函数）。
+ * 34 个工具的 define 常量与 TOOL_DEFS 登记表。本文件无运行时依赖（纯数据 + 小函数）。
  */
 /** 工具结果里的一本书（供对话页做结构化列表渲染）。 */
 export interface ToolBookLine {
@@ -372,6 +372,85 @@ export const TOOL_ASK_USER: AiToolDefinition = defineTool('ask_user',
     '用户的答复会作为本工具的结果返回，收到后再继续。不要用它闲聊或问与当前任务无关的信息。',
   ASK_USER_PROPS, ['question', 'options']);
 
+export const PLAN_PROPS: Record<string, AiToolProperty> = {
+  'items': prop('string', '每行一步，行首标状态：「✅ 」已完成、「⏳ 」进行中、「☐ 」待办；' +
+    '每次传整份清单，重复调用即整体替换'),
+};
+export const TOOL_PLAN: AiToolDefinition = defineTool('plan',
+  '多步任务的主动规划：需要 3 步以上的工作（批量搜索/下载入库/元数据整理/逐项修改等）开工前先调它，' +
+    '把要做的事列成计划让用户看到整体安排；每做完一步再调一次更新状态（该步标 ✅、下一步标 ⏳），' +
+    '执行中的步骤任何时刻只保留一个 ⏳。一两步的小任务不要用它，直接做完即可。',
+  PLAN_PROPS, ['items']);
+
+const PLAN_DONE_MARKS: string[] = ['✅', '✔', '✓', '☑'];
+const PLAN_DOING_MARKS: string[] = ['⏳', '▶', '🔄'];
+const PLAN_PENDING_MARKS: string[] = ['☐', '□', '▫', '⬜'];
+const PLAN_STEP_LIMIT: number = 15;
+
+/** 剥行首编号「1.」「1、」「12)」及后续空白（模型爱在步骤前自带序号）。 */
+function stripPlanOrdinal(line: string): string {
+  let j: number = 0;
+  while (j < line.length && line.charAt(j) >= '0' && line.charAt(j) <= '9') {
+    j++;
+  }
+  if (j > 0 && j < line.length && ('.、)）:：'.indexOf(line.charAt(j)) >= 0)) {
+    return line.substring(j + 1).trim();
+  }
+  return line;
+}
+
+function planStepText(line: string, marks: string[]): string {
+  for (let i = 0; i < marks.length; i++) {
+    if (line.startsWith(marks[i])) {
+      return line.substring(marks[i].length).trim();
+    }
+  }
+  return line;
+}
+
+/**
+ * plan 清单归一化：剥去行首编号（1. / 1、/ 1)）与状态标记，重排成「N. ✅ 步骤」编号行+总进度。
+ * 模型写各种花样（漏标/带编号/空行）都收敛成同一可读格式；超 PLAN_STEP_LIMIT 步截断并计数提示。
+ */
+export function formatPlanList(items: string): string {
+  const lines: string[] = items.split('\n');
+  const rows: string[] = [];
+  let total: number = 0;
+  let done: number = 0;
+  for (let i = 0; i < lines.length; i++) {
+    let line: string = stripPlanOrdinal(lines[i].trim());
+    if (line.length === 0) {
+      continue;
+    }
+    let mark: string = '☐';
+    if (planStepText(line, PLAN_DONE_MARKS) !== line) {
+      mark = '✅';
+      line = planStepText(line, PLAN_DONE_MARKS);
+    } else if (planStepText(line, PLAN_DOING_MARKS) !== line) {
+      mark = '⏳';
+      line = planStepText(line, PLAN_DOING_MARKS);
+    } else {
+      line = planStepText(line, PLAN_PENDING_MARKS);
+    }
+    line = stripPlanOrdinal(line);
+    if (mark === '✅') {
+      done++;
+    }
+    total++;
+    if (rows.length < PLAN_STEP_LIMIT) {
+      rows.push(`${rows.length + 1}. ${mark} ${line}`);
+    }
+  }
+  if (total === 0) {
+    return '计划为空：每行一步传入 items（行首用 ✅/⏳/☐ 标状态）。';
+  }
+  if (total > PLAN_STEP_LIMIT) {
+    rows.push(`…（另有 ${total - PLAN_STEP_LIMIT} 步未列出）`);
+  }
+  const head: string = `【任务计划】进度 ${done}/${total}` + (done === total ? '（全部完成）' : '');
+  return `${head}\n${rows.join('\n')}`;
+}
+
 export const SET_VOICE_PROPS: Record<string, AiToolProperty> = {
   'voice': prop('string', '目标音色 id：longanqian（女·默认）、longanlingxin（女·知心温暖）、' +
     'longanlingxi（女·可爱甜美）、longanxiaoxin（女·亲切活泼）、longanlufeng（男·明亮开朗）'),
@@ -389,6 +468,7 @@ export const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SEARCH_BOOKS, TOOL_BOOK_DETAIL, TOOL_BOOK_NOTES, TOOL_READING_HISTORY,
   TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS, TOOL_ADD_TO_SHELF,
   TOOL_PUSH_TO_DEVICE, TOOL_READING_STATS, TOOL_SHELF_LIST, TOOL_BOOK_PROGRESS, TOOL_LIST_AI_TOOLS,
+  TOOL_PLAN,
   TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_LIST_BOOKLISTS, TOOL_UPDATE_BOOKLIST,
   TOOL_DELETE_BOOKLIST, TOOL_REMOVE_BOOK_FROM_BOOKLIST,
   TOOL_UPDATE_BOOK_META, TOOL_LIST_CATEGORIES,

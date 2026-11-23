@@ -25,7 +25,9 @@ export const SYSTEM_PROMPT_TOOLS: string =
   '需要用户在多个候选间拍板、或缺少无法安全臆断的关键信息时，用 ask_user 提出一个问题并给 2-6 个简短选项，' +
     '得到答复前不要执行有后果的操作；用户跳过时基于现状谨慎收敛，不要反复追问。' +
   '换封面流程：先 search_cover 列出候选给用户看，用户选定后再 set_cover。' +
-  '网文下载流程：search_sonovel 拿 url → add_sonovel_task 入队 → list_download_tasks 报进度，成品完成后自动进本地书架可读。';
+  '网文下载流程：search_sonovel 拿 url → add_sonovel_task 入队 → list_download_tasks 报进度，成品完成后自动进本地书架可读。' +
+  '主动规划：需要 3 步以上才能完成的任务，开工前先调 plan 列出完整计划让用户看到整体安排，每做完一步再调 plan 更新状态' +
+    '（该步标 ✅、下一步标 ⏳）；任务被中断或提前结束时，让计划里剩余步骤保持 ☐，收尾正文如实说明做到哪、剩下什么没做。';
 
 /**
  * 自我学习规程：save_memory/forget_memory 工具早已就位，但模型没有触发时机与记录纪律，
