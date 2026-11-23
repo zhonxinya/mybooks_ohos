@@ -86,7 +86,7 @@ export struct AiSearchEngineSection {
       }
       .width('100%');
 
-      Text('提示：百度/Bing/360/搜狗为网页抓取通道，被反爬时该通道静默跳过；维基百科走官方 API 更稳定，但中文条目覆盖有限。')
+      Text('提示：百度/Bing/360/搜狗为网页抓取通道，被反爬时该通道静默跳过；维基百科走官方 API 更稳定，但中文条目覆盖有限；DeepSeek 为官方搜索接口，需在「服务商」页配 DeepSeek Key 才生效。')
         .fontSize(11)
         .fontColor($r('app.color.text_tertiary'))
         .width('100%');
