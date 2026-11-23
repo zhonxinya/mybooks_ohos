@@ -107,13 +107,25 @@ export class AiVoiceKit {
     }
   }
 
+  /** 向语音侧过程显示上报一次活动（doing/done/rejected/failed）；页面没接线就静默跳过。 */
+  private static report(onActivity: ((label: string, state: string) => void) | undefined,
+    label: string, state: string): void {
+    if (onActivity !== undefined) {
+      onActivity(label, state);
+    }
+  }
+
   /**
    * 执行模型请求的工具（含确认闸门），结果回填 realtime 会话。
    * `uiContext` 用于确认弹窗；页面已退出时弹窗失败按拒绝收敛，绝不卡会话。
+   * `onActivity`：语音侧工具过程显示接线。文字回路有活动时间线，语音页原本没有
+   * 工具状态的落点，由两个页面各按自己的 UI 语义消费（通话页字幕行/对话页状态横幅）。
    */
-  static async runTool(name: string, args: string, callId: string, uiContext: UIContext): Promise<void> {
+  static async runTool(name: string, args: string, callId: string, uiContext: UIContext,
+    onActivity?: (label: string, state: string) => void): Promise<void> {
     if (name === 'set_voice') {
       // 音色切换不经文字回路 dispatch：直接落配置并触发会话重建（重建闭包自带挂断+重开）
+      AiVoiceKit.report(onActivity, '切换音色', 'doing');
       let out: string;
       try {
         out = AiVoiceKit.applySetVoice(args);
@@ -121,20 +133,25 @@ export class AiVoiceKit {
         out = `set_voice 执行失败：${error}`;
       }
       RealtimeCallService.sendToolResult(callId, out);
+      AiVoiceKit.report(onActivity, '切换音色',
+        out.indexOf('已切换到音色') === 0 ? 'done' : 'failed');
       const switcher: (() => void) | null = AiVoiceKit.voiceSwitcher;
       if (out.indexOf('已切换到音色') === 0 && switcher !== null) {
         switcher();
       }
       return;
     }
+    const label: string = AiService.toolLabelFor(name);
+    AiVoiceKit.report(onActivity, label, 'doing');
     let output: string;
+    let state: string = 'done';
     try {
       if (AiTools.needsConfirm(name)) {
         const permission: string = AiService.loadPermission();
         if (permission === 'readonly') {
           output = '当前为只读权限模式，写操作不可执行。';
+          state = 'rejected';
         } else if (permission === 'confirm') {
-          const label: string = AiService.toolLabelFor(name);
           let allow: boolean = false;
           try {
             const dialog = await uiContext.getPromptAction().showDialog({
@@ -150,6 +167,7 @@ export class AiVoiceKit {
             allow = false;
           }
           output = allow ? await AiService.toolRunFor(name, args, callId) : '用户拒绝了该操作。';
+          state = allow ? 'done' : 'rejected';
         } else {
           output = await AiService.toolRunFor(name, args, callId);
         }
@@ -158,7 +176,9 @@ export class AiVoiceKit {
       }
     } catch (error) {
       output = `工具执行失败：${error}`;
+      state = 'failed';
     }
     RealtimeCallService.sendToolResult(callId, output);
+    AiVoiceKit.report(onActivity, label, state);
   }
 }

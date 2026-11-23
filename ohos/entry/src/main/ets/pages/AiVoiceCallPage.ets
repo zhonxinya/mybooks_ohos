@@ -28,6 +28,8 @@ struct AiVoiceCallPage {
   @State aiLine: string = '';
   @State tip: string = '';
   @State muted: boolean = false;
+  /** 工具过程字幕：realtime 调用工具期间圆环状态不变，靠这一行让用户看到在查什么。 */
+  @State toolLine: string = '';
   private history: AiMessage[] = [];
   /** 轮次序号：挂断/重开后旧异步链凭序号失效（多处 await 后检查）。 */
   private turnSeq: number = 0;
@@ -112,6 +114,13 @@ struct AiVoiceCallPage {
           .textAlign(TextAlign.Center);
       }
       .padding({ left: 28, right: 28 })
+      if (this.toolLine.length > 0) {
+        Text(this.toolLine)
+          .fontSize(13)
+          .fontColor($r('app.color.text_secondary'))
+          .textAlign(TextAlign.Center)
+          .padding({ left: 28, right: 28 });
+      }
       if (this.tip.length > 0) {
         Text(this.tip)
           .fontSize(12)
@@ -213,10 +222,12 @@ struct AiVoiceCallPage {
       onSpeechStarted: (): void => {
         // 开口即打断（服务已清播放队列），回到聆听
         this.tip = '';
+        this.toolLine = '';
         this.st = ST_LISTENING;
       },
       onSpeechStopped: (): void => {
         this.aiLine = '';
+        this.toolLine = '';
         this.st = ST_THINKING;
       },
       onResponding: (): void => {
@@ -239,7 +250,18 @@ struct AiVoiceCallPage {
         }
       },
       onFunctionCall: (name: string, args: string, callId: string): void => {
-        void AiVoiceKit.runTool(name, args, callId, this.getUIContext());
+        void AiVoiceKit.runTool(name, args, callId, this.getUIContext(),
+          (label: string, state: string): void => {
+            if (state === 'doing') {
+              this.toolLine = `执行中：${label}…`;
+            } else if (state === 'rejected') {
+              this.toolLine = `已拒绝：${label}`;
+            } else if (state === 'failed') {
+              this.toolLine = `执行失败：${label}`;
+            } else {
+              this.toolLine = `已完成：${label}`;
+            }
+          });
       },
     };
     // set_voice 生效通道：存配置后重开 realtime 会话（新音色进首包 session.update）
@@ -254,6 +276,7 @@ struct AiVoiceCallPage {
       await RealtimeCallService.connect(prompt, cb, AiTools.realtimeDefinitions(AiService.loadPermission(), mcpTools));
       this.rtMode = true;
       this.muted = false;
+      this.toolLine = '';
       this.st = ST_LISTENING;
     } catch (error) {
       hilog.error(0x0000, TAG, 'realtime connect: %{public}s', `${error}`);
@@ -338,6 +361,7 @@ struct AiVoiceCallPage {
     this.turnSeq++;
     this.rtMode = false;
     this.muted = false;
+    this.toolLine = '';
     this.st = ST_IDLE;
     AiVoiceKit.voiceSwitcher = null;
     RealtimeCallService.disconnect();

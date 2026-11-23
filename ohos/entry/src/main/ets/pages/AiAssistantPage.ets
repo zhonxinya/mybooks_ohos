@@ -345,12 +345,24 @@ struct AiAssistantPage {
         this.voiceStatus = '说话中';
       },
       onResponseDone: (): void => {
-        if (this.voiceActive) {
+        // 工具轮的 response 先于结果回填结束：执行中状态不能被「聆听中」覆盖回去
+        if (this.voiceActive && this.voiceStatus.indexOf('执行中：') !== 0) {
           this.voiceStatus = '聆听中';
         }
       },
       onFunctionCall: (name: string, args: string, callId: string): void => {
-        void AiVoiceKit.runTool(name, args, callId, this.getUIContext());
+        void AiVoiceKit.runTool(name, args, callId, this.getUIContext(),
+          (label: string, state: string): void => {
+            if (!this.voiceActive) {
+              return;
+            }
+            // 只在自己的「执行中」链上收敛状态，避免覆盖打断/新一轮的正常流转
+            if (state === 'doing') {
+              this.voiceStatus = `执行中：${label}…`;
+            } else if (this.voiceStatus.indexOf('执行中：') === 0) {
+              this.voiceStatus = state === 'rejected' ? '已拒绝' : '思考中';
+            }
+          });
       },
       onError: (m: string): void => {
         promptAction.showToast({ message: m });
