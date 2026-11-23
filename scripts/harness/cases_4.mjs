@@ -370,7 +370,7 @@ export function register(ctx) {
     assert.equal(store.contextUsageK(), 8, '在途与错误气泡不进指示器');
   });
 
-  test('网关工具回路：超过轮数上限报错收场，最后一轮不挂 tools', async () => {
+  test('网关工具回路：触顶自动续段至 5 段后硬上限报错，段尾轮不挂 tools', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
     RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'big-pickle', 'sk-oc', 0.5);
@@ -381,9 +381,12 @@ export function register(ctx) {
       onDelta: () => {}, onDone: () => {}, onError: (m) => { error = m; },
     }, 128);
     await flush();
-    assert.equal(deps.state.requests.length, 13);
-    assert.ok(!('tools' in JSON.parse(deps.state.requests[12].content)), '最后一轮不挂工具');
-    assert.match(error, /上限/);
+    // 5 段 ×（12 轮带工具 + 1 轮收尾）= 65 次请求；每段收尾轮不挂 tools
+    assert.equal(deps.state.requests.length, 65);
+    assert.ok(!('tools' in JSON.parse(deps.state.requests[12].content)), '段一收尾轮不挂工具');
+    assert.ok(!('tools' in JSON.parse(deps.state.requests[64].content)), '段五收尾轮不挂工具');
+    assert.ok('tools' in JSON.parse(deps.state.requests[13].content), '续段首轮回带工具');
+    assert.match(error, /硬上限/);
     deps.state.rcpResponse = null;
   });
 

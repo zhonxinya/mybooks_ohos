@@ -11,7 +11,7 @@ import type { AiPermissionMode } from './AiTools';
 import type { AiToolDefinition } from './AiToolsDefs';
 import type { AiMessage, AiConfig, AiAbortHandle } from './AiService';
 import type { AiSessionHolder } from './AiServiceHttp';
-import { AiServiceConfig, MAX_TOOL_ROUNDS, MAX_GATEWAY_ATTEMPTS, MAX_TOOL_SLOTS } from './AiServiceConfig';
+import { AiServiceConfig, MAX_TOOL_ROUNDS, MAX_AUTO_CONTINUES, MAX_GATEWAY_ATTEMPTS, MAX_TOOL_SLOTS } from './AiServiceConfig';
 import { AiServiceHttp } from './AiServiceHttp';
 import { mergeUsage, parseUsage, TRACE_FULL_ROUNDS } from './AiChatModel';
 import type { AiTokenUsage, ToolTraceCall, ToolTraceRound } from './AiChatModel';
@@ -178,19 +178,24 @@ export class AiServiceGateway {
     onReasoning: ((text: string) => void) | null,
     onAsk: ((question: string, options: string[]) => Promise<string>) | null,
     traceBox: ToolTraceRound[] | null): Promise<string> {
-    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+    // 分段预算：每段 12 轮 + 1 轮收尾；触顶且模型仍在调工具时自动续段
+    // （最多 MAX_AUTO_CONTINUES 次），而不是把半截任务甩回用户
+    let limit: number = MAX_TOOL_ROUNDS;
+    let segmentStart: number = 0;
+    let autoContinues: number = 0;
+    for (let round = 0; round <= limit; round++) {
       if (isAborted !== null && isAborted()) {
         return '';
       }
-      // 剩 3 轮时提醒模型收敛：多数截断本可避免（软着陆只是兜底，别靠它）
-      if (round === MAX_TOOL_ROUNDS - 3) {
+      // 每段剩 3 轮时提醒模型收敛：多数截断本可避免（软着陆只是兜底，别靠它）
+      if (round - segmentStart === MAX_TOOL_ROUNDS - 3) {
         gwMessages.push({
           role: 'user',
-          content: '（内部提示）工具调用仅剩 3 轮。请尽快汇总已获得的结果准备最终回答，不要再发起非必要的工具调用。',
+          content: '（内部提示）本轮预算的工具调用仅剩 3 轮。请尽快汇总已获得的结果准备最终回答，不要再发起非必要的工具调用。',
         });
       }
-      // 最后一轮不带 tools，逼模型给最终回答而不是继续调工具
-      const attach: AiToolDefinition[] | null = round < MAX_TOOL_ROUNDS ? tools : null;
+      // 每段最后一轮不带 tools，逼模型给最终回答而不是继续调工具
+      const attach: AiToolDefinition[] | null = round - segmentStart < MAX_TOOL_ROUNDS ? tools : null;
       const reply: GatewayReply | null = await transport(attach);
       if (reply === null) {
         return '';
@@ -200,13 +205,29 @@ export class AiServiceGateway {
         onReasoning(reply.reasoning);
       }
       if (reply.calls !== null && reply.calls.length > 0) {
-        if (round === MAX_TOOL_ROUNDS) {
-          // 软着陆：模型此前已产出正文时保留部分成果，整条回复不再报废；
-          // 只有纯工具调用没正文可给才报错（此时前文也无总结价值）
-          if (reply.content.length > 0) {
-            return `${reply.content}\n\n（本次任务工具调用达到 ${MAX_TOOL_ROUNDS} 轮上限，以上为中断时的结果；如需继续请再发一条消息。）`;
+        if (round - segmentStart === MAX_TOOL_ROUNDS) {
+          if (autoContinues < MAX_AUTO_CONTINUES) {
+            // 自动续段：预算滚动重开，任务上下文原样延续，用户无需「再发一条消息」
+            autoContinues += 1;
+            segmentStart = round + 1;
+            limit = segmentStart + MAX_TOOL_ROUNDS;
+            gwMessages.push({
+              role: 'user',
+              content: '（内部提示）工具调用预算已自动续期，请继续原任务，不要道歉也不要从头重做已完成的步骤。',
+            });
+            if (onResult !== null) {
+              // 直接以完成态入活动时间线（endActivity 无 doing 条目时补记），
+              // 不走 onTool 避免留下永不翻转的「进行中」项
+              onResult('auto_continue', `工具轮次已用满，自动继续（第 ${autoContinues + 1} 段）`, '', '');
+            }
+            continue;
           }
-          throw new Error(`模型连续调用工具达到上限（${MAX_TOOL_ROUNDS} 轮），请把问题说具体些再试`);
+          // 硬上限（防模型死循环烧 token）：有正文先软着陆保留成果，纯工具才报错
+          const hardMax: number = MAX_TOOL_ROUNDS * (MAX_AUTO_CONTINUES + 1);
+          if (reply.content.length > 0) {
+            return `${reply.content}\n\n（本次任务工具调用达到 ${hardMax} 轮硬上限，以上为中断时的结果；如需继续请再发一条消息。）`;
+          }
+          throw new Error(`模型连续调用工具达到硬上限（${hardMax} 轮），请把问题说具体些再试`);
         }
         const calls: Record<string, Object>[] = [];
         for (let i = 0; i < reply.calls.length; i++) {

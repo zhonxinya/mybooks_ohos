@@ -331,7 +331,7 @@ export class AiServiceHttp {
    * `tools` 非空时走 **function calling 回路**：模型返回 tool_calls → （写工具按
    * `permission` 三档处理：只读挡下 / 逐笔过 onConfirm / 自动放行）本地执行（AiTools）
    * → 以 assistant+tool 消息回填上下文 → 再次请求，
-   * 直到模型给出文本回答或达到 MAX_TOOL_ROUNDS 轮上限。
+   * 直到模型给出文本回答或达到硬上限（每段 MAX_TOOL_ROUNDS 轮，触顶自动续段）。
    */
 
   static normalizeBaseUrl(baseUrl: string): string {
