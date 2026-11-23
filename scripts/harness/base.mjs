@@ -345,6 +345,8 @@ export const rcp = {
       if (state.rcpThrowQueue.length > 0) { throw state.rcpThrowQueue.shift(); }
       if (state.rcpError) { throw state.rcpError; }
       const queued = state.rcpResponses.length > 0 ? state.rcpResponses.shift() : null;
+      // #1633：{ hang: true } 条目模拟通道永挂（测单引擎硬超时收敛，不拖死聚合）
+      if (queued && queued.hang) { return new Promise(() => {}); }
       return queued ?? state.rcpResponse ?? { statusCode: 200, body: enc(JSON.stringify({ data: state.models })) };
     },
     close: () => {},

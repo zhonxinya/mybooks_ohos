@@ -275,11 +275,13 @@ export function register(ctx) {
       { statusCode: 200, body: enc(so360Html) },
     ];
     const out = await RealAiTools.execute('search_web', '{"query":"三体"}');
-    // 重排序后顺序按来源权重；断言内容存在与格式（编号+来源标签+链接行）
+    // #1632 相关性排序后：标题+摘要双命中者并列，百度首位保持；断言内容存在与格式（编号+来源标签+链接行）
     assert.ok(out.includes('1. [百度] 三体全集在线阅读-起点中文网'), out);
     assert.ok(out.includes('链接：https://www.qidian.com/book/123'), out);
     assert.ok(out.includes('[百度] 三体全集免费阅读_番茄小说官网'), out);
     assert.ok(out.includes('[Bing] 三体（刘慈欣创作的系列小说）_百度百科'), out);
+    // #1633：工具文案尾部附逐引擎通道统计
+    assert.ok(out.includes('[通道统计] 百度 3 | Bing 2 | 360 搜索 2'), out);
     // 无摘要条目：链接行后紧跟空行（不占摘要行）
     assert.ok(/链接：https:\/\/fanqienovel\.com\/page\/698\n\n/.test(out), out);
     // 空 query 直接回文案
@@ -575,6 +577,70 @@ export function register(ctx) {
     confirmIndex = 0;
     assert.equal(await page.requestConfirm('加入书架', '{}'), false, '拒绝仍弹窗且为 false');
     assert.equal(dialogs.length, n + 1);
+  });
+
+  test('搜索引擎优化（#1632-#1635）：相关性排序/通道超时诊断/候选联动/URL 归一去重', async () => {
+    const { EncyclopediaService } = await load('RealEncyclopedia');
+    deps.state.rcpThrowQueue.length = 0;
+    deps.state.rcpError = null;
+    deps.state.store.clear();
+    deps.state.rcpResponses = [];
+    for (const id of ['sogou', 'wikipedia']) { EncyclopediaService.setEngineEnabled(id, false); }
+    // #1632 相关性：满命中低权重源 排在 零命中高权重源前（旧公式权重×10 会霸排）
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc('<div class="result c-container" mu="https://a.example/1">' +
+        '<h3><a><!--s-text-->完全不相关的百科内容<!--/s-text--></a></h3>' +
+        '<span class="summary-text_1">这是一段与查询毫无关联的长摘要文本，用来验证来源权重不再压过相关性信号。</span></div>') },
+      { statusCode: 200, body: enc('<ol></ol>') },
+      { statusCode: 200, body: enc('<li class="res-list"><h3><a href="https://b.example/2">' +
+        '球状闪电_刘慈欣著 完整介绍</a></h3><span class="res-list-summary">刘慈欣创作的科幻小说《球状闪电》讲述球状闪电之谜与主人公的执着追寻，篇幅足够长以验证完整度加分。</span></li>') },
+    ];
+    const rel = await EncyclopediaService.searchWeb('球状闪电');
+    assert.ok(rel.ok, rel.error);
+    assert.equal(rel.items[0].source, '360', '查询词满命中胜过来源权重差');
+    // #1633 超时：Bing 通道永挂 → 8s 硬超时收敛（用例调小句柄），其余照常，诊断标注超时
+    const savedTimeout = EncyclopediaService.engineTimeoutMs;
+    try {
+      EncyclopediaService.engineTimeoutMs = 30;
+      deps.state.rcpResponses = [
+        { statusCode: 200, body: enc('<div class="result c-container" mu="https://a.example/1">' +
+          '<h3><a><!--s-text-->三体阅读<!--/s-text--></a></h3></div>') },
+        { hang: true },
+        { statusCode: 200, body: enc('<li class="res-list"><h3><a href="https://b.example/2">三体百科</a></h3></li>') },
+      ];
+      const to = await EncyclopediaService.searchWeb('三体');
+      assert.ok(to.ok, to.error);
+      assert.ok(to.stats.includes('Bing 0(超时)'), to.stats);
+      assert.ok(to.stats.includes('百度 1') && to.stats.includes('360 搜索 1'), to.stats);
+    } finally {
+      EncyclopediaService.engineTimeoutMs = savedTimeout;
+    }
+    // #1634 候选联动：limit 放大后单引擎候选不再被钉死 8 条
+    let manyHtml = '<html><body>';
+    for (let i = 0; i < 12; i++) {
+      manyHtml += `<div class="result c-container" mu="https://c.example/${i}">` +
+        `<h3><a><!--s-text-->三体结果编号${i}<!--/s-text--></a></h3></div>`;
+    }
+    manyHtml += '</body></html>';
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(manyHtml) }, { statusCode: 200, body: enc('<ol></ol>') },
+      { statusCode: 200, body: enc('<ul></ul>') },
+    ];
+    const many = await EncyclopediaService.searchWeb('三体', 12);
+    assert.equal(many.items.length, 12, 'perEngine=max(8,limit+4) 生效，12 条候选全进结果');
+    // #1635 URL 归一去重：跟踪参数/大小写/尾斜杠变体视为同一文章（标题不同也合并）
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc('<div class="result c-container" mu="https://WWW.x.com/a/?utm_source=1">' +
+        '<h3><a><!--s-text-->转载标题甲<!--/s-text--></a></h3></div>' +
+        '<div class="result c-container" mu="https://www.x.com/a?spm=2">' +
+        '<h3><a><!--s-text-->原文链接乙<!--/s-text--></a></h3></div>') },
+      { statusCode: 200, body: enc('<ol></ol>') },
+      { statusCode: 200, body: enc('<ul></ul>') },
+    ];
+    const dd = await EncyclopediaService.searchWeb('标题');
+    assert.equal(dd.items.length, 1, 'utm/spm 变体经归一化后同 URL 合并');
+    deps.state.store.clear();
+    deps.state.rcpResponses = [];
   });
 
 }

@@ -25,6 +25,15 @@ export interface WebSearchResult {
   ok: boolean;
   items: WebSearchHit[];
   error: string;
+  /** 逐引擎命中诊断（#1633）：如「百度 8 | Bing 0(超时) | 360 5」，引擎改版静默失效可见化。 */
+  stats: string;
+}
+
+/** 单引擎抓取诊断项（#1633）：state 空串=正常，否则「超时」/「失败」。 */
+interface EngineStat {
+  label: string;
+  count: number;
+  state: string;
 }
 
 /** 搜索引擎登记：id 用于配置存储（启用/顺序），label 供 UI 展示。 */
@@ -55,8 +64,10 @@ export const SEARCH_ENGINES: SearchEngine[] = [
 const ENGINES_KEY: string = 'ai_search_engines';
 /** 结果条数上限（默认 8）。 */
 const SEARCH_LIMIT_KEY: string = 'ai_search_limit';
-/** 单引擎抓取条数（比最终条数多取，供去重与重排序筛选）。 */
+/** 单引擎抓取条数下限（比最终条数多取，供去重与重排序筛选；#1634 按 limit 动态放大）。 */
 const PER_ENGINE_FETCH: number = 8;
+/** 单引擎硬超时（#1633）：rcp transferMs 20s 仍会拖慢全局聚合，8s 快失败。 */
+const ENGINE_TIMEOUT_MS: number = 8000;
 /** 来源可信度权重：百科/主搜高于聚合站，用于重排序。 */
 const SOURCE_WEIGHT: Record<string, number> = {
   '百度百科': 3, '维基百科': 3, '百度': 2, 'Bing': 2, '360': 1, '搜狗': 1,
@@ -69,6 +80,8 @@ const BAIDU_UA: string =
 const ABSTRACT_MAX: number = 600;
 
 export class EncyclopediaService {
+  /** 单引擎硬超时毫秒（#1633）；harness 用例临时调小避免真实等待 8s。 */
+  static engineTimeoutMs: number = ENGINE_TIMEOUT_MS;
   /** GET 文本响应；非 2xx 抛错（通道层捕获转 ok=false）。 */
   private static async fetchText(url: string, ua: string): Promise<string> {
     const headers: rcp.RequestHeaders = {
@@ -442,15 +455,150 @@ export class EncyclopediaService {
     return items;
   }
 
+  /** 词段发射（#1632）：非 CJK 整词需 ≥2 字符；CJK 单字成词、多字切二元组。 */
+  private static emitRun(run: string, isCjk: boolean, toks: string[]): void {
+    if (!isCjk) {
+      if (run.length >= 2) {
+        toks.push(run);
+      }
+    } else if (run.length === 1) {
+      toks.push(run);
+    } else {
+      for (let k = 0; k + 1 < run.length; k++) {
+        toks.push(run.substring(k, k + 2));
+      }
+    }
+  }
+
   /**
-   * 来源可信度打分：来源权重为主，摘要长度作相关度代理（有摘要的更可能是正文命中），
-   * 同分保持引擎内原始序（稳定排序）。
+   * 查询词切分（#1632）：空白分词后，CJK 连续块切二元组（「三体小说」→ 三体/体小/小说），
+   * 非 CJK 词整词保留。无空白中文查询也能算命中率。
    */
-  private static rankScore(hit: WebSearchHit): number {
+  private static queryTokens(query: string): string[] {
+    const toks: string[] = [];
+    const parts: string[] = query.toLowerCase().split(/\s+/);
+    for (let p = 0; p < parts.length; p++) {
+      const part: string = parts[p];
+      let run: string = '';
+      let isCjk: boolean = false;
+      for (let i = 0; i < part.length; i++) {
+        const ch: string = part.charAt(i);
+        const cjk: boolean = /[\u4e00-\u9fff]/.test(ch);
+        if (i > 0 && cjk === isCjk) {
+          run = `${run}${ch}`;
+        } else {
+          if (i > 0) {
+            EncyclopediaService.emitRun(run, isCjk, toks);
+          }
+          run = ch;
+          isCjk = cjk;
+        }
+      }
+      if (run.length > 0) {
+        EncyclopediaService.emitRun(run, isCjk, toks);
+      }
+    }
+    return toks;
+  }
+
+  /** 词命中率：toks 中在 text 出现的比例（0–1）；空词表回 0。 */
+  private static hitRate(text: string, toks: string[]): number {
+    if (toks.length === 0) {
+      return 0;
+    }
+    const lower: string = text.toLowerCase();
+    let hit: number = 0;
+    for (let i = 0; i < toks.length; i++) {
+      if (lower.indexOf(toks[i]) >= 0) {
+        hit++;
+      }
+    }
+    return hit / toks.length;
+  }
+
+  /**
+   * URL 归一化（#1635）：去 fragment、剥跟踪类查询参数（utm 系列/spm/from/ref 等）、
+   * host 小写、去尾斜杠。仅用于去重键，不改展示 URL。
+   */
+  private static normalizeUrl(url: string): string {
+    let u: string = url.split('#')[0];
+    const qAt: number = u.indexOf('?');
+    if (qAt >= 0) {
+      const base: string = u.substring(0, qAt);
+      const kept: string[] = [];
+      const params: string[] = u.substring(qAt + 1).split('&');
+      for (let i = 0; i < params.length; i++) {
+        const name: string = params[i].split('=')[0].toLowerCase();
+        if (name.length > 0 && !/^(utm_|spm|usm|from|scene|share_|track|srcid|ref|ch$|tcfrom)/.test(name)) {
+          kept.push(params[i]);
+        }
+      }
+      u = kept.length > 0 ? `${base}?${kept.join('&')}` : base;
+    }
+    const m: RegExpExecArray | null = /^(https?:\/\/[^/]+)(.*)$/.exec(u);
+    if (m !== null) {
+      u = `${m[1].toLowerCase()}${m[2]}`;
+    }
+    if (u.endsWith('/')) {
+      u = u.substring(0, u.length - 1);
+    }
+    return u;
+  }
+
+  /**
+   * 单引擎硬超时包装（#1633）：ms 内未定则以空结果收敛并标注「超时」；
+   * 抓取异常收敛为「失败」，绝不让单通道挂死 Promise.all。
+   * 定时器在正常/异常路径均清除，不留悬挂句柄。
+   */
+  private static withTimeout(p: Promise<WebSearchHit[]>, ms: number, stat: EngineStat): Promise<WebSearchHit[]> {
+    return new Promise<WebSearchHit[]>((resolve: (v: WebSearchHit[]) => void): void => {
+      let done: boolean = false;
+      const timer: number = setTimeout((): void => {
+        if (!done) {
+          done = true;
+          stat.state = '超时';
+          resolve([]);
+        }
+      }, ms);
+      p.then((hits: WebSearchHit[]): void => {
+        if (!done) {
+          done = true;
+          clearTimeout(timer);
+          stat.count = hits.length;
+          resolve(hits);
+        }
+      }).catch((): void => {
+        if (!done) {
+          done = true;
+          clearTimeout(timer);
+          stat.state = '失败';
+          resolve([]);
+        }
+      });
+    });
+  }
+
+  /** 引擎 id → 展示名（诊断行用）。 */
+  private static engineLabel(id: string): string {
+    for (let i = 0; i < SEARCH_ENGINES.length; i++) {
+      if (SEARCH_ENGINES[i].id === id) {
+        return SEARCH_ENGINES[i].label;
+      }
+    }
+    return id;
+  }
+
+  /**
+   * 综合打分（#1632）：查询词命中率为核心信号（标题权重 > 摘要），来源权重仅作次级修正
+   * （×4 上限 12，压不过满相关 9.5+完整度——高权重无关源不再霸前排），同分保持引擎内原始序。
+   */
+  private static rankScore(hit: WebSearchHit, toks: string[]): number {
     const w: number | undefined = SOURCE_WEIGHT[hit.source];
     const weight: number = w === undefined ? 1 : w;
+    const titleHit: number = EncyclopediaService.hitRate(hit.title, toks);
+    const sumHit: number = EncyclopediaService.hitRate(hit.summary, toks);
     const summaryBonus: number = hit.summary.length > 60 ? 1 : hit.summary.length > 0 ? 0.5 : 0;
-    return weight * 10 + summaryBonus;
+    return weight * 4 + titleHit * 6 + sumHit * 2 + summaryBonus;
   }
 
   /** 去重键：标题归一（去空白/标点）+ 域名，避免同标题不同站被误合。 */
@@ -465,36 +613,46 @@ export class EncyclopediaService {
   }
 
   /**
-   * 通用网页搜索（可配置）：按设置页启用的引擎并行抓取，单通道失败静默跳过，
-   * 结果按「标题+域名」去重、按来源可信度+摘要完整度重排序，取前 limit 条。
+   * 通用网页搜索（可配置）：按设置页启用的引擎并行抓取，单通道 8s 硬超时/失败静默跳过，
+   * 结果按「标题+域名」与「归一化 URL」双层去重、按来源权重+查询词命中率重排序，取前 limit 条。
+   * 逐引擎命中数进 stats（#1633），工具文案尾部回传，引擎改版失效不再静默。
    */
   static async searchWeb(query: string, limit: number = 0): Promise<WebSearchResult> {
-    const result: WebSearchResult = { ok: false, items: [], error: '' };
+    const result: WebSearchResult = { ok: false, items: [], error: '', stats: '' };
     const finalLimit: number = limit > 0 ? limit : EncyclopediaService.searchLimit();
+    // #1634：候选量随最终条数联动放大，修「少引擎+高 limit 时候选不足」
+    const perEngine: number = Math.max(PER_ENGINE_FETCH, finalLimit + 4);
     const enc: string = encodeURIComponent(query);
     const enabled: string[] = EncyclopediaService.enabledEngines();
     const tasks: Promise<WebSearchHit[]>[] = [];
+    const stats: EngineStat[] = [];
     for (let i = 0; i < enabled.length; i++) {
       const id: string = enabled[i];
+      const stat: EngineStat = { label: EncyclopediaService.engineLabel(id), count: 0, state: '' };
+      stats.push(stat);
       if (id === 'baidu') {
-        tasks.push(EncyclopediaService.fetchText(`https://www.baidu.com/s?wd=${enc}`, BAIDU_UA)
-          .then((h: string): WebSearchHit[] => EncyclopediaService.parseWebBaidu(h, PER_ENGINE_FETCH))
-          .catch((): WebSearchHit[] => []));
+        tasks.push(EncyclopediaService.withTimeout(
+          EncyclopediaService.fetchText(`https://www.baidu.com/s?wd=${enc}`, BAIDU_UA)
+            .then((h: string): WebSearchHit[] => EncyclopediaService.parseWebBaidu(h, perEngine)),
+          EncyclopediaService.engineTimeoutMs, stat));
       } else if (id === 'bing') {
-        tasks.push(EncyclopediaService.fetchText(`https://cn.bing.com/search?q=${enc}&setlang=zh-hans`, BAIDU_UA)
-          .then((h: string): WebSearchHit[] => EncyclopediaService.parseWebBing(h, PER_ENGINE_FETCH))
-          .catch((): WebSearchHit[] => []));
+        tasks.push(EncyclopediaService.withTimeout(
+          EncyclopediaService.fetchText(`https://cn.bing.com/search?q=${enc}&setlang=zh-hans`, BAIDU_UA)
+            .then((h: string): WebSearchHit[] => EncyclopediaService.parseWebBing(h, perEngine)),
+          EncyclopediaService.engineTimeoutMs, stat));
       } else if (id === 'so360') {
-        tasks.push(EncyclopediaService.fetchText(`https://www.so.com/s?q=${enc}`, BAIDU_UA)
-          .then((h: string): WebSearchHit[] => EncyclopediaService.parseWeb360(h, PER_ENGINE_FETCH))
-          .catch((): WebSearchHit[] => []));
+        tasks.push(EncyclopediaService.withTimeout(
+          EncyclopediaService.fetchText(`https://www.so.com/s?q=${enc}`, BAIDU_UA)
+            .then((h: string): WebSearchHit[] => EncyclopediaService.parseWeb360(h, perEngine)),
+          EncyclopediaService.engineTimeoutMs, stat));
       } else if (id === 'sogou') {
-        tasks.push(EncyclopediaService.fetchText(`https://www.sogou.com/web?query=${enc}`, BAIDU_UA)
-          .then((h: string): WebSearchHit[] => EncyclopediaService.parseWebSogou(h, PER_ENGINE_FETCH))
-          .catch((): WebSearchHit[] => []));
+        tasks.push(EncyclopediaService.withTimeout(
+          EncyclopediaService.fetchText(`https://www.sogou.com/web?query=${enc}`, BAIDU_UA)
+            .then((h: string): WebSearchHit[] => EncyclopediaService.parseWebSogou(h, perEngine)),
+          EncyclopediaService.engineTimeoutMs, stat));
       } else if (id === 'wikipedia') {
-        tasks.push(EncyclopediaService.searchWikipediaWeb(query, PER_ENGINE_FETCH)
-          .catch((): WebSearchHit[] => []));
+        tasks.push(EncyclopediaService.withTimeout(
+          EncyclopediaService.searchWikipediaWeb(query, perEngine), EncyclopediaService.engineTimeoutMs, stat));
       }
     }
     if (tasks.length === 0) {
@@ -502,7 +660,11 @@ export class EncyclopediaService {
       return result;
     }
     const rounds: WebSearchHit[][] = await Promise.all(tasks);
+    // 必须在全部通道收敛后拼：EngineStat 由 withTimeout 就地回写
+    result.stats = stats.map((s: EngineStat): string =>
+      s.state.length > 0 ? `${s.label} 0(${s.state})` : `${s.label} ${s.count}`).join(' | ');
     const seen: Set<string> = new Set();
+    const seenUrls: Set<string> = new Set();
     const merged: WebSearchHit[] = [];
     for (const hits of rounds) {
       for (const hit of hits) {
@@ -510,7 +672,15 @@ export class EncyclopediaService {
         if (seen.has(key)) {
           continue;
         }
+        // #1635 第二层：归一化 URL 相同即转载/跟踪参数变体，跨标题也合并
+        const norm: string = EncyclopediaService.normalizeUrl(hit.url);
+        if (norm.length > 0 && seenUrls.has(norm)) {
+          continue;
+        }
         seen.add(key);
+        if (norm.length > 0) {
+          seenUrls.add(norm);
+        }
         merged.push(hit);
       }
     }
@@ -519,9 +689,10 @@ export class EncyclopediaService {
       return result;
     }
     // 稳定重排序：分数降序，同分保持合并序
+    const toks: string[] = EncyclopediaService.queryTokens(query);
     const indexed: RankedHit[] = [];
     for (let i = 0; i < merged.length; i++) {
-      const item: RankedHit = { hit: merged[i], score: EncyclopediaService.rankScore(merged[i]), order: i };
+      const item: RankedHit = { hit: merged[i], score: EncyclopediaService.rankScore(merged[i], toks), order: i };
       indexed.push(item);
     }
     indexed.sort((a, b) => (b.score - a.score) || (a.order - b.order));

@@ -347,7 +347,8 @@ export class AiToolsExecMeta {
       }
       parts.push(line);
     }
-    return parts.join('\n\n');
+    // #1633：逐引擎命中数回传，某引擎恒 0 即改版/反爬信号，不再静默
+    return `${parts.join('\n\n')}\n\n[通道统计] ${res.stats}`;
   }
 
   /** 访问具体网页：标题 + 来源 + 正文纯文本；HTTP 拿不到正文时自动走 ArkWeb 渲染降级。 */
