@@ -40,6 +40,12 @@ import { McpService, McpServer } from './McpService';
  */
 export type AiPermissionMode = 'readonly' | 'confirm' | 'auto';
 
+/** 缓存条目：文本+写入时刻（TTL 按键首段工具名分级判定）。 */
+interface ToolCacheEntry {
+  text: string;
+  ts: number;
+}
+
 export class AiTools {
   /** 随请求体附带的工具定义；readonly 模式过滤掉写工具。 */
   static definitions(mode: AiPermissionMode = 'confirm'): AiToolDefinition[] {
@@ -175,16 +181,24 @@ export class AiTools {
     }
   }
 
-  // ———— 只读工具结果缓存（#1517）：进程级内存，不落盘、重启即清 ————
+  // ———— 只读工具结果缓存（#1517）：进程级内存，不落盘、重启即清；#1648 分级 TTL+LRU ————
   /**
    * 缓存白名单：贵且静态的联网/元数据类，结果纯文本、无书目 side-channel。
    * 不缓存书目侧信道类（命中会把 book 卡槽旁路掉）与进度语义类（list_download_tasks）。
    */
   private static readonly CACHEABLE_TOOLS: string[] =
     ['search_meta', 'get_novel_meta', 'search_encyclopedia', 'search_web', 'fetch_url', 'ai_search'];
-  /** 条数上限：FIFO 淘汰，长会话内存有界。 */
+  /** 条数上限：写前清过期，仍超限按最旧逐出（LRU：命中提升到尾，热点不被新条目挤掉）。 */
   private static readonly TOOL_CACHE_MAX: number = 24;
-  private static toolCache: Map<string, string> = new Map();
+  /**
+   * 分级 TTL：新闻/网页类结果会过时（15 分钟），静态元数据可长存（6 小时）——
+   * 无 TTL 时一次搜索的结果整会话被钉成「新鲜」，模型可能把陈旧新闻当最新状态。
+   */
+  private static readonly TOOL_TTL_FRESH_MS: number = 15 * 60 * 1000;
+  private static readonly TOOL_TTL_STATIC_MS: number = 6 * 60 * 60 * 1000;
+  private static toolCache: Map<string, ToolCacheEntry> = new Map();
+  /** 时间注入缝（harness TTL 用例用）：null=Date.now，同 AiKeepAlive.startFn 惯例。 */
+  static nowFn: (() => number) | null = null;
   /** 回归隔离开关：harness setup 置 true（既有用例多次同参调用是设计使然），#1517 用例内手动开回。 */
   static cacheDisabled: boolean = false;
 
@@ -210,17 +224,50 @@ export class AiTools {
     return `${name}|${norm}`;
   }
 
-  /** 清历史等本地数据变更时可主动调用；默认缓存随进程存活。 */
+  /** 清历史等本地数据变更时可主动调用；条目另有分级 TTL 自动过期。 */
   static clearToolCache(): void {
     AiTools.toolCache.clear();
   }
 
+  /** 该工具的缓存 TTL：静态元数据类 6 小时，时效检索类（含 mcp_*）15 分钟。 */
+  static toolCacheTtl(name: string): number {
+    if (name === 'search_meta' || name === 'get_novel_meta' || name === 'search_encyclopedia') {
+      return AiTools.TOOL_TTL_STATIC_MS;
+    }
+    return AiTools.TOOL_TTL_FRESH_MS;
+  }
+
+  private static now(): number {
+    return AiTools.nowFn !== null ? AiTools.nowFn() : Date.now();
+  }
+
+  /** 缓存键的工具名段（toolCacheKey=`name|归一参数`；name 不含 |，参数含 | 也取首段无误）。 */
+  private static cacheNameOf(key: string): string {
+    const sep: number = key.indexOf('|');
+    return sep > 0 ? key.substring(0, sep) : key;
+  }
+
+  /** 写前清扫：过期条目整体清掉，避免淘汰窗口被死条目占位。 */
+  private static purgeExpiredCache(): void {
+    const now: number = AiTools.now();
+    const dead: string[] = [];
+    AiTools.toolCache.forEach((entry: ToolCacheEntry, key: string) => {
+      if (now - entry.ts > AiTools.toolCacheTtl(AiTools.cacheNameOf(key))) {
+        dead.push(key);
+      }
+    });
+    for (let i = 0; i < dead.length; i++) {
+      AiTools.toolCache.delete(dead[i]);
+    }
+  }
+
   private static rememberCache(key: string, text: string): void {
+    AiTools.purgeExpiredCache();
     if (AiTools.toolCache.size >= AiTools.TOOL_CACHE_MAX && !AiTools.toolCache.has(key)) {
       const oldest: string = AiTools.toolCache.keys().next().value as string;
       AiTools.toolCache.delete(oldest);
     }
-    AiTools.toolCache.set(key, text);
+    AiTools.toolCache.set(key, { text: text, ts: AiTools.now() });
   }
 
 
@@ -368,10 +415,16 @@ export class AiTools {
     const cacheable: boolean = AiTools.isCacheable(name) && !AiTools.cacheDisabled;
     const key: string = cacheable ? AiTools.toolCacheKey(name, argsJson) : '';
     if (cacheable) {
-      const hit: string | undefined = AiTools.toolCache.get(key);
+      const hit: ToolCacheEntry | undefined = AiTools.toolCache.get(key);
       if (hit !== undefined) {
-        // 前缀标注让模型知道这是会话内复用而非新鲜查询，避免据此断言「最新状态」
-        return `[缓存复用] ${hit}`;
+        if (AiTools.now() - hit.ts <= AiTools.toolCacheTtl(AiTools.cacheNameOf(key))) {
+          // LRU：命中提升到尾，热点条目不被后续新条目挤掉
+          AiTools.toolCache.delete(key);
+          AiTools.toolCache.set(key, hit);
+          // 前缀标注让模型知道这是会话内复用而非新鲜查询，避免据此断言「最新状态」
+          return `[缓存复用] ${hit.text}`;
+        }
+        AiTools.toolCache.delete(key);
       }
     }
     const text: string = await AiTools.executeWithRetry(name, argsJson, callId);

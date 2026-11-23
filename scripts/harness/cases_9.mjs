@@ -155,7 +155,7 @@ export function register(ctx) {
     }
     assert.equal(RealAiTools.toolCache.size, 24, '上限 24');
     assert.equal(RealAiTools.toolCache.has('k0'), false, '最旧被逐');
-    assert.equal(RealAiTools.toolCache.get('k24'), 'v24');
+    assert.equal(RealAiTools.toolCache.get('k24').text, 'v24');
     // 端到端：真发一次→同参再调命中零请求（本用例内开缓存）
     RealAiTools.cacheDisabled = false;
     try {
@@ -186,6 +186,61 @@ export function register(ctx) {
       assert.equal(deps.state.rcpResponses.length, 0, '两个 URL 各自真执行');
     } finally {
       RealAiTools.cacheDisabled = true;
+    }
+  });
+
+  test('缓存 TTL/LRU（#1648）：时效 15min 元数据 6h，过期重查、命中提升不被逐、写前清死条目', async () => {
+    assert.equal(RealAiTools.toolCacheTtl('search_web'), 15 * 60 * 1000);
+    assert.equal(RealAiTools.toolCacheTtl('mcp_web_search'), 15 * 60 * 1000, 'mcp 走时效默认');
+    assert.equal(RealAiTools.toolCacheTtl('search_meta'), 6 * 60 * 60 * 1000);
+    assert.equal(RealAiTools.toolCacheTtl('search_encyclopedia'), 6 * 60 * 60 * 1000, '百科词条静态长存');
+    let fakeNow = 1000000;
+    RealAiTools.nowFn = () => fakeNow;
+    RealAiTools.cacheDisabled = false;
+    try {
+      RealAiTools.clearToolCache();
+      const html = '<html><head><title>TTL页</title></head><body><p>正文。</p></body></html>';
+      deps.state.rcpError = null;
+      deps.state.rcpResponses = [{ statusCode: 200, body: enc(html) }, { statusCode: 200, body: enc(html) }];
+      const before = deps.state.requests.length;
+      await RealAiTools.execute('fetch_url', '{"url":"https://example.com/ttl"}');
+      assert.equal(deps.state.requests.length, before + 1);
+      // TTL 内命中零请求
+      fakeNow += 14 * 60 * 1000;
+      const hit = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/ttl"}');
+      assert.ok(hit.startsWith('[缓存复用]'), `TTL 内应命中：${hit}`);
+      assert.equal(deps.state.requests.length, before + 1, 'TTL 内不发请求');
+      // 越过 TTL 重查（15min 已过）
+      fakeNow += 2 * 60 * 1000;
+      const miss = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/ttl"}');
+      assert.ok(!miss.includes('[缓存复用]') && miss.includes('TTL页'), `过期应重查：${miss.slice(0, 40)}`);
+      assert.equal(deps.state.requests.length, before + 2, '过期条目必须重取');
+      // LRU：命中把条目提升到尾，后续写满上限逐的是最旧而非热点
+      RealAiTools.clearToolCache();
+      deps.state.rcpResponses = [{ statusCode: 200, body: enc(html) }];
+      await RealAiTools.execute('fetch_url', '{"url":"https://example.com/hot"}');
+      for (let i = 0; i < 23; i++) {
+        RealAiTools.rememberCache(`k${i}`, `v${i}`);
+      }
+      await RealAiTools.execute('fetch_url', '{"url":"https://example.com/hot"}'); // 命中→提升到尾
+      const hotKey = RealAiTools.toolCacheKey('fetch_url', '{"url":"https://example.com/hot"}');
+      RealAiTools.rememberCache('newer', 'v'); // 满 24 逐最旧（k0），热点幸存
+      assert.equal(RealAiTools.toolCache.size, 24);
+      assert.equal(RealAiTools.toolCache.has(hotKey), true, '热点条目命中后不得被逐');
+      assert.equal(RealAiTools.toolCache.has('k0'), false, '最旧被逐');
+      assert.equal(RealAiTools.toolCache.has('newer'), true);
+      // 写前清扫：全部过期后一次写入不留 24 个死位
+      RealAiTools.clearToolCache();
+      for (let i = 0; i < 24; i++) {
+        RealAiTools.rememberCache(`x${i}`, 'y');
+      }
+      fakeNow += 60 * 60 * 1000; // 时效类 15min 全过期
+      RealAiTools.rememberCache('fresh', 'new');
+      assert.equal(RealAiTools.toolCache.size, 1, '写入须先清过期条目');
+    } finally {
+      RealAiTools.nowFn = null;
+      RealAiTools.cacheDisabled = true;
+      RealAiTools.clearToolCache();
     }
   });
 
