@@ -608,7 +608,7 @@ export class AiChatStore {
    * AI 字幕进流：delta 在既有流式气泡上累计（打断后重新开口即新气泡）；
    * final 固化（done 全文优先，空则保留已累计文本）。
    */
-  voiceAi(text: string, final: boolean): void {
+  voiceAi(text: string, final: boolean, trace?: ToolTraceRound[]): void {
     const last: ChatBubble | null = this.lastBubble();
     let content: string = text;
     if (last !== null && last.role === 'assistant' && last.streaming) {
@@ -620,8 +620,9 @@ export class AiChatStore {
       }
     }
     if (content.length > 0) {
+      // #1627：语音轮工具痕迹随固化气泡落会话（流式中间帧不带，final 一次挂上）
       this.messages.push({ role: 'assistant', content: content, streaming: !final, error: false,
-        activities: [], voice: true, ts: Date.now() });
+        activities: [], voice: true, ts: Date.now(), toolTrace: final ? trace : undefined });
     }
     this.messages = this.messages.slice();
     if (final) {
@@ -630,8 +631,8 @@ export class AiChatStore {
     this.notify();
   }
 
-  /** 打断/断线收尾：固化尾部流式气泡（AI 已播出的文字保留，光标熄灭）。 */
-  voiceSealStreaming(): void {
+  /** 打断/断线收尾：固化尾部流式气泡（AI 已播出的文字保留，光标熄灭）；#1627 痕迹补挂。 */
+  voiceSealStreaming(trace?: ToolTraceRound[]): void {
     let changed: boolean = false;
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const bubble: ChatBubble = this.messages[i];
@@ -639,13 +640,12 @@ export class AiChatStore {
         break;
       }
       bubble.streaming = false;
+      if (trace !== undefined && trace.length > 0 && bubble.role === 'assistant' && bubble.toolTrace === undefined) {
+        bubble.toolTrace = trace;
+      }
       changed = true;
     }
-    if (changed) {
-      this.messages = this.messages.slice();
-      this.saveHistory();
-      this.notify();
-    }
+    if (changed) { this.messages = this.messages.slice(); this.saveHistory(); this.notify(); }
   }
 
   /** 工具开始执行：活动区加一条 doing。整组换数组赋值，保证视图刷新。 */

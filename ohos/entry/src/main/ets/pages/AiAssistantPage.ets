@@ -9,6 +9,7 @@ import { AI_SKILLS, AiSkill } from '../services/AiSkills';
 import { ActivityTimeline, AskUserCard, ReasoningBlock, SessionsSheet, StreamBubble } from '../components/AiChatBlocks';
 import { AiChatStore, AskRequest, ChatActivity, ChatBubble, ChatSession } from '../services/AiChatStore';
 import { appendHeardText, formatDividerTime, shouldShowTimeDivider } from '../services/AiChatModel';
+import type { ToolTraceRound } from '../services/AiChatModel';
 import { AiConfig, AiMessage, AiService } from '../services/AiService';
 import { SpeakService } from '../services/SpeakService';
 import { AiPermissionMode, AiTools } from '../services/AiTools';
@@ -71,6 +72,8 @@ struct AiAssistantPage {
   @State holdTalkReady: boolean = false;
   /** 语音会话代际：挂断/重开后，旧 connect 异步链的失败回调凭序号作废。 */
   private voiceGen: number = 0;
+  /** #1627：语音轮工具痕迹盒——runTool 写入，随语音气泡固化/收尾挂上并进会话历史。 */
+  private voiceTrace: ToolTraceRound[] = [];
   /** 会话状态机在全局单例里：退出页面不中断流式回复，后台照常完成并落盘。 */
   private store: AiChatStore = AiChatStore.instance();
   /** attachView 凭据：disappear 只解绑自己这一份视图。 */
@@ -331,11 +334,13 @@ struct AiAssistantPage {
         this.store.voiceAi(d, false);
       },
       onAiTextDone: (t: string): void => {
-        this.store.voiceAi(t, true);
+        this.store.voiceAi(t, true, this.voiceTrace); // #1627 痕迹随固化气泡落会话
+        this.voiceTrace = [];
       },
       onSpeechStarted: (): void => {
         // 开口打断：AI 已出的字幕固化，切回聆听
-        this.store.voiceSealStreaming();
+        this.store.voiceSealStreaming(this.voiceTrace);
+        this.voiceTrace = [];
         this.voiceStatus = '聆听中';
       },
       onSpeechStopped: (): void => {
@@ -351,7 +356,7 @@ struct AiAssistantPage {
         }
       },
       onFunctionCall: (name: string, args: string, callId: string): void => {
-        void AiVoiceKit.runTool(name, args, callId, this.getUIContext(),
+        void AiVoiceKit.runTool(name, args, callId, this.getUIContext(), // #1627 传痕迹盒
           (label: string, state: string): void => {
             if (!this.voiceActive) {
               return;
@@ -362,7 +367,7 @@ struct AiAssistantPage {
               // 仍有其它工具在途时保持「执行中」显示，最后一个回填后才收敛
               this.voiceStatus = state === 'rejected' ? '已拒绝' : '思考中';
             }
-          });
+          }, this.voiceTrace);
       },
       onError: (m: string): void => {
         promptAction.showToast({ message: m });
@@ -371,7 +376,8 @@ struct AiAssistantPage {
         // 网关/网络断线：会话态收敛，尾部流式气泡固化
         this.voiceActive = false;
         this.voiceStatus = '';
-        this.store.voiceSealStreaming();
+        this.store.voiceSealStreaming(this.voiceTrace);
+        this.voiceTrace = [];
       },
     };
     const gen: number = ++this.voiceGen;
@@ -408,7 +414,8 @@ struct AiAssistantPage {
     this.voiceActive = false;
     this.voiceStatus = '';
     this.voiceMuted = false;
-    this.store.voiceSealStreaming();
+    this.store.voiceSealStreaming(this.voiceTrace);
+    this.voiceTrace = [];
   }
 
   /** 按住说话·按下（#1516）：授权通过才开录；失败不进录音态（松手会被 guard 吞掉）。 */
