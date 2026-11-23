@@ -13,6 +13,7 @@ import { AiToolDefinition, AiToolGroup } from './AiToolsDefs';
 import { McpService, McpServer } from './McpService';
 import { AiServiceConfig } from './AiServiceConfig';
 import { AiServiceHttp } from './AiServiceHttp';
+import { AiKeepAlive } from './AiKeepAlive';
 import { AiServiceGateway } from './AiServiceGateway';
 import { KEY_PROVIDER, KEY_BASE_URL, KEY_MODEL, KEY_AUTO_SPEAK, KEY_VOICE_PROVIDER, KEY_VOICE_MODEL, KEY_SPEAK_ENGINE, KEY_CALL_MODE, KEY_API_KEY, KEY_API_KEY_PREFIX, KEY_CUSTOM_PROVIDERS, KEY_TEMPERATURE, KEY_SESSION_ID, KEY_VISION, KEY_CONTEXT, KEY_PERMISSION, KEY_PROVIDER_MODELS_PREFIX, CONTEXT_LENGTH_OPTIONS, DEFAULT_CONTEXT_K, DEFAULT_TEMPERATURE, TIMEOUT_MS, MAX_TOOL_ROUNDS, MAX_GATEWAY_ATTEMPTS, MAX_TOOL_SLOTS } from './AiServiceConfig';
 import type { GatewayMessage, GatewayToolCall, GatewayReply, AskPayload } from './AiServiceGateway';
@@ -142,6 +143,17 @@ export class AiService {
       handlers.onError('请先在「AI 助手 → 模型设置」里填写 API Key');
       return handle;
     }
+    // #1639：流式在途申请 dataTransfer 长时任务——进后台系统不再掐流量，
+    // 会话不再以「AI 请求超时」中断。释放在两条终结路径：finish（settled 收敛）
+    // 与 handle.destroy（中断路径不收敛到 finish，release 自身幂等兜底）
+    AiKeepAlive.begin();
+    let keepAliveHeld: boolean = true;
+    const releaseKeepAlive = (): void => {
+      if (keepAliveHeld) {
+        keepAliveHeld = false;
+        AiKeepAlive.end();
+      }
+    };
 
     let full: string = '';
     let settled: boolean = false;
@@ -164,6 +176,7 @@ export class AiService {
         return;
       }
       settled = true;
+      releaseKeepAlive();
       if (errorText.length > 0) {
         handlers.onError(errorText);
       } else {
@@ -176,6 +189,7 @@ export class AiService {
       const gatewaySession: rcp.Session = rcp.createSession();
       handle.destroy = (): void => {
         handle.aborted = true;
+        releaseKeepAlive();
         try {
           gatewaySession.cancel();
         } catch (_error) {
@@ -220,6 +234,7 @@ export class AiService {
       const sessionBox: AiSessionHolder[] = [];
       handle.destroy = (): void => {
         handle.aborted = true;
+        releaseKeepAlive();
         try {
           // rcp.Session.cancel()：中断在途请求，否则流式响应会一直占着连接
           sessionBox[0]?.cancel();
@@ -349,6 +364,7 @@ export class AiService {
 
     handle.destroy = (): void => {
       handle.aborted = true;
+      releaseKeepAlive();
       try {
         // rcp.Session.cancel()：中断在途请求，否则流式响应会一直占着连接
         session?.cancel();

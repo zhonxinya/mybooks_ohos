@@ -19,17 +19,25 @@ export function stageAiService() {
     ["'./AiServiceHttp'", "'./RealAiServiceHttp.ts'"],
     ["'./AiServiceGateway'", "'./RealAiServiceGateway.ts'"],
     ["'./AiChatModel'", "'./AiChatModel.ts'"],
+    ["'./AiKeepAlive'", "'./RealAiKeepAlive.ts'"],
+    ["'@kit.BackgroundTasksKit'", "'./aiServiceDeps.ts'"],
+    ["'@kit.AbilityKit'", "'./aiServiceDeps.ts'"],
+    ["'@kit.BasicServicesKit'", "'./aiServiceDeps.ts'"],
+    ["'@kit.PerformanceAnalysisKit'", "'./aiServiceDeps.ts'"],
   ];
   const VALUE_NAMES = new Set(['OpenAI', 'util', 'rcp', 'TalebookService', 'AiTools', 'McpService',
     'AiServiceConfig', 'AiServiceHttp', 'AiServiceGateway', 'ChatCompletionChunk',
-    'mergeUsage', 'parseUsage', 'TRACE_FULL_ROUNDS']);
+    'mergeUsage', 'parseUsage', 'TRACE_FULL_ROUNDS',
+    // #1639 AiKeepAlive 与其 kit 依赖全是运行时值（WantAgent 是唯一类型，走 import type 擦除）
+    'AiKeepAlive', 'backgroundTaskManager', 'common', 'wantAgent', 'deviceInfo', 'hilog']);
   // Config 下沉的常量（KEY_*/DEFAULT_*/MAX_*/TIMEOUT_MS/AI_PROVIDERS）都是运行时值
   const isValue = (n) => VALUE_NAMES.has(n.replace(/.* as /, '')) ||
     /^(KEY_|DEFAULT_|MAX_|TIMEOUT_MS|CONTEXT_LENGTH_OPTIONS|AI_PROVIDERS)/.test(n);
   for (const [out, ets] of [['RealAiService.ts', 'services/AiService.ets'],
     ['RealAiServiceConfig.ts', 'services/AiServiceConfig.ets'],
     ['RealAiServiceHttp.ts', 'services/AiServiceHttp.ets'],
-    ['RealAiServiceGateway.ts', 'services/AiServiceGateway.ets']]) {
+    ['RealAiServiceGateway.ts', 'services/AiServiceGateway.ets'],
+    ['RealAiKeepAlive.ts', 'services/AiKeepAlive.ets']]) {
     let source = read(ets).replace(/^(import|export) \{ ([^}]+) \} from '([^']+)';$/gm, (all, verb, clause, path) => {
       if (verb === 'export') {
         // 门面转发（export { CONTEXT_LENGTH_OPTIONS } from './AiServiceConfig'）同样要落扩展名

@@ -376,6 +376,15 @@ export const fs = {
 };
 export { fs as fileIo };
 export const hilog = { info: () => {}, warn: () => {}, error: () => {} };
+// #1639 AiKeepAlive 顶层 kit 桩：用例走 startFn/stopFn 注入缝，真分支不在 harness 触发
+export const backgroundTaskManager = { BackgroundMode: { DATA_TRANSFER: 1 },
+  BackgroundTaskMode: { MODE_DATA_TRANSFER: 1 },
+  ContinuousTaskRequest: function () {},
+  startBackgroundRunning: async () => {}, stopBackgroundRunning: async () => {} };
+export const common = {};
+export const wantAgent = { OperationType: { START_ABILITIES: 0 },
+  WantAgentFlags: { UPDATE_PRESENT_FLAG: 0 }, getWantAgent: async () => ({}) };
+export const deviceInfo = { sdkApiVersion: 22 };
 // QwenAudioService 顶层 import 的名字必须齐全（录音/播放不在用例内走空壳即可）
 export class BusinessError extends Error { code = 0; }
 export const audio = {
@@ -677,6 +686,7 @@ export async function setup() {
   const { NovelMetaService } = await load('RealNovelMeta');
   const deps = await load('aiServiceDeps');
   const { AiService: RealAiService } = await load('RealAiService');
+  const { AiKeepAlive: RealAiKeepAlive } = await load('RealAiKeepAlive');
   const { AiTools: RealAiTools } = await load('RealAiTools');
   // #1517：既有用例刻意多次同参调用驱动状态机，默认关只读工具缓存（用例内自开）
   RealAiTools.cacheDisabled = true;
@@ -740,6 +750,6 @@ export async function setup() {
     page.aboutToAppear();
     return page;
   };
-  return { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, mdAppendCaret, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiFeatureModelsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, featurePage, providersPage, libraryPage, chat, reappear };
+  return { load, deps, RealAiService, RealAiKeepAlive, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, mdAppendCaret, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiFeatureModelsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, featurePage, providersPage, libraryPage, chat, reappear };
 }
 

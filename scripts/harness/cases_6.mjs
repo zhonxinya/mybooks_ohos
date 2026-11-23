@@ -6,7 +6,7 @@ import { dir, read, ETS, ROOT } from './paths.mjs';
 import { DOUBAN_PAGE, K17_PAGE, KUJIANG_PAGE, CIWEIMAO_PAGE, ZONGHENG_PAGE, QIDIAN_M_PAGE, WTZW_PAGE, WXSCS_PAGE, UJXSW_PAGE, MH_PAGE, FQ_INFO_B64, XXSY_PAGE, ZY_PAGE, QX_PAGE, YE_PAGE, SF_PAGE, DD_PAGE, YQ_DETAIL, R3_SOURCES } from './fixtures.mjs';
 
 export function register(ctx) {
-  const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, chat, reappear } = ctx;
+  const { load, deps, RealAiService, RealAiKeepAlive, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, chat, reappear } = ctx;
   test('Reader3 http 桥：抓取异常也必须 deliver transport_error（引擎线程不能挂等）', async () => {
     const { Reader3Native } = await load('RealReader3');
     deps.state.rcpError = new Error('connection reset');
@@ -758,6 +758,83 @@ export function register(ctx) {
     assert.ok(r.stats.includes('OpenAlex 2') && r.stats.includes('Crossref 2'), r.stats);
     deps.state.store.clear();
     deps.state.rcpResponses = [];
+  });
+
+  // #1639：后台掐流量致「AI 请求超时」中断——流式在途申请 dataTransfer 长时任务，
+  // 三类终结（正常收敛/错误/用户中断）都必须恰好释放一次
+  test('#1639 保活配对：流式在途 begin，收敛/错误/中断三类终结各恰好 end 一次', async () => {
+    deps.state.store.clear();
+    let starts = 0;
+    let stops = 0;
+    globalThis.getContext = () => ({ abilityInfo: { bundleName: 'b', name: 'a' } });
+    RealAiKeepAlive.startFn = () => { starts += 1; return Promise.resolve(true); };
+    RealAiKeepAlive.stopFn = () => { stops += 1; return Promise.resolve(); };
+    try {
+      assert.equal(RealAiKeepAlive.refCount(), 0, '起点无残留引用');
+      // 1) 校验失败早退：无 Key 不 begin
+      RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'big-pickle', '', 0.5);
+      RealAiService.chatStream([{ role: 'user', content: '你好' }],
+        { onDelta: () => {}, onDone: () => {}, onError: () => {} });
+      await flush();
+      assert.equal(starts, 0, '早退不得申请保活');
+      assert.equal(RealAiKeepAlive.refCount(), 0);
+      // 2) 正常收敛：恰好一对 begin/end
+      RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'big-pickle', 'sk-oc', 0.5);
+      deps.state.rcpResponse = { statusCode: 200,
+        body: enc(JSON.stringify({ choices: [{ message: { content: 'ok' } }] })) };
+      await new Promise((resolve, reject) => {
+        RealAiService.chatStream([{ role: 'user', content: '你好' }],
+          { onDelta: () => {}, onDone: resolve, onError: reject });
+      });
+      await flush();
+      assert.equal(starts, 1, '流式在途申请一次');
+      assert.equal(stops, 1, '收敛即释放');
+      assert.equal(RealAiKeepAlive.refCount(), 0);
+      // 3) 错误收敛同样释放（后台掐流量→超时的真实病灶路径）
+      deps.state.rcpError = new Error('request timed out');
+      let err = '';
+      await new Promise((resolve) => {
+        RealAiService.chatStream([{ role: 'user', content: '你好' }],
+          { onDelta: () => {}, onDone: () => {}, onError: (m) => { err = m; resolve(); } });
+      });
+      await flush();
+      assert.match(err, /timed out/);
+      assert.equal(starts, 2);
+      assert.equal(stops, 2, '错误也释放——否则保活泄漏常驻');
+      assert.equal(RealAiKeepAlive.refCount(), 0);
+      deps.state.rcpError = null;
+      // 4) 中断终结：aborted 分支不走 finish，释放依赖 handle.destroy；
+      //    在首个微任务前 destroy，请求尚未收敛
+      deps.state.rcpResponse = { statusCode: 200,
+        body: enc(JSON.stringify({ choices: [{ message: { content: 'ok' } }] })) };
+      const h = RealAiService.chatStream([{ role: 'user', content: '你好' }],
+        { onDelta: () => {}, onDone: () => {}, onError: () => {} });
+      h.destroy();
+      assert.equal(starts, 3);
+      assert.equal(stops, 3, '中断即时释放');
+      await flush();
+      await flush();
+      assert.equal(stops, 3, 'aborted 后续收敛不得二次释放');
+      assert.equal(RealAiKeepAlive.refCount(), 0);
+      // 5) 引用计数嵌套：仅首个 begin 申请、末个 end 释放；over-end 不下零
+      RealAiKeepAlive.begin();
+      RealAiKeepAlive.begin();
+      assert.equal(starts, 4, '嵌套不重复申请');
+      RealAiKeepAlive.end();
+      assert.equal(stops, 3, '非末位 end 不释放');
+      RealAiKeepAlive.end();
+      assert.equal(stops, 4);
+      RealAiKeepAlive.end();
+      assert.equal(RealAiKeepAlive.refCount(), 0);
+      assert.equal(stops, 4, '幂等：多还一次不触发多余释放');
+    } finally {
+      RealAiKeepAlive.startFn = null;
+      RealAiKeepAlive.stopFn = null;
+      delete globalThis.getContext;
+      deps.state.rcpResponse = null;
+      deps.state.rcpError = null;
+      deps.state.store.clear();
+    }
   });
 
 }
