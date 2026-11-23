@@ -463,17 +463,21 @@ export class TalebookServiceStore {
       return false;
     }
     const rec: DownloadRecord = records[index];
-    if (title.length > 0) {
-      rec.title = title;
-    }
-    if (author.length > 0) {
-      rec.author = author;
-    }
-    if (coverUrl.length > 0) {
-      rec.coverUrl = coverUrl;
-    }
-    records[index] = rec;
-    TalebookServiceStore.saveDownloads(records);
+    const next: DownloadRecord = {
+      bookId: rec.bookId,
+      title: title.length > 0 ? title : rec.title,
+      author: author.length > 0 ? author : rec.author,
+      coverUrl: coverUrl.length > 0 ? coverUrl : rec.coverUrl,
+      filePath: rec.filePath,
+      format: rec.format,
+      downloadTime: rec.downloadTime,
+      progress: rec.progress,
+    };
+    // 新对象+新数组（不可变替换）：页面侧 @State/DataSource 持旧引用，
+    // 就地改字段会让 stamp 与逐槽比较双双看不见变化（书架实时刷新失效）
+    const updated: DownloadRecord[] = records.slice();
+    updated[index] = next;
+    TalebookServiceStore.saveDownloads(updated);
     BookshelfRefresh.notify();
     return true;
   }
