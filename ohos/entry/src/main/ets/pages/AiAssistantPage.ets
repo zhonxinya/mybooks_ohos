@@ -6,7 +6,7 @@ import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { PageScaffold, SecondaryButton, TextButton } from '../components';
 import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
-import { ActivityTimeline, AskUserCard, ReasoningBlock, SessionsSheet, StreamBubble } from '../components/AiChatBlocks';
+import { ActivityTimeline, AskUserCard, ReasoningBlock, SessionsSheet, StreamBubble, ToolTraceCard } from '../components/AiChatBlocks';
 import { AiChatStore, AskRequest, ChatActivity, ChatBubble, ChatSession } from '../services/AiChatStore';
 import { appendHeardText, formatDividerTime, shouldShowTimeDivider } from '../services/AiChatModel';
 import type { ToolTraceRound } from '../services/AiChatModel';
@@ -1177,6 +1177,10 @@ struct AiAssistantPage {
             ReasoningBlock({ reasoning: bubble.reasoning ?? '', live: false, thinkMs: bubble.thinkMs ?? 0 });
           }
           ActivityTimeline({ acts: bubble.activities, live: false });
+          // #1625：工具调用详情卡（只读展开 args/result），仅固化 assistant 泡且有痕时出现
+          if (bubble.role === 'assistant' && bubble.toolTrace !== undefined && bubble.toolTrace.length > 0) {
+            ToolTraceCard({ trace: bubble.toolTrace });
+          }
           MarkdownText({ content: bubble.content });
           // token 用量脚注（#1514）：服务商回传 usage 才显示，旧存档/语音轮无感
           if (bubble.usage !== undefined && bubble.usage.total > 0) {

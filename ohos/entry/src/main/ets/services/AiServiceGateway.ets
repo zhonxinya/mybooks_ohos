@@ -66,10 +66,11 @@ export class AiServiceGateway {
           }
         }
       }
-      const finalText: string = AiServiceHttp.gatewayContent(m);
-      // 错误泡回放 content 为空：有痕迹时不再推空 assistant 文本消息
-      if (m.role !== 'user' && (finalText.length > 0 || trace === undefined)) {
-        out.push({ role: m.role, content: finalText });
+      const finalContent: Object = AiServiceHttp.gatewayContent(m);
+      // 错误泡回放 content 为空：有痕迹时不再推空 assistant 文本消息（图文数组恒非空不受影响）
+      const emptyFinal: boolean = typeof finalContent === 'string' && finalContent.length === 0;
+      if (m.role !== 'user' && (!emptyFinal || trace === undefined)) {
+        out.push({ role: m.role, content: finalContent });
       }
     }
     return out;
