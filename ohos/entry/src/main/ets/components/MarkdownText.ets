@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
-import { collectLinks, linkHost, MdBlock, MdInline, mdParseBlocks } from '../services/MdParse';
+import { collectLinks, linkHost, MdBlock, MdInline, mdAppendCaret, mdParseBlocks } from '../services/MdParse';
 import { ExternalLinkOpener } from '../services/ExternalLinkOpener';
 
 /**
@@ -10,6 +10,9 @@ import { ExternalLinkOpener } from '../services/ExternalLinkOpener';
 @Component
 export struct MarkdownText {
   @Prop @Watch('reparse') content: string = '';
+  /** 打字光标（#1622）：showCaret=流式期在尾行注入光标 seg；caretOn=闪烁相位（只切颜色）。 */
+  @Prop @Watch('reparse') showCaret: boolean = false;
+  @Prop caretOn: boolean = false;
   @State blocks: MdBlock[] = [];
 
   aboutToAppear(): void {
@@ -18,6 +21,18 @@ export struct MarkdownText {
 
   reparse(): void {
     this.blocks = mdParseBlocks(this.content);
+    if (this.showCaret) {
+      mdAppendCaret(this.blocks);
+    }
+  }
+
+  /** 块尾行是否带注入的光标 seg（决定闪烁相位是否进 key）。 */
+  private tailHasCaret(block: MdBlock): boolean {
+    if (block.segs.length === 0) {
+      return false;
+    }
+    const tail: MdInline[] = block.segs[block.segs.length - 1];
+    return tail.length > 0 && tail[tail.length - 1].style === 5;
   }
 
   private headSize(level: number): number {
@@ -52,7 +67,8 @@ export struct MarkdownText {
           .fontWeight(seg.style === 1 ? FontWeight.Bold : FontWeight.Normal)
           .fontStyle(seg.style === 4 ? FontStyle.Italic : FontStyle.Normal)
           .fontFamily(seg.style === 2 ? 'monospace' : undefined)
-          .fontColor(seg.style === 2 || seg.style === 3 ? $r('app.color.brand_primary') : undefined)
+          .fontColor(seg.style === 5 ? (this.caretOn ? $r('app.color.brand_primary') : Color.Transparent) :
+            (seg.style === 2 || seg.style === 3 ? $r('app.color.brand_primary') : undefined))
           .decoration({
             type: seg.style === 3 ? TextDecorationType.Underline : TextDecorationType.None,
             color: $r('app.color.brand_primary'),
@@ -207,7 +223,14 @@ export struct MarkdownText {
     Column({ space: 8 }) {
       ForEach(this.blocks, (block: MdBlock, index: number) => {
         this.blockView(block, index);
-      }, (block: MdBlock, index: number) => `${index}-${block.kind}-${block.raw.length}-${block.segs.length}`);
+        // key 必须覆盖「尾行段数 + 闪烁相位」：光标 seg 是解析后注入的，不改 raw.length/segs.length——
+        // 若 key 不含它，末块前移时旧块 key 不变会被 ForEach 复用，旧块（含光标）卡屏，
+        // 流式全程每个历史末块都钉上一个光标（#1622 上板实测）；而 caretOn 不进带光标的
+        // 末块 key，闪烁时子树不重建、Span 颜色表达式不重估，光标就不眨。
+        // 重建范围仅末段（宽度恒占、布局不变），无旧实现的回绕抖动。
+      }, (block: MdBlock, index: number) => `${index}-${block.kind}-${block.raw.length}-${block.segs.length}` +
+        `-${block.segs.length > 0 ? block.segs[block.segs.length - 1].length : 0}` +
+        `${this.caretOn && this.tailHasCaret(block) ? '-c' : ''}`);
     }
     .alignItems(HorizontalAlign.Start)
     .width('100%');

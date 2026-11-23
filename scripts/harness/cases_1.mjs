@@ -5,7 +5,7 @@ import { test, state, settingsDefaults, enc, rtB64, deferred, tick, flush } from
 import { dir, read, ETS, ROOT } from './paths.mjs';
 
 export function register(ctx) {
-  const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, providersPage, chat, reappear } = ctx;
+  const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, collectLinks, linkHost, mdAppendCaret, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, providersPage, chat, reappear } = ctx;
   test('从模型设置返回时刷新三个 AI 页面的可用状态', () => {
     for (const Page of [AiAssistantPage, AiBookPanelPage, AiRecommendPage]) {
       const page = new Page();
@@ -427,6 +427,37 @@ export function register(ctx) {
     assert.equal(linkHost('example.org/path'), 'example.org');
     // 无 href 的旧样式段不进清单（历史数据/裸着色段不炸）
     assert.deepEqual(collectLinks([[{ text: '裸链样式', style: 3 }]]), []);
+  });
+  test('MdParse #1622：mdAppendCaret 只在可行内块尾行注入光标 seg，h/code/table/hr/空不注入', () => {
+    // p 多行：只追加到整个文档**末块的最后一行**行尾
+    const b1 = mdParseBlocks('第一段\n第二段');
+    mdAppendCaret(b1);
+    assert.equal(b1[0].segs[1].at(-1).text, '▌');
+    assert.equal(b1[0].segs[1].at(-1).style, 5);
+    assert.equal(b1[0].segs[0].some((s) => s.style === 5), false, '非尾行不注入');
+    // 多块：注入落在末块（ul），前面的 p 块不碰
+    const b1b = mdParseBlocks('第一段\n\n- 列表甲\n- 列表乙');
+    mdAppendCaret(b1b);
+    assert.equal(b1b[1].segs[1].at(-1).text, '▌', '末块（ul 末项）注入');
+    assert.equal(b1b[0].segs[0].some((s) => s.style === 5), false, '非末块不注入');
+    // 光标可跟在粗体段后（追加而非合并）
+    const b3 = mdParseBlocks('看 **重点**');
+    mdAppendCaret(b3);
+    assert.deepEqual(b3[0].segs[0].map((s) => s.style), [0, 1, 5]);
+    // 收尾在 h/code/table/hr：不注入（避免黑光标/污染块解析）
+    for (const src of ['## 标题', '```\ncode\n```', '| a | b |\n|---|---|\n| 1 | 2 |', '---']) {
+      const bb = mdParseBlocks(src);
+      mdAppendCaret(bb);
+      assert.equal(bb.some((blk) => blk.segs.some((l) => l.some((s) => s.style === 5))), false, src);
+    }
+    // 空文档 no-op 不炸
+    mdAppendCaret([]);
+    // quote 注入
+    const b5 = mdParseBlocks('> 引用');
+    mdAppendCaret(b5);
+    assert.equal(b5[0].segs[0].at(-1).text, '▌');
+    // 回归面：注入不改任何既有 seg 文本（旧实现拼进 content 会改块 raw/长度）
+    assert.equal(b1[0].segs[1][0].text, '第二段');
   });
   test('服务商管理页：添加自定义服务商有校验，成功后出现在清单', () => {
     resetSettings();

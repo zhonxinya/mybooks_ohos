@@ -254,7 +254,9 @@ export struct StreamBubble {
       ReasoningBlock({ reasoning: this.reasoning, live: true });
       ActivityTimeline({ acts: this.acts, live: true });
       if (this.text.length > 0) {
-        MarkdownText({ content: this.text + (this.caret ? '▌' : '') });
+        // 光标不进 content（#1622）：拼全角 '▌' 让长度每 530ms ±1，
+        // 末行回绕抖动且 block key 变化致整段重建；改为渲染层注入+切色闪烁。
+        MarkdownText({ content: this.text, showCaret: true, caretOn: this.caret });
       } else if (this.acts.length === 0) {
         Text('思考中…')
           .fontSize(15)
