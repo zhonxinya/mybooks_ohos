@@ -249,6 +249,7 @@ export const BOOK_META_REQUIRED: string[] = ['book_id'];
 
 export const TOOL_UPDATE_BOOK_META: AiToolDefinition = defineTool('update_book_meta',
   '更新服务器上某本书的元数据（书籍 id 来自 search_books）。只传要修改的字段，未传字段保持原值。' +
+    '更新成功后本地书架的书名/作者会自动同步，无需重新下载该书。' +
     '改前先 book_detail 核对现值并向用户复述目标改动。更换封面图片用 search_cover + set_cover。' +
     '分类(category)与标签(tags)是两套体系：分类单选、标签可多个，动分类前先用 list_categories 看现有分类。',
   BOOK_META_PROPS, BOOK_META_REQUIRED);
@@ -338,8 +339,8 @@ export const WEB_SEARCH_PROPS: Record<string, AiToolProperty> = {
   'query': prop('string', '搜索关键词（书名、人名、事件、规格参数等任意信息），尽量精炼，不要整句问话'),
 };
 export const TOOL_SEARCH_WEB: AiToolDefinition = defineTool('search_web',
-  '通用网页搜索（百度/Bing/360 三引擎并行聚合）：查书籍之外的任意信息——作者近况、作品改编、价格评测、' +
-    '新闻事件、名词解释等。返回若干条结果的来源、标题、链接与摘要（已跨引擎去重）。' +
+  '通用网页搜索（多引擎并行聚合，含 DeepSeek 官方搜索与 OpenAlex/Crossref 免费学术出版库通道）：查书籍之外的任意信息——作者近况、作品改编、价格评测、' +
+    '新闻事件、名词解释等。返回若干条结果的来源、标题、链接与摘要（已跨引擎去重）及逐引擎通道统计。' +
     '百科类词条优先用 search_encyclopedia；摘要不够时可把候选链接讲给用户自行查看。',
   WEB_SEARCH_PROPS, ['query']);
 

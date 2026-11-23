@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { dir } from './paths.mjs';
 import { stagePure, stagePage, stageAiService, stageChatStore, stageAiPersona, stageMetaSearch,
-  stageEncyclopedia, stageWebFetch, stageMcp, stageQwenAudio, stageNovelMeta, stageReader3, stageAiTools,
-  stageAiVoiceKit } from './stages.mjs';
+  stageEncyclopedia, stageWebSearchChannels, stageWebFetch, stageMcp, stageQwenAudio, stageNovelMeta,
+  stageReader3, stageAiTools, stageAiVoiceKit } from './stages.mjs';
 
 export const settingsDefaults = () => ({
   config: { providerId: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat',
@@ -345,6 +345,8 @@ export const rcp = {
       if (state.rcpThrowQueue.length > 0) { throw state.rcpThrowQueue.shift(); }
       if (state.rcpError) { throw state.rcpError; }
       const queued = state.rcpResponses.length > 0 ? state.rcpResponses.shift() : null;
+      // #1633：{ hang: true } 条目模拟通道永挂（测单引擎硬超时收敛，不拖死聚合）
+      if (queued && queued.hang) { return new Promise(() => {}); }
       return queued ?? state.rcpResponse ?? { statusCode: 200, body: enc(JSON.stringify({ data: state.models })) };
     },
     close: () => {},
@@ -425,7 +427,7 @@ export const toolsState = {
   search: null, detail: null, notes: [], notesError: '', history: [],
   sonovelEnvelope: null, tasks: [], processed: 0,
   booklistCreateResult: null, booklistAddResult: null, booklistCreateCalls: [], booklistAddCalls: [],
-  bookDetailAsync: null, editCalls: [], editResult: null, bookNavAsync: null,
+  bookDetailAsync: null, editCalls: [], editResult: null, bookNavAsync: null, syncMetaCalls: [],
   referBooks: null, referSearchCalls: [], applyReferCalls: [], applyReferResult: null,
   // add_to_shelf 用：登录态、配额检查可用性/结果、内存目录、talebook 入队记录
   authOk: true, quotaSupported: true, quotaResult: null, dirs: new Set(), talebookEnqueues: [],
@@ -569,6 +571,16 @@ export const TalebookService = {
   },
   getBookNavCachedAsync: async () => (toolsState.bookNavAsync
     ? await toolsState.bookNavAsync() : { status: 200, body: null, error: 'stub: 未设置' }),
+  syncDownloadMeta: (id, title, author, coverUrl) => {
+    toolsState.syncMetaCalls.push({ id, title, author, coverUrl });
+    return true;
+  },
+  syncLocalBookMeta: async (id) => {
+    const env = toolsState.bookDetailAsync ? await toolsState.bookDetailAsync(id) : { status: 404, body: null };
+    const book = (env.body && env.body.book) ? env.body.book : {};
+    const authors = Array.isArray(book.authors) ? book.authors : [];
+    toolsState.syncMetaCalls.push({ id: String(id), title: book.title ?? '', author: authors[0] ?? '', coverUrl: book.cover ?? '' });
+  },
 };
 // TalebookApi 拆分域类：与门面共用同一桩对象（toolsState 可编程性不分家）
 export const TalebookApiBooks = TalebookApi;
@@ -635,6 +647,7 @@ export async function setup() {
   stageMetaSearch();
   stageNovelMeta();
   stageEncyclopedia();
+  stageWebSearchChannels();
   stageWebFetch();
   stageMcp();
   stageQwenAudio();

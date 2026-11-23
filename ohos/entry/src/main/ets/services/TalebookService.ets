@@ -887,6 +887,23 @@ export class TalebookService {
   static upsertDownloadRecord(record: DownloadRecord): void {
     TalebookServiceStore.upsertDownloadRecord(record);
   }
+  /** 委托 TalebookServiceStore.syncDownloadMeta（#1638 元数据同步本地书架快照）。 */
+  static syncDownloadMeta(bookId: string, title: string, author: string, coverUrl: string): boolean {
+    return TalebookServiceStore.syncDownloadMeta(bookId, title, author, coverUrl);
+  }
+  /**
+   * 服务端元数据被远端改动（AI 补全等）后重取 detail 并同步本地书架（#1638）。
+   * 书未下载（无本地记录）时静默跳过；不下载任何文件内容。
+   */
+  static async syncLocalBookMeta(bookId: number): Promise<void> {
+    const envelope = await TalebookService.getBookDetailAsync(bookId);
+    const body: Record<string, Object> = envelope.body ?? {};
+    const book: Record<string, Object> = (body['book'] as Record<string, Object> | undefined) ?? body;
+    const title: string = String(book['title'] ?? '');
+    const authors: string[] = Array.isArray(book['authors']) ? (book['authors'] as string[]) : [];
+    const cover: string = String(book['cover'] ?? '');
+    TalebookServiceStore.syncDownloadMeta(`${bookId}`, title, authors.length > 0 ? authors[0] : '', cover);
+  }
   /** 委托 TalebookServiceStore.removeDownloadRecord（本地持久化域）。 */
   static removeDownloadRecord(bookId: string, deleteFile: boolean = true): void {
     TalebookServiceStore.removeDownloadRecord(bookId, deleteFile);

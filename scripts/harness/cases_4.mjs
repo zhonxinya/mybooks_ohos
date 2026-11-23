@@ -12,9 +12,13 @@ export function register(ctx) {
       category: '科幻时空',
       isbn: '', series: '', languages: ['zh'], translators: [], series_index: 1, rating: null } } });
     toolsState.editCalls.length = 0;
+    toolsState.syncMetaCalls.length = 0;
     const out = await RealAiTools.execute('update_book_meta', '{"book_id":1481,"title":"三体（新版）"}');
     assert.ok(out.includes('已更新'), out);
     assert.ok(out.includes('「三体」→「三体（新版）」'));
+    // #1638：更新成功后同步本地书架快照（免重新下载整本书）
+    assert.deepEqual(toolsState.syncMetaCalls, [{ id: '1481', title: '三体（新版）', author: '刘慈欣', coverUrl: '' }],
+      'edit 成功后必须调 syncDownloadMeta 带新标题/第一作者');
     const p = toolsState.editCalls[0].payload;
     assert.equal(p.title, '三体（新版）');
     assert.deepEqual(p.authors, ['刘慈欣'], '未传 authors 保持原值');
@@ -43,7 +47,9 @@ export function register(ctx) {
     assert.ok((await RealAiTools.execute('update_book_meta', '{"book_id":999,"title":"x"}')).includes('没有找到'));
     toolsState.bookDetailAsync = async () => ({ status: 200, body: { book: { title: '三体', authors: [] } } });
     toolsState.editResult = { status: 500, body: null, error: '服务端炸了' };
+    const beforeFail = toolsState.syncMetaCalls.length;
     assert.ok((await RealAiTools.execute('update_book_meta', '{"book_id":1481,"title":"x"}')).includes('更新失败'));
+    assert.equal(toolsState.syncMetaCalls.length, beforeFail, 'edit 失败不得同步本地快照');
     toolsState.editResult = null;
   });
 

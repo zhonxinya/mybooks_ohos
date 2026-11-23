@@ -275,11 +275,13 @@ export function register(ctx) {
       { statusCode: 200, body: enc(so360Html) },
     ];
     const out = await RealAiTools.execute('search_web', '{"query":"三体"}');
-    // 重排序后顺序按来源权重；断言内容存在与格式（编号+来源标签+链接行）
+    // #1632 相关性排序后：标题+摘要双命中者并列，百度首位保持；断言内容存在与格式（编号+来源标签+链接行）
     assert.ok(out.includes('1. [百度] 三体全集在线阅读-起点中文网'), out);
     assert.ok(out.includes('链接：https://www.qidian.com/book/123'), out);
     assert.ok(out.includes('[百度] 三体全集免费阅读_番茄小说官网'), out);
     assert.ok(out.includes('[Bing] 三体（刘慈欣创作的系列小说）_百度百科'), out);
+    // #1633：工具文案尾部附逐引擎通道统计
+    assert.ok(out.includes('[通道统计] 百度 3 | Bing 2 | 360 搜索 2'), out);
     // 无摘要条目：链接行后紧跟空行（不占摘要行）
     assert.ok(/链接：https:\/\/fanqienovel\.com\/page\/698\n\n/.test(out), out);
     // 空 query 直接回文案
@@ -311,8 +313,20 @@ export function register(ctx) {
     assert.equal(EncyclopediaService.searchLimit(), 20, '上限 20');
     EncyclopediaService.setSearchLimit(5);
     assert.equal(EncyclopediaService.searchLimit(), 5);
-    // 全关（人为清空配置）→ 明确错误文案，不发请求
-    deps.state.store.set('p:ai_search_engines', '[]');
+    // 旧「启用清单」键迁移（#1636）：老配置=5 引擎启用（无 deepseek）→ 新引擎自动启用、旧启用保持
+    deps.state.store.clear();
+    deps.state.store.set('p:ai_search_engines', JSON.stringify(['baidu', 'bing', 'so360', 'sogou', 'wikipedia']));
+    assert.deepEqual(EncyclopediaService.enabledEngines(),
+      ['baidu', 'bing', 'so360', 'sogou', 'wikipedia', 'deepseek', 'openalex', 'crossref'],
+      '迁移后 deepseek/openalex/crossref（非旧时代引擎）默认启用');
+    assert.deepEqual(JSON.parse(deps.state.store.get('p:ai_search_engines_off')), [], '迁移落盘 off 键（无停用项）');
+    // 老配置里被停用的引擎迁移后仍停用；deepseek 不属「旧时代已知引擎」保持默认启用
+    deps.state.store.clear();
+    deps.state.store.set('p:ai_search_engines', JSON.stringify(['baidu', 'bing']));
+    assert.deepEqual(EncyclopediaService.enabledEngines(), ['baidu', 'bing', 'deepseek', 'openalex', 'crossref']);
+    // 全关（人为写空启用清单）→ 明确错误文案，不发请求
+    deps.state.store.set('p:ai_search_engines_off',
+      JSON.stringify(['baidu', 'bing', 'so360', 'sogou', 'wikipedia', 'deepseek', 'openalex', 'crossref']));
     deps.state.rcpResponses = [];
     const none = await EncyclopediaService.searchWeb('三体');
     assert.ok(!none.ok && none.error.includes('没有启用任何搜索引擎'), none.error);
@@ -575,6 +589,175 @@ export function register(ctx) {
     confirmIndex = 0;
     assert.equal(await page.requestConfirm('加入书架', '{}'), false, '拒绝仍弹窗且为 false');
     assert.equal(dialogs.length, n + 1);
+  });
+
+  test('搜索引擎优化（#1632-#1635）：相关性排序/通道超时诊断/候选联动/URL 归一去重', async () => {
+    const { EncyclopediaService } = await load('RealEncyclopedia');
+    deps.state.rcpThrowQueue.length = 0;
+    deps.state.rcpError = null;
+    deps.state.store.clear();
+    deps.state.rcpResponses = [];
+    for (const id of ['sogou', 'wikipedia']) { EncyclopediaService.setEngineEnabled(id, false); }
+    // #1632 相关性：满命中低权重源 排在 零命中高权重源前（旧公式权重×10 会霸排）
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc('<div class="result c-container" mu="https://a.example/1">' +
+        '<h3><a><!--s-text-->完全不相关的百科内容<!--/s-text--></a></h3>' +
+        '<span class="summary-text_1">这是一段与查询毫无关联的长摘要文本，用来验证来源权重不再压过相关性信号。</span></div>') },
+      { statusCode: 200, body: enc('<ol></ol>') },
+      { statusCode: 200, body: enc('<li class="res-list"><h3><a href="https://b.example/2">' +
+        '球状闪电_刘慈欣著 完整介绍</a></h3><span class="res-list-summary">刘慈欣创作的科幻小说《球状闪电》讲述球状闪电之谜与主人公的执着追寻，篇幅足够长以验证完整度加分。</span></li>') },
+    ];
+    const rel = await EncyclopediaService.searchWeb('球状闪电');
+    assert.ok(rel.ok, rel.error);
+    assert.equal(rel.items[0].source, '360', '查询词满命中胜过来源权重差');
+    // #1633 超时：Bing 通道永挂 → 8s 硬超时收敛（用例调小句柄），其余照常，诊断标注超时
+    const savedTimeout = EncyclopediaService.engineTimeoutMs;
+    try {
+      EncyclopediaService.engineTimeoutMs = 30;
+      deps.state.rcpResponses = [
+        { statusCode: 200, body: enc('<div class="result c-container" mu="https://a.example/1">' +
+          '<h3><a><!--s-text-->三体阅读<!--/s-text--></a></h3></div>') },
+        { hang: true },
+        { statusCode: 200, body: enc('<li class="res-list"><h3><a href="https://b.example/2">三体百科</a></h3></li>') },
+      ];
+      const to = await EncyclopediaService.searchWeb('三体');
+      assert.ok(to.ok, to.error);
+      assert.ok(to.stats.includes('Bing 0(超时)'), to.stats);
+      assert.ok(to.stats.includes('百度 1') && to.stats.includes('360 搜索 1'), to.stats);
+    } finally {
+      EncyclopediaService.engineTimeoutMs = savedTimeout;
+    }
+    // #1634 候选联动：limit 放大后单引擎候选不再被钉死 8 条
+    let manyHtml = '<html><body>';
+    for (let i = 0; i < 12; i++) {
+      manyHtml += `<div class="result c-container" mu="https://c.example/${i}">` +
+        `<h3><a><!--s-text-->三体结果编号${i}<!--/s-text--></a></h3></div>`;
+    }
+    manyHtml += '</body></html>';
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(manyHtml) }, { statusCode: 200, body: enc('<ol></ol>') },
+      { statusCode: 200, body: enc('<ul></ul>') },
+    ];
+    const many = await EncyclopediaService.searchWeb('三体', 12);
+    assert.equal(many.items.length, 12, 'perEngine=max(8,limit+4) 生效，12 条候选全进结果');
+    // #1635 URL 归一去重：跟踪参数/大小写/尾斜杠变体视为同一文章（标题不同也合并）
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc('<div class="result c-container" mu="https://WWW.x.com/a/?utm_source=1">' +
+        '<h3><a><!--s-text-->转载标题甲<!--/s-text--></a></h3></div>' +
+        '<div class="result c-container" mu="https://www.x.com/a?spm=2">' +
+        '<h3><a><!--s-text-->原文链接乙<!--/s-text--></a></h3></div>') },
+      { statusCode: 200, body: enc('<ol></ol>') },
+      { statusCode: 200, body: enc('<ul></ul>') },
+    ];
+    const dd = await EncyclopediaService.searchWeb('标题');
+    assert.equal(dd.items.length, 1, 'utm/spm 变体经归一化后同 URL 合并');
+    deps.state.store.clear();
+    deps.state.rcpResponses = [];
+  });
+
+  test('DeepSeek 官方搜索通道（#1636）：无 Key 不发请求、POST 结构、summary 优先解析', async () => {
+    const { EncyclopediaService, SEARCH_ENGINES } = await load('RealEncyclopedia');
+    deps.state.rcpThrowQueue.length = 0;
+    deps.state.rcpError = null;
+    deps.state.store.clear();
+    deps.state.rcpResponses = [];
+    deps.state.requests.length = 0;
+    for (const e of SEARCH_ENGINES) {
+      if (e.id !== 'deepseek') { EncyclopediaService.setEngineEnabled(e.id, false); }
+    }
+    // ① 无 Key：零请求（不烧配额不占超时），诊断行明标「无Key」
+    const noKey = await EncyclopediaService.searchWeb('三体');
+    assert.equal(deps.state.requests.length, 0, '无 Key 不发 HTTP');
+    assert.ok(noKey.stats.includes('DeepSeek 0(无Key)'), noKey.stats);
+    assert.ok(!noKey.ok && noKey.error.includes('均无结果'), noKey.error);
+    // ② 配 Key：POST /tools/search 结构 + Bearer 头 + 请求体字段
+    deps.state.store.set('s:ai_api_key_deepseek', 'sk-test');
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(JSON.stringify({ results: [
+      { title: '三体', url: 'https://ds.example/1', summary: '刘慈欣长篇科幻小说，雨果奖作品。', snippet: '短摘要', authority: 4 },
+      { title: '球状闪电', url: 'https://ds.example/2', snippet: '同作者早期长篇', rerank_score: 2.1 },
+      { title: '', url: 'https://ds.example/skip', snippet: '无标题应被跳过' },
+    ] })) }];
+    const r = await EncyclopediaService.searchWeb('三体 刘慈欣', 5);
+    assert.ok(r.ok, r.error);
+    const req = deps.state.requests[deps.state.requests.length - 1];
+    assert.equal(req.method, 'POST');
+    assert.equal(req.url, 'https://api.deepseek.com/v1/tools/search');
+    assert.equal(req.headers['Authorization'], 'Bearer sk-test');
+    assert.equal(req.headers['Content-Type'], 'application/json');
+    const body = JSON.parse(req.content);
+    assert.equal(body.query, '三体 刘慈欣');
+    assert.equal(body.count, 9, 'count=perEngine（limit+4 去重余量，#1634 联动）');
+    assert.equal(body.need_content, false);
+    assert.equal(r.items.length, 2, '无标题条目被跳过');
+    assert.equal(r.items[0].source, 'DeepSeek');
+    assert.equal(r.items[0].summary, '刘慈欣长篇科幻小说，雨果奖作品。', 'summary 优先于 snippet');
+    assert.equal(r.items[1].summary, '同作者早期长篇', '无 summary 回退 snippet');
+    assert.ok(r.stats.includes('DeepSeek 2'), r.stats);
+    // ③ count 夹取上限 50 + 查询超长截 128（API 硬约束）
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc('{"results":[]}') }];
+    await EncyclopediaService.searchWeb('长'.repeat(200), 60);
+    const req2 = deps.state.requests[deps.state.requests.length - 1];
+    const body2 = JSON.parse(req2.content);
+    assert.equal(body2.count, 50, 'count 上限 50');
+    assert.equal(body2.query.length, 128, 'query 截 128');
+    deps.state.store.clear();
+    deps.state.rcpResponses = [];
+  });
+
+  test('OpenAlex/Crossref 免费学术通道（#1637）：请求结构、倒排摘要重建、DOI 回退、降级摘要', async () => {
+    const { EncyclopediaService, SEARCH_ENGINES } = await load('RealEncyclopedia');
+    deps.state.rcpThrowQueue.length = 0;
+    deps.state.rcpError = null;
+    deps.state.store.clear();
+    deps.state.requests.length = 0;
+    for (const e of SEARCH_ENGINES) {
+      if (e.id !== 'openalex' && e.id !== 'crossref') { EncyclopediaService.setEngineEnabled(e.id, false); }
+    }
+    deps.state.rcpResponses = [
+      { statusCode: 200, body: enc(JSON.stringify({ meta: { count: 100 }, results: [
+        { display_name: '量子三体问题', publication_year: 2000, doi: 'https://doi.org/10.1360/x',
+          primary_location: { landing_page_url: 'https://wap.example/a' },
+          abstract_inverted_index: { 一个: [0], 行星: [1], 系统: [2] },
+          authorships: [{ author: { display_name: '张三' } }] },
+        { display_name: '三体出版研究', doi: 'https://doi.org/10.2/y', publication_year: 2008,
+          authorships: [{ author: { display_name: '李四' } }] },
+        { display_name: '', doi: 'https://doi.org/10.3/z' },
+        { display_name: '无链接条目' },
+      ] })) },
+      { statusCode: 200, body: enc(JSON.stringify({ message: { items: [
+        { title: ['试析《三体》成功之路'], DOI: '10.6/a', URL: 'https://doi.org/10.6/a',
+          abstract: '<jats:p>本文分析科幻叙事。</jats:p>', author: [{ name: '王五' }],
+          issued: { 'date-parts': [[2026, 2]] }, type: 'journal-article' },
+        { title: ['三体英译本研究'], DOI: '10.7/b', author: [{ name: '赵六' }],
+          issued: { 'date-parts': [[2015]] }, type: 'book-chapter' },
+        { title: [], DOI: '10.8/c' },
+      ] } })) },
+    ];
+    const r = await EncyclopediaService.searchWeb('三体', 5);
+    assert.ok(r.ok, r.error);
+    // 请求结构：GET + 编码查询 + 条数联动（perEngine=limit+4=9）+ crossref select 省流量
+    const oa = deps.state.requests.find((q) => q.url.includes('openalex.org'));
+    const cr = deps.state.requests.find((q) => q.url.includes('crossref.org'));
+    assert.equal(oa.method, 'GET');
+    assert.ok(oa.url.includes('search=%E4%B8%89%E4%BD%93') && oa.url.includes('per-page=9'), oa.url);
+    assert.ok(cr.url.includes('rows=9') && cr.url.includes('select='), cr.url);
+    // OpenAlex：倒排摘要重建、landing_page_url 优先、无 landing 回退 DOI、无标题/无链接跳过、无摘要退化「作者 (年份)」
+    const oaHits = r.items.filter((h) => h.source === 'OpenAlex');
+    assert.equal(oaHits.length, 2, '空标题与无链接条目被跳过');
+    assert.equal(oaHits[0].url, 'https://wap.example/a', 'landing_page_url 优先于 doi');
+    assert.equal(oaHits[0].summary, '一个 行星 系统', 'abstract_inverted_index 按位置重建');
+    assert.equal(oaHits[1].url, 'https://doi.org/10.2/y', '无 landing_page_url 回退 doi');
+    assert.equal(oaHits[1].summary, '李四 (2008)', '无摘要退化为作者+年份');
+    // Crossref：title[0]、URL 字段、abstract 去 XML 标签、缺摘要退化「作者 (年份) · 类型」
+    const crHits = r.items.filter((h) => h.source === 'Crossref');
+    assert.equal(crHits.length, 2, '空 title 数组被跳过');
+    assert.equal(crHits[0].title, '试析《三体》成功之路');
+    assert.ok(crHits[0].summary.includes('本文分析科幻叙事'), crHits[0].summary);
+    assert.ok(!crHits[0].summary.includes('jats'), 'XML 标签已剥离');
+    assert.equal(crHits[1].summary, '赵六 (2015) · book-chapter');
+    assert.ok(r.stats.includes('OpenAlex 2') && r.stats.includes('Crossref 2'), r.stats);
+    deps.state.store.clear();
+    deps.state.rcpResponses = [];
   });
 
 }

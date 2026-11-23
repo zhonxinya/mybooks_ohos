@@ -70,7 +70,8 @@ export class BookCatalogDataSource implements IDataSource {
     return true;
   }
 
-  private static fingerprint(item: BookListItemData): string {
+  /** 公开供 LazyForEach keygen 复用：key 覆盖全部展示字段，同 key 会被组件复用不刷新（#1638） */
+  static fingerprint(item: BookListItemData): string {
     return `${item.id}\u0001${item.title}\u0001${item.author ?? ''}\u0001${item.cover ?? ''}\u0001` +
       `${item.subtitle ?? ''}\u0001${item.format ?? ''}\u0001${item.badge ?? ''}`;
   }

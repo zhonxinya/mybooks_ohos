@@ -451,6 +451,37 @@ export class TalebookServiceStore {
     BookshelfRefresh.notify();
   }
 
+  /**
+   * 元数据写服务端成功后同步本地书架快照（#1638）：修「更新元数据必须重新下载
+   * 才能在书架看到新值」。仅当该书已在本地（有记录）才更新；空字段=保持原值；
+   * filePath/format/progress 等下载态字段一律不动（不触发任何重新下载）。
+   */
+  static syncDownloadMeta(bookId: string, title: string, author: string, coverUrl: string): boolean {
+    const records = TalebookServiceStore.getDownloads();
+    const index: number = records.findIndex((item) => item.bookId === bookId);
+    if (index < 0) {
+      return false;
+    }
+    const rec: DownloadRecord = records[index];
+    const next: DownloadRecord = {
+      bookId: rec.bookId,
+      title: title.length > 0 ? title : rec.title,
+      author: author.length > 0 ? author : rec.author,
+      coverUrl: coverUrl.length > 0 ? coverUrl : rec.coverUrl,
+      filePath: rec.filePath,
+      format: rec.format,
+      downloadTime: rec.downloadTime,
+      progress: rec.progress,
+    };
+    // 新对象+新数组（不可变替换）：页面侧 @State/DataSource 持旧引用，
+    // 就地改字段会让 stamp 与逐槽比较双双看不见变化（书架实时刷新失效）
+    const updated: DownloadRecord[] = records.slice();
+    updated[index] = next;
+    TalebookServiceStore.saveDownloads(updated);
+    BookshelfRefresh.notify();
+    return true;
+  }
+
   static removeDownloadRecord(bookId: string, deleteFile: boolean = true): void {
     const records = TalebookServiceStore.getDownloads();
     const target = records.find((item) => item.bookId === bookId);

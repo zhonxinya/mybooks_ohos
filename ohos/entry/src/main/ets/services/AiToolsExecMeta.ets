@@ -8,7 +8,8 @@ import { TalebookApiBooks } from './TalebookApiBooks';
 import { TalebookService } from './TalebookService';
 import { DoubanDetail, DoubanHit, MetaSearchService } from './MetaSearchService';
 import { NovelMeta, NovelMetaService } from './NovelMetaService';
-import { EncyclopediaHit, EncyclopediaService, WebSearchHit, WebSearchResult } from './EncyclopediaService';
+import { EncyclopediaHit, EncyclopediaService, WebSearchResult } from './EncyclopediaService';
+import { WebSearchHit } from './WebSearchChannels';
 import { WebFetchResult, WebFetchService } from './WebFetchService';
 import { BrowserRenderService } from './BrowserRenderService';
 import { AiService, AiConfig, LlmSearchResult, LlmSearchSource } from './AiService';
@@ -136,6 +137,8 @@ export class AiToolsExecMeta {
     if (rsp.status < 200 || rsp.status >= 300) {
       return `更新失败（${rsp.error.length > 0 ? rsp.error : `HTTP ${rsp.status}`}）。`;
     }
+    // #1638：同步本地书架快照——更新元数据不再需要重新下载整本书才生效
+    TalebookService.syncDownloadMeta(`${bookId}`, newTitle, authors.length > 0 ? authors[0] : '', '');
     return `已更新《${newTitle}》：${changes.join('；')}`;
   }
 
@@ -347,7 +350,8 @@ export class AiToolsExecMeta {
       }
       parts.push(line);
     }
-    return parts.join('\n\n');
+    // #1633：逐引擎命中数回传，某引擎恒 0 即改版/反爬信号，不再静默
+    return `${parts.join('\n\n')}\n\n[通道统计] ${res.stats}`;
   }
 
   /** 访问具体网页：标题 + 来源 + 正文纯文本；HTTP 拿不到正文时自动走 ArkWeb 渲染降级。 */

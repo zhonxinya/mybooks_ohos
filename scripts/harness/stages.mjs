@@ -284,14 +284,28 @@ export function stageMetaSearch() {
   writeFileSync(join(dir, 'RealMetaSearch.ts'), source);
 }
 
-/** EncyclopediaService 真实入检：rcp/util 复用 aiServiceDeps 桩（双通道都走 fetchText）。 */
+/** EncyclopediaService 真实入检：rcp/util 复用 aiServiceDeps 桩（双通道都走 fetchText）；#1636 DeepSeek 通道用真实 staged Config（槽语义实测）。 */
 export function stageEncyclopedia() {
   let source = read('services/EncyclopediaService.ets');
   source = source
     .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
     .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
-    .replace(`from './TalebookService'`, `from './aiServiceDeps.ts'`);
+    .replace(`from './TalebookService'`, `from './aiServiceDeps.ts'`)
+    .replace(`from './AiServiceConfig'`, `from './RealAiServiceConfig.ts'`)
+    .replace(`from './WebSearchChannels'`, `from './RealWebSearchChannels.ts'`);
   writeFileSync(join(dir, 'RealEncyclopedia.ts'), source);
+}
+
+/** WebSearchChannels（#1637 拆分出的通道层）真实入检：同 Encyclopedia 的桩映射。 */
+export function stageWebSearchChannels() {
+  let source = read('services/WebSearchChannels.ets');
+  source = source
+    .replace(`from '@kit.RemoteCommunicationKit'`, `from './aiServiceDeps.ts'`)
+    .replace(`from '@kit.ArkTS'`, `from './aiServiceDeps.ts'`)
+    .replace(`from './AiServiceConfig'`, `from './RealAiServiceConfig.ts'`);
+  // strip-types 会擦除 interface，但消费方仍按值 import 类型名——补占位导出（同 aiToolsDeps 惯例）
+  source += '\nexport const WebSearchHit = undefined;\n';
+  writeFileSync(join(dir, 'RealWebSearchChannels.ts'), source);
 }
 
 /** WebFetchService 真实入检：rcp/util 复用 aiServiceDeps 桩（fetch_url 与网页搜索同 HTTP 通道）。 */
@@ -461,6 +475,7 @@ export function stageAiTools() {
     ["'./MetaSearchService'", "'./RealMetaSearch.ts'"],
     ["'./NovelMetaService'", "'./RealNovelMeta.ts'"],
     ["'./EncyclopediaService'", "'./RealEncyclopedia.ts'"],
+    ["'./WebSearchChannels'", "'./RealWebSearchChannels.ts'"],
     ["'./WebFetchService'", "'./RealWebFetch.ts'"],
     ["'./AiPersona'", "'./RealAiPersona.ts'"],
     ["'./AiService'", "'./RealAiService.ts'"],

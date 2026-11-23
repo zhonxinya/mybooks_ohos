@@ -70,8 +70,9 @@ export struct BookCatalogView {
           .height($r('app.float.list_item_height'))
           .padding({ left: 16, right: 16 })
           // key 必须包含行内会变化的字段：角标（如「已入库」）是异步补齐的，
-          // 只按下标做 key 时 onDataReloaded 会复用旧组件，行内容不刷新
-        }, (item: BookListItemData) => `list-${item.id}-${item.badge ?? ''}`);
+          // 元数据同步（#1638）改 title/author/cover 后同样必须重建行——key 直接用
+          // DataSource.fingerprint，与 sync 的变更检测共用同一套字段，不再两处漏抄
+        }, (item: BookListItemData) => `list-${BookCatalogDataSource.fingerprint(item)}`);
         if (this.loadingMore) {
           ListItem() {
             LoadingState({ hint: '加载更多...' });
@@ -109,7 +110,7 @@ export struct BookCatalogView {
             })
               .reuseId('book-grid-card');
           }
-        }, (item: BookListItemData) => `grid-${item.id}-${item.badge ?? ''}`);
+        }, (item: BookListItemData) => `grid-${BookCatalogDataSource.fingerprint(item)}`);
 
         if (this.loadingMore) {
           GridItem() {
