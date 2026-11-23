@@ -345,8 +345,8 @@ struct AiAssistantPage {
         this.voiceStatus = '说话中';
       },
       onResponseDone: (): void => {
-        // 工具轮的 response 先于结果回填结束：执行中状态不能被「聆听中」覆盖回去
-        if (this.voiceActive && this.voiceStatus.indexOf('执行中：') !== 0) {
+        // 工具轮的 response.done 先于结果回填到达：还欠回填（isToolBusy）时不得切回「聆听中」
+        if (this.voiceActive && !RealtimeCallService.isToolBusy()) {
           this.voiceStatus = '聆听中';
         }
       },
@@ -356,10 +356,10 @@ struct AiAssistantPage {
             if (!this.voiceActive) {
               return;
             }
-            // 只在自己的「执行中」链上收敛状态，避免覆盖打断/新一轮的正常流转
             if (state === 'doing') {
               this.voiceStatus = `执行中：${label}…`;
-            } else if (this.voiceStatus.indexOf('执行中：') === 0) {
+            } else if (this.voiceStatus.indexOf('执行中：') === 0 && !RealtimeCallService.isToolBusy()) {
+              // 仍有其它工具在途时保持「执行中」显示，最后一个回填后才收敛
               this.voiceStatus = state === 'rejected' ? '已拒绝' : '思考中';
             }
           });

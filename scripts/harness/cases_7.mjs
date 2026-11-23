@@ -382,8 +382,10 @@ export function register(ctx) {
       call_id: 'c1', name: 'search_books', arguments: '{"query":"三体"}' }));
     await flush();
     assert.ok(ev.includes('call:search_books:c1'));
+    assert.equal(Rt.isToolBusy(), true, 'args.done 即计入在途工具');
     Rt.sendToolResult('c1', '找到《三体》');
     await flush();
+    assert.equal(Rt.isToolBusy(), false, '回填销账');
     assert.equal(rtState.sends.length, sendsBeforeCall + 2);
     const toolOut = JSON.parse(rtState.sends[sendsBeforeCall]);
     assert.equal(toolOut.item.type, 'function_call_output');
@@ -394,11 +396,14 @@ export function register(ctx) {
     rtState.socket.emitEvent(JSON.stringify({ type: 'response.function_call_arguments.done',
       call_id: 'c2', name: 'search_books', arguments: '{}' }));
     await flush();
+    assert.equal(Rt.isToolBusy(), true);
     rtState.socket.emitEvent(JSON.stringify({ type: 'input_audio_buffer.speech_started' }));
     await flush();
+    assert.equal(Rt.isToolBusy(), true, '打断不销账：结果未回填仍算在途');
     const sendsBefore2 = rtState.sends.length;
     Rt.sendToolResult('c2', '结果');
     await flush();
+    assert.equal(Rt.isToolBusy(), false);
     assert.equal(rtState.sends.length, sendsBefore2 + 1);
     assert.equal(JSON.parse(rtState.sends[sendsBefore2]).item.call_id, 'c2');
     // 静音=停上行帧（不断采集），取消静音恢复 append
@@ -411,7 +416,13 @@ export function register(ctx) {
     rtState.capturer.feedMic(mic);
     await flush();
     assert.equal(rtState.sends.length, sendsBefore + 1);
+    // 挂断清零：在途工具不随会话残留（否则新会话轮次守卫被旧账误伤）
+    rtState.socket.emitEvent(JSON.stringify({ type: 'response.function_call_arguments.done',
+      call_id: 'c3', name: 'search_books', arguments: '{}' }));
+    await flush();
+    assert.equal(Rt.isToolBusy(), true);
     Rt.disconnect();
+    assert.equal(Rt.isToolBusy(), false, 'disconnect 归零在途计数');
     await flush();
     await connecting;
     // 缺 Key：连接即抛（页面提示配置）

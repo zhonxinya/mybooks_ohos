@@ -70,9 +70,25 @@ export class RealtimeCallService {
   private static muted: boolean = false;
   /** 有工具结果待回填续流；用户在此期间开口则交给 VAD 自动起轮，不再抢 response.create。 */
   private static toolWaitResponse: boolean = false;
+  /**
+   * 在途工具调用数（一个响应可带多个 function_call，逐条计数配对回填）。
+   * 工具轮时序：args.done → response.done（先于结果回填）→ sendToolResult → 新一轮。
+   * 语音页的工具过程显示以此判定「是否还欠回填」，不靠猜事件顺序——
+   * 否则 response.done 会把「执行中」覆盖回「聆听中」（本字段是该时序的唯一事实源）。
+   */
+  private static toolInFlight: number = 0;
+
+  /** 是否有工具在执行中（结果未回填）。供语音页守卫轮次事件不覆盖工具过程显示。 */
+  static isToolBusy(): boolean {
+    return RealtimeCallService.toolInFlight > 0;
+  }
 
   /** 回填工具执行结果（output 为人话摘要或原始 JSON 均可，模型自行消化）。 */
   static sendToolResult(callId: string, output: string): void {
+    // 计数递减先于连接判空：runTool 每个 call 恰好回填一次，挂断后到达的结果也要销账
+    if (RealtimeCallService.toolInFlight > 0) {
+      RealtimeCallService.toolInFlight--;
+    }
     if (RealtimeCallService.ws === null || RealtimeCallService.closed) {
       return;
     }
@@ -109,6 +125,7 @@ export class RealtimeCallService {
     RealtimeCallService.userTranscript = '';
     RealtimeCallService.muted = false;
     RealtimeCallService.toolWaitResponse = false;
+    RealtimeCallService.toolInFlight = 0;
 
     const ws: webSocket.WebSocket = webSocket.createWebSocket();
     RealtimeCallService.ws = ws;
@@ -191,6 +208,7 @@ export class RealtimeCallService {
 
   static disconnect(): void {
     RealtimeCallService.closed = true;
+    RealtimeCallService.toolInFlight = 0;
     RealtimeCallService.failCreated('已挂断');
     const capturer: audio.AudioCapturer | null = RealtimeCallService.capturer;
     RealtimeCallService.capturer = null;
@@ -311,6 +329,7 @@ export class RealtimeCallService {
       const args: string = String(event['arguments'] ?? '{}');
       // 本轮响应已因 function_call 结束（response.done）；回填后需手动续一轮
       RealtimeCallService.toolWaitResponse = true;
+      RealtimeCallService.toolInFlight++;
       RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onFunctionCall(name, args, callId));
     } else if (type === 'response.done') {
       RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onResponseDone());
