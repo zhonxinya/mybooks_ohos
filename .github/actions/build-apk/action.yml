@@ -115,6 +115,16 @@ runs:
         android-sdk: ${{ github.workspace }}/android-sdk
         android-ndk: ${{ github.workspace }}/android-sdk/ndk/${{ inputs.ndk-version }}
 
+    # setup-arkuix 会把 JAVA_HOME 覆盖为工具链自带 JBR（6.1.1.300 现为 Java 25），
+    # gradlew 起的 Gradle 8.4 daemon 直接报 Unsupported class file major version 69。
+    # 本机 APK 链一直是 JDK 17 跑通的，这里恢复 setup-java 的 Temurin 17。
+    - name: Restore JDK 17 for Gradle
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+        "$JAVA_HOME_17_X64/bin/java" -version
+
     - name: Apply CI Build Profile
       shell: bash
       run: |
