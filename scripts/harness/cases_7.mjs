@@ -610,4 +610,37 @@ export function register(ctx) {
       act('list_shelf', '查看书架', 'done', '', [{ title: 'B', subtitle: '', cover: '' }])]);
     assert.equal(bk[0].books[0].title, 'B');
   });
+
+  test('#1627 语音工具痕迹：runTool 记 traceBox，voiceAi/voiceSealStreaming 挂泡进会话', async () => {
+    const Kit = await load('RealAiVoiceKit');
+    resetSettings();
+    toolsState.search = async (q) => [{ id: 1, title: q, authors: ['作者'] }];
+    const box = [];
+    await Kit.AiVoiceKit.runTool('search_books', '{"query":"三体"}', 'c1', null, undefined, box);
+    assert.equal(box.length, 1);
+    assert.deepEqual(box[0].calls.map((c) => c.id), ['c1']);
+    assert.ok(box[0].calls[0].result.includes('三体'), '真实结果进痕迹');
+    // set_voice 也记（同轮并入 calls，text 恒空）
+    await Kit.AiVoiceKit.runTool('set_voice', '{"voice":"longanqian"}', 'c2', null, undefined, box);
+    assert.equal(box[0].calls.length, 2, '两类工具同轮都记');
+    // 不传盒零影响（通话页旧调用兼容）
+    await Kit.AiVoiceKit.runTool('search_books', '{"query":"x"}', 'c3', null);
+    assert.equal(box[0].calls.length, 2);
+    // store 挂泡：voiceAi(final) 带痕
+    const store = AiChatStore.instance();
+    store.resetForTest();
+    store.voiceUser('加一本', true);
+    store.voiceAi('已加好', true, box);
+    const last = store.messages[store.messages.length - 1];
+    assert.equal(last.voice, true);
+    assert.ok(last.toolTrace !== undefined && last.toolTrace[0].calls.length === 2, '痕迹随语音固化泡落会话');
+    // 流式中间帧不挂痕（避免逐帧重建）
+    store.voiceAi('半', false);
+    assert.equal(store.messages[store.messages.length - 1].toolTrace, undefined);
+    // 打断收尾：seal 把痕补挂被固化的流式泡
+    store.voiceSealStreaming(box.slice());
+    const sealed = store.messages[store.messages.length - 1];
+    assert.equal(sealed.streaming, false);
+    assert.ok(sealed.toolTrace !== undefined, '打断收尾也挂痕');
+  });
 }

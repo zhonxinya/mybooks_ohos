@@ -7,7 +7,7 @@ import { AiService, AiConfig, AiMessage, AiStreamHandlers, AiAbortHandle } from 
 import { AiPersona } from './AiPersona';
 import { TalebookService } from './TalebookService';
 
-import { AiTokenUsage, AskRequest, buildSessionMd, ChatActivity, ChatBubble, ChatSession, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, COMPRESS_MIN_DROPPED, HistorySummary, parseBubbles, sessionMatches, sessionTitle, ToolTraceRound } from './AiChatModel';
+import { AiTokenUsage, AskRequest, buildSessionMd, ChatActivity, ChatBubble, ChatSession, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, collectTraces, COMPRESS_MIN_DROPPED, HistorySummary, parseBubbles, sessionMatches, sessionTitle, ToolTraceRound } from './AiChatModel';
 import { permissionPromptNote, SUMMARY_SYSTEM_PROMPT, SYSTEM_PROMPT, SYSTEM_PROMPT_LEARN, SYSTEM_PROMPT_TOOLS } from './AiChatPrompts';
 
 export { AskRequest, ChatActivity, ChatBubble, ChatSession, HistorySummary } from './AiChatModel';
@@ -302,7 +302,8 @@ export class AiChatStore {
         content: `用户正在阅读${this.bookContext}。回答优先结合这本书；话题与书无关时正常回答，不要生拉硬扯。` });
     }
     const bubbles: ChatBubble[] = this.messages.filter((m: ChatBubble) =>
-      !m.error && (m.content.length > 0 || (m.images ?? []).length > 0));
+      (!m.error && (m.content.length > 0 || (m.images ?? []).length > 0)) ||
+      (m.error === true && m.toolTrace !== undefined && m.toolTrace.length > 0)); // #1624 有痕错误泡仍回放
     const start: number = Math.max(0, bubbles.length - AiService.contextRounds(this.contextK) * 2);
     // 窗口外旧轮的历史摘要随会话携带：count 超过当前截断点说明消息被重排
     // （重新生成/清空过），摘要脱节，宁缺毋滥地不注入
@@ -311,7 +312,8 @@ export class AiChatStore {
       context.push({ role: 'system', content: `早前对话摘要（已压缩 ${summary.count} 条）：\n${summary.text}` });
     }
     for (let i = start; i < bubbles.length; i++) {
-      const msg: AiMessage = { role: bubbles[i].role, content: bubbles[i].content };
+      // #1624：错误泡只带痕迹回放，错误文案不进上下文
+      const msg: AiMessage = { role: bubbles[i].role, content: bubbles[i].error ? '' : bubbles[i].content };
       if (bubbles[i].toolTrace !== undefined) msg.toolTrace = bubbles[i].toolTrace; // #1623 回放素材
       const imgs: string[] = this.visionEnabled ? (bubbles[i].images ?? []) : [];
       if (imgs.length > 0) {
@@ -449,7 +451,7 @@ export class AiChatStore {
     return text.trim().length > 0 && !this.thinking && AiService.isReady();
   }
 
-  async send(text: string, images: string[]): Promise<void> {
+  async send(text: string, images: string[], carried?: ToolTraceRound[]): Promise<void> {
     const question: string = text.trim();
     if (question.length === 0 || this.thinking) { return; }
     if (!AiService.isReady()) {
@@ -464,8 +466,7 @@ export class AiChatStore {
 
     const bubbleImages: string[] = this.visionEnabled ? images : [];
     const now: number = Date.now();
-    this.messages.push({ role: 'user', content: question, streaming: false, error: false,
-      activities: [], images: bubbleImages, ts: now });
+    this.messages.push({ role: 'user', content: question, streaming: false, error: false, activities: [], images: bubbleImages, ts: now, toolTrace: carried }); // #1624 重试携带痕迹挂问题泡
     this.messages.push({ role: 'assistant', content: '', streaming: true, error: false, activities: [], ts: now });
     this.saveHistory();
     this.streamingText = '';
@@ -555,7 +556,7 @@ export class AiChatStore {
     last.reasoning = this.streamingReasoning;
     // 复用泡显式覆盖：重试轮不带 usage 时清掉旧计量（#1514）
     last.usage = usage;
-    last.toolTrace = !isError && trace !== undefined && trace.length > 0 ? trace : undefined; // #1623；错误轮不留（重试=当没做过）
+    last.toolTrace = trace !== undefined && trace.length > 0 ? trace : undefined; // #1623/#1624：错误轮也留痕（工具可能已执行）
     // 思考耗时在 saveHistory 之前结算，随本轮一起落盘；错误轮/无打点=undefined 不显示
     last.thinkMs = !isError && this.thinkStartAt > 0 ? Date.now() - this.thinkStartAt : undefined;
     this.thinkStartAt = 0;
@@ -607,7 +608,7 @@ export class AiChatStore {
    * AI 字幕进流：delta 在既有流式气泡上累计（打断后重新开口即新气泡）；
    * final 固化（done 全文优先，空则保留已累计文本）。
    */
-  voiceAi(text: string, final: boolean): void {
+  voiceAi(text: string, final: boolean, trace?: ToolTraceRound[]): void {
     const last: ChatBubble | null = this.lastBubble();
     let content: string = text;
     if (last !== null && last.role === 'assistant' && last.streaming) {
@@ -619,8 +620,9 @@ export class AiChatStore {
       }
     }
     if (content.length > 0) {
+      // #1627：语音轮工具痕迹随固化气泡落会话（流式中间帧不带，final 一次挂上）
       this.messages.push({ role: 'assistant', content: content, streaming: !final, error: false,
-        activities: [], voice: true, ts: Date.now() });
+        activities: [], voice: true, ts: Date.now(), toolTrace: final ? trace : undefined });
     }
     this.messages = this.messages.slice();
     if (final) {
@@ -629,8 +631,8 @@ export class AiChatStore {
     this.notify();
   }
 
-  /** 打断/断线收尾：固化尾部流式气泡（AI 已播出的文字保留，光标熄灭）。 */
-  voiceSealStreaming(): void {
+  /** 打断/断线收尾：固化尾部流式气泡（AI 已播出的文字保留，光标熄灭）；#1627 痕迹补挂。 */
+  voiceSealStreaming(trace?: ToolTraceRound[]): void {
     let changed: boolean = false;
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const bubble: ChatBubble = this.messages[i];
@@ -638,13 +640,12 @@ export class AiChatStore {
         break;
       }
       bubble.streaming = false;
+      if (trace !== undefined && trace.length > 0 && bubble.role === 'assistant' && bubble.toolTrace === undefined) {
+        bubble.toolTrace = trace;
+      }
       changed = true;
     }
-    if (changed) {
-      this.messages = this.messages.slice();
-      this.saveHistory();
-      this.notify();
-    }
+    if (changed) { this.messages = this.messages.slice(); this.saveHistory(); this.notify(); }
   }
 
   /** 工具开始执行：活动区加一条 doing。整组换数组赋值，保证视图刷新。 */
@@ -944,13 +945,15 @@ export class AiChatStore {
     for (let i = Math.min(anchor, this.messages.length) - 1; i >= 0; i--) {
       if (this.messages[i].role === 'user') {
         const question: ChatBubble = this.messages[i];
+        // #1624：截断前先收集被截泡（含错误泡）的工具痕迹，随重试轮携带——工具已执行过不得重跑
+        const carried: ToolTraceRound[] = collectTraces(this.messages, i + 1);
         this.messages = this.messages.slice(0, i);
         // 截断重排后摘要的「前 count 条」坐标系失效且无法回退，宁可丢掉待重建
         if (this.summaries.delete(this.currentId)) {
           this.saveSummaries();
         }
         this.saveHistory();
-        void this.send(question.content, question.images ?? []);
+        void this.send(question.content, question.images ?? [], carried);
         return true;
       }
     }

@@ -22,7 +22,7 @@ export function stageAiService() {
   ];
   const VALUE_NAMES = new Set(['OpenAI', 'util', 'rcp', 'TalebookService', 'AiTools', 'McpService',
     'AiServiceConfig', 'AiServiceHttp', 'AiServiceGateway', 'ChatCompletionChunk',
-    'mergeUsage', 'parseUsage']);
+    'mergeUsage', 'parseUsage', 'TRACE_FULL_ROUNDS']);
   // Config 下沉的常量（KEY_*/DEFAULT_*/MAX_*/TIMEOUT_MS/AI_PROVIDERS）都是运行时值
   const isValue = (n) => VALUE_NAMES.has(n.replace(/.* as /, '')) ||
     /^(KEY_|DEFAULT_|MAX_|TIMEOUT_MS|CONTEXT_LENGTH_OPTIONS|AI_PROVIDERS)/.test(n);
@@ -251,8 +251,8 @@ export function stageChatStore() {
       `import { AiService } from './shim.ts';`)
     .replace(`from './AiPersona'`, `from './RealAiPersona.ts'`)
     .replace(`from './TalebookService'`, `from './shim.ts'`)
-    .replace(`import { AiTokenUsage, AskRequest, buildSessionMd, ChatActivity, ChatBubble, ChatSession, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, COMPRESS_MIN_DROPPED, HistorySummary, parseBubbles, sessionMatches, sessionTitle, ToolTraceRound } from './AiChatModel';`,
-      `import { parseBubbles, sessionTitle, buildSessionMd, sessionMatches, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, COMPRESS_MIN_DROPPED } from './AiChatModel.ts';\nimport type { AiTokenUsage, AskRequest, ChatActivity, ChatBubble, ChatSession, HistorySummary, ToolTraceRound } from './AiChatModel.ts';`)
+    .replace(`import { AiTokenUsage, AskRequest, buildSessionMd, ChatActivity, ChatBubble, ChatSession, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, collectTraces, COMPRESS_MIN_DROPPED, HistorySummary, parseBubbles, sessionMatches, sessionTitle, ToolTraceRound } from './AiChatModel';`,
+      `import { parseBubbles, sessionTitle, buildSessionMd, sessionMatches, collectTraces, CHAT_HISTORY_KEY, CHAT_HISTORY_MAX, CHAT_SESSIONS_KEY, CHAT_SESSIONS_MAX, CHAT_SUMMARIES_KEY, COMPRESS_MIN_DROPPED } from './AiChatModel.ts';\nimport type { AiTokenUsage, AskRequest, ChatActivity, ChatBubble, ChatSession, HistorySummary, ToolTraceRound } from './AiChatModel.ts';`)
     .replace(`export { AskRequest, ChatActivity, ChatBubble, ChatSession, HistorySummary } from './AiChatModel';`,
       `export type { AskRequest, ChatActivity, ChatBubble, ChatSession, HistorySummary } from './AiChatModel.ts';`)
     .replace(`import { permissionPromptNote, SUMMARY_SYSTEM_PROMPT, SYSTEM_PROMPT, SYSTEM_PROMPT_LEARN, SYSTEM_PROMPT_TOOLS } from './AiChatPrompts';`,

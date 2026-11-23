@@ -464,4 +464,84 @@ export function register(ctx) {
     assert.equal(bubbles[1].toolTrace, undefined, '无键=undefined（旧存档兼容）');
   });
 
+  test('#1624 回放协议：user 泡痕迹排在问题文本后；空文本 assistant 有痕不推空消息', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '嗯' } }] })) }];
+    const carried = [{ text: '', calls: [{ id: 'c1', name: 'search_books', args: '{"query":"x"}', result: '已执行' }] }];
+    RealAiService.chatStream([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: '加一本', toolTrace: carried },
+      { role: 'assistant', content: '', toolTrace: carried },
+    ], { onDelta: () => {}, onDone: () => {}, onError: () => {} }, 256);
+    await flush();
+    const sent = JSON.parse(deps.state.requests[0].content).messages;
+    const uIdx = sent.findIndex((m) => m.role === 'user' && m.content === '加一本');
+    const tcIdx = sent.findIndex((m) => m.tool_calls !== undefined);
+    assert.ok(uIdx >= 0 && tcIdx > uIdx, `user 痕迹：问题文本在前、工具轮在后（u=${uIdx},tc=${tcIdx}）`);
+    // assistant 空文本+痕迹：只展开工具历史，不再推 content='' 的多余消息
+    const emptyAssist = sent.filter((m) => m.role === 'assistant' && (m.content ?? '') === '' && m.tool_calls === undefined);
+    assert.equal(emptyAssist.length, 0, '空 assistant 文本消息不推');
+    assert.deepEqual(sent.filter((m) => m.role === 'tool').map((m) => m.tool_call_id), ['c1', 'c1']);
+  });
+
+  test('#1624 store：错误泡留痕进回放（文案不进上下文）；retryFrom 截泡带走痕迹', async () => {
+    const { collectTraces } = await load('AiChatModel');
+    const mk = (role, extra) => Object.assign({ role, content: '', streaming: false, error: false,
+      activities: [], images: [], reasoning: '', voice: false, ts: 1 }, extra);
+    const trace = [{ text: '', calls: [{ id: 'c1', name: 'add_to_shelf', args: '{"bookId":9}', result: '已加入' }] }];
+    // collectTraces：拼接 from 起所有痕迹
+    const bs = [mk('user', {}), mk('assistant', { toolTrace: trace }), mk('assistant', { toolTrace: trace })];
+    assert.equal(collectTraces(bs, 1).length, 2);
+    assert.equal(collectTraces(bs, 2).length, 1);
+    assert.equal(collectTraces(bs, 0).length, 2);
+    const store = AiChatStore.instance();
+    store.resetForTest();
+    // 错误轮 finishBubble 不再弃痕
+    store.messages = [mk('user', { content: '加一本' }), mk('assistant', { streaming: true })];
+    store.finishBubble('网络错误', true, undefined, trace);
+    assert.equal(store.messages[1].error, true);
+    assert.ok(store.messages[1].toolTrace !== undefined && store.messages[1].toolTrace.length === 1,
+      '错误轮保留工具痕迹');
+    // buildContext：有痕错误泡仍回放，content 置空（错误文案不进上下文）
+    const ctxMsgs = await store.buildContext();
+    const lastMsg = ctxMsgs[ctxMsgs.length - 1];
+    assert.equal(lastMsg.role, 'assistant');
+    assert.equal(lastMsg.content, '', '错误文案不进上下文');
+    assert.ok(lastMsg.toolTrace !== undefined, '错误泡痕迹透传给回放');
+    // retryFrom：截掉的错误泡痕迹移挂问题泡
+    store.messages = [mk('user', { content: '加一本' }),
+      mk('assistant', { error: true, content: '网络错误', toolTrace: trace })];
+    state.ready = true;
+    assert.equal(store.retryFrom(2), true);
+    // send 同步段已重推问题+流式泡；messages[0] 即带痕的问题泡
+    assert.ok(store.messages[0].toolTrace !== undefined && store.messages[0].toolTrace.length === 1,
+      '重试轮问题泡携带被截泡的痕迹');
+    await flush();
+  });
+
+  test('#1628 痕迹回放 token 治理：仅最近 TRACE_FULL_ROUNDS 轮全量展开，旧轮压一行摘要', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '嗯' } }] })) }];
+    const mkRound = (id) => ({ text: '', calls: [{ id, name: 'search_books', args: '{}', result: `RESULT_${id}_`.repeat(40) }] });
+    RealAiService.chatStream([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'q1' },
+      { role: 'assistant', content: 'a1', toolTrace: [mkRound('r1'), mkRound('r2'), mkRound('r3')] },
+    ], { onDelta: () => {}, onDone: () => {}, onError: () => {} }, 256);
+    await flush();
+    const sent = JSON.parse(deps.state.requests[0].content).messages;
+    const withTc = sent.filter((m) => m.tool_calls !== undefined);
+    assert.deepEqual(withTc.map((m) => m.tool_calls[0].id), ['r2', 'r3'], '仅最近 2 轮全量展开');
+    const compressed = sent.filter((m) => m.role === 'assistant' && (m.content ?? '').includes('早前工具轮已执行'));
+    assert.equal(compressed.length, 1);
+    assert.ok(compressed[0].content.includes('search_books'), '压缩行仍告知做过什么');
+    const body = JSON.stringify(sent);
+    assert.ok(!body.includes('RESULT_r1'), '旧轮 result 全文不进请求体');
+    assert.ok(body.includes('RESULT_r3'), '最近轮 result 仍全量回放');
+  });
+
 }

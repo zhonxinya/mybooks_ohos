@@ -6,6 +6,7 @@ import { abilityAccessCtrl, common } from '@kit.AbilityKit';
 import { AiService } from './AiService';
 import { AiTools } from './AiTools';
 import { RealtimeCallService } from './RealtimeCallService';
+import type { ToolTraceRound } from './AiChatModel';
 
 /** 音色条目：id=网关 voice 参数值，label=设置页/AI 可见的中文名。 */
 export interface AiVoiceTimbre {
@@ -115,14 +116,27 @@ export class AiVoiceKit {
     }
   }
 
+  /** #1627：把一次语音工具执行记进痕迹盒（盒由页面持有，随语音气泡固化）。 */
+  private static recordTrace(box: ToolTraceRound[] | undefined, callId: string, name: string,
+    args: string, result: string): void {
+    if (box === undefined) {
+      return;
+    }
+    if (box.length === 0) {
+      box.push({ text: '', calls: [] });
+    }
+    box[box.length - 1].calls.push({ id: callId, name: name, args: args, result: result });
+  }
+
   /**
    * 执行模型请求的工具（含确认闸门），结果回填 realtime 会话。
    * `uiContext` 用于确认弹窗；页面已退出时弹窗失败按拒绝收敛，绝不卡会话。
    * `onActivity`：语音侧工具过程显示接线。文字回路有活动时间线，语音页原本没有
    * 工具状态的落点，由两个页面各按自己的 UI 语义消费（通话页字幕行/对话页状态横幅）。
+   * `traceBox`：#1627 痕迹收集盒——语音轮执行过的工具落进会话，文字追问不再重跑。
    */
   static async runTool(name: string, args: string, callId: string, uiContext: UIContext,
-    onActivity?: (label: string, state: string) => void): Promise<void> {
+    onActivity?: (label: string, state: string) => void, traceBox?: ToolTraceRound[]): Promise<void> {
     if (name === 'set_voice') {
       // 音色切换不经文字回路 dispatch：直接落配置并触发会话重建（重建闭包自带挂断+重开）
       AiVoiceKit.report(onActivity, '切换音色', 'doing');
@@ -132,6 +146,7 @@ export class AiVoiceKit {
       } catch (error) {
         out = `set_voice 执行失败：${error}`;
       }
+      AiVoiceKit.recordTrace(traceBox, callId, name, args, out);
       RealtimeCallService.sendToolResult(callId, out);
       AiVoiceKit.report(onActivity, '切换音色',
         out.indexOf('已切换到音色') === 0 ? 'done' : 'failed');
@@ -178,6 +193,7 @@ export class AiVoiceKit {
       output = `工具执行失败：${error}`;
       state = 'failed';
     }
+    AiVoiceKit.recordTrace(traceBox, callId, name, args, output);
     RealtimeCallService.sendToolResult(callId, output);
     AiVoiceKit.report(onActivity, label, state);
   }

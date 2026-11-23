@@ -221,6 +221,20 @@ export function parseBubbles(parsed: Object): ChatBubble[] {
   return bubbles;
 }
 
+/** 收集 from 起所有气泡的工具痕迹并拼接（#1624：retryFrom 截掉错误泡时带走已执行痕迹）。 */
+export function collectTraces(bubbles: ChatBubble[], from: number): ToolTraceRound[] {
+  const out: ToolTraceRound[] = [];
+  for (let i = Math.max(0, from); i < bubbles.length; i++) {
+    const t: ToolTraceRound[] | undefined = bubbles[i].toolTrace;
+    if (t !== undefined) {
+      for (let k = 0; k < t.length; k++) {
+        out.push(t[k]);
+      }
+    }
+  }
+  return out;
+}
+
 /** 会话标题：取首条用户消息前 20 字；没有则空串（调用侧兜底「新对话」）。 */
 export function sessionTitle(bubbles: ChatBubble[]): string {
   for (const b of bubbles) {
@@ -391,3 +405,5 @@ export const CHAT_SESSIONS_MAX: number = 12;
 export const CHAT_SUMMARIES_KEY: string = 'ai_chat_summaries';
 /** 未摘数量达到该阈值才触发一次摘要请求：压缩自身也要省 token。 */
 export const COMPRESS_MIN_DROPPED: number = 8;
+/** 工具痕迹保留全量协议展开的轮数（#1628）：更早轮压成一行摘要，治理回放 token。 */
+export const TRACE_FULL_ROUNDS: number = 2;

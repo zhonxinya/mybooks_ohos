@@ -3,6 +3,7 @@ import { MarkdownText } from './MarkdownText';
 import { TextButton } from './TextButton';
 import { ToolResultList } from './ToolResultList';
 import { ActivityGroup, formatThinkMs, groupActivities } from '../services/AiChatModel';
+import type { ToolTraceCall, ToolTraceRound } from '../services/AiChatModel';
 import { AiChatStore, ChatActivity, ChatSession } from '../services/AiChatStore';
 import { ToolBookLine } from '../services/AiToolsDefs';
 
@@ -152,9 +153,8 @@ export struct ActivityTimeline {
         }
         .width('100%')
         .onClick(() => {
-          if (!this.live) {
-            this.expanded = !this.expanded;
-          }
+          // #1629：流式期也可折叠——StreamBubble 整轮不重建，@State 折叠态跨 delta 保持
+          this.expanded = !this.expanded;
         });
         if (this.expanded) {
           ForEach(groupActivities(this.acts), (g: ActivityGroup, idx: number) => {
@@ -198,6 +198,106 @@ export struct ActivityTimeline {
             .alignItems(HorizontalAlign.Start)
             .width('100%');
           }, (g: ActivityGroup, idx: number) => `${idx}-${g.name}-${g.state}-${g.count}-${g.books.length}`);
+        }
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .padding(10)
+      .borderRadius($r('app.float.chip_radius'))
+      .backgroundColor($r('app.color.page_background'));
+    }
+  }
+}
+
+/**
+ * #1625：工具调用详情卡——历史气泡活动区下方，展开逐条核对 name/args/result（只读）。
+ * 数据来自 bubble.toolTrace（#1623 落盘）；默认折叠，超长结果逐条「展开全文」。
+ */
+@Component
+export struct ToolTraceCard {
+  @Prop trace: ToolTraceRound[] = [];
+  @State expanded: boolean = false;
+  /** 当前展开全文的结果条序号（-1 无）；进 ForEach key 防复用不重绘（#1622 教训）。 */
+  @State openResult: number = -1;
+
+  private callCount(): number {
+    let n: number = 0;
+    for (const r of this.trace) {
+      n += r.calls.length;
+    }
+    return n;
+  }
+
+  private flatCalls(): ToolTraceCall[] {
+    const out: ToolTraceCall[] = [];
+    for (const r of this.trace) {
+      for (const c of r.calls) {
+        out.push(c);
+      }
+    }
+    return out;
+  }
+
+  private prettyArgs(args: string): string {
+    if (args.length === 0) {
+      return '（无参数）';
+    }
+    try {
+      return JSON.stringify(JSON.parse(args), null, 2);
+    } catch (e) {
+      return args;
+    }
+  }
+
+  build() {
+    if (this.trace.length > 0) {
+      Column({ space: 8 }) {
+        Row({ space: 4 }) {
+          SymbolGlyph(this.expanded ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
+            .fontSize(12)
+            .fontColor([$r('app.color.text_tertiary')]);
+          Text(`工具详情 · ${this.callCount()} 次调用`)
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+            .layoutWeight(1)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
+        }
+        .width('100%')
+        .onClick(() => {
+          this.expanded = !this.expanded;
+        });
+        if (this.expanded) {
+          ForEach(this.flatCalls(), (c: ToolTraceCall, idx: number) => {
+            Column({ space: 4 }) {
+              Text(c.name)
+                .fontSize(12)
+                .fontWeight(FontWeight.Bold)
+                .fontColor($r('app.color.text_primary'));
+              Text(this.prettyArgs(c.args))
+                .fontSize(11)
+                .fontColor($r('app.color.text_tertiary'))
+                .fontFamily('monospace')
+                .maxLines(4)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .width('100%');
+              Text(this.openResult === idx || c.result.length <= 120 ? c.result :
+                `${c.result.substring(0, 120)}…`)
+                .fontSize(11)
+                .fontColor($r('app.color.text_secondary'))
+                .width('100%');
+              if (c.result.length > 120) {
+                Text(this.openResult === idx ? '收起结果' : '展开全文')
+                  .fontSize(11)
+                  .fontColor($r('app.color.brand_primary'))
+                  .onClick(() => {
+                    this.openResult = this.openResult === idx ? -1 : idx;
+                  });
+              }
+            }
+            .alignItems(HorizontalAlign.Start)
+            .width('100%');
+          }, (c: ToolTraceCall, idx: number) => `${idx}-${c.id}-${this.openResult === idx ? 'o' : 'c'}`);
         }
       }
       .width('100%')

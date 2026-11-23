@@ -38,6 +38,8 @@ globalThis.AppStorage = { setOrCreate: () => {} };
 globalThis.$r = (name) => name;
 // #1506 onListTouch 触控意图判定引用 TouchType；桩值与 ArkUI 枚举序号一致
 globalThis.TouchType = { Down: 0, Up: 1, Move: 2, Cancel: 3, OutsideTrigger: 4 };
+// #1626 requestConfirm 的 showDialog 参数引用 DialogAlignment 全局枚举
+globalThis.DialogAlignment = { Center: 0, TopStart: 1, TopEnd: 2, Bottom: 3 };
 export function writeStubs() {
 const shim = `
 const state = globalThis.__aiCheck;

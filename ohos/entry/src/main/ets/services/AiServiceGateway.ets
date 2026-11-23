@@ -13,7 +13,7 @@ import type { AiMessage, AiConfig, AiAbortHandle } from './AiService';
 import type { AiSessionHolder } from './AiServiceHttp';
 import { AiServiceConfig, MAX_TOOL_ROUNDS, MAX_GATEWAY_ATTEMPTS, MAX_TOOL_SLOTS } from './AiServiceConfig';
 import { AiServiceHttp } from './AiServiceHttp';
-import { mergeUsage, parseUsage } from './AiChatModel';
+import { mergeUsage, parseUsage, TRACE_FULL_ROUNDS } from './AiChatModel';
 import type { AiTokenUsage, ToolTraceCall, ToolTraceRound } from './AiChatModel';
 
 export class AiServiceGateway {
@@ -25,12 +25,36 @@ export class AiServiceGateway {
    */
   static messagesToGw(messages: AiMessage[]): GatewayMessage[] {
     const out: GatewayMessage[] = [];
+    // #1628：全局轮数计数——仅最近 TRACE_FULL_ROUNDS 轮全量展开，更早轮压成一行摘要省 token
+    let totalRounds: number = 0;
+    for (let i = 0; i < messages.length; i++) {
+      const t: ToolTraceRound[] | undefined = messages[i].toolTrace;
+      if (t !== undefined) {
+        totalRounds += t.length;
+      }
+    }
+    let seen: number = 0;
     for (let i = 0; i < messages.length; i++) {
       const m: AiMessage = messages[i];
       const trace: ToolTraceRound[] | undefined = m.toolTrace;
+      // #1624：user 泡的痕迹=该问题之后的工具轮，展开排在问题文本后
+      if (m.role === 'user') {
+        out.push({ role: m.role, content: AiServiceHttp.gatewayContent(m) });
+      }
       if (trace !== undefined) {
         for (let r = 0; r < trace.length; r++) {
           const rt: ToolTraceRound = trace[r];
+          const full: boolean = seen >= totalRounds - TRACE_FULL_ROUNDS;
+          seen++;
+          if (!full) {
+            // 旧轮：模型仍知道「做过什么」，但不背全量 payload 的 token
+            const names: string[] = [];
+            for (let c = 0; c < rt.calls.length; c++) {
+              names.push(rt.calls[c].name);
+            }
+            out.push({ role: 'assistant', content: `早前工具轮已执行：${names.join('、')}（详情略）` });
+            continue;
+          }
           const calls: Record<string, Object>[] = [];
           for (let c = 0; c < rt.calls.length; c++) {
             const fn: Record<string, Object> = { 'name': rt.calls[c].name, 'arguments': rt.calls[c].args };
@@ -42,7 +66,12 @@ export class AiServiceGateway {
           }
         }
       }
-      out.push({ role: m.role, content: AiServiceHttp.gatewayContent(m) });
+      const finalContent: Object = AiServiceHttp.gatewayContent(m);
+      // 错误泡回放 content 为空：有痕迹时不再推空 assistant 文本消息（图文数组恒非空不受影响）
+      const emptyFinal: boolean = typeof finalContent === 'string' && finalContent.length === 0;
+      if (m.role !== 'user' && (!emptyFinal || trace === undefined)) {
+        out.push({ role: m.role, content: finalContent });
+      }
     }
     return out;
   }

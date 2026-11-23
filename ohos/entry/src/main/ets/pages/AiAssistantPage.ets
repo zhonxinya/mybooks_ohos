@@ -6,9 +6,10 @@ import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { PageScaffold, SecondaryButton, TextButton } from '../components';
 import { MarkdownText } from '../components/MarkdownText';
 import { AI_SKILLS, AiSkill } from '../services/AiSkills';
-import { ActivityTimeline, AskUserCard, ReasoningBlock, SessionsSheet, StreamBubble } from '../components/AiChatBlocks';
+import { ActivityTimeline, AskUserCard, ReasoningBlock, SessionsSheet, StreamBubble, ToolTraceCard } from '../components/AiChatBlocks';
 import { AiChatStore, AskRequest, ChatActivity, ChatBubble, ChatSession } from '../services/AiChatStore';
 import { appendHeardText, formatDividerTime, shouldShowTimeDivider } from '../services/AiChatModel';
+import type { ToolTraceRound } from '../services/AiChatModel';
 import { AiConfig, AiMessage, AiService } from '../services/AiService';
 import { SpeakService } from '../services/SpeakService';
 import { AiPermissionMode, AiTools } from '../services/AiTools';
@@ -71,6 +72,10 @@ struct AiAssistantPage {
   @State holdTalkReady: boolean = false;
   /** 语音会话代际：挂断/重开后，旧 connect 异步链的失败回调凭序号作废。 */
   private voiceGen: number = 0;
+  /** #1627：语音轮工具痕迹盒——runTool 写入，随语音气泡固化/收尾挂上并进会话历史。 */
+  private voiceTrace: ToolTraceRound[] = [];
+  /** #1626：「本轮全部允许」授权位——仅当前回路有效，thinking 落定即复位。 */
+  private allowAllRound: boolean = false;
   /** 会话状态机在全局单例里：退出页面不中断流式回复，后台照常完成并落盘。 */
   private store: AiChatStore = AiChatStore.instance();
   /** attachView 凭据：disappear 只解绑自己这一份视图。 */
@@ -214,6 +219,10 @@ struct AiAssistantPage {
 
   /** store 状态变化回调：拉齐页面镜像（attachView 时注册）。 */
   private requestConfirm(label: string, args: string): Promise<boolean> {
+    // #1626：本轮已选「全部允许」——后续写操作直接放行（回路结束由 syncFromStore 复位）
+    if (this.allowAllRound) {
+      return Promise.resolve(true);
+    }
     const summary: string = args.length > 200 ? `${args.substring(0, 200)}…` : args;
     // showDialog 的 Promise 结果是按钮下标；异常路径（返回键等）统一按拒绝兜底
     return this.getUIContext().getPromptAction().showDialog({
@@ -221,15 +230,24 @@ struct AiAssistantPage {
       message: `操作：${label}\n参数：${summary}`,
       buttons: [
         { text: '拒绝', color: '#E5484D' },
+        { text: '本轮全部允许', color: '#1890FF' },
         { text: '允许', color: '#1890FF' },
       ],
       alignment: DialogAlignment.Center,
-    }).then((res: promptAction.ShowDialogSuccessResponse): boolean => res.index === 1)
+    }).then((res: promptAction.ShowDialogSuccessResponse): boolean => {
+      if (res.index === 1) {
+        this.allowAllRound = true;
+      }
+      return res.index >= 1;
+    })
       .catch((): boolean => false);
   }
 
   /** 把 store 状态机拉到本页面 @State 镜像；渲染只读镜像，不直接碰单例。 */
   private syncFromStore(): void {
+    if (!this.store.thinking) {
+      this.allowAllRound = false; // #1626：回路结束，批量授权随之失效
+    }
     this.messages = this.store.messages.slice();
     this.streamingText = this.store.streamingText;
     this.streamingReasoning = this.store.streamingReasoning;
@@ -331,11 +349,13 @@ struct AiAssistantPage {
         this.store.voiceAi(d, false);
       },
       onAiTextDone: (t: string): void => {
-        this.store.voiceAi(t, true);
+        this.store.voiceAi(t, true, this.voiceTrace); // #1627 痕迹随固化气泡落会话
+        this.voiceTrace = [];
       },
       onSpeechStarted: (): void => {
         // 开口打断：AI 已出的字幕固化，切回聆听
-        this.store.voiceSealStreaming();
+        this.store.voiceSealStreaming(this.voiceTrace);
+        this.voiceTrace = [];
         this.voiceStatus = '聆听中';
       },
       onSpeechStopped: (): void => {
@@ -351,7 +371,7 @@ struct AiAssistantPage {
         }
       },
       onFunctionCall: (name: string, args: string, callId: string): void => {
-        void AiVoiceKit.runTool(name, args, callId, this.getUIContext(),
+        void AiVoiceKit.runTool(name, args, callId, this.getUIContext(), // #1627 传痕迹盒
           (label: string, state: string): void => {
             if (!this.voiceActive) {
               return;
@@ -362,7 +382,7 @@ struct AiAssistantPage {
               // 仍有其它工具在途时保持「执行中」显示，最后一个回填后才收敛
               this.voiceStatus = state === 'rejected' ? '已拒绝' : '思考中';
             }
-          });
+          }, this.voiceTrace);
       },
       onError: (m: string): void => {
         promptAction.showToast({ message: m });
@@ -371,7 +391,8 @@ struct AiAssistantPage {
         // 网关/网络断线：会话态收敛，尾部流式气泡固化
         this.voiceActive = false;
         this.voiceStatus = '';
-        this.store.voiceSealStreaming();
+        this.store.voiceSealStreaming(this.voiceTrace);
+        this.voiceTrace = [];
       },
     };
     const gen: number = ++this.voiceGen;
@@ -408,7 +429,8 @@ struct AiAssistantPage {
     this.voiceActive = false;
     this.voiceStatus = '';
     this.voiceMuted = false;
-    this.store.voiceSealStreaming();
+    this.store.voiceSealStreaming(this.voiceTrace);
+    this.voiceTrace = [];
   }
 
   /** 按住说话·按下（#1516）：授权通过才开录；失败不进录音态（松手会被 guard 吞掉）。 */
@@ -1155,6 +1177,10 @@ struct AiAssistantPage {
             ReasoningBlock({ reasoning: bubble.reasoning ?? '', live: false, thinkMs: bubble.thinkMs ?? 0 });
           }
           ActivityTimeline({ acts: bubble.activities, live: false });
+          // #1625：工具调用详情卡（只读展开 args/result），仅固化 assistant 泡且有痕时出现
+          if (bubble.role === 'assistant' && bubble.toolTrace !== undefined && bubble.toolTrace.length > 0) {
+            ToolTraceCard({ trace: bubble.toolTrace });
+          }
           MarkdownText({ content: bubble.content });
           // token 用量脚注（#1514）：服务商回传 usage 才显示，旧存档/语音轮无感
           if (bubble.usage !== undefined && bubble.usage.total > 0) {

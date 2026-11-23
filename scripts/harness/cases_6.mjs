@@ -547,4 +547,34 @@ export function register(ctx) {
     state.settings.fetchError = '';
   });
 
+  test('#1626 写确认批量授权：本轮全部允许后不再弹窗；回路结束复位', async () => {
+    const page = chat();
+    const store = AiChatStore.instance();
+    const dialogs = [];
+    let confirmIndex = 2;
+    page.getUIContext = () => ({
+      getPromptAction: () => ({
+        showDialog: (opt) => { dialogs.push(opt); return Promise.resolve({ index: confirmIndex }); },
+      }),
+    });
+    // 单笔允许（index 2）：放行但不启用批量
+    assert.equal(await page.requestConfirm('加入书架', '{}'), true);
+    assert.equal(dialogs[0].buttons.length, 3, '三键弹窗：拒绝/本轮全部允许/允许');
+    assert.equal(page.allowAllRound, false);
+    // 本轮全部允许（index 1）：放行并启用批量
+    confirmIndex = 1;
+    assert.equal(await page.requestConfirm('加入书架', '{}'), true);
+    assert.equal(page.allowAllRound, true);
+    const n = dialogs.length;
+    assert.equal(await page.requestConfirm('创建书单', '{}'), true);
+    assert.equal(dialogs.length, n, '已批量授权不再弹窗');
+    // 回路结束（thinking=false）经 syncFromStore 复位后恢复弹窗
+    store.thinking = false;
+    page.syncFromStore();
+    assert.equal(page.allowAllRound, false);
+    confirmIndex = 0;
+    assert.equal(await page.requestConfirm('加入书架', '{}'), false, '拒绝仍弹窗且为 false');
+    assert.equal(dialogs.length, n + 1);
+  });
+
 }
