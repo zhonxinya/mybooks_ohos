@@ -26,6 +26,15 @@ export struct MarkdownText {
     }
   }
 
+  /** 块尾行是否带注入的光标 seg（决定闪烁相位是否进 key）。 */
+  private tailHasCaret(block: MdBlock): boolean {
+    if (block.segs.length === 0) {
+      return false;
+    }
+    const tail: MdInline[] = block.segs[block.segs.length - 1];
+    return tail.length > 0 && tail[tail.length - 1].style === 5;
+  }
+
   private headSize(level: number): number {
     if (level === 1) { return 19; }
     if (level === 2) { return 17; }
@@ -214,7 +223,14 @@ export struct MarkdownText {
     Column({ space: 8 }) {
       ForEach(this.blocks, (block: MdBlock, index: number) => {
         this.blockView(block, index);
-      }, (block: MdBlock, index: number) => `${index}-${block.kind}-${block.raw.length}-${block.segs.length}`);
+        // key 必须覆盖「尾行段数 + 闪烁相位」：光标 seg 是解析后注入的，不改 raw.length/segs.length——
+        // 若 key 不含它，末块前移时旧块 key 不变会被 ForEach 复用，旧块（含光标）卡屏，
+        // 流式全程每个历史末块都钉上一个光标（#1622 上板实测）；而 caretOn 不进带光标的
+        // 末块 key，闪烁时子树不重建、Span 颜色表达式不重估，光标就不眨。
+        // 重建范围仅末段（宽度恒占、布局不变），无旧实现的回绕抖动。
+      }, (block: MdBlock, index: number) => `${index}-${block.kind}-${block.raw.length}-${block.segs.length}` +
+        `-${block.segs.length > 0 ? block.segs[block.segs.length - 1].length : 0}` +
+        `${this.caretOn && this.tailHasCaret(block) ? '-c' : ''}`);
     }
     .alignItems(HorizontalAlign.Start)
     .width('100%');
