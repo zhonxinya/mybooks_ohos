@@ -22,7 +22,7 @@ export function stageAiService() {
   ];
   const VALUE_NAMES = new Set(['OpenAI', 'util', 'rcp', 'TalebookService', 'AiTools', 'McpService',
     'AiServiceConfig', 'AiServiceHttp', 'AiServiceGateway', 'ChatCompletionChunk',
-    'mergeUsage', 'parseUsage']);
+    'mergeUsage', 'parseUsage', 'TRACE_FULL_ROUNDS']);
   // Config 下沉的常量（KEY_*/DEFAULT_*/MAX_*/TIMEOUT_MS/AI_PROVIDERS）都是运行时值
   const isValue = (n) => VALUE_NAMES.has(n.replace(/.* as /, '')) ||
     /^(KEY_|DEFAULT_|MAX_|TIMEOUT_MS|CONTEXT_LENGTH_OPTIONS|AI_PROVIDERS)/.test(n);

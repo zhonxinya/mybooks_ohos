@@ -521,4 +521,27 @@ export function register(ctx) {
     await flush();
   });
 
+  test('#1628 痕迹回放 token 治理：仅最近 TRACE_FULL_ROUNDS 轮全量展开，旧轮压一行摘要', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    deps.state.rcpResponses = [{ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '嗯' } }] })) }];
+    const mkRound = (id) => ({ text: '', calls: [{ id, name: 'search_books', args: '{}', result: `RESULT_${id}_`.repeat(40) }] });
+    RealAiService.chatStream([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'q1' },
+      { role: 'assistant', content: 'a1', toolTrace: [mkRound('r1'), mkRound('r2'), mkRound('r3')] },
+    ], { onDelta: () => {}, onDone: () => {}, onError: () => {} }, 256);
+    await flush();
+    const sent = JSON.parse(deps.state.requests[0].content).messages;
+    const withTc = sent.filter((m) => m.tool_calls !== undefined);
+    assert.deepEqual(withTc.map((m) => m.tool_calls[0].id), ['r2', 'r3'], '仅最近 2 轮全量展开');
+    const compressed = sent.filter((m) => m.role === 'assistant' && (m.content ?? '').includes('早前工具轮已执行'));
+    assert.equal(compressed.length, 1);
+    assert.ok(compressed[0].content.includes('search_books'), '压缩行仍告知做过什么');
+    const body = JSON.stringify(sent);
+    assert.ok(!body.includes('RESULT_r1'), '旧轮 result 全文不进请求体');
+    assert.ok(body.includes('RESULT_r3'), '最近轮 result 仍全量回放');
+  });
+
 }

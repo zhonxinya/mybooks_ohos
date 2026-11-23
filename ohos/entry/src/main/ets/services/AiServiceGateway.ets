@@ -13,7 +13,7 @@ import type { AiMessage, AiConfig, AiAbortHandle } from './AiService';
 import type { AiSessionHolder } from './AiServiceHttp';
 import { AiServiceConfig, MAX_TOOL_ROUNDS, MAX_GATEWAY_ATTEMPTS, MAX_TOOL_SLOTS } from './AiServiceConfig';
 import { AiServiceHttp } from './AiServiceHttp';
-import { mergeUsage, parseUsage } from './AiChatModel';
+import { mergeUsage, parseUsage, TRACE_FULL_ROUNDS } from './AiChatModel';
 import type { AiTokenUsage, ToolTraceCall, ToolTraceRound } from './AiChatModel';
 
 export class AiServiceGateway {
@@ -25,6 +25,15 @@ export class AiServiceGateway {
    */
   static messagesToGw(messages: AiMessage[]): GatewayMessage[] {
     const out: GatewayMessage[] = [];
+    // #1628：全局轮数计数——仅最近 TRACE_FULL_ROUNDS 轮全量展开，更早轮压成一行摘要省 token
+    let totalRounds: number = 0;
+    for (let i = 0; i < messages.length; i++) {
+      const t: ToolTraceRound[] | undefined = messages[i].toolTrace;
+      if (t !== undefined) {
+        totalRounds += t.length;
+      }
+    }
+    let seen: number = 0;
     for (let i = 0; i < messages.length; i++) {
       const m: AiMessage = messages[i];
       const trace: ToolTraceRound[] | undefined = m.toolTrace;
@@ -35,6 +44,17 @@ export class AiServiceGateway {
       if (trace !== undefined) {
         for (let r = 0; r < trace.length; r++) {
           const rt: ToolTraceRound = trace[r];
+          const full: boolean = seen >= totalRounds - TRACE_FULL_ROUNDS;
+          seen++;
+          if (!full) {
+            // 旧轮：模型仍知道「做过什么」，但不背全量 payload 的 token
+            const names: string[] = [];
+            for (let c = 0; c < rt.calls.length; c++) {
+              names.push(rt.calls[c].name);
+            }
+            out.push({ role: 'assistant', content: `早前工具轮已执行：${names.join('、')}（详情略）` });
+            continue;
+          }
           const calls: Record<string, Object>[] = [];
           for (let c = 0; c < rt.calls.length; c++) {
             const fn: Record<string, Object> = { 'name': rt.calls[c].name, 'arguments': rt.calls[c].args };

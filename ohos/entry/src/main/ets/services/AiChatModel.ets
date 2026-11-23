@@ -405,3 +405,5 @@ export const CHAT_SESSIONS_MAX: number = 12;
 export const CHAT_SUMMARIES_KEY: string = 'ai_chat_summaries';
 /** 未摘数量达到该阈值才触发一次摘要请求：压缩自身也要省 token。 */
 export const COMPRESS_MIN_DROPPED: number = 8;
+/** 工具痕迹保留全量协议展开的轮数（#1628）：更早轮压成一行摘要，治理回放 token。 */
+export const TRACE_FULL_ROUNDS: number = 2;
