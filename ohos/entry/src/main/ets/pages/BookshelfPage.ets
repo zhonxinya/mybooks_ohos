@@ -19,6 +19,7 @@ import {
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { mapTalebookBook } from '../utils/BookMapper';
 import { AppRouter } from '../utils/AppRouter';
+import { AiEntryHintBanner } from '../components/AiEntryHintBanner';
 
 /** 书架页底部面板类型。 */
 const SHEET_NONE: string = 'none';
@@ -857,6 +858,8 @@ export struct BookshelfPage {
       .borderRadius($r('app.float.card_radius'))
       .backgroundColor($r('app.color.card_background'));
       this.toolbarRow();
+      // #1631：AI 入口一次性提示（点「知道了」后不再出现）
+      AiEntryHintBanner();
       this.contentArea();
     }
     .width('100%')

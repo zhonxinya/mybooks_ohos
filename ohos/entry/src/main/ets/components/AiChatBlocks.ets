@@ -153,9 +153,8 @@ export struct ActivityTimeline {
         }
         .width('100%')
         .onClick(() => {
-          if (!this.live) {
-            this.expanded = !this.expanded;
-          }
+          // #1629：流式期也可折叠——StreamBubble 整轮不重建，@State 折叠态跨 delta 保持
+          this.expanded = !this.expanded;
         });
         if (this.expanded) {
           ForEach(groupActivities(this.acts), (g: ActivityGroup, idx: number) => {
