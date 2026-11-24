@@ -45,6 +45,24 @@ export function register(ctx) {
     toolsState.notesError = '';
   });
 
+  test('plan 工具：状态归一化/编号双向剥离/进度统计/整体替换/空与超限', async () => {
+    const r1 = await RealAiTools.execute('plan', '{"items":"✅ 1. 搜全部13本书\\n⏳ 汇总结果\\n☐ 归档进书单\\n漏标状态的一步"}');
+    assert.ok(r1.startsWith('【任务计划】进度 1/4'), r1);
+    assert.ok(r1.includes('1. ✅ 搜全部13本书'), '行首 ✅ 与自带编号都要剥净');
+    assert.ok(r1.includes('4. ☐ 漏标状态的一步'), '漏标默认待办');
+    const r2 = await RealAiTools.execute('plan', '{"items":"✔ 搜完\\n✓ 汇总完\\n✅ 归档完"}');
+    assert.ok(r2.includes('进度 3/3（全部完成）') && r2.includes('2. ✅ 汇总完'), r2);
+    const r3 = await RealAiTools.execute('plan', '{"items":"  \\n \\n"}');
+    assert.ok(r3.includes('计划为空'), r3);
+    const many = [];
+    for (let i = 0; i < 20; i++) {
+      many.push('☐ 步' + (i + 1));
+    }
+    const r4 = await RealAiTools.execute('plan', JSON.stringify({ items: many.join('\n') }));
+    assert.ok(r4.includes('进度 0/20') && r4.includes('…（另有 5 步未列出）') && !r4.includes('步16'), r4);
+    assert.equal(RealAiTools.toolLabel('plan'), '梳理任务计划');
+  });
+
   test('AiTools：so-novel 与书单工具（搜源/入队去重/任务列表/建单加书/确认登记）', async () => {
     toolsState.sonovelEnvelope = { status: 200, error: '', body: { code: 200, message: '', data: [
       { sourceId: 3, sourceName: '某书源', url: 'http://x/book/1/', bookName: '夜的命名术',
@@ -333,7 +351,7 @@ export function register(ctx) {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 33 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 34 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');

@@ -484,7 +484,7 @@ export function register(ctx) {
     assert.ok(cat.includes('【书架检索】') && cat.includes('【联网检索】'), cat);
     assert.ok(cat.includes('shelf_list') && cat.includes('book_progress') && cat.includes('list_ai_tools'), cat);
     assert.ok(cat.includes('create_booklist [写]'), '写操作有标记');
-    assert.ok(cat.includes('共 33 个'), cat);
+    assert.ok(cat.includes('共 34 个') && cat.includes('plan'), cat);
     toolsState.readingBooks = [];
     toolsState.favorites = [];
     toolsState.history = [];
@@ -513,6 +513,8 @@ export function register(ctx) {
     assert.ok(shelf !== undefined && shelf.items.some((it) => it.name === 'shelf_list'), '新工具进目录');
     const booklist = groups.find((g) => g.title === '书单管理');
     assert.ok(booklist.items.find((it) => it.name === 'create_booklist').write === true, '写工具标记');
-    assert.ok(RealAiTools.toolCount() === 33, '总数与定义表一致');
+    const interact = groups.find((g) => g.title === '交互');
+    assert.ok(interact.items.some((it) => it.name === 'plan' && it.write === false), 'plan 进交互分组且非写工具');
+    assert.ok(RealAiTools.toolCount() === 34, '总数与定义表一致');
   });
 }
