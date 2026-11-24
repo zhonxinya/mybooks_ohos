@@ -13,7 +13,11 @@
 #include <iomanip>
 #include <mutex>
 #include <sstream>
+#include <vector>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
 
 namespace talebook {
 namespace {
@@ -81,8 +85,75 @@ CURL *acquireEasyHandle()
     return gTlsEasy;
 }
 
-void applySharedCurlOptions(CURL *curl)
+/** 收集 host 指定协议族的地址字符串（失败静默，交由调用方兜底）。 */
+void collectAddresses(const std::string &host, int family, std::vector<std::string> &out)
 {
+    struct addrinfo hints {};
+    hints.ai_family = family;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *res = nullptr;
+    if (getaddrinfo(host.c_str(), nullptr, &hints, &res) != 0) {
+        return;
+    }
+    char buf[INET6_ADDRSTRLEN] = {};
+    for (auto *ai = res; ai != nullptr; ai = ai->ai_next) {
+        const void *addr = ai->ai_family == AF_INET6
+            ? static_cast<const void *>(&reinterpret_cast<const struct sockaddr_in6 *>(ai->ai_addr)->sin6_addr)
+            : static_cast<const void *>(&reinterpret_cast<const struct sockaddr_in *>(ai->ai_addr)->sin_addr);
+        if (inet_ntop(ai->ai_family, addr, buf, sizeof(buf)) != nullptr) {
+            out.emplace_back(buf);
+        }
+    }
+    freeaddrinfo(res);
+}
+
+/**
+ * IPv6 优先解析（#1654）：so-novel/在线书站常见 A 记录失效或被污染而 AAAA 可用，
+ * curl 默认跟随 getaddrinfo 返回顺序不可控，导致解析/连接失败。这里分别取 AAAA 与 A，
+ * 按「IPv6 在前、IPv4 在后」注入 CURLOPT_RESOLVE，curl 依列表顺序尝试（Happy Eyeballs
+ * 50ms 回退）。本机无 IPv6 出口时 AAAA 连接失败自动落到后面的 A 记录；解析全失败则
+ * 不注入，保持 curl 默认行为。curl ≥7.62 内部复制列表，setopt 后即可释放。
+ */
+void applyIpv6FirstResolve(CURL *curl, const std::string &url)
+{
+    size_t schemeEnd = url.find("://");
+    if (schemeEnd == std::string::npos) {
+        return;
+    }
+    size_t hostStart = schemeEnd + 3;
+    if (hostStart < url.size() && url[hostStart] == '[') {
+        return;  // IPv6 字面量无需解析
+    }
+    size_t hostEnd = url.find_first_of(":/?#", hostStart);
+    std::string host = url.substr(hostStart, hostEnd == std::string::npos
+        ? std::string::npos : hostEnd - hostStart);
+    if (host.empty()) {
+        return;
+    }
+    std::string port = schemeEnd == 4 ? "80" : "443";  // schemeEnd 即 scheme 长度，4="http"
+    if (hostEnd != std::string::npos && hostStart + host.size() < url.size()
+        && url[hostStart + host.size()] == ':') {
+        size_t portEnd = url.find_first_of("/?#", hostStart + host.size() + 1);
+        port = url.substr(hostStart + host.size() + 1,
+            portEnd == std::string::npos ? std::string::npos : portEnd - hostStart - host.size() - 1);
+    }
+    std::vector<std::string> ips;
+    collectAddresses(host, AF_INET6, ips);
+    collectAddresses(host, AF_INET, ips);
+    if (ips.empty()) {
+        return;  // 双族皆挂：交给 curl 默认解析（错误形态保持一致）
+    }
+    struct curl_slist *list = nullptr;
+    for (const auto &ip : ips) {
+        list = curl_slist_append(list, (host + ":" + port + ":" + ip).c_str());
+    }
+    curl_easy_setopt(curl, CURLOPT_RESOLVE, list);
+    curl_slist_free_all(list);
+}
+
+void applySharedCurlOptions(CURL *curl, const std::string &url)
+{
+    applyIpv6FirstResolve(curl, url);
     if (gCurlShare != nullptr) {
         curl_easy_setopt(curl, CURLOPT_SHARE, gCurlShare);
     }
@@ -289,7 +360,7 @@ HttpResponse performCurlRequest(const std::string &url, const std::string &metho
     // 重定向到本地协议所利用（curl 支持 file://，可读出本地文件）。
     curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
     curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
-    applySharedCurlOptions(curl);
+    applySharedCurlOptions(curl, url);
 
     const std::string cookieFile = cookiePath(cookieDir);
     if (!cookieFile.empty()) {
@@ -373,7 +444,7 @@ HttpResponse performCurlDownload(const std::string &url, const std::string &dest
     // 仅允许 http/https（含重定向），避免本地协议被利用
     curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
     curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
-    applySharedCurlOptions(curl);
+    applySharedCurlOptions(curl, url);
 
     const std::string cookieFile = cookiePath(cookieDir);
     if (!cookieFile.empty()) {
