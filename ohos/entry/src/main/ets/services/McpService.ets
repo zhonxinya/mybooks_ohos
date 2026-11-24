@@ -4,10 +4,11 @@ import { AiToolDefinition, AiToolFunctionBody, AiToolParameters } from './AiTool
 import { TalebookService } from './TalebookService';
 
 /**
- * 百炼 MCP 客户端（Streamable HTTP / JSON-RPC 2.0）。
+ * MCP 客户端（Streamable HTTP / JSON-RPC 2.0）。
  *
- * 四家 MCP server 挂在 Token Plan 网关域，鉴权复用设置页已填的 qwen-tokenplan Key；
- * 当前服务商非 Token Plan 或未配 Key 时整个工具集为空（零请求、静默降级）。
+ * 内置家分两类：百炼四家挂 Token Plan 网关域，需各家单独配 Key；
+ * 开源两家（DeepWiki/Context7）为公共端点，免 Key 即可挂载（public 标记）。
+ * 一家都不可用（未配 Key 且开源家全禁用）时工具集为空（零请求、静默降级）。
  * 每家可在设置页「MCP」档单独禁用（ai_mcp_on_<tag>，未设置=启用）。
  * 协议流程：initialize → notifications/initialized → tools/list → tools/call，
  * 会话 id 走 `mcp-session-id` 响应头；响应体兼容纯 JSON 与 SSE `data:` 两种形态。
@@ -18,8 +19,10 @@ export interface McpServer {
   tag: string;
   label: string;
   url: string;
-  /** 是否内置四家（内置家的鉴权回落到 Token Plan Key；自定义家用自己的 Key）。 */
+  /** 是否内置家（内置家不可改删；百炼四家需单独填 Key，开源两家免 Key）。 */
   builtin?: boolean;
+  /** 开源免 Key 家：无需 API Key 即可握手挂载；填了 Key 则带上（缓解限流）。 */
+  public?: boolean;
 }
 
 /** 单个 server 的握手产物（会话 id + 工具清单）。 */
@@ -41,6 +44,10 @@ const MCP_SERVERS: McpServer[] = [
   { tag: 'ws', label: '百炼联网搜索', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/WebSearch/mcp', builtin: true },
   { tag: 'wf', label: '百炼网页解析', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/WebFetch/mcp', builtin: true },
   { tag: 'sg', label: '百炼语音转写', url: 'https://cn-beijing.maas.qianwenaiapi.com/api/v1/mcps/SpeechGenerateText/mcp', builtin: true },
+  // 开源社区托管的公共 MCP（免 Key 可用；实测 initialize/tools/list/tools/call 均匿名通）：
+  // DeepWiki=任意 GitHub 仓库文档问答，Context7=最新库/API 文档。填 Key 可选（缓解限流）。
+  { tag: 'dwiki', label: '开源DeepWiki仓库问答', url: 'https://mcp.deepwiki.com/mcp', builtin: true, public: true },
+  { tag: 'ctx7', label: '开源Context7库文档', url: 'https://mcp.context7.com/mcp', builtin: true, public: true },
 ];
 
 /** 自定义 MCP server 的持久化键：值为 JSON 数组 `[{tag,label,url}]`。 */
@@ -62,18 +69,23 @@ export class McpService {
   private static cacheAt: number = 0;
   private static states: McpServerState[] = [];
 
-  /** 当前是否至少有一家启用且配了 Key（MCP 门控）。 */
+  /** 当前是否至少有一家「启用且可用」：配了 Key，或开源免 Key 家（MCP 门控）。 */
   static enabledFor(): boolean {
     const all: McpServer[] = McpService.servers();
     for (let i = 0; i < all.length; i++) {
-      if (McpService.isServerEnabled(all[i].tag) && McpService.apiKeyFor(all[i]).length > 0) {
+      if (McpService.isServerEnabled(all[i].tag) && McpService.usableFor(all[i])) {
         return true;
       }
     }
     return false;
   }
 
-  /** 当前全部 MCP server：内置四家 + 用户新增的自定义家。 */
+  /** 单家当前是否可用：填了 Key，或开源免 Key 家无需 Key。 */
+  static usableFor(server: McpServer): boolean {
+    return server.public === true || McpService.apiKeyFor(server).length > 0;
+  }
+
+  /** 当前全部 MCP server：内置家（百炼四 + 开源免 Key 二）+ 用户新增的自定义家。 */
   static servers(): McpServer[] {
     const out: McpServer[] = MCP_SERVERS.slice();
     const raw: string = TalebookService.prefGet(MCP_CUSTOM_KEY);
@@ -108,7 +120,7 @@ export class McpService {
   }
 
   /**
-   * 单家鉴权 Key：一律用该家自己的槽位（内置家也需单独填写，不复用服务商 Key）。
+   * 单家鉴权 Key：一律用该家自己的槽位（百炼家需单独填写，不复用服务商 Key；开源家可留空）。
    * 不反向 import AiServiceConfig（Config 已 import McpService，会成环）。
    */
   static apiKeyFor(server: McpServer): string {
@@ -210,7 +222,7 @@ export class McpService {
   /**
    * 取全量 MCP 工具定义（合并各家）：命中缓存零请求；设置页禁用的家与未配 Key 的家不握手，
    * 单家失败静默跳过，全挂返回空数组——聊天照常走内置工具。
-   * Key 由各家自取（内置家也需单独填写），参数仅用于缓存归属（服务商切换后重新握手）。
+   * Key 由各家自取（百炼家需单独填写，开源免 Key 家空 Key 也握手），参数仅用于缓存归属（服务商切换后重新握手）。
    */
   static async ensureToolset(cacheOwner: string): Promise<AiToolDefinition[]> {
     const all: McpServer[] = McpService.servers();
@@ -219,7 +231,7 @@ export class McpService {
       const fresh: (McpServerState | null)[] = await Promise.all(
         all.map((s: McpServer): Promise<McpServerState | null> => {
           const key: string = McpService.apiKeyFor(s);
-          return McpService.isServerEnabled(s.tag) && key.length > 0 ?
+          return McpService.isServerEnabled(s.tag) && McpService.usableFor(s) ?
             McpService.handshake(s, key) : Promise.resolve(null);
         }));
       const states: McpServerState[] = [];
@@ -285,7 +297,7 @@ export class McpService {
       return `${server.label}已在设置页的 MCP 档中禁用`;
     }
     const key: string = McpService.apiKeyFor(server);
-    if (key.length === 0) {
+    if (key.length === 0 && server.public !== true) {
       return `${server.label} 不可用：未配置 API Key`;
     }
     const orig: string = fullName.substring(MCP_PREFIX.length + server.tag.length + 1);
@@ -498,10 +510,13 @@ export class McpService {
     body: string, waitReply: boolean): Promise<McpRpcReply> {
     const reply: McpRpcReply = { result: null, sessionId: '', error: '' };
     const headers: rcp.RequestHeaders = {
-      'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
       'Accept': 'application/json, text/event-stream',
     };
+    // 开源免 Key 家用空 Key：不发 Authorization（匿名端点会忽略甚至拒绝 Bearer 空串）
+    if (apiKey.length > 0) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
     if (sessionId.length > 0) {
       headers['mcp-session-id'] = sessionId;
     }
