@@ -440,6 +440,8 @@ export const toolsState = {
   referBooks: null, referSearchCalls: [], applyReferCalls: [], applyReferResult: null,
   // add_to_shelf 用：登录态、配额检查可用性/结果、内存目录、talebook 入队记录
   authOk: true, quotaSupported: true, quotaResult: null, dirs: new Set(), talebookEnqueues: [],
+  // sync_local_shelf 用：本地书架记录快照与同步返回值（#1651）
+  downloads: [], syncMetaResult: null,
   // 书单管理/推送/统计工具用：可编程响应 + 调用记录
   myBooklists: null, booklistDetail: null, booklistUpdateCalls: [], booklistDeleteCalls: [],
   booklistRemoveCalls: [], pushResult: null, pushCalls: [], devices: null,
@@ -461,6 +463,7 @@ export const fileIo = fs;
 // 仅作类型标注用的名字（strip-types 后仍走值 import），占位防命名导出缺失
 export const SoNovelBookPayload = undefined;
 export const DownloadTask = undefined;
+export const DownloadRecord = undefined;
 export const SoNovelSearchItem = undefined;
 export const BookListAddResponse = undefined;
 export const BookListMutationResponse = undefined;
@@ -582,8 +585,9 @@ export const TalebookService = {
     ? await toolsState.bookNavAsync() : { status: 200, body: null, error: 'stub: 未设置' }),
   syncDownloadMeta: (id, title, author, coverUrl) => {
     toolsState.syncMetaCalls.push({ id, title, author, coverUrl });
-    return true;
+    return toolsState.syncMetaResult ?? true;
   },
+  getDownloads: () => toolsState.downloads.slice(),
   syncLocalBookMeta: async (id) => {
     const env = toolsState.bookDetailAsync ? await toolsState.bookDetailAsync(id) : { status: 404, body: null };
     const book = (env.body && env.body.book) ? env.body.book : {};

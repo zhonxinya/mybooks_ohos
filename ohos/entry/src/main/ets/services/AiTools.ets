@@ -92,7 +92,8 @@ export class AiTools {
     ['书架检索', 'search_books', 'book_detail', 'shelf_list', 'book_progress', 'reading_history', 'reading_stats'],
     ['书单管理', 'list_booklists', 'create_booklist', 'add_books_to_booklist', 'update_booklist',
       'delete_booklist', 'remove_book_from_booklist'],
-    ['书籍入库', 'search_sonovel', 'add_sonovel_task', 'list_download_tasks', 'add_to_shelf', 'push_to_device'],
+    ['书籍入库', 'search_sonovel', 'add_sonovel_task', 'list_download_tasks', 'add_to_shelf',
+      'sync_local_shelf', 'push_to_device'],
     ['元数据与封面', 'search_meta', 'get_novel_meta', 'update_book_meta', 'list_categories',
       'search_cover', 'set_cover'],
     ['联网检索', 'search_web', 'fetch_url', 'ai_search', 'search_encyclopedia'],
@@ -369,6 +370,9 @@ export class AiTools {
     if (name === 'add_to_shelf') {
       return '加入书架';
     }
+    if (name === 'sync_local_shelf') {
+      return '同步本地书架';
+    }
     if (name === 'push_to_device') {
       return '推送到阅读设备';
     }
@@ -565,6 +569,9 @@ export class AiTools {
       }
       if (name === 'add_to_shelf') {
         return await AiToolsExecShelf.addToShelf(args);
+      }
+      if (name === 'sync_local_shelf') {
+        return await AiToolsExecShelf.syncLocalShelf(args);
       }
       if (name === 'push_to_device') {
         return await AiToolsExecShelf.pushToDevice(args);

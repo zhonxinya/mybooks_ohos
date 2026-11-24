@@ -484,7 +484,7 @@ export function register(ctx) {
     assert.ok(cat.includes('【书架检索】') && cat.includes('【联网检索】'), cat);
     assert.ok(cat.includes('shelf_list') && cat.includes('book_progress') && cat.includes('list_ai_tools'), cat);
     assert.ok(cat.includes('create_booklist [写]'), '写操作有标记');
-    assert.ok(cat.includes('共 34 个') && cat.includes('plan'), cat);
+    assert.ok(cat.includes('共 35 个') && cat.includes('plan') && cat.includes('sync_local_shelf'), cat);
     toolsState.readingBooks = [];
     toolsState.favorites = [];
     toolsState.history = [];
@@ -515,6 +515,9 @@ export function register(ctx) {
     assert.ok(booklist.items.find((it) => it.name === 'create_booklist').write === true, '写工具标记');
     const interact = groups.find((g) => g.title === '交互');
     assert.ok(interact.items.some((it) => it.name === 'plan' && it.write === false), 'plan 进交互分组且非写工具');
-    assert.ok(RealAiTools.toolCount() === 34, '总数与定义表一致');
+    const ingest = groups.find((g) => g.title === '书籍入库');
+    assert.ok(ingest.items.find((it) => it.name === 'sync_local_shelf').write === false,
+      '#1651 同步本地书架是只读语义（不下载不入写闸门）');
+    assert.ok(RealAiTools.toolCount() === 35, '总数与定义表一致');
   });
 }

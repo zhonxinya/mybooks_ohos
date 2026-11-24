@@ -5,7 +5,7 @@
 import { ApiMessageResult, TalebookApi } from './TalebookApi';
 import { TalebookApiBooks } from './TalebookApiBooks';
 import { AnnotationApi, annotationTypeLabel, ANNOTATION_SCOPE_MINE } from './AnnotationApi';
-import { SoNovelBookPayload, DownloadTask, TalebookService } from './TalebookService';
+import { SoNovelBookPayload, DownloadRecord, DownloadTask, TalebookService } from './TalebookService';
 import { SoNovelService } from './SoNovelService';
 import { SoNovelMerge, SoNovelSearchItem } from '../utils/SoNovelMerge';
 import { DownloadTaskService } from './DownloadTaskService';
@@ -18,7 +18,7 @@ import { ServerFeature, ServerRegistry } from './ServerProfile';
 import { AccountManager } from './AccountManager';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { AiToolsCore } from './AiToolsCore';
-import { SEARCH_LIMIT, NOTE_LIMIT, HISTORY_LIMIT, INTRO_MAX, SONOVEL_LIMIT, TASK_LIST_LIMIT, BOOKLIST_DEFAULT_COLOR, ToolBookLine } from './AiToolsDefs';
+import { SEARCH_LIMIT, NOTE_LIMIT, HISTORY_LIMIT, INTRO_MAX, SONOVEL_LIMIT, TASK_LIST_LIMIT, SHELF_SYNC_LIMIT, BOOKLIST_DEFAULT_COLOR, ToolBookLine } from './AiToolsDefs';
 
 export class AiToolsExecShelf {
   static async searchBooks(query: string, callId: string = ''): Promise<string> {
@@ -372,6 +372,72 @@ export class AiToolsExecShelf {
     DownloadTaskService.processQueue();
     return `《${detail.title}》已加入下载队列（格式 ${format}），下载完成后会自动出现在书架；` +
       '进度可随时调 list_download_tasks 查看。';
+  }
+
+  /**
+   * 刷新本地书架元数据快照（#1651 修「更新本地书架会下载」）：只重取服务端 detail
+   * 并同步已有本地记录的字段，本地无记录=跳过，全程不入队任何下载。
+   */
+  static async syncLocalShelf(args: Record<string, Object>): Promise<string> {
+    const bookId: number = AiToolsCore.argNumber(args, 'book_id');
+    const records: DownloadRecord[] = TalebookService.getDownloads();
+    if (bookId > 0) {
+      const hit: DownloadRecord | undefined =
+        records.find((r: DownloadRecord) => r.bookId === `${bookId}`);
+      if (hit === undefined) {
+        return `id=${bookId} 的书不在本地书架，已跳过（本工具不下载书；要下载请另调 add_to_shelf）。`;
+      }
+      const ok: boolean = await AiToolsExecShelf.syncOneLocal(bookId);
+      return ok ? `已按服务器数据刷新本地书架的《${hit.title}》（仅字段，未下载文件）。` :
+        `刷新失败：《${hit.title}》的服务端信息未能同步。`;
+    }
+    const targets: DownloadRecord[] =
+      records.filter((r: DownloadRecord) => /^[0-9]+$/.test(r.bookId));
+    const skippedLocal: number = records.length - targets.length;
+    if (targets.length === 0) {
+      return '本地书架没有可同步的书（空书架，或只有本机导入/网文成品，服务器无对应元数据）。';
+    }
+    const cap: number = Math.min(targets.length, SHELF_SYNC_LIMIT);
+    let done: number = 0;
+    let failed: number = 0;
+    for (let i = 0; i < cap; i++) {
+      const id: number = Number(targets[i].bookId);
+      try {
+        if (await AiToolsExecShelf.syncOneLocal(id)) {
+          done++;
+        } else {
+          failed++;
+        }
+      } catch (_error) {
+        failed++;
+      }
+    }
+    let text: string = `已同步本地书架 ${done} 本的元数据（仅更新已有记录字段，未下载任何文件）`;
+    if (failed > 0) {
+      text += `；${failed} 本服务端信息获取失败，保持原值`;
+    }
+    if (targets.length > cap) {
+      text += `；另有 ${targets.length - cap} 本未处理（单次上限 ${SHELF_SYNC_LIMIT}，可按 book_id 指定）`;
+    }
+    if (skippedLocal > 0) {
+      text += `；${skippedLocal} 条本机导入/网文记录无服务器元数据，跳过`;
+    }
+    return text + '。';
+  }
+
+  /** 单本：重取服务端 detail → 同步本地记录字段；返回是否成功同步到本地记录。 */
+  private static async syncOneLocal(bookId: number): Promise<boolean> {
+    const envelope = await TalebookService.getBookDetailAsync(bookId);
+    // 非 2xx 时 detail 字段全空，写下去等于假同步——判失败保持原值
+    if (envelope.status < 200 || envelope.status >= 300) {
+      return false;
+    }
+    const body: Record<string, Object> = envelope.body ?? {};
+    const book: Record<string, Object> = (body['book'] as Record<string, Object> | undefined) ?? body;
+    const title: string = String(book['title'] ?? '');
+    const authors: string[] = Array.isArray(book['authors']) ? (book['authors'] as string[]) : [];
+    const cover: string = String(book['cover'] ?? '');
+    return TalebookService.syncDownloadMeta(`${bookId}`, title, authors.length > 0 ? authors[0] : '', cover);
   }
 
   /** 推送工具支持的设备类型（ftp 需凭据走页面，不开放给模型）。 */
