@@ -730,6 +730,10 @@ export const MAX_TOOL_ROUNDS: number = 12;
 /** 轮次上限触顶后的自动续段次数：每段仍是 12 轮预算+1 轮收尾，触顶自动续接
  *  而不是报废半截任务让用户「再发一条消息」。硬上限 12×(4+1)=60 轮兜死循环。 */
 export const MAX_AUTO_CONTINUES: number = 4;
+/** 工具回路上下文折叠预算：最近 TOOL_FOLD_KEEP 条 tool 结果保持全文，更早的截到
+ *  TOOL_FOLD_HEAD 字符+可重查提示——回路每轮全量重发历史，不折叠则长任务上下文线性膨胀。 */
+export const TOOL_FOLD_KEEP: number = 4;
+export const TOOL_FOLD_HEAD: number = 160;
 /** 网关单轮请求最多尝试次数（1 次原始 + 2 次重试）：网络抖动/429/5xx 不该报废整条回复。 */
 export const MAX_GATEWAY_ATTEMPTS: number = 3;
 /** 单轮流式 tool_calls 槽位上限（OpenAI 标准 index 从 0 连续）：异常 index 钳制于此，防无界扩容。 */

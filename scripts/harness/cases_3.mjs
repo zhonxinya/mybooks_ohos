@@ -126,6 +126,61 @@ export function register(ctx) {
     assert.match(error, /硬上限/, '超 4 次自动续段后按硬上限报错');
   });
 
+  test('上下文折叠单元：最近 4 条 tool 消息保全文，更早截到头部+可重查提示；幂等；数组不动', async () => {
+    const { AiServiceGateway } = await load('RealAiServiceGateway');
+    const long = 'x'.repeat(400);
+    const msgs = [
+      { role: 'user', content: 'q' },
+      { role: 'tool', content: long, tool_call_id: 't1' },
+      { role: 'tool', content: 'short', tool_call_id: 't2' },
+      { role: 'tool', content: long, tool_call_id: 't3' },
+      { role: 'tool', content: long, tool_call_id: 't4' },
+      { role: 'tool', content: long, tool_call_id: 't5' },
+      { role: 'tool', content: [{ type: 'text', text: '多模态' }], tool_call_id: 't6' },
+    ];
+    AiServiceGateway.foldStaleToolResults(msgs);
+    // 保留窗=最后 4 条 tool（t6/t5/t4/t3）；t1 折叠；t2 短于头部长度跳过
+    assert.ok(msgs[1].content.startsWith('xxx') && msgs[1].content.includes('…（已折叠 240 字符'),
+      `t1 应截到 160 字符+提示：${msgs[1].content.slice(150, 200)}`);
+    assert.equal(msgs[2].content, 'short', '短条目不动');
+    assert.equal(msgs[3].content, long, 't3 在保留窗内须全文');
+    assert.ok(Array.isArray(msgs[6].content), '多模态数组 content 不动');
+    const snapshot = msgs[1].content;
+    AiServiceGateway.foldStaleToolResults(msgs);
+    assert.equal(msgs[1].content, snapshot, '幂等：已折叠条目不得二次截短');
+  });
+
+  test('上下文折叠链路：6 轮长结果任务后续请求折叠最早结果、最近 4 条全文', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    const longTitle = '测试'.repeat(60);
+    toolsState.search = async () => [
+      { id: 1, title: longTitle, authors: ['甲'] },
+      { id: 2, title: longTitle + '贰', authors: ['乙'] },
+      { id: 3, title: longTitle + '叁', authors: ['丙'] },
+    ];
+    const mkFold = () => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+      tool_calls: [{ id: 'f', type: 'function', function: { name: 'search_books', arguments: '{"query":"f"}' } }] } }] })) });
+    const fin = (t) => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: t } }] })) });
+    deps.state.rcpResponses = [...Array(6).fill(0).map(mkFold), fin('查完了。')];
+    let error = '';
+    RealAiService.chatStream([{ role: 'user', content: '逐本查' }], {
+      onDelta: () => {}, onDone: () => {}, onError: (m) => { error = m; },
+    }, 256);
+    await flush();
+    assert.equal(error, '');
+    const b = JSON.parse(deps.state.requests[6].content);
+    const toolMsgs = b.messages.filter((m) => m.role === 'tool');
+    assert.equal(toolMsgs.length, 6);
+    assert.ok(`${toolMsgs[0].content}`.includes('…（已折叠') && `${toolMsgs[1].content}`.includes('…（已折叠'),
+      '最早两条应被折叠');
+    for (let i = 2; i < 6; i++) {
+      assert.ok(!`${toolMsgs[i].content}`.includes('已折叠'), '最近 4 条保持全文');
+    }
+    toolsState.search = async () => [];
+  });
+
   test('写工具确认闸门：拒绝/无确认方不执行，批准才执行', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
