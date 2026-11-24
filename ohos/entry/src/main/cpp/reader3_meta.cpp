@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -31,15 +32,20 @@ struct HttpTask {
     std::string responseJson;
 };
 
+// #1668：task 用引用计数管理生命周期。此前 HttpFetch 超时即 delete，
+// 而晚到的 deliver/CallJs 仍持有裸指针 → use-after-free；任何访问方
+// 只要拿着一份 HttpTaskPtr，对象就多活一份时间，最后持有者释放。
+using HttpTaskPtr = std::shared_ptr<HttpTask>;
+
 napi_threadsafe_function g_tsfn = nullptr;
 
-// 单挂起任务槽：book_info 串行使用；HttpFetch 拥有 task 生命周期
-HttpTask *g_pending = nullptr;
+// 单挂起任务槽：book_info 串行使用；持有者=引用计数（HttpFetch/CallJs/deliver 各取副本）
+HttpTaskPtr g_pending;
 std::mutex g_pendingMu;
 
 void DeliverPendingResponse(const std::string &resp)
 {
-    HttpTask *task = nullptr;
+    HttpTaskPtr task;
     {
         std::lock_guard<std::mutex> lk(g_pendingMu);
         task = g_pending;
@@ -56,16 +62,28 @@ void DeliverPendingResponse(const std::string &resp)
     task->cv.notify_all();
 }
 
-void CallJsHttp(napi_env env, napi_value jsCb, void *, void *data)
+void CallJsHttp(napi_env env, napi_value jsCb, void *, void *)
 {
-    auto *task = static_cast<HttpTask *>(data);
-    if (env == nullptr || jsCb == nullptr) {
-        std::lock_guard<std::mutex> lk(task->mu);
-        task->responseJson = "{\"status_code\":0,\"transport_error\":\"bridge unavailable\",\"headers\":{},\"body_b64\":\"\"}";
-        task->delivered = true;
-        task->cv.notify_all();
+    // #1668：队列项不再携带 task 裸指针（HttpFetch 超时释放后就是悬垂指针）；
+    // 从 g_pending 取引用计数副本——取到 null 说明任务已超时清理，静默跳过
+    HttpTaskPtr task;
+    {
+        std::lock_guard<std::mutex> lk(g_pendingMu);
+        task = g_pending;
+    }
+    if (task == nullptr) {
         return;
     }
+    if (env == nullptr || jsCb == nullptr) {
+        std::lock_guard<std::mutex> lk(task->mu);
+        if (!task->delivered) {
+            task->responseJson = "{\"status_code\":0,\"transport_error\":\"bridge unavailable\",\"headers\":{},\"body_b64\":\"\"}";
+            task->delivered = true;
+            task->cv.notify_all();
+        }
+        return;
+    }
+    // requestJson 写入先于 g_pending 赋值（g_pendingMu 建立 happens-before），读无需再加锁
     napi_value arg = nullptr;
     napi_create_string_utf8(env, task->requestJson.c_str(), task->requestJson.size(), &arg);
     napi_value undefined = nullptr;
@@ -74,9 +92,11 @@ void CallJsHttp(napi_env env, napi_value jsCb, void *, void *data)
     napi_status st = napi_call_function(env, undefined, jsCb, 1, &arg, &ignore);
     if (st != napi_ok) {
         std::lock_guard<std::mutex> lk(task->mu);
-        task->responseJson = "{\"status_code\":0,\"transport_error\":\"js dispatch failed\",\"headers\":{},\"body_b64\":\"\"}";
-        task->delivered = true;
-        task->cv.notify_all();
+        if (!task->delivered) {
+            task->responseJson = "{\"status_code\":0,\"transport_error\":\"js dispatch failed\",\"headers\":{},\"body_b64\":\"\"}";
+            task->delivered = true;
+            task->cv.notify_all();
+        }
     }
     // 成功路径由 reader3Deliver 完成 delivered/notify
 }
@@ -84,7 +104,7 @@ void CallJsHttp(napi_env env, napi_value jsCb, void *, void *data)
 int32_t HttpFetch(void *, const uint8_t *req, int64_t reqlen,
                   uint8_t **out_json, int64_t *out_len)
 {
-    auto *task = new HttpTask();
+    auto task = std::make_shared<HttpTask>();
     task->requestJson.assign((const char *)req, (size_t)reqlen);
     bool dispatched = false;
     if (g_tsfn != nullptr) {
@@ -92,7 +112,8 @@ int32_t HttpFetch(void *, const uint8_t *req, int64_t reqlen,
             std::lock_guard<std::mutex> lk(g_pendingMu);
             if (g_pending == nullptr) {
                 g_pending = task;
-                if (napi_call_threadsafe_function(g_tsfn, task, napi_tsfn_blocking) == napi_ok) {
+                // #1668：队列项不携带 task 指针，消费端从 g_pending 取引用副本
+                if (napi_call_threadsafe_function(g_tsfn, nullptr, napi_tsfn_blocking) == napi_ok) {
                     dispatched = true;
                 } else {
                     g_pending = nullptr;
@@ -100,21 +121,31 @@ int32_t HttpFetch(void *, const uint8_t *req, int64_t reqlen,
             }
         }
     }
+    std::string resp;
     if (dispatched) {
         std::unique_lock<std::mutex> lk(task->mu);
         // 上限=引擎单请求 timeout + 网络余量；rcp 自身超时更短，正常不会触顶
         if (!task->cv.wait_for(lk, std::chrono::seconds(60), [&task] { return task->delivered; })) {
-            std::lock_guard<std::mutex> plk(g_pendingMu);
-            if (g_pending == task) {
-                g_pending = nullptr;
+            lk.unlock();
+            {
+                std::lock_guard<std::mutex> plk(g_pendingMu);
+                if (g_pending == task) {
+                    g_pending = nullptr;
+                }
             }
-            task->responseJson = "{\"status_code\":0,\"transport_error\":\"host timeout\",\"headers\":{},\"body_b64\":\"\"}";
+            // #1668：超时写入必须持 task->mu 并复核 delivered——若晚到的 deliver
+            // 抢先认领并写了真实响应，不得覆盖；对同一 string 并发裸写即堆破坏
+            lk.lock();
+            if (!task->delivered) {
+                task->responseJson = "{\"status_code\":0,\"transport_error\":\"host timeout\",\"headers\":{},\"body_b64\":\"\"}";
+                task->delivered = true;
+            }
         }
+        resp = task->responseJson;
     } else {
-        task->responseJson = "{\"status_code\":0,\"transport_error\":\"bridge unavailable\",\"headers\":{},\"body_b64\":\"\"}";
+        resp = "{\"status_code\":0,\"transport_error\":\"bridge unavailable\",\"headers\":{},\"body_b64\":\"\"}";
     }
-    const std::string resp = task->responseJson;
-    delete task;
+    // #1668：不再 delete——本地引用离开作用域自动释放，晚到的持引用方仍安全
     uint8_t *buf = (uint8_t *)malloc(resp.size() + 1);
     if (buf == nullptr) {
         return 1;
@@ -181,7 +212,9 @@ napi_value Reader3Deliver(napi_env env, napi_callback_info info)
     napi_value argv[1] = {nullptr};
     napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
     napi_value r = nullptr;
-    char buf[2 * 1024 * 1024];
+    // #1668：2MB 大缓冲移出调用栈（napi 线程栈宽有限，压栈即溢出）；
+    // deliver 仅在 JS 主线程被调，无并发写，static 复用安全
+    static char buf[2 * 1024 * 1024];
     size_t len = 0;
     if (argc < 1 || napi_get_value_string_utf8(env, argv[0], buf, sizeof(buf), &len) != napi_ok) {
         napi_get_boolean(env, false, &r);

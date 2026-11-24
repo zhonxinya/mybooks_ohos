@@ -524,6 +524,8 @@ void HttpClient::setBaseUrl(const std::string &service, const std::string &url)
     if (!normalized.empty() && normalized.find("://") == std::string::npos) {
         normalized = "http://" + normalized;
     }
+    // #1668：成员写入持锁，与 getBaseUrl 的读互斥
+    std::lock_guard<std::mutex> lock(baseMutex_);
     if (service == "sonovel") {
         sonovelBase_ = normalized;
     } else {
@@ -533,6 +535,7 @@ void HttpClient::setBaseUrl(const std::string &service, const std::string &url)
 
 std::string HttpClient::getBaseUrl(const std::string &service) const
 {
+    std::lock_guard<std::mutex> lock(baseMutex_);
     return service == "sonovel" ? sonovelBase_ : talebookBase_;
 }
 

@@ -344,8 +344,10 @@ export class AiService {
           }
         },
         onError: (error: Error): void => {
+          // #1668：SDK 回调=napi 落点，error 可能 undefined/无 message，判空取值
           if (!handle.aborted) {
-            finish(AiServiceHttp.friendlyMessage(error.message));
+            const msg: string = error !== undefined && error !== null ? `${error.message}` : '';
+            finish(AiServiceHttp.friendlyMessage(msg));
           }
         },
       });

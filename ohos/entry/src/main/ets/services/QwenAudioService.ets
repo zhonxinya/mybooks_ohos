@@ -38,12 +38,19 @@ export class QwenAudioService {
       },
       capturerInfo: { source: audio.SourceType.SOURCE_TYPE_MIC, capturerFlags: 0 },
     });
+    // #1668：readData=napi→JS 落点，回调体未捕获异常直接终止应用，顶层 try 包底
     capturer.on('readData', (buffer: ArrayBuffer): void => {
-      QwenAudioService.pcmChunks.push(new Uint8Array(buffer));
-      QwenAudioService.pcmBytes += buffer.byteLength;
-      if (QwenAudioService.pcmBytes >= SAMPLE_RATE * 2 * MAX_RECORD_MS / 1000) {
-        // 到顶自动截断：页面侧不依赖此回调，stopRecording 幂等可重复调。
-        QwenAudioService.stopRecording().then((): void => {});
+      try {
+        QwenAudioService.pcmChunks.push(new Uint8Array(buffer));
+        QwenAudioService.pcmBytes += buffer.byteLength;
+        if (QwenAudioService.pcmBytes >= SAMPLE_RATE * 2 * MAX_RECORD_MS / 1000) {
+          // 到顶自动截断：页面侧不依赖此回调，stopRecording 幂等可重复调。
+          // 链尾必须挂 catch，否则 rejection 在 napi 上下文里升级成崩溃
+          QwenAudioService.stopRecording().catch((): void => {});
+        }
+      } catch (e) {
+        hilog.error(0x0000, TAG, 'readData handler error: %{public}s',
+          e instanceof Error ? e.message : String(e));
       }
     });
     QwenAudioService.capturer = capturer;
@@ -303,24 +310,40 @@ export class QwenAudioService {
   }
 
   private static bindPlayerEvents(player: media.AVPlayer): void {
+    // #1668：AVPlayer 事件=napi→JS 落点。.catch 只挡 rejection 挡不住
+    // prepare()/play() 的同步抛，整个回调体顶层 try 包底
     player.on('stateChange', (state: media.AVPlayerState): void => {
-      if (state === 'initialized') {
-        player.prepare().catch((error: BusinessError): void => {
-          hilog.error(0x0000, TAG, 'prepare: %{public}s', error.message);
-          QwenAudioService.finishPlay(false);
-        });
-      } else if (state === 'prepared') {
-        player.play().catch((error: BusinessError): void => {
-          hilog.error(0x0000, TAG, 'play: %{public}s', error.message);
-          QwenAudioService.finishPlay(false);
-        });
-      } else if (state === 'completed') {
-        QwenAudioService.finishPlay(true);
+      try {
+        if (state === 'initialized') {
+          player.prepare().catch((error: BusinessError): void => {
+            hilog.error(0x0000, TAG, 'prepare: %{public}s',
+              error !== undefined && error !== null ? error.message : '');
+            QwenAudioService.finishPlay(false);
+          });
+        } else if (state === 'prepared') {
+          player.play().catch((error: BusinessError): void => {
+            hilog.error(0x0000, TAG, 'play: %{public}s',
+              error !== undefined && error !== null ? error.message : '');
+            QwenAudioService.finishPlay(false);
+          });
+        } else if (state === 'completed') {
+          QwenAudioService.finishPlay(true);
+        }
+      } catch (e) {
+        hilog.error(0x0000, TAG, 'stateChange handler error: %{public}s',
+          e instanceof Error ? e.message : String(e));
+        QwenAudioService.finishPlay(false);
       }
     });
     player.on('error', (error: BusinessError): void => {
-      hilog.error(0x0000, TAG, 'player error %{public}d %{public}s', error.code, error.message);
-      QwenAudioService.finishPlay(false);
+      try {
+        const code: number = error !== undefined && error !== null ? error.code : -1;
+        const message: string = error !== undefined && error !== null ? `${error.message}` : '';
+        hilog.error(0x0000, TAG, 'player error %{public}d %{public}s', code, message);
+        QwenAudioService.finishPlay(false);
+      } catch (e) {
+        hilog.error(0x0000, TAG, 'player error handler failed');
+      }
     });
   }
 

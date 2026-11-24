@@ -339,41 +339,47 @@ export class AudioPlaybackService {
 
   private bindPlayerEvents(player: media.AVPlayer): void {
     player.on('stateChange', (state: media.AVPlayerState) => {
-      if (state === 'initialized') {
-        // 赋 fdSrc/url 之后播放器异步进入 initialized，必须等这个事件再 prepare。
-        // prepare/play 在这版 SDK 里返回 void（非 Promise），失败通过 'error' 事件/error 态上报。
-        player.prepare();
-      } else if (state === 'prepared') {
-        player.setSpeed(this.state.speed);
-        player.play();
-      } else if (state === 'playing') {
-        this.state.isPlaying = true;
-        this.state.trackLoading = false;
-        this.finished = false;
-        this.notify(true);
-        void this.platform.startBackgroundTask(this.context ?? null, this.state);
-        void this.platform.syncPlaybackState(this.state, false);
-      } else if (state === 'paused') {
-        this.state.isPlaying = false;
-        this.state.trackLoading = false;
-        this.notify(true);
-        void this.platform.stopBackgroundTask(this.context ?? null);
-        void this.platform.syncPlaybackState(this.state, false);
-      } else if (state === 'completed') {
-        this.state.isPlaying = false;
-        void this.onTrackCompleted();
-      } else if (state === 'stopped') {
-        this.state.isPlaying = false;
-        this.state.trackLoading = false;
-        this.notify(true);
-        void this.platform.stopBackgroundTask(this.context ?? null);
-        void this.platform.syncPlaybackState(this.state, false);
-      } else if (state === 'error') {
-        this.state.isPlaying = false;
-        this.state.trackLoading = false;
-        this.notify(true);
-        void this.platform.stopBackgroundTask(this.context ?? null);
-        void this.platform.syncPlaybackState(this.state, false);
+      // #1668：AVPlayer 事件=napi→JS 落点，回调体未捕获异常直接终止应用，顶层 try 包底
+      try {
+        if (state === 'initialized') {
+          // 赋 fdSrc/url 之后播放器异步进入 initialized，必须等这个事件再 prepare。
+          // prepare/play 在这版 SDK 里返回 void（非 Promise），失败通过 'error' 事件/error 态上报。
+          player.prepare();
+        } else if (state === 'prepared') {
+          player.setSpeed(this.state.speed);
+          player.play();
+        } else if (state === 'playing') {
+          this.state.isPlaying = true;
+          this.state.trackLoading = false;
+          this.finished = false;
+          this.notify(true);
+          void this.platform.startBackgroundTask(this.context ?? null, this.state);
+          void this.platform.syncPlaybackState(this.state, false);
+        } else if (state === 'paused') {
+          this.state.isPlaying = false;
+          this.state.trackLoading = false;
+          this.notify(true);
+          void this.platform.stopBackgroundTask(this.context ?? null);
+          void this.platform.syncPlaybackState(this.state, false);
+        } else if (state === 'completed') {
+          this.state.isPlaying = false;
+          void this.onTrackCompleted();
+        } else if (state === 'stopped') {
+          this.state.isPlaying = false;
+          this.state.trackLoading = false;
+          this.notify(true);
+          void this.platform.stopBackgroundTask(this.context ?? null);
+          void this.platform.syncPlaybackState(this.state, false);
+        } else if (state === 'error') {
+          this.state.isPlaying = false;
+          this.state.trackLoading = false;
+          this.notify(true);
+          void this.platform.stopBackgroundTask(this.context ?? null);
+          void this.platform.syncPlaybackState(this.state, false);
+        }
+      } catch (e) {
+        hilog.error(0x0000, TAG, 'stateChange handler error: %{public}s',
+          e instanceof Error ? e.message : String(e));
       }
     });
     player.on('timeUpdate', (time: number) => {
@@ -392,9 +398,16 @@ export class AudioPlaybackService {
       void this.platform.syncPlaybackState(this.state, false);
     });
     player.on('error', (err: BusinessError) => {
-      this.state.isPlaying = false;
-      this.state.trackLoading = false;
-      this.setNotice(`播放错误：${err.message ?? err.code}`);
+      // #1668：同 stateChange——napi 落点，且 err 字段可能缺失，判空取值
+      try {
+        this.state.isPlaying = false;
+        this.state.trackLoading = false;
+        const detail: string = err !== undefined && err !== null
+          ? `${err.message ?? err.code}` : '未知播放器错误';
+        this.setNotice(`播放错误：${detail}`);
+      } catch (e) {
+        hilog.error(0x0000, TAG, 'error handler failed');
+      }
     });
   }
 

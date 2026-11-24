@@ -575,9 +575,11 @@ export class AiServiceGateway {
             }
           },
           onError: (error: Error): void => {
+            // #1668：SDK 回调=napi 落点，error 可能 undefined/无 message，判空取值
             if (!settled) {
               settled = true;
-              reject(new Error(AiServiceHttp.friendlyMessage(error.message)));
+              const msg: string = error !== undefined && error !== null ? `${error.message}` : '';
+              reject(new Error(AiServiceHttp.friendlyMessage(msg)));
             }
           },
         });

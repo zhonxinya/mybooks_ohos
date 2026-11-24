@@ -214,9 +214,17 @@ export class TalebookService {
           TalebookServiceStore.downloadsCache = [];
         }
       } catch (_error) {
-        TalebookServiceStore.downloadsCache = downloadsRaw.length > 0
-          ? JSON.parse(downloadsRaw) as DownloadRecord[]
-          : [];
+        // #1668：旧兜底对同一字符串再 parse 一次——数据坏时必再抛，
+        // 启动链 fire-and-forget 下直接升级成 unhandled rejection 崩溃。改为失败置空
+        let fallback: DownloadRecord[] = [];
+        if (downloadsRaw.length > 0) {
+          try {
+            fallback = JSON.parse(downloadsRaw) as DownloadRecord[];
+          } catch (_bad) {
+            fallback = [];
+          }
+        }
+        TalebookServiceStore.downloadsCache = fallback;
       }
     }
     if (TalebookServiceStore.historyCache === null) {
@@ -232,9 +240,16 @@ export class TalebookService {
           TalebookServiceStore.historyCache = [];
         }
       } catch (_error) {
-        TalebookServiceStore.historyCache = historyRaw.length > 0
-          ? JSON.parse(historyRaw) as ReadingHistoryItem[]
-          : [];
+        // #1668：同 downloads 分支——兜底不再裸抛，坏数据置空保启动
+        let fallback: ReadingHistoryItem[] = [];
+        if (historyRaw.length > 0) {
+          try {
+            fallback = JSON.parse(historyRaw) as ReadingHistoryItem[];
+          } catch (_bad) {
+            fallback = [];
+          }
+        }
+        TalebookServiceStore.historyCache = fallback;
       }
     }
   }
