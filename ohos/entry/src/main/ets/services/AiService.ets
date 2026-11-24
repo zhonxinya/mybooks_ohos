@@ -290,6 +290,8 @@ export class AiService {
         // SDK 类型未覆盖该字段：params 即请求体对象，索引注入直达 wire（网关先例同款双 cast）
         (params as Object as Record<string, Object>)['reasoning_effort'] = effort;
       }
+      // #1658：通义系端点开内置联网检索（服务端按意图自主检索，与 tools 共存）
+      AiServiceHttp.applyNativeSearch(params as Object as Record<string, Object>, config);
       const result = client.chat.completions.create(params, {
         onData: (chunks: ChatCompletionChunk[]): void => {
           if (handle.aborted) {

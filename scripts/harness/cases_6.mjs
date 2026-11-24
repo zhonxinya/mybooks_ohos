@@ -502,6 +502,12 @@ export function register(ctx) {
       // 非 2xx → 失败文案
       deps.state.rcpResponses = [{ statusCode: 401, body: enc('bad key') }];
       assert.ok((await RealAiTools.execute('ai_search', '{"query":"x"}')).includes('失败'));
+      // 千问平台 Token Plan 端点（qianwenaiapi.com 域名）同样可用（#1658 域判定扩展）
+      deps.state.store.set('s:ai_base_url', 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1');
+      deps.state.rcpResponses = [{ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: 'Token Plan 联网答案' } }] })) }];
+      const tpOut = await RealAiTools.execute('ai_search', '{"query":"x"}');
+      assert.equal(tpOut, 'Token Plan 联网答案');
+      assert.equal(JSON.parse(deps.state.lastRequest.content).enable_search, true, 'Token Plan 须发 enable_search');
       // 非通义服务商：提示改用 search_web，且不发请求
       deps.state.store.set('s:ai_base_url', 'https://api.deepseek.com/v1');
       const before = deps.state.requests.length;
