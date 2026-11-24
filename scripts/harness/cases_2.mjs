@@ -623,4 +623,32 @@ export function register(ctx) {
     assert.equal(hits[1].title, '三体全集 (豆瓣)', 'organic 标题链不变');
     assert.equal(hits[1].summary, '刘慈欣科幻三部曲');
   });
+
+  test('#1664 SERP 跳转壳页解码 + 搜狗相对链召回', async () => {
+    const { WebFetchService } = await load('RealWebFetch');
+    const { WebSearchChannels } = await load('RealWebSearchChannels');
+    // 搜狗 /link：JS replace 壳页 → 真链（真实样本形态）
+    assert.equal(WebFetchService.jsRedirect(
+      '<meta content="always" name="referrer"><script>window.location.replace("https://ex.chinadaily.com.cn/a.html")</script>'),
+      'https://ex.chinadaily.com.cn/a.html', 'location.replace 壳页');
+    // 360 /link：meta refresh 壳页（无 script 形态）
+    assert.equal(WebFetchService.jsRedirect(
+      '<noscript><meta http-equiv="refresh" content="0;URL=\'https://hao.360.com/?src=x\'"></noscript>'),
+      'https://hao.360.com/?src=x', 'meta refresh 壳页');
+    assert.equal(WebFetchService.jsRedirect('<script>x</script>'.repeat(400)), '', '长页面拒判防误触');
+    assert.equal(WebFetchService.jsRedirect(
+      '<script>window.location.replace("javascript:alert(1)")</script>'), '', '伪协议不透传');
+    // 搜狗解析：/link 相对链与 // 协议相对链拼绝对（旧正则整条丢弃）
+    const serp = [
+      '<div class="vrwrap"><h3><a href="/link?url=ABC123">中国日报看山西|解码《三体》</a></h3>',
+      '<div class="str-text-info">一部科幻里程碑为何成功</div></div>',
+      '<div class="vrwrap"><h3><a href="//m.sogou.com/card">协议相对卡</a></h3></div>',
+      '<div class="vrwrap"><h3><a href="https://baike.sogou.com/v1.htm">搜狗百科三体</a></h3></div>',
+    ].join('\n');
+    const hits = WebSearchChannels.parseWebSogou(serp, 8);
+    assert.equal(hits.length, 3, '相对/协议相对/绝对三态全收');
+    assert.equal(hits[0].url, 'https://www.sogou.com/link?url=ABC123', '相对 /link 拼绝对');
+    assert.equal(hits[1].url, 'https://m.sogou.com/card', '协议相对补 https');
+    assert.equal(hits[2].url, 'https://baike.sogou.com/v1.htm', '绝对链行为不变');
+  });
 }

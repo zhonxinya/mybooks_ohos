@@ -230,8 +230,9 @@ export class WebSearchChannels {
       const from: number = starts[i];
       const to: number = i + 1 < starts.length ? starts[i + 1] : Math.min(html.length, from + 6000);
       const seg: string = html.substring(from, to);
+      // href 三态：绝对链 / 协议相对 // / 搜狗相对跳转链 /link?url=（#1664：只认绝对会漏召回）
       const a: RegExpExecArray | null =
-        /<h3[^>]*>[\s\S]{0,200}?<a[^>]*href="(https?:\/\/[^"]{1,300})"[^>]*>([\s\S]{1,300}?)<\/a>/.exec(seg);
+        /<h3[^>]*>[\s\S]{0,200}?<a[^>]*href="((?:https?:)?\/\/[^"]{1,300}|\/link\?[^"]{1,300})"[^>]*>([\s\S]{1,300}?)<\/a>/.exec(seg);
       if (a === null) {
         continue;
       }
@@ -239,13 +240,17 @@ export class WebSearchChannels {
       if (title.length === 0) {
         continue;
       }
+      let href: string = a[1];
+      if (href.indexOf('http') !== 0) {
+        href = href.indexOf('//') === 0 ? `https:${href}` : `https://www.sogou.com${href}`;
+      }
       let summary: string = '';
       const cap: RegExpExecArray | null =
         /class="[^"]*(?:str-text-info|text-layout)[^"]*"[^>]*>([\s\S]{1,600}?)<\/(?:div|span|p)>/.exec(seg);
       if (cap !== null) {
         summary = WebSearchChannels.stripHtml(cap[1]);
       }
-      items.push({ source: '搜狗', title: title, url: a[1], summary: WebSearchChannels.trimSummary(summary) });
+      items.push({ source: '搜狗', title: title, url: href, summary: WebSearchChannels.trimSummary(summary) });
     }
     return items;
   }

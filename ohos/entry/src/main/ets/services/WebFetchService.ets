@@ -30,7 +30,7 @@ export class WebFetchService {
   }
 
   /** 抓页面提取正文；一切失败收敛到 result.error，不抛异常（工具层直接回给模型）。 */
-  static async fetch(rawUrl: string): Promise<WebFetchResult> {
+  static async fetch(rawUrl: string, allowJump: boolean = true): Promise<WebFetchResult> {
     const url: string = rawUrl.trim();
     if (!WebFetchService.validUrl(url)) {
       return { ok: false, title: '', text: '', error: 'URL 无效：需以 http:// 或 https:// 开头的完整地址', hint: '' };
@@ -65,6 +65,14 @@ export class WebFetchService {
         bytes.subarray(0, FETCH_MAX_BYTES) : bytes;
       const decoder: util.TextDecoder = util.TextDecoder.create('utf-8', { ignoreBOM: true });
       const html: string = decoder.decodeToString(capped);
+      // SERP 跳转壳页（搜狗/360 的 /link：200 + window.location.replace / meta refresh）
+      // 直接一跳跟随真链，省一次 ArkWeb 渲染（#1664）
+      if (allowJump) {
+        const jump: string = WebFetchService.jsRedirect(html);
+        if (jump.length > 0 && jump !== url) {
+          return await WebFetchService.fetch(jump, false);
+        }
+      }
       const titleMatch: RegExpExecArray | null = /<title[^>]*>([^<]{1,200})<\/title>/i.exec(html);
       const title: string = titleMatch !== null ? WebFetchService.decodeEntities(titleMatch[1]).trim() : '';
       let text: string = WebFetchService.extractBody(html);
@@ -83,6 +91,26 @@ export class WebFetchService {
     } finally {
       session.close();
     }
+  }
+
+  /**
+   * 跳转壳页解析（#1664）：只认极短页面里的 window.location.replace("X") /
+   * location.href="X" / meta refresh，返回 http(s) 真链；否则空串。
+   * 长度闸防普通页面里的同名脚本误触。
+   */
+  static jsRedirect(html: string): string {
+    if (html.length === 0 || html.length > 3000) {
+      return '';
+    }
+    const m: RegExpExecArray | null =
+      /window\.location\.replace\("([^"]{8,500})"\)/.exec(html)
+        ?? /location\.href\s*=\s*"([^"]{8,500})"/.exec(html)
+        ?? /http-equiv=["']refresh["'][^>]*URL='?([^"'>\s]{8,500})/i.exec(html);
+    if (m === null) {
+      return '';
+    }
+    const t: string = m[1];
+    return t.indexOf('http://') === 0 || t.indexOf('https://') === 0 ? t : '';
   }
 
   /**
