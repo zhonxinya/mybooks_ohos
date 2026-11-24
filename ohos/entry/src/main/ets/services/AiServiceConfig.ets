@@ -735,12 +735,10 @@ export const DEFAULT_CONTEXT_K: number = 8;
 export const DEFAULT_TEMPERATURE: number = 0.7;
 export const TIMEOUT_MS: number = 180000;
 /** 工具回路最多执行的 tool_calls 轮数；再多一轮不带 tools 逼模型收尾。
- *  上限按「长任务」定：批量场景如 4 本书×（搜+下载）=8 轮，12 轮留余量；
- *  同时兜住模型死循环烧 token。退出对话页不打断回路（后台完成落盘），分钟级任务可行。 */
+ *  段预算按「长任务」定：批量场景如 4 本书×（搜+下载）=8 轮，12 轮留余量。
+ *  任务总轮次不设上限（用户指令 2026-11-24）：触顶无限自动续段，直到模型收敛
+ *  或用户中断。退出对话页不打断回路（后台完成落盘），分钟级任务可行。 */
 export const MAX_TOOL_ROUNDS: number = 12;
-/** 轮次上限触顶后的自动续段次数：每段仍是 12 轮预算+1 轮收尾，触顶自动续接
- *  而不是报废半截任务让用户「再发一条消息」。硬上限 12×(4+1)=60 轮兜死循环。 */
-export const MAX_AUTO_CONTINUES: number = 4;
 /** 工具回路上下文折叠预算：最近 TOOL_FOLD_KEEP 条 tool 结果保持全文，更早的截到
  *  TOOL_FOLD_HEAD 字符+可重查提示——回路每轮全量重发历史，不折叠则长任务上下文线性膨胀。 */
 export const TOOL_FOLD_KEEP: number = 4;
