@@ -244,6 +244,43 @@ export function register(ctx) {
     }
   });
 
+  test('缓存命中率（#1649）：检索参数折叠等价、URL 大小写分键、失败前置判定修假阴性', async () => {
+    // ① 折叠等价：大小写/连续空白/尾标点/参数顺序差异同键（板上实测模型改写措辞是头号漏失）
+    const k1 = RealAiTools.toolCacheKey('search_web', '{"query":"HarmonyOS  内核？！","engine":"Bing"}');
+    const k2 = RealAiTools.toolCacheKey('search_web', '{"engine":"bing","query":"  harmonyos 内核  "}');
+    assert.equal(k1, k2, `折叠后应同键：${k1} vs ${k2}`);
+    // 语义级改写仍分键（折叠不吞信息）
+    assert.notEqual(RealAiTools.toolCacheKey('search_web', '{"query":"三体"}'),
+      RealAiTools.toolCacheKey('search_web', '{"query":"三体 作者"}'), '不同语义必须分键');
+    // ② fetch_url 大小写敏感分键（URL 路径大小写不同=不同页面，误命中比漏命中有害）
+    assert.notEqual(RealAiTools.toolCacheKey('fetch_url', '{"url":"https://example.com/Book"}'),
+      RealAiTools.toolCacheKey('fetch_url', '{"url":"https://example.com/book"}'), 'URL 不得折叠大小写');
+    // ③ 失败判定精确化：正文含「失败」的正常结果应可缓存（旧子串判定假阴性）
+    RealAiTools.cacheDisabled = false;
+    try {
+      RealAiTools.clearToolCache();
+      const bodyHtml = '<html><head><title>乌托邦实验的失败史</title></head><body><p>正文。</p></body></html>';
+      deps.state.rcpError = null;
+      deps.state.rcpResponses = [{ statusCode: 200, body: enc(bodyHtml) }];
+      const first = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/failbody"}');
+      assert.ok(!first.startsWith('[缓存复用]'), first);
+      const again = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/failbody"}');
+      assert.ok(again.startsWith('[缓存复用]'), '正文含「失败」的正常结果必须能进缓存');
+      // 前置形态失败（「…失败：」）依旧不钉
+      RealAiTools.clearToolCache();
+      deps.state.rcpError = new Error('connection reset by peer');
+      const bad = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/err2"}');
+      assert.ok(bad.includes('失败'), bad);
+      deps.state.rcpError = null;
+      deps.state.rcpResponses = [{ statusCode: 200, body: enc(bodyHtml) }];
+      const retry = await RealAiTools.execute('fetch_url', '{"url":"https://example.com/err2"}');
+      assert.ok(!retry.startsWith('[缓存复用]'), '失败结果不得固化');
+    } finally {
+      RealAiTools.cacheDisabled = true;
+      RealAiTools.clearToolCache();
+    }
+  });
+
   test('功能专属模型槽（#1600）：voice 键兼容、音频三件回退链、绑定独立、解绑跟随', async () => {
     deps.state.store.clear();
     RealAiService.saveConfig('deepseek', 'https://api.deepseek.com/v1', 'deepseek-chat', 'sk-d', 0.5);

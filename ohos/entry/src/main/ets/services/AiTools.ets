@@ -188,6 +188,9 @@ export class AiTools {
    */
   private static readonly CACHEABLE_TOOLS: string[] =
     ['search_meta', 'get_novel_meta', 'search_encyclopedia', 'search_web', 'fetch_url', 'ai_search'];
+  /** 检索类（参数做大小写/空白/尾标点折叠归一）；fetch_url 除外，见 normalizeQueryValue。 */
+  private static readonly FOLDABLE_SEARCH_TOOLS: string[] =
+    ['search_meta', 'get_novel_meta', 'search_encyclopedia', 'search_web', 'ai_search'];
   /** 条数上限：写前清过期，仍超限按最旧逐出（LRU：命中提升到尾，热点不被新条目挤掉）。 */
   private static readonly TOOL_CACHE_MAX: number = 24;
   /**
@@ -213,15 +216,66 @@ export class AiTools {
       const obj: Record<string, Object> = JSON.parse(norm) as Record<string, Object>;
       const keys: string[] = Object.keys(obj);
       keys.sort();
+      const foldable: boolean = AiTools.FOLDABLE_SEARCH_TOOLS.indexOf(name) >= 0;
       const parts: string[] = [];
       for (const k of keys) {
-        parts.push(`${k}=${JSON.stringify(obj[k])}`);
+        const v: Object = obj[k];
+        if (foldable && typeof v === 'string') {
+          parts.push(`${k}=${JSON.stringify(AiTools.normalizeQueryValue(v as string))}`);
+        } else {
+          parts.push(`${k}=${JSON.stringify(v)}`);
+        }
       }
       norm = parts.join('&');
     } catch (_error) {
       // 参数不可解析时按原文，代价只是命中率
     }
     return `${name}|${norm}`;
+  }
+
+  /**
+   * 检索类参数折叠归一：大小写/连续空白/尾标点差异不该 miss（板上实测模型两轮改写
+   * query 是命中率头号杀手）。只用于缓存键，不影响实际请求；fetch_url 不在列——
+   * URL 路径大小写敏感，误命中比漏命中有害。语义级改写（换词）由提示词钉参兜住。
+   */
+  private static normalizeQueryValue(v: string): string {
+    let s: string = v.trim().toLowerCase();
+    let collapsed: string = '';
+    let lastSpace: boolean = false;
+    for (let i = 0; i < s.length; i++) {
+      const c: string = s.charAt(i);
+      if (c === ' ' || c === '\t' || c === '\n') {
+        if (!lastSpace && collapsed.length > 0) {
+          collapsed += ' ';
+        }
+        lastSpace = true;
+      } else {
+        collapsed += c;
+        lastSpace = false;
+      }
+    }
+    const puncts: string = '？?。.！!，,、；;：:·';
+    while (collapsed.length > 0 && puncts.indexOf(collapsed.charAt(collapsed.length - 1)) >= 0) {
+      collapsed = collapsed.substring(0, collapsed.length - 1);
+    }
+    return collapsed.trim();
+  }
+
+  /**
+   * 失败结果判定：执行器把网络/HTTP 异常消化成的失败文案统一是「…失败：/（…」前置形态
+   * （百科检索失败：、网页抓取失败：、工具 X 暂时失败：…），故只认「失败」出现在前 20 字
+   * 且紧跟冒号/括号。旧的全文子串判定会把正文提到失败的正常结果误挡在缓存外（假阴性）。
+   */
+  private static isFailureText(text: string): boolean {
+    const i: number = text.indexOf('失败');
+    if (i < 0 || i > 20) {
+      return false;
+    }
+    if (text.length <= i + 2) {
+      return true;
+    }
+    const next: string = text.charAt(i + 2);
+    return next === '：' || next === ':' || next === '（' || next === '(';
   }
 
   /** 清历史等本地数据变更时可主动调用；条目另有分级 TTL 自动过期。 */
@@ -428,10 +482,9 @@ export class AiTools {
       }
     }
     const text: string = await AiTools.executeWithRetry(name, argsJson, callId);
-    // 含「失败」一律不固化：除重试环兜底文案外，工具内部把网络/HTTP 异常消化成的
-    // 失败文本（如「网页抓取失败：…」）也在 dispatch 正常返回里，钉住会放大成整会话错误。
-    // 误伤正文含「失败」的正常结果只是不缓存，代价仅命中率。
-    if (cacheable && text.indexOf('失败') < 0) {
+    // 前置形态失败文案（「…失败：/（」）一律不固化，钉住会放大成整会话错误；
+    // 正文中段提到「失败」的正常结果不再误伤（isFailureText 精确化，#1649）。
+    if (cacheable && !AiTools.isFailureText(text)) {
       AiTools.rememberCache(key, text);
     }
     return text;
