@@ -56,7 +56,18 @@ export class AiServiceConfig {
     if (contextK <= 128) {
       return 30;
     }
-    return 50;
+    if (contextK <= 200) {
+      return 50;
+    }
+    if (contextK <= 500) {
+      return 80;
+    }
+    return 120;
+  }
+
+  /** 档位展示名：1000K 显示为 1M，其余按 `${k}K`。 */
+  static contextLabel(contextK: number): string {
+    return contextK >= 1000 ? `${Math.round(contextK / 1000)}M` : `${contextK}K`;
   }
 
   /** 读权限模式（非法/未设置值一律回落为逐笔确认）。 */
@@ -717,8 +728,8 @@ export const KEY_PERMISSION: string = 'ai_permission_mode';
 /** 本地常用模型清单（按服务商分开存）：`ai_provider_models_<id>` = JSON 字符串数组。 */
 export const KEY_PROVIDER_MODELS_PREFIX: string = 'ai_provider_models_';
 
-/** 上下文长度档位（K tokens），设置页下拉与轮数映射共用。 */
-export const CONTEXT_LENGTH_OPTIONS: number[] = [4, 8, 32, 128, 200];
+/** 上下文长度档位（K tokens，1000 即 1M），设置页下拉与轮数映射共用。 */
+export const CONTEXT_LENGTH_OPTIONS: number[] = [4, 8, 32, 128, 200, 300, 500, 1000];
 export const DEFAULT_CONTEXT_K: number = 8;
 
 export const DEFAULT_TEMPERATURE: number = 0.7;

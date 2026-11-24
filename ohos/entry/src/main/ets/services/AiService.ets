@@ -439,6 +439,11 @@ export class AiService {
   static detectVision(model: string): boolean {
     return AiServiceConfig.detectVision(model);
   }
+  /** 委托 AiServiceConfig.contextLabel（档位展示名）。 */
+  static contextLabel(contextK: number): string {
+    return AiServiceConfig.contextLabel(contextK);
+  }
+
   /** 委托 AiServiceConfig.contextRounds（拆分：见文件头说明）。 */
   static contextRounds(contextK: number): number {
     return AiServiceConfig.contextRounds(contextK);

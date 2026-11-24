@@ -223,7 +223,7 @@ struct AiSettingsPage {
   private contextSelectItems(): SelectOption[] {
     const items: SelectOption[] = [];
     for (let i = 0; i < CONTEXT_LENGTH_OPTIONS.length; i++) {
-      const opt: SelectOption = { value: `${CONTEXT_LENGTH_OPTIONS[i]}K` };
+      const opt: SelectOption = { value: AiService.contextLabel(CONTEXT_LENGTH_OPTIONS[i]) };
       items.push(opt);
     }
     return items;
@@ -637,7 +637,7 @@ struct AiSettingsPage {
               .width('100%');
             Select(this.contextSelectItems())
               .selected(this.contextSelectIndex())
-              .value(`${this.contextLength}K`)
+              .value(AiService.contextLabel(this.contextLength))
               .width('100%')
               .onSelect((index: number, value: string) => {
                 this.contextLength = CONTEXT_LENGTH_OPTIONS[index];
