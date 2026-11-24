@@ -376,24 +376,31 @@ export function register(ctx) {
     assert.equal(store.contextUsageK(), 8, '在途与错误气泡不进指示器');
   });
 
-  test('网关工具回路：触顶自动续段至 5 段后硬上限报错，段尾轮不挂 tools', async () => {
+  test('网关工具回路：不限制任务轮次——超旧 60 轮硬上限仍自动续段直到文本回答，段尾轮不挂 tools', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
+    deps.state.rcpResponse = null;
     RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'big-pickle', 'sk-oc', 0.5);
-    deps.state.rcpResponse = { statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
-      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'reading_history', arguments: '{}' } }] } }] })) };
+    const mk = () => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: '',
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'reading_history', arguments: '{}' } }] } }] })) });
+    const final = (t) => ({ statusCode: 200, body: enc(JSON.stringify({ choices: [{ message: { content: t } }] })) });
+    // 70 次工具调用（远超旧硬上限 60/65），第 71 次给文本收尾
+    deps.state.rcpResponses = [...Array(70).fill(0).map(mk), final('收尾完成。')];
     let error = '';
+    let full = '';
     RealAiService.chatStream([{ role: 'user', content: '继续' }], {
-      onDelta: () => {}, onDone: () => {}, onError: (m) => { error = m; },
+      onDelta: (t) => { full += t; }, onDone: () => {}, onError: (m) => { error = m; },
     }, 128);
     await flush();
-    // 5 段 ×（12 轮带工具 + 1 轮收尾）= 65 次请求；每段收尾轮不挂 tools
-    assert.equal(deps.state.requests.length, 65);
+    // 不限制任务轮次：越过旧 65 次上限，一直续段到第 71 轮文本才结束（70 工具轮 + 1 收尾）
+    assert.equal(error, '', '超旧硬上限不得报错');
+    assert.ok(full.includes('收尾完成。'), full);
+    assert.equal(deps.state.requests.length, 71);
     assert.ok(!('tools' in JSON.parse(deps.state.requests[12].content)), '段一收尾轮不挂工具');
     assert.ok(!('tools' in JSON.parse(deps.state.requests[64].content)), '段五收尾轮不挂工具');
     assert.ok('tools' in JSON.parse(deps.state.requests[13].content), '续段首轮回带工具');
-    assert.match(error, /硬上限/);
-    deps.state.rcpResponse = null;
+    assert.ok('tools' in JSON.parse(deps.state.requests[70].content), '第 71 轮（第六段）仍带工具');
+    deps.state.rcpResponses.length = 0;
   });
 
   test('灵魂与记忆：SOUL.md 默认兜底，MEMORY.md 追加/去重/序号删除', () => {

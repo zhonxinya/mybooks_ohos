@@ -115,15 +115,19 @@ export function register(ctx) {
     assert.ok(b13.tools !== undefined && b13.tools.length > 0, '续段首轮回带 tools');
     const continued = (msgs) => msgs.filter((m) => m.role === 'user' && `${m.content}`.includes('已自动续期')).length;
     assert.equal(continued(b13.messages), 1, '续段注入内部提示一次');
-    // ③ 连续 5 段（12×5 轮）全调工具 → 硬上限报错（防死循环烧 token）
+    // ③ 不限制任务轮次：连续超过旧 60 轮硬上限（65 轮全调工具）仍无限自动续段，
+    //    直到第 66 轮给出文本回答才收尾——不得再报「硬上限」
     deps.state.requests.length = 0;
-    deps.state.rcpResponses = [...Array(65).fill(0).map(mk)];
+    deps.state.rcpResponses = [...Array(65).fill(0).map(mk), final('慢慢查完了。')];
     error = '';
+    let full3 = '';
     RealAiService.chatStream([{ role: 'user', content: '光查不说' }], {
-      onDelta: () => {}, onDone: () => {}, onError: (m) => { error = m; },
+      onDelta: (t) => { full3 += t; }, onDone: () => {}, onError: (m) => { error = m; },
     }, 256);
     await flush();
-    assert.match(error, /硬上限/, '超 4 次自动续段后按硬上限报错');
+    assert.equal(error, '', '不限制任务轮次：超旧 60 轮硬上限不得报错');
+    assert.ok(full3.includes('慢慢查完了。'), '续段到模型主动收尾');
+    assert.equal(deps.state.requests.length, 66, '65 轮工具 + 第 66 轮收尾文本');
   });
 
   test('上下文折叠单元：最近 4 条 tool 消息保全文，更早截到头部+可重查提示；幂等；数组不动', async () => {
