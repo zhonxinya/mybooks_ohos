@@ -39,7 +39,7 @@ export class AiChatStore {
   streamingText: string = '';
   /** 工具回路实时活动时间线；finishBubble 时快照进气泡成为历史。 */
   liveActivities: ChatActivity[] = [];
-  /** 流式中的思考过程（#1662：每轮回调整段替换=只显当前轮；固化进气泡=末轮段）。 */
+  /** 流式中的思考过程（#1667：回调=增量，块内拼接；挂起工具即换块）。固化进气泡见 finishBubble。 */
   streamingReasoning: string = '';
   thinking: boolean = false;
   errorTip: string = '';
@@ -488,13 +488,16 @@ export class AiChatStore {
         if (requestId !== this.requestId || !this.thinking) {
           return;
         }
-        // #1662：每次回调=一轮整段，替换不累加（早期轮思考随 trace 分轮入卡）
-        this.streamingReasoning = delta;
+        // #1667：回调=增量（真实 SDK 每批上报批内增量），块内拼接不覆盖；
+        // 换块靠 onTool 清空（轮界），分轮全文另随 trace 固化（#1662 目标不变）
+        this.streamingReasoning += delta;
         this.notifyDelta();
       },
       onTool: (label: string, name: string) => {
         if (requestId === this.requestId && this.thinking) {
           this.beginActivity(name, label);
+          // #1667：挂起工具=轮界，下一段思考换新块
+          this.streamingReasoning = '';
         }
       },
       onToolResult: (name: string, label: string, text: string, callId: string) => {

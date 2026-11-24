@@ -649,4 +649,42 @@ export function register(ctx) {
     deps.state.rcpResponses.length = 0;
   });
 
+  test('#1667 SDK 流式多批思考：回调=批内增量，trace 固化本轮全文（消失 bug 的回归网）', async () => {
+    deps.state.chatCalls.length = 0;
+    RealAiService.saveConfig('deepseek', 'https://api.deepseek.com/v1', 'deepseek-chat', 'sk-d', 0.5);
+    toolsState.search = async (q) => [{ id: 1, title: q, authors: [] }];
+    // 真实 SDK 形态：同轮思考分多批 onData 上报，每批只带批内增量
+    deps.state.chatStreamRounds = [
+      [
+        { choices: [{ delta: { reasoning_content: '让我' } }] },
+        { choices: [{ delta: { reasoning_content: '想想，先查下书架。' } }] },
+        { choices: [{ delta: { tool_calls: [
+          { index: 0, id: 'c1', function: { name: 'search_books', arguments: '{"query":"三体"}' } }] } }] },
+      ],
+      [
+        { choices: [{ delta: { reasoning_content: '再查一本。' } }] },
+        { choices: [{ delta: { content: '查完了。' } }] },
+      ],
+    ];
+    deps.state.chatResponses = [{ statusCode: 200, body: enc('{}') },
+      { statusCode: 200, body: enc('{}') }];
+    const segs = [];
+    const errs = [];
+    let doneTrace = null;
+    RealAiService.chatStream([{ role: 'user', content: '查两本书' }], {
+      onDelta: () => {}, onError: (e) => { errs.push(e); },
+      onReasoning: (seg) => { segs.push(seg); },
+      onDone: (full, usage, trace) => { doneTrace = trace; },
+    });
+    await flush();
+    assert.equal(errs.length, 0, 'errs=' + JSON.stringify(errs));
+    assert.deepEqual(segs, ['让我想想，先查下书架。', '再查一本。'], '每批 onData 上报一次批内增量（非整段替换、非轮末整包双计）');
+    assert.equal(doneTrace.length, 1, '一个工具轮入痕');
+    assert.equal(doneTrace[0].reasoning, '让我想想，先查下书架。', 'trace 固化本轮多批拼接全文');
+    deps.state.chatStreamRounds = null;
+    deps.state.chatResponses = [];
+    deps.state.chatCalls.length = 0;
+    toolsState.search = null;
+  });
+
 }
