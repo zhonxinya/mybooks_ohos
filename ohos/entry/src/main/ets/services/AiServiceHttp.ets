@@ -73,10 +73,25 @@ export class AiServiceHttp {
 
   /**
    * 是否支持服务端内置联网搜索（enable_search 为通义 DashScope 兼容模式私有参数）。
-   * 按域名判定：dashscope / maas / token-plan 均落在 aliyuncs.com，自建 OpenAI 兼容服务不会误判。
+   * 按域名判定：dashscope 落 aliyuncs.com；千问平台（platform.qianwenai.com 文档体系）
+   * 的 maas / token-plan 端点落 qianwenaiapi.com。自建 OpenAI 兼容服务不会误判。
    */
   static supportsNativeOnlineSearch(baseUrl: string): boolean {
-    return baseUrl.indexOf('aliyuncs.com') >= 0;
+    return baseUrl.indexOf('aliyuncs.com') >= 0 || baseUrl.indexOf('qianwenaiapi.com') >= 0;
+  }
+
+  /**
+   * 主聊天循环注入内置联网搜索（#1658 完善聊天协议）：通义系端点加顶层 enable_search，
+   * 服务端按意图自主决定是否检索（turbo 策略），与自定义 function calling 共存。
+   * 其余端点不发该私有字段——严格网关会对未知参数报错。
+   * 平台文档边界：网页抓取 web_extractor 仅 Responses API 支持（本应用走 Chat Completions，
+   * 维持自研 search_web/fetch_url 工具）；enable_code_interpreter 与 function calling 互斥，
+   * 工具回路不可开启。
+   */
+  static applyNativeSearch(payload: Record<string, Object>, config: AiConfig): void {
+    if (AiServiceHttp.supportsNativeOnlineSearch(config.baseUrl)) {
+      payload['enable_search'] = true;
+    }
   }
 
   /**

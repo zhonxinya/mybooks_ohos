@@ -111,6 +111,7 @@ export class AiServiceGateway {
       if (effort !== 'default') {
         payload['reasoning_effort'] = effort;
       }
+      AiServiceHttp.applyNativeSearch(payload, config);
       const request: rcp.Request = new rcp.Request(url, 'POST', headers, JSON.stringify(payload));
       // 单轮请求失败直接 throw 会让整条多轮回复报废——
       // 用户侧表现为「工具调用失败不重试、会话中断」。退避重试，其余 4xx 无意义不重试。
@@ -553,6 +554,7 @@ export class AiServiceGateway {
       if (effort !== 'default') {
         payload['reasoning_effort'] = effort;
       }
+      AiServiceHttp.applyNativeSearch(payload, config);
       const result = client.chat.completions.create(
         payload as Object as ChatCompletionCreateParamsBase, {
           onData: (chunks: ChatCompletionChunk[]): void => {

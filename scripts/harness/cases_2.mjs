@@ -361,6 +361,41 @@ export function register(ctx) {
     assert.equal(deps.state.chatCalls.at(-1).body.reasoning_effort, undefined, 'default 档不注入');
   });
 
+  test('内置联网搜索：通义系端点请求体注入 enable_search，其余端点不发（#1658）', async () => {
+    // 域名判定须同时覆盖 DashScope(aliyuncs) 与千问平台 maas/token-plan(qianwenaiapi)；
+    // 此前只认 aliyuncs.com，Token Plan 端点曾被 ai_search 误判不支持。
+    assert.equal(RealAiService.supportsNativeOnlineSearch('https://dashscope.aliyuncs.com/compatible-mode/v1'), true);
+    assert.equal(RealAiService.supportsNativeOnlineSearch('https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1'), true);
+    assert.equal(RealAiService.supportsNativeOnlineSearch('https://api.deepseek.com/v1'), false);
+    // SDK 流式工具回路通道：qwen（DashScope）注入
+    RealAiService.saveConfig('qwen', 'https://dashscope.aliyuncs.com/compatible-mode/v1', 'qwen-plus', 'sk-q', 0.5);
+    deps.state.chatCalls.length = 0;
+    RealAiService.chatStream([{ role: 'user', content: '杭州明天天气' }],
+      { onDelta: () => {}, onDone: () => {}, onError: () => {} }, 64);
+    await flush();
+    assert.equal(deps.state.chatCalls.at(-1).body.enable_search, true, 'DashScope 须带 enable_search');
+    // Token Plan 千问平台端点同样注入
+    RealAiService.saveConfig('qwen-tokenplan', 'https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1', 'qwen3.6-flash', 'sk-tp', 0.5);
+    deps.state.chatCalls.length = 0;
+    RealAiService.chatStream([{ role: 'user', content: '杭州明天天气' }],
+      { onDelta: () => {}, onDone: () => {}, onError: () => {} }, 64);
+    await flush();
+    assert.equal(deps.state.chatCalls.at(-1).body.enable_search, true, 'Token Plan 端点须带 enable_search');
+    // 非通义端点不发私有字段（严格网关会拒未知参数）
+    RealAiService.saveConfig('deepseek', 'https://api.deepseek.com', 'deepseek-chat', 'sk-d', 0.5);
+    deps.state.chatCalls.length = 0;
+    RealAiService.chatStream([{ role: 'user', content: 'q' }],
+      { onDelta: () => {}, onDone: () => {}, onError: () => {} }, 64);
+    await flush();
+    assert.equal(deps.state.chatCalls.at(-1).body.enable_search, undefined, 'deepseek 不发 enable_search');
+    // 一次性补全 complete（书单 JSON 等结构化输出）不注入联网检索
+    deps.state.chatCalls.length = 0;
+    RealAiService.saveConfig('qwen', 'https://dashscope.aliyuncs.com/compatible-mode/v1', 'qwen-plus', 'sk-q', 0.5);
+    await RealAiService.complete([{ role: 'user', content: 'q' }], 64);
+    assert.equal(deps.state.chatCalls.at(-1).body.enable_search, undefined, 'complete 不注入 enable_search');
+    RealAiService.saveConfig('deepseek', 'https://api.deepseek.com', 'deepseek-chat', 'sk-d', 0.5);
+  });
+
   test('网关工具回路：执行 tool_calls 回填结果，第二轮拿到最终回答', async () => {
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
