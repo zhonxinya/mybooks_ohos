@@ -228,14 +228,18 @@ export struct ToolTraceCard {
     return n;
   }
 
-  private flatCalls(): ToolTraceCall[] {
-    const out: ToolTraceCall[] = [];
-    for (const r of this.trace) {
-      for (const c of r.calls) {
-        out.push(c);
-      }
+  /** #1662：轮思考取用（可选字段渲染端判空统一走这里，build 里不做类型窄化）。 */
+  private roundReasoning(r: ToolTraceRound): string {
+    return r.reasoning !== undefined ? r.reasoning : '';
+  }
+
+  /** 第 ri 轮首个调用在扁平序号中的起点（展开全文状态 openResult 沿用全局序号）。 */
+  private callBase(ri: number): number {
+    let n: number = 0;
+    for (let i = 0; i < ri; i++) {
+      n += this.trace[i].calls.length;
     }
-    return out;
+    return n;
   }
 
   private prettyArgs(args: string): string {
@@ -268,36 +272,47 @@ export struct ToolTraceCard {
           this.expanded = !this.expanded;
         });
         if (this.expanded) {
-          ForEach(this.flatCalls(), (c: ToolTraceCall, idx: number) => {
-            Column({ space: 4 }) {
-              Text(c.name)
-                .fontSize(12)
-                .fontWeight(FontWeight.Bold)
-                .fontColor($r('app.color.text_primary'));
-              Text(this.prettyArgs(c.args))
-                .fontSize(11)
-                .fontColor($r('app.color.text_tertiary'))
-                .fontFamily('monospace')
-                .maxLines(4)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .width('100%');
-              Text(this.openResult === idx || c.result.length <= 120 ? c.result :
-                `${c.result.substring(0, 120)}…`)
-                .fontSize(11)
-                .fontColor($r('app.color.text_secondary'))
-                .width('100%');
-              if (c.result.length > 120) {
-                Text(this.openResult === idx ? '收起结果' : '展开全文')
-                  .fontSize(11)
-                  .fontColor($r('app.color.brand_primary'))
-                  .onClick(() => {
-                    this.openResult = this.openResult === idx ? -1 : idx;
-                  });
+          // #1662：按轮分组——每轮思考（若有）渲一个小块打头，再接该轮调用，思考与动作对上号
+          ForEach(this.trace, (r: ToolTraceRound, ri: number) => {
+            Column({ space: 6 }) {
+              if (this.roundReasoning(r).length > 0) {
+                ReasoningBlock({ reasoning: this.roundReasoning(r), live: false })
               }
+              ForEach(r.calls, (c: ToolTraceCall, ci: number) => {
+                Column({ space: 4 }) {
+                  Text(c.name)
+                    .fontSize(12)
+                    .fontWeight(FontWeight.Bold)
+                    .fontColor($r('app.color.text_primary'));
+                  Text(this.prettyArgs(c.args))
+                    .fontSize(11)
+                    .fontColor($r('app.color.text_tertiary'))
+                    .fontFamily('monospace')
+                    .maxLines(4)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .width('100%');
+                  Text(this.openResult === this.callBase(ri) + ci || c.result.length <= 120 ? c.result :
+                    `${c.result.substring(0, 120)}…`)
+                    .fontSize(11)
+                    .fontColor($r('app.color.text_secondary'))
+                    .width('100%');
+                  if (c.result.length > 120) {
+                    Text(this.openResult === this.callBase(ri) + ci ? '收起结果' : '展开全文')
+                      .fontSize(11)
+                      .fontColor($r('app.color.brand_primary'))
+                      .onClick(() => {
+                        this.openResult = this.openResult === this.callBase(ri) + ci ? -1 : this.callBase(ri) + ci;
+                      });
+                  }
+                }
+                .alignItems(HorizontalAlign.Start)
+                .width('100%');
+              }, (c: ToolTraceCall, ci: number) => `${ri}-${ci}-${c.id}-${
+                this.openResult === this.callBase(ri) + ci ? 'o' : 'c'}`);
             }
             .alignItems(HorizontalAlign.Start)
             .width('100%');
-          }, (c: ToolTraceCall, idx: number) => `${idx}-${c.id}-${this.openResult === idx ? 'o' : 'c'}`);
+          }, (r: ToolTraceRound, ri: number) => `round-${ri}-${r.calls.length}-${this.roundReasoning(r).length}`);
         }
       }
       .width('100%')

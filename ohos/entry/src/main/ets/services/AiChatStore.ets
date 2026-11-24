@@ -39,7 +39,7 @@ export class AiChatStore {
   streamingText: string = '';
   /** 工具回路实时活动时间线；finishBubble 时快照进气泡成为历史。 */
   liveActivities: ChatActivity[] = [];
-  /** 流式中的思考过程增量；finishBubble/stopStreaming 时固化进气泡。 */
+  /** 流式中的思考过程（#1662：每轮回调整段替换=只显当前轮；固化进气泡=末轮段）。 */
   streamingReasoning: string = '';
   thinking: boolean = false;
   errorTip: string = '';
@@ -488,7 +488,8 @@ export class AiChatStore {
         if (requestId !== this.requestId || !this.thinking) {
           return;
         }
-        this.streamingReasoning += delta;
+        // #1662：每次回调=一轮整段，替换不累加（早期轮思考随 trace 分轮入卡）
+        this.streamingReasoning = delta;
         this.notifyDelta();
       },
       onTool: (label: string, name: string) => {
