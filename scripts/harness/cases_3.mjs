@@ -603,9 +603,13 @@ export function register(ctx) {
     const sent = JSON.parse(deps.state.requests[0].content).messages;
     const withTc = sent.filter((m) => m.tool_calls !== undefined);
     assert.deepEqual(withTc.map((m) => m.tool_calls[0].id), ['r2', 'r3'], '仅最近 2 轮全量展开');
-    const compressed = sent.filter((m) => m.role === 'assistant' && (m.content ?? '').includes('早前工具轮已执行'));
+    const compressed = sent.filter((m) => (m.content ?? '').includes('早前工具轮已执行'));
     assert.equal(compressed.length, 1);
+    assert.equal(compressed[0].role, 'system', '#1819：压缩行必须 system 注入——assistant 角色会被模型复读进正文');
     assert.ok(compressed[0].content.includes('search_books'), '压缩行仍告知做过什么');
+    assert.ok(compressed[0].content.includes('请勿在回答中复述'), '压缩行自带禁复述标注');
+    assert.ok(!sent.some((m) => m.role === 'assistant' && (m.content ?? '').includes('早前工具轮已执行')),
+      '不得再有 assistant 形态压缩行');
     const body = JSON.stringify(sent);
     assert.ok(!body.includes('RESULT_r1'), '旧轮 result 全文不进请求体');
     assert.ok(body.includes('RESULT_r3'), '最近轮 result 仍全量回放');

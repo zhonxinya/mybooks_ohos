@@ -47,12 +47,15 @@ export class AiServiceGateway {
           const full: boolean = seen >= totalRounds - TRACE_FULL_ROUNDS;
           seen++;
           if (!full) {
-            // 旧轮：模型仍知道「做过什么」，但不背全量 payload 的 token
+            // 旧轮：模型仍知道「做过什么」，但不背全量 payload 的 token。
+            // #1819：必须用 system 角色——板上实测 assistant 角色时模型把这行复读进
+            // 回答正文（还因此跳过工具直接答题）；system 注入不被当作自身输出模仿
             const names: string[] = [];
             for (let c = 0; c < rt.calls.length; c++) {
               names.push(rt.calls[c].name);
             }
-            out.push({ role: 'assistant', content: `早前工具轮已执行：${names.join('、')}（详情略）` });
+            out.push({ role: 'system', content: `（上下文压缩记录：早前工具轮已执行 ${names.join('、')}，详情略。` +
+              `此行是系统注入的占位说明，不是你的输出，请勿在回答中复述）` });
             continue;
           }
           const calls: Record<string, Object>[] = [];
