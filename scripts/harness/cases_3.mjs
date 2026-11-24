@@ -611,4 +611,42 @@ export function register(ctx) {
     assert.ok(body.includes('RESULT_r3'), '最近轮 result 仍全量回放');
   });
 
+  test('#1662 思考分轮：每轮 reasoning_content 记入对应 trace 轮；气泡只留末轮段', async () => {
+    deps.state.requests.length = 0;
+    deps.state.rcpResponses.length = 0;
+    RealAiService.saveConfig('opencode', 'https://opencode.ai/zen/go/v1', 'deepseek-v4.1-flash', 'sk-oc', 0.5);
+    toolsState.search = async (q) => [{ id: 1, title: q, authors: [] }];
+    const gw = (msg) => ({ statusCode: 200,
+      body: enc(JSON.stringify({ choices: [{ message: msg }] })) });
+    deps.state.rcpResponses = [
+      gw({ content: '', reasoning_content: '先查下书架。', tool_calls: [
+        { id: 'g1', type: 'function', function: { name: 'search_books', arguments: '{"query":"三体"}' } }] }),
+      gw({ content: '', reasoning_content: '再查一本。', tool_calls: [
+        { id: 'g2', type: 'function', function: { name: 'search_books', arguments: '{"query":"红魔"}' } }] }),
+      gw({ content: '查完了。', reasoning_content: '现在收尾回答。' }),
+    ];
+    const segs = [];
+    let doneTrace = null;
+    RealAiService.chatStream([{ role: 'user', content: '查两本书' }], {
+      onDelta: () => {}, onError: () => {},
+      onReasoning: (seg) => { segs.push(seg); },
+      onDone: (full, usage, trace) => { doneTrace = trace; },
+    }, 256);
+    await flush();
+    assert.equal(doneTrace.length, 2, '两个工具轮入痕');
+    assert.equal(doneTrace[0].reasoning, '先查下书架。', '第 1 轮思考随行');
+    assert.equal(doneTrace[1].reasoning, '再查一本。', '第 2 轮思考随行');
+    assert.deepEqual(segs, ['先查下书架。', '再查一本。', '现在收尾回答。'], '回调按轮整段上报（store 分段显示依赖此约定）');
+    // 持久化往返：轮 reasoning 解析；缺字段（旧档）=undefined 不炸
+    const { parseBubbles } = await load('AiChatModel');
+    const bubbles = parseBubbles([
+      { role: 'assistant', content: 'x', streaming: false, error: false, activities: [], toolTrace: [
+        { text: '', calls: [{ id: 'a', name: 'n', args: '{}', result: 'r' }], reasoning: '想了' },
+        { text: '', calls: [{ id: 'b', name: 'n2', args: '{}', result: 'r2' }] }] },
+    ]);
+    assert.equal(bubbles[0].toolTrace[0].reasoning, '想了', '轮思考落盘往返');
+    assert.equal(bubbles[0].toolTrace[1].reasoning, undefined, '旧档无该字段兼容');
+    deps.state.rcpResponses.length = 0;
+  });
+
 }

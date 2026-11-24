@@ -26,6 +26,8 @@ export interface ToolTraceCall {
 export interface ToolTraceRound {
   text: string;
   calls: ToolTraceCall[];
+  /** 该轮推理模型的思考（reasoning_content）；空=模型本轮没思考。#1662 分轮显示，不再全挤一个思维块。 */
+  reasoning?: string;
 }
 
 /** 界面上的消息：与协议层 AiMessage 分开，因为要额外带状态。 */
@@ -209,7 +211,10 @@ export function parseBubbles(parsed: Object): ChatBubble[] {
           }
         }
         if (calls.length > 0) {
-          rounds.push({ text: typeof rr['text'] === 'string' ? rr['text'] : '', calls: calls });
+          const rReason: Object = rr['reasoning'];
+          const reasoning: string = typeof rReason === 'string' ? rReason : '';
+          rounds.push({ text: typeof rr['text'] === 'string' ? rr['text'] : '', calls: calls,
+            reasoning: reasoning.length > 0 ? reasoning : undefined });
         }
       }
       if (rounds.length > 0) {

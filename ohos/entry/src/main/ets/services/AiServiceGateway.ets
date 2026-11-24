@@ -264,7 +264,9 @@ export class AiServiceGateway {
         gwMessages.push({ role: 'assistant', content: reply.content, tool_calls: calls });
         // #1623 痕迹登记：round 随轮开始入箱，calls 逐项补 result；
         // 中断产生的半轮在回放时按已记录 calls 截断，协议仍合法。
-        const rt: ToolTraceRound = { text: reply.content, calls: [] };
+        // #1662：本轮思考随行记录，历史按轮拆块显示（不再全挤气泡顶部一个思维块）
+        const rt: ToolTraceRound = { text: reply.content, calls: [],
+          reasoning: reply.reasoning.length > 0 ? reply.reasoning : undefined };
         if (traceBox !== null) {
           traceBox.push(rt);
         }
@@ -520,6 +522,8 @@ export class AiServiceGateway {
     if (think.length > 0 && onReasoning !== null) {
       onReasoning(think);
     }
+    // #1662：本轮思考回填 reply，供回路痕迹按轮记录（与整包模式 reply.reasoning 对齐）
+    reply.reasoning = think;
     if (piece.length > 0) {
       reply.content += piece;
       onDelta(piece);
