@@ -82,24 +82,27 @@ export function register(ctx) {
     assert.equal(page2.messages.at(-1).content, '前半后半');
     assert.equal(page2.thinking, false);
   });
-  test('思考过程：流式显当前轮段、固化只留末轮段（#1662 分轮拆分，不再串一个思维块）', async () => {
+  test('思考过程：同轮多批增量拼接、轮界换块（#1667 修复替换语义把思考覆盖消失）', async () => {
     const page = chat();
     const store = AiChatStore.instance();
     await page.send('问题');
     const handlers = state.handlers;
     handlers.onReasoning('让我想想。');
-    assert.equal(store.streamingReasoning, '让我想想。', '流式显当前轮段');
-    handlers.onReasoning('先给结论。');
-    assert.equal(store.streamingReasoning, '先给结论。', '换轮即换新段，不累加成大块');
+    assert.equal(store.streamingReasoning, '让我想想。', '首批即显');
+    handlers.onReasoning('先查一下书架。');
+    assert.equal(store.streamingReasoning, '让我想想。先查一下书架。', '同轮多批=增量拼接，不覆盖（真实 SDK 每批上报批内增量）');
+    handlers.onTool('查询书架', 'library_status');
+    handlers.onReasoning('再查另一本。');
+    assert.equal(store.streamingReasoning, '再查另一本。', '已挂起工具→新轮换块，不跨轮累加');
     handlers.onDelta('正文');
     handlers.onDone('正文');
-    assert.equal(page.messages.at(-1).reasoning, '先给结论。', '固化留末轮段（早期轮思考随 trace 分轮显示）');
+    assert.equal(page.messages.at(-1).reasoning, '再查另一本。', '固化留末块段（早期轮思考随 trace 分轮显示）');
     assert.equal(store.streamingReasoning, '', '固化后重置');
     const saved = JSON.parse(state.prefs.get('ai_chat_history'));
-    assert.equal(saved.at(-1).reasoning, '先给结论。', '随历史落盘');
+    assert.equal(saved.at(-1).reasoning, '再查另一本。', '随历史落盘');
     const page2 = reappear();
     page2.store.loadHistory();
-    assert.equal(page2.messages.at(-1).reasoning, '先给结论。', '历史恢复');
+    assert.equal(page2.messages.at(-1).reasoning, '再查另一本。', '历史恢复');
   });
   test('思考过程：停止生成也固化已有思考', async () => {
     const page = chat();

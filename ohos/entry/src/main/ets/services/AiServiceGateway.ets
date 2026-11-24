@@ -230,8 +230,8 @@ export class AiServiceGateway {
       if (reply === null) {
         return '';
       }
-      if (reply.reasoning.length > 0 && onReasoning !== null) {
-        // 整包模式：本轮思考过程一次性给出（工具回路多轮则逐轮累积）
+      if (reply.reasoning.length > 0 && onReasoning !== null && !reply.reasoningStreamed) {
+        // 整包模式（rcp/网关 transport）：本轮思考一次性给出；SDK 流式轮已在批内增量上报
         onReasoning(reply.reasoning);
       }
       if (reply.calls !== null && reply.calls.length > 0) {
@@ -519,11 +519,12 @@ export class AiServiceGateway {
         }
       }
     }
+    // #1667：本函数按批调用、think 是批内增量——回调=增量语义（store 拼接显示）；
+    // reply 每轮新建，+= 聚合出本轮整段供痕迹按轮固化（与 transport 整包对齐）
     if (think.length > 0 && onReasoning !== null) {
       onReasoning(think);
     }
-    // #1662：本轮思考回填 reply，供回路痕迹按轮记录（与整包模式 reply.reasoning 对齐）
-    reply.reasoning = think;
+    reply.reasoning += think;
     if (piece.length > 0) {
       reply.content += piece;
       onDelta(piece);
@@ -593,6 +594,8 @@ export class AiServiceGateway {
           return;
         }
         reply.calls = slots.length > 0 ? slots : null;
+        // #1667：思考已随 onData 分批增量上报（consumeStreamChunks），标记防整包双计
+        reply.reasoningStreamed = true;
         resolve(reply);
       }).catch((error: Error): void => {
         if (!settled) {
@@ -689,6 +692,8 @@ export interface GatewayReply {
   calls: GatewayToolCall[] | null;
   /** 推理模型的思考过程（OpenAI 兼容字段 reasoning_content，整包模式一次给全）。 */
   reasoning: string;
+  /** #1667：SDK 流式轮已按批增量回调 onReasoning，runToolLoop 不得再整包重发（双计）。 */
+  reasoningStreamed?: boolean;
   /** 本次请求的 token 用量（#1514）；服务商没回传 usage 时为 null。 */
   usage: AiTokenUsage | null;
 }
