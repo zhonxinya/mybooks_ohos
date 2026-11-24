@@ -5,8 +5,9 @@ import { AiToolDefinition } from '../services/AiToolsDefs';
 /**
  * MCP 设置区（AiSettingsPage「MCP」档）。
  *
- * 每一家（含内置四家百炼）都用自己填写的 Key，互不复用；用户还可新增任意 MCP server。
- * 每行：启用开关 / 名称 / URL / Key 状态；内置家可填/改 Key，自定义家可编辑与删除。
+ * 内置分两类：百炼家需自己填 Key（互不复用）；开源家（DeepWiki/Context7）免 Key 即用。
+ * 用户还可新增任意 MCP server。每行：启用开关 / 名称 / URL / Key 状态。
+ * 内置家可填/改 Key，自定义家可编辑与删除。
  * 改动即存并失效工具集缓存，下一轮对话生效。
  */
 @Component
@@ -39,7 +40,9 @@ export struct AiMcpSection {
     this.servers = list;
     this.onArr = onArr;
     this.hasKeyArr = keyArr;
-    this.anyKey = keyArr.some((k: boolean) => k);
+    // 可用=任一「启用」家有 Key，或是启用的开源免 Key 家
+    this.anyKey = keyArr.some((k: boolean, i: number) =>
+      onArr[i] && (k || list[i].public === true));
   }
 
   private setEnabled(index: number, on: boolean): void {
@@ -74,11 +77,17 @@ export struct AiMcpSection {
         // 内置家的名称/URL 固定，只更新 Key；自定义家三者都可改
         const target: McpServer | undefined = this.servers.find((s: McpServer) => s.tag === this.editTag);
         const builtin: boolean = target !== undefined && target.builtin === true;
-        if (builtin) {
-          if (this.editKey.trim().length === 0) {
-            this.toast('请填写该服务的 API Key');
-            return;
-          }
+    if (builtin) {
+      if (this.editKey.trim().length === 0) {
+        // 开源免 Key 家：保存空值=不改 Key 只关编辑态（其余内置家仍必填）
+        if (target !== undefined && target.public === true) {
+          this.editTag = '';
+          this.reload();
+          return;
+        }
+        this.toast('请填写该服务的 API Key');
+        return;
+      }
           AiService.mcpSetKey(this.editTag, this.editKey);
           this.toast('Key 已保存');
         } else {
@@ -134,12 +143,12 @@ export struct AiMcpSection {
 
   build() {
     Column({ space: 12 }) {
-      Text('MCP 服务会把其工具挂进对话。每家都用自己填写的 Key（内置四家百炼也需单独填写，不复用服务商 Key）；也可新增任意 MCP 服务（Streamable HTTP）。关掉哪家，哪家的工具就不出现，下一轮对话生效。')
+      Text('MCP 服务会把其工具挂进对话。内置开源家（DeepWiki/Context7）免 Key 直接可用；百炼家需单独填 Key（不复用服务商 Key）；也可新增任意 MCP 服务（Streamable HTTP）。关掉哪家，哪家的工具就不出现，下一轮对话生效。')
         .fontSize(12)
         .fontColor($r('app.color.text_secondary'))
         .width('100%');
       if (!this.anyKey) {
-        Text('还没有任何一家配置 Key：点下面的「填 Key」逐家填写后才会挂载。')
+        Text('当前没有任何可挂载的服务：给百炼/自定义家填 Key，或启用开源免 Key 家。')
           .fontSize(12)
           .fontColor($r('app.color.error'))
           .width('100%');
@@ -153,7 +162,7 @@ export struct AiMcpSection {
                 Text(server.label)
                   .fontSize(13)
                   .fontColor($r('app.color.text_primary'));
-                Text(server.builtin === true ? '内置' : '自定义')
+                Text(server.public === true ? '开源·免Key' : (server.builtin === true ? '内置' : '自定义'))
                   .fontSize(10)
                   .fontColor($r('app.color.text_tertiary'))
                   .backgroundColor($r('app.color.page_background'))
@@ -174,10 +183,12 @@ export struct AiMcpSection {
           .width('100%');
 
           Row({ space: 12 }) {
-            Text(this.hasKeyArr[index] ? 'Key 已配置' : '未配 Key')
+            Text(this.hasKeyArr[index] ? 'Key 已配置' : (server.public === true ? '免 Key 可用' : '未配 Key'))
               .fontSize(11)
-              .fontColor(this.hasKeyArr[index] ? $r('app.color.success') : $r('app.color.error'));
-            Text(this.editTag === server.tag ? '收起' : (this.hasKeyArr[index] ? '编辑' : '填 Key'))
+              .fontColor(this.hasKeyArr[index] || server.public === true
+                ? $r('app.color.success') : $r('app.color.error'));
+            Text(this.editTag === server.tag ? '收起'
+              : (this.hasKeyArr[index] ? '编辑' : (server.public === true ? '选填 Key' : '填 Key')))
               .fontSize(12)
               .fontColor($r('app.color.brand_primary'))
               .onClick(() => {

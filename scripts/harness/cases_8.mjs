@@ -6,10 +6,10 @@ import { dir, read, ETS, ROOT } from './paths.mjs';
 
 export function register(ctx) {
   const { load, deps, RealAiService, RealAiTools, parseToolBookLines, toolsState, mdParseBlocks, mdParseInline, AI_SKILLS, AiAssistantPage, AiBookPanelPage, AiRecommendPage, AiSettingsPage, AiPersonaPage, AiPersona, DEFAULT_SOUL, AiChatStore, personaState, MetaSearchService, NovelMetaService, resetSettings, settingsPage, chat, reappear } = ctx;
-  test('MCP 客户端：四家握手合并、SSE 解析、单家降级与会话缓存', async () => {
+  test('MCP 客户端：内置六家握手合并（含开源免 Key 两家）、SSE 解析、单家降级与会话缓存', async () => {
     const { McpService } = await load('RealMcp');
     McpService.reset();
-    // #1613 新语义：内置家也需各自填 Key（不再复用服务商 Key）
+    // #1613 新语义：百炼家也需各自填 Key（不复用服务商 Key）；#1661 开源家 dwiki/ctx7 免 Key
     for (const t of ['es', 'ws', 'wf', 'sg']) { McpService.setApiKey(t, 'sk-sp-test'); }
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
@@ -26,37 +26,54 @@ export function register(ctx) {
     const wfList = { statusCode: 200, headers: {}, body: enc(JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: [
       { name: 'web_extractor', description: '网页抽取', inputSchema: { type: 'object', properties: { url: { type: 'string' } } } },
     ] } })) };
+    const dwikiList = { statusCode: 200, headers: {}, body: enc(JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: [
+      { name: 'ask_wiki_question', description: '仓库问答', inputSchema: { type: 'object', properties: { repoName: { type: 'string' } } } },
+    ] } })) };
+    const ctx7List = { statusCode: 200, headers: {}, body: enc(JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: [
+      { name: 'resolve-library-id', description: '库检索', inputSchema: { type: 'object', properties: { libraryName: { type: 'string' } } } },
+    ] } })) };
     const badKey = { statusCode: 401, headers: {}, body: enc('{"code":"InvalidApiKey","message":"Invalid API-key provided."}') };
-    // 并行发起顺序=登记序（es,ws,wf,sg）：init×4 → notify×3（sg 已死）→ list×3；sg 401 降级
-    deps.state.rcpResponses.push(ok('sid-es'), ok('sid-ws'), ok('sid-wf'), badKey,
-      notify, notify, notify, esList, wsList, wfList);
+    // 并行发起顺序=登记序（es,ws,wf,sg,dwiki,ctx7）：init×6 → notify×5（sg 已死）→ list×5；sg 401 降级
+    deps.state.rcpResponses.push(ok('sid-es'), ok('sid-ws'), ok('sid-wf'), badKey, ok('sid-dw'), ok('sid-c7'),
+      notify, notify, notify, notify, notify, esList, wsList, wfList, dwikiList, ctx7List);
     const tools = await McpService.ensureToolset('sk-sp-test');
-    assert.equal(tools.length, 3, '单家失败静默跳过，其余保留');
+    assert.equal(tools.length, 5, '单家失败静默跳过，其余保留（含两家开源）');
     assert.equal(tools[0].function.name, 'mcp_es_bailian_web_search');
     assert.equal(tools[1].function.name, 'mcp_ws_web_search');
     assert.equal(tools[2].function.name, 'mcp_wf_web_extractor');
+    assert.equal(tools[3].function.name, 'mcp_dwiki_ask_wiki_question', '开源家工具同样前缀挂载');
+    assert.equal(tools[4].function.name, 'mcp_ctx7_resolve-library-id');
     assert.equal(tools[0].function.parameters.type, 'object', 'inputSchema 缺 type 时强制补齐');
     const req0 = deps.state.requests[0];
     assert.ok(req0.url.includes('/mcps/EnhancedSearch/mcp'));
     assert.equal(req0.headers['Authorization'], 'Bearer sk-sp-test');
     assert.ok(req0.headers['Accept'].includes('text/event-stream'));
+    // 开源免 Key 家：init 请求（登记序第 5/6）不带 Authorization
+    const reqDw = deps.state.requests[4];
+    assert.ok(reqDw.url.includes('mcp.deepwiki.com'));
+    assert.equal(reqDw.headers['Authorization'], undefined, '免 Key 家不发 Authorization');
     // list 请求带 initialize 响应的会话头
     const listEs = deps.state.requests.find((r) => r.content.includes('tools/list') && r.url.includes('EnhancedSearch'));
     assert.equal(listEs.headers['mcp-session-id'], 'sid-es');
     const before = deps.state.requests.length;
     const again = await McpService.ensureToolset('sk-sp-test');
-    assert.equal(again.length, 3);
+    assert.equal(again.length, 5);
     assert.equal(deps.state.requests.length, before, '缓存命中零请求');
     // Key 变化 + reset 都要重新握手
-    deps.state.rcpResponses.push(ok('a'), ok('b'), ok('c'), badKey,
-      notify, notify, notify, esList, wsList, wfList);
+    deps.state.rcpResponses.push(ok('a'), ok('b'), ok('c'), badKey, ok('d'), ok('e'),
+      notify, notify, notify, notify, notify, esList, wsList, wfList, dwikiList, ctx7List);
     await McpService.ensureToolset('sk-sp-other');
     assert.ok(deps.state.requests.length > before, '换 Key 强制重握手');
     McpService.reset();
-    // #1613 新语义：门控只看「是否至少一家启用且配了 Key」，与当前服务商无关
+    // #1613 新语义：门控只看「是否至少一家启用且可用」；#1661 开源家免 Key 即可用
     assert.equal(McpService.enabledFor(), true, '已配 Key 的启用家 → 启用');
     for (const t of ['es', 'ws', 'wf', 'sg']) { McpService.setApiKey(t, ''); }
-    assert.equal(McpService.enabledFor(), false, '全部无 Key → 不启用');
+    assert.equal(McpService.enabledFor(), true, '百炼全无 Key 仍启用：开源家免 Key');
+    McpService.setServerEnabled('dwiki', false);
+    McpService.setServerEnabled('ctx7', false);
+    assert.equal(McpService.enabledFor(), false, '开源家也禁用 → 全不可用');
+    McpService.setServerEnabled('dwiki', true);
+    McpService.setServerEnabled('ctx7', true);
     for (const t of ['es', 'ws', 'wf', 'sg']) { McpService.setApiKey(t, 'sk-sp-x'); }
     assert.equal(McpService.isMcpTool('mcp_es_x'), true);
     assert.equal(McpService.isMcpTool('mcp_ws_x'), true, '第四家前缀同样路由');
@@ -80,10 +97,11 @@ export function register(ctx) {
       { name: 'search', description: 's', inputSchema: { type: 'object', properties: {} } },
     ] } })) };
     const bad = { statusCode: 401, headers: {}, body: enc('{"code":"InvalidApiKey","message":"nope"}') };
-    // 四家并行：init-es, init-ws, init-wf, init-sg, notify-es, list-es（ws/wf/sg 在 init 即败）
-    deps.state.rcpResponses.push(init, bad, bad, bad, notify, list);
+    // 六家并行：init-es, init-ws(败), init-wf(败), init-sg(败), init-dwiki, init-ctx7,
+    // notify×3（es/dwiki/ctx7）, list×3
+    deps.state.rcpResponses.push(init, bad, bad, bad, init, init, notify, notify, notify, list, list, list);
     await McpService.ensureToolset('k');
-    assert.equal(deps.state.requests.length, 6, 'es 全握手、ws/wf/sg init 即败');
+    assert.equal(deps.state.requests.length, 12, 'es+开源全握手、ws/wf/sg init 即败');
     // 正常调用：多段 text 拼接
     deps.state.rcpResponses.push({ statusCode: 200, headers: {}, body: enc(JSON.stringify({
       jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: '第一段' }, { type: 'image' }, { type: 'text', text: '第二段' }] } })) });
@@ -105,6 +123,12 @@ export function register(ctx) {
     deps.state.store.delete('s:ai_mcp_key_es');
     assert.ok((await McpService.callTool('mcp_es_search', '{}')).includes('未配置'));
     deps.state.store.set('s:ai_mcp_key_es', 'k');
+    // 开源免 Key 家：callTool 不因缺 Key 拒绝（#1661）
+    deps.state.rcpResponses.push({ statusCode: 200, headers: {}, body: enc(JSON.stringify({
+      jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: '匿名可用' }] } })) });
+    assert.equal(await McpService.callTool('mcp_dwiki_search', '{}'), '匿名可用');
+    const dwCall = deps.state.requests[deps.state.requests.length - 1];
+    assert.equal(dwCall.headers['Authorization'], undefined, '免 Key 家调用不发 Authorization');
     // 会话失效：error → 重新握手 → 重试成功（es 无 sg：init/notify/list + call）
     deps.state.rcpResponses.push(
       { statusCode: 200, headers: {}, body: enc('{"jsonrpc":"2.0","id":3,"error":{"code":-32001,"message":"session expired"}}') },
@@ -201,11 +225,14 @@ export function register(ctx) {
     const { McpService } = await load('RealMcp');
     McpService.reset();
     for (const t of ['es', 'ws', 'wf', 'sg']) { McpService.setApiKey(t, 'sk-sp-x'); }
+    // 本用例聚焦百炼四家开关拓扑：开源两家先禁用（其免 Key 默认可用会搅乱队列）
+    McpService.setServerEnabled('dwiki', false);
+    McpService.setServerEnabled('ctx7', false);
     McpService.reset();
     deps.state.requests.length = 0;
     deps.state.rcpResponses.length = 0;
     assert.equal(McpService.isServerEnabled('es'), true, '未设置=启用（默认行为不变）');
-    assert.equal(McpService.serverList().length, 4, '四家登记');
+    assert.equal(McpService.serverList().length, 6, '内置六家登记');
     const ok = (sid) => ({ statusCode: 200, headers: { 'mcp-session-id': sid },
       body: enc(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-03-26' } })) });
     const notify = { statusCode: 202, headers: {}, body: enc('') };
@@ -248,19 +275,22 @@ export function register(ctx) {
     const { McpService } = await load('RealMcp');
     McpService.reset();
     deps.state.store.clear();
-    // 内置四家仍在，自定义家初始为空
-    assert.equal(McpService.serverList().length, 4);
+    // 门控断言聚焦自定义家：开源两家先禁用，否则免 Key 常态会让 enabledFor 恒真
+    McpService.setServerEnabled('dwiki', false);
+    McpService.setServerEnabled('ctx7', false);
+    // 内置六家仍在，自定义家初始为空
+    assert.equal(McpService.serverList().length, 6);
     // 新增：名称归一化 tag、落库、自带 Key
     const s1 = McpService.addServer('我的搜索 服务', 'https://mcp.example.com/mcp', 'sk-mcp-1');
     assert.equal(s1.tag, 'srv', '中文名归一为空 → srv');
-    assert.equal(McpService.serverList().length, 5);
+    assert.equal(McpService.serverList().length, 7);
     assert.equal(McpService.apiKeyFor(s1), 'sk-mcp-1', '自定义家用自己 Key');
     assert.equal(McpService.hasApiKey(s1), true, '有 Key 即算已配');
     // 同名再建：tag 去重加序号
     const s2 = McpService.addServer('我的搜索 服务', 'https://mcp2.example.com/mcp', '');
     assert.equal(s2.tag, 'srv2', '重名加序号');
     // 持久化往返：新实例读回自定义家
-    assert.equal(McpService.serverList().length, 6);
+    assert.equal(McpService.serverList().length, 8);
     // 内置家不走自定义 Key 槽
     const builtin = McpService.serverList().find((s) => s.tag === 'es');
     assert.equal(McpService.apiKeyFor(builtin), '', '内置家不回落服务商 Key，需单独填写');
