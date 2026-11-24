@@ -129,18 +129,29 @@ export class RealtimeCallService {
 
     const ws: webSocket.WebSocket = webSocket.createWebSocket();
     RealtimeCallService.ws = ws;
+    // #1668：ws 事件=napi→JS 落点，回调体内任何未捕获异常会直接终止应用，顶层 try 包底
     ws.on('message', (err: BusinessError, data: string | ArrayBuffer): void => {
-      if (err !== null && err !== undefined) {
-        return;
+      try {
+        if (err !== null && err !== undefined) {
+          return;
+        }
+        const text: string = typeof data === 'string' ? data :
+          RealtimeCallService.decoder.decodeToString(new Uint8Array(data));
+        RealtimeCallService.handleEvent(text);
+      } catch (e) {
+        hilog.error(0x0000, TAG, 'ws message handler error: %{public}s',
+          e instanceof Error ? e.message : String(e));
       }
-      const text: string = typeof data === 'string' ? data :
-        RealtimeCallService.decoder.decodeToString(new Uint8Array(data));
-      RealtimeCallService.handleEvent(text);
     });
     ws.on('close', (): void => {
-      RealtimeCallService.failCreated('实时连接被关闭');
-      if (!RealtimeCallService.closed) {
-        RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onClosed());
+      try {
+        RealtimeCallService.failCreated('实时连接被关闭');
+        if (!RealtimeCallService.closed) {
+          RealtimeCallService.notify((c: RealtimeCallCallbacks): void => c.onClosed());
+        }
+      } catch (e) {
+        hilog.error(0x0000, TAG, 'ws close handler error: %{public}s',
+          e instanceof Error ? e.message : String(e));
       }
     });
     ws.on('error', (err: BusinessError): void => {

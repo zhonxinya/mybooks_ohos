@@ -192,12 +192,19 @@ export class ReadKitBridge {
   }
 
   private static dispatch(eventData: emitter.EventData): void {
+    // #1668：emitter 原生事件是 napi→JS 同步落点，监听者抛错=终止应用；
+    // 逐个 try 隔离，单个坏监听者不断其他订阅者的通知链
     const payload = eventData.data as ReadKitEventPayload;
     if (payload === undefined) {
       return;
     }
     for (let i = 0; i < ReadKitBridge.listeners.length; i++) {
-      ReadKitBridge.listeners[i](payload);
+      try {
+        ReadKitBridge.listeners[i](payload);
+      } catch (e) {
+        hilog.error(0x0000, 'ReadKitBridge', 'listener error: %{public}s',
+          e instanceof Error ? e.message : String(e));
+      }
     }
   }
 }

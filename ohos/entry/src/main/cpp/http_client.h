@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mutex>
 #include <string>
 
 namespace talebook {
@@ -47,6 +48,9 @@ private:
     std::string buildUrl(const std::string &service, const std::string &path,
                          const std::string &query) const;
 
+    // #1668：UI 线程保存服务商地址与请求线程拼接 URL 并发，std::string
+    // 无锁读写=堆缓冲破坏（UAF/double-free 形态）；base 成员统一持锁访问
+    mutable std::mutex baseMutex_;
     std::string talebookBase_;
     std::string sonovelBase_;
     std::string cookieDir_;

@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { PageScaffold, LoadingState, EmptyState, AuthImage, LazyDataSource } from '../components';
 import { AudioFileInfo } from '../common/ApiTypes';
 import { AudioPlaybackListener, AudioPlaybackService, AudioPlaybackState } from '../services/AudioPlaybackService';
@@ -52,7 +53,13 @@ struct AudioPlayerPage {
     // @Watch 在首帧前的赋值不保证触发，这里显式同步一次章节懒加载数据源
     this.filesSource.update(this.files);
     this.prevHighlightIndex = this.currentIndex;
-    void service.openBook(context, this.bookId, title, author, cover, startIndex, resume);
+    // #1668：fire-and-forget 必须挂链尾 catch，否则 openBook 前段未兜底的 rejection
+    // 会以 unhandled rejection 终止应用（服务内部 catch 只覆盖主流程 try 块）
+    service.openBook(context, this.bookId, title, author, cover, startIndex, resume)
+      .catch((e: Object): void => {
+        hilog.error(0x0000, 'AudioPlayerPage', 'openBook rejected: %{public}s',
+          e instanceof Error ? e.message : String(e));
+      });
   }
 
   aboutToDisappear(): void {

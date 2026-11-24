@@ -33,7 +33,9 @@ export default class EntryAbility extends UIAbility {
     TalebookService.applyLocalConfig();
     NotificationService.init();
     DownloadTaskService.notifyChanged();
-    void TalebookService.warmLocalCaches();
+    // #1668：onCreate 里的 fire-and-forget 链尾必须挂 catch，否则任何 rejection
+    // 都是无人处理的启动即崩（服务内部兜底已改为坏数据置空，这里是最后一道）
+    TalebookService.warmLocalCaches().catch((): void => {});
     BookshelfRefresh.init();
     AppTheme.applyThemeMode(this.context, TalebookService.prefGet('theme_mode', 'system'));
   }
@@ -51,7 +53,9 @@ export default class EntryAbility extends UIAbility {
     AccountManager.ensureActiveIdentity();
     // 凭据明文清理：把历史版本明文保存的密码/用户名/资料迁入 Asset Store 后从明文通道删除
     TalebookService.migratePlaintextSecrets();
-    // 先预热连接再恢复会话，减轻首次 API 握手等待
+    // 先预热连接再恢复会话，减轻首次 API 握手等待。
+    // #1668：三层嵌套此前层层 void 且全链无 handler——任一层 rejection 即启动上下文
+    // unhandled rejection。各层链尾补 catch 静默（自愈失败维持原有「不阻塞启动」语义）
     void TalebookService.warmConnection().then(() => {
       void TalebookService.ensureAuthenticated().then((_ok: boolean) => {
         // 登录页已移除：自动登录失败的原因发布到 AppStorage，由 MainTabs 提示一次
@@ -61,9 +65,9 @@ export default class EntryAbility extends UIAbility {
           if (corrected) {
             AppStorage.setOrCreate(SERVER_KIND_NOTICE_KEY, ServerRegistry.profile().displayName);
           }
-        });
-      });
-    });
+        }).catch((): void => {});
+      }).catch((): void => {});
+    }).catch((): void => {});
     // 初始化「可升级版本」提示键，供设置页订阅（值为空串表示暂无提示）；
     // 设置 Tab 懒构建，放这里不影响首帧，AppStorage 订阅会在值发布后自动刷新
     UpdateService.publishHint();
