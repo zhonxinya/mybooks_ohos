@@ -163,7 +163,8 @@ export const AiService = {
   },
   detectVision: (model) => /vl|vision|4o|omni|gemini|claude|llava|qvq/i.test(model),
   supportsTools: () => (state.settings.config.baseUrl ?? '').indexOf('opencode.ai') >= 0,
-  contextRounds: (k) => (k <= 4 ? 4 : k <= 8 ? 8 : k <= 32 ? 16 : k <= 128 ? 30 : 50),
+  contextRounds: (k) => (k <= 4 ? 4 : k <= 8 ? 8 : k <= 32 ? 16 : k <= 128 ? 30 : k <= 200 ? 50 : k <= 500 ? 80 : 120),
+  contextLabel: (k) => (k >= 1000 ? String(Math.round(k / 1000)) + 'M' : String(k) + 'K'),
   loadPermission: () => state.settings.permission ?? 'confirm',
   savePermission: (mode) => { state.settings.permission = mode; },
   complete: async (messages, maxTokens, config) => {
@@ -273,7 +274,7 @@ export const pasteboard = {
 export const AppRouter = { getParams: () => (globalThis.__aiCheck.routerParams ?? {}) };
 export const promptAction = { showToast: (o) => { state.lastToast = o.message; } };
 export const AI_PROVIDERS = [];
-export const CONTEXT_LENGTH_OPTIONS = [4, 8, 32, 128, 200];
+export const CONTEXT_LENGTH_OPTIONS = [4, 8, 32, 128, 200, 300, 500, 1000];
 // 对话页附图管线的 kit 桩：回归只测协议形状与状态流转，真实编码上板验证
 export const common = {};
 export const fileIo = {

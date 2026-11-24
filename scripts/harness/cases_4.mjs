@@ -101,7 +101,9 @@ export function register(ctx) {
     assert.equal(RealAiService.loadConfig().contextLength, 32);
     RealAiService.saveConfig('moonshot', 'https://api.moonshot.cn/v1', 'moonshot-v1-8k', '', 0.7, '', 8);
     assert.equal(RealAiService.loadConfig().visionOverride, '', '恢复自动');
-    assert.deepEqual([4, 8, 32, 128, 200].map((k) => RealAiService.contextRounds(k)), [4, 8, 16, 30, 50]);
+    // 200→50 保持不变；新增 300/500/1000（1M）档 → 80/80/120
+    assert.deepEqual([4, 8, 32, 128, 200, 300, 500, 1000].map((k) => RealAiService.contextRounds(k)), [4, 8, 16, 30, 50, 80, 80, 120]);
+    assert.deepEqual([4, 32, 200, 300, 500, 1000].map((k) => RealAiService.contextLabel(k)), ['4K', '32K', '200K', '300K', '500K', '1M'], '1000 显示 1M');
     assert.equal(RealAiService.detectVision('qwen2.5-vl-72b'), true);
     assert.equal(RealAiService.detectVision('glm-4-flash'), false);
   });
@@ -199,9 +201,13 @@ export function register(ctx) {
     assert.equal(page.visionOn(), true);
     page.visionOverride = 'off';
     assert.equal(page.visionOn(), false, '手动关闭压过自动检测');
-    assert.ok(page.contextSelectItems().length === 5);
+    const items = page.contextSelectItems();
+    assert.ok(items.length === 8, '档位含 300K/500K/1M 共 8 档');
+    assert.equal(items[7].value, '1M', '1000K 档展示为 1M');
     page.contextLength = 128;
     assert.equal(page.contextSelectIndex(), 3);
+    page.contextLength = 1000;
+    assert.equal(page.contextSelectIndex(), 7);
   });
 
   test('对话页历史持久化：finishBubble 落盘、loadHistory 恢复、clearChat 清空', () => {
