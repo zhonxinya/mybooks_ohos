@@ -86,7 +86,9 @@ export class WebSearchChannels {
   }
 
   static stripHtml(text: string): string {
-    return text.replace(/<[^>]*>/g, '').replace(/&[a-z]+;|&#\d+;/g, ' ').replace(/\s+/g, ' ').trim();
+    // 尾部再剥 icon-font 私有区字形（百度/360 卡片里的装饰字符，肉眼不可见但会让空标题漏判，#1663）
+    return text.replace(/<[^>]*>/g, '').replace(/&[a-z]+;|&#\d+;/g, ' ')
+      .replace(new RegExp('[\\uE000-\\uF8FF]', 'g'), '').replace(/\s+/g, ' ').trim();
   }
 
   /** organic 容器切段：按引擎锚点返回各容器起始下标（最多扫 30 个）。 */
@@ -106,13 +108,17 @@ export class WebSearchChannels {
   }
 
   /**
-   * 百度 organic：容器 `class="result c-container"`。
+   * 百度结果：容器 `class="result c-container"`（organic）与 `result-op c-container`
+   * （百科/文学实体等知识卡，#1663：只扫 organic 会把最权威的正主词条全丢掉，
+   * 剩下的多是盗版/SEO 垃圾站）。
    * mu=属性为原站直链（比 link 跳转可靠；recommend_list 榜单推广排除）、
-   * <!--s-text--> 标记标题（含 <em> 高亮，h3 兜底）、summary-text_* 为摘要（CSS Modules 哈希后缀会变）。
+   * <!--s-text--> 标记标题（含 <em> 高亮，h3 兜底；知识卡标题在 <!--s-data:{...}-->
+   * JSON 的 "html" 字段）；summary-text_* 为摘要（CSS Modules 哈希后缀会变；
+   * 知识卡摘要在 s-data 的 "abstract" 字段）。
    */
   static parseWebBaidu(html: string, limit: number): WebSearchHit[] {
     const items: WebSearchHit[] = [];
-    const starts: number[] = WebSearchChannels.containerStarts(html, /class="result c-container/g);
+    const starts: number[] = WebSearchChannels.containerStarts(html, /class="result(?:-op)? c-container/g);
     for (let i = 0; i < starts.length && items.length < limit; i++) {
       const from: number = starts[i];
       const to: number = i + 1 < starts.length ? starts[i + 1] : Math.min(html.length, from + 9000);
@@ -130,6 +136,12 @@ export class WebSearchChannels {
         const h3: RegExpExecArray | null = /<h3[^>]*>([\s\S]{1,300}?)<\/h3>/.exec(seg);
         if (h3 !== null) {
           rawTitle = h3[1];
+        } else {
+          // 知识卡（result-op）无 s-text/h3，标题取 s-data JSON 首个 "html" 字段
+          const sd: RegExpExecArray | null = /<!--s-data:[\s\S]{0,1600}?"html":"([^"]{1,150})"/.exec(seg);
+          if (sd !== null) {
+            rawTitle = sd[1];
+          }
         }
       }
       const title: string = WebSearchChannels.stripHtml(rawTitle);
@@ -140,6 +152,12 @@ export class WebSearchChannels {
       const sum: RegExpExecArray | null = /class="[^"]*summary-text_[^"]*">([\s\S]{1,600}?)<\/span>/.exec(seg);
       if (sum !== null) {
         summary = WebSearchChannels.stripHtml(sum[1]);
+      } else {
+        // 知识卡摘要：s-data JSON 的 "abstract" 字段
+        const sdAbs: RegExpExecArray | null = /"abstract":"([^"]{1,300})"/.exec(seg);
+        if (sdAbs !== null) {
+          summary = WebSearchChannels.stripHtml(sdAbs[1]);
+        }
       }
       items.push({ source: '百度', title: title, url: mu[1], summary: WebSearchChannels.trimSummary(summary) });
     }
@@ -212,8 +230,9 @@ export class WebSearchChannels {
       const from: number = starts[i];
       const to: number = i + 1 < starts.length ? starts[i + 1] : Math.min(html.length, from + 6000);
       const seg: string = html.substring(from, to);
+      // href 三态：绝对链 / 协议相对 // / 搜狗相对跳转链 /link?url=（#1664：只认绝对会漏召回）
       const a: RegExpExecArray | null =
-        /<h3[^>]*>[\s\S]{0,200}?<a[^>]*href="(https?:\/\/[^"]{1,300})"[^>]*>([\s\S]{1,300}?)<\/a>/.exec(seg);
+        /<h3[^>]*>[\s\S]{0,200}?<a[^>]*href="((?:https?:)?\/\/[^"]{1,300}|\/link\?[^"]{1,300})"[^>]*>([\s\S]{1,300}?)<\/a>/.exec(seg);
       if (a === null) {
         continue;
       }
@@ -221,13 +240,17 @@ export class WebSearchChannels {
       if (title.length === 0) {
         continue;
       }
+      let href: string = a[1];
+      if (href.indexOf('http') !== 0) {
+        href = href.indexOf('//') === 0 ? `https:${href}` : `https://www.sogou.com${href}`;
+      }
       let summary: string = '';
       const cap: RegExpExecArray | null =
         /class="[^"]*(?:str-text-info|text-layout)[^"]*"[^>]*>([\s\S]{1,600}?)<\/(?:div|span|p)>/.exec(seg);
       if (cap !== null) {
         summary = WebSearchChannels.stripHtml(cap[1]);
       }
-      items.push({ source: '搜狗', title: title, url: a[1], summary: WebSearchChannels.trimSummary(summary) });
+      items.push({ source: '搜狗', title: title, url: href, summary: WebSearchChannels.trimSummary(summary) });
     }
     return items;
   }
