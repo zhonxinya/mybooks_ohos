@@ -93,20 +93,25 @@ void collectAddresses(const std::string &host, int family, std::vector<std::stri
  * 50ms 回退）。本机无 IPv6 出口时 AAAA 连接失败自动落到后面的 A 记录；解析全失败则
  * 不注入，保持 curl 默认行为。curl ≥7.62 内部复制列表，setopt 后即可释放。
  */
-static void applyIpv6FirstResolve(CURL *curl, const std::string &url) {
+/**
+ * 返回的 slist 必须存活到 transfer 结束：curl 的 CURLOPT_RESOLVE 只存指针，
+ * pretransfer 阶段才由 Curl_loadhostpairs 遍历（curl 8.23 实证），setopt 后立即
+ * free 会 use-after-free 崩溃。调用方在请求收尾时 curl_slist_free_all。
+ */
+static struct curl_slist *applyIpv6FirstResolve(CURL *curl, const std::string &url) {
     size_t schemeEnd = url.find("://");
     if (schemeEnd == std::string::npos) {
-        return;
+        return nullptr;
     }
     size_t hostStart = schemeEnd + 3;
     if (hostStart < url.size() && url[hostStart] == '[') {
-        return;  // IPv6 字面量无需解析
+        return nullptr;  // IPv6 字面量无需解析
     }
     size_t hostEnd = url.find_first_of(":/?#", hostStart);
     std::string host = url.substr(hostStart, hostEnd == std::string::npos
         ? std::string::npos : hostEnd - hostStart);
     if (host.empty()) {
-        return;
+        return nullptr;
     }
     std::string port = schemeEnd == 4 ? "80" : "443";  // schemeEnd 即 scheme 长度，4="http"
     if (hostEnd != std::string::npos && hostStart + host.size() < url.size()
@@ -119,19 +124,19 @@ static void applyIpv6FirstResolve(CURL *curl, const std::string &url) {
     collectAddresses(host, AF_INET6, ips);
     collectAddresses(host, AF_INET, ips);
     if (ips.empty()) {
-        return;  // 双族皆挂：交给 curl 默认解析（错误形态保持一致）
+        return nullptr;  // 双族皆挂：交给 curl 默认解析（错误形态保持一致）
     }
     struct curl_slist *list = nullptr;
     for (const auto &ip : ips) {
         list = curl_slist_append(list, (host + ":" + port + ":" + ip).c_str());
     }
     curl_easy_setopt(curl, CURLOPT_RESOLVE, list);
-    curl_slist_free_all(list);
+    return list;
 }
 
-/** 连接层通用选项：线程内连接复用、TCP 调优、超时实现方式。 */
-static void applyConnectionOptions(CURL *curl, const std::string &url) {
-    applyIpv6FirstResolve(curl, url);
+/** 连接层通用选项：线程内连接复用、TCP 调优、超时实现方式。返回需随请求释放的 resolve 列表。 */
+static struct curl_slist *applyConnectionOptions(CURL *curl, const std::string &url) {
+    struct curl_slist *resolveList = applyIpv6FirstResolve(curl, url);
     if (gCurlShare != nullptr) {
         curl_easy_setopt(curl, CURLOPT_SHARE, gCurlShare);
     }
@@ -154,6 +159,7 @@ static void applyConnectionOptions(CURL *curl, const std::string &url) {
     curl_easy_setopt(curl, CURLOPT_EXPECT_100_TIMEOUT_MS, 0L);
     // 当前 libcurl 构建无 nghttp2，HTTP/1.1 是唯一可用版本；显式指定避免协商。
     curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+    return resolveList;
 }
 
 static size_t writeCallback(char *ptr, size_t size, size_t nmemb, void *userdata) {
@@ -354,7 +360,7 @@ HttpResponse HttpClient::request(const HttpRequestOptions &options) {
     // 仅允许 http/https（含重定向），阻断 file:// 等本地协议被利用
     curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
     curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
-    applyConnectionOptions(curl, url);
+    struct curl_slist *resolveList = applyConnectionOptions(curl, url);
 
     struct curl_slist *headers = nullptr;
     headers = curl_slist_append(headers, "Accept: application/json, text/plain, */*");
@@ -417,6 +423,7 @@ HttpResponse HttpClient::request(const HttpRequestOptions &options) {
     // handle 留在本线程复用连接，cookie 改为「有变化才原子落盘」
     persistCookiesIfChanged(curl, cookieDir_);
     curl_slist_free_all(headers);
+    curl_slist_free_all(resolveList);
     return response;
 }
 
@@ -518,7 +525,7 @@ HttpResponse HttpClient::uploadFiles(const std::string &pathOrUrl,
     // 仅允许 http/https（含重定向），阻断本地协议被利用
     curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
     curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
-    applyConnectionOptions(curl, url);
+    struct curl_slist *resolveList = applyConnectionOptions(curl, url);
 
     struct curl_slist *headers = nullptr;
     headers = curl_slist_append(headers, "Accept: application/json, text/plain, */*");
@@ -563,6 +570,7 @@ HttpResponse HttpClient::uploadFiles(const std::string &pathOrUrl,
     persistCookiesIfChanged(curl, cookieDir_);
     curl_mime_free(mime);
     curl_slist_free_all(headers);
+    curl_slist_free_all(resolveList);
     // handle 留在本线程复用连接
     return response;
 }
@@ -611,7 +619,7 @@ HttpResponse HttpClient::downloadToFile(const std::string &pathOrUrl, const std:
     // 仅允许 http/https（含重定向），阻断本地协议被利用
     curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
     curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
-    applyConnectionOptions(curl, url);
+    struct curl_slist *resolveList = applyConnectionOptions(curl, url);
     curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progressCallback);
     curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progressData);
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
@@ -644,6 +652,7 @@ HttpResponse HttpClient::downloadToFile(const std::string &pathOrUrl, const std:
     logRequestMetrics("core-download", "GET", url, curl, code, status);
     persistCookiesIfChanged(curl, cookieDir_);
     curl_slist_free_all(headers);
+    curl_slist_free_all(resolveList);
     // handle 留在本线程复用连接
     return response;
 }
