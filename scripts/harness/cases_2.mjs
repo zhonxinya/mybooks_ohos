@@ -172,6 +172,47 @@ export function register(ctx) {
     toolsState.detail = null;
   });
 
+  test('AiTools：sync_local_shelf——更新本地书架只同步字段绝不下载（#1651 语义钉死）', async () => {
+    toolsState.talebookEnqueues.length = 0;
+    toolsState.syncMetaCalls.length = 0;
+    toolsState.processed = 0;
+    toolsState.downloads = [
+      { bookId: '12', title: '三体（旧快照）' },
+      { bookId: '77', title: '服务端已删的书' },
+      { bookId: 'local_abc', title: '本机导入书' },
+    ];
+    toolsState.bookDetailAsync = async (id) => (id === 12
+      ? { status: 200, body: { book: { title: '三体', authors: ['刘慈欣'], cover: '/cover/12.png' } }, error: '' }
+      : { status: 404, body: null, error: 'not found' });
+    // 单本在架：刷字段、零入队、零调度——这是本修复的核心不变量
+    const one = await RealAiTools.execute('sync_local_shelf', '{"book_id":12}');
+    assert.ok(one.includes('三体') && one.includes('仅字段'), one);
+    assert.deepEqual(toolsState.syncMetaCalls[0],
+      { id: '12', title: '三体', author: '刘慈欣', coverUrl: '/cover/12.png' });
+    assert.equal(toolsState.talebookEnqueues.length, 0, '不得入队任何下载');
+    assert.equal(toolsState.processed, 0, '不得启动下载队列');
+    // 单本不在架：跳过并明说不下载，不写任何记录
+    const miss = await RealAiTools.execute('sync_local_shelf', '{"book_id":99}');
+    assert.ok(miss.includes('不在本地书架') && miss.includes('跳过'), miss);
+    assert.equal(toolsState.syncMetaCalls.length, 1, '未命中本地不得写记录');
+    // 服务端 404 有本地记录：判失败保持原值，不得假报同步成功
+    const fail = await RealAiTools.execute('sync_local_shelf', '{"book_id":77}');
+    assert.ok(fail.includes('刷新失败'), fail);
+    assert.equal(toolsState.syncMetaCalls.length, 1);
+    // 缺省=全量：只处理数字 id；导入书跳过计数、404 计失败
+    toolsState.syncMetaCalls.length = 0;
+    const all = await RealAiTools.execute('sync_local_shelf', '{}');
+    assert.ok(all.includes('已同步本地书架 1 本') && all.includes('1 本服务端信息获取失败') &&
+      all.includes('1 条本机导入'), all);
+    assert.equal(toolsState.talebookEnqueues.length, 0);
+    // 闸门与标签：只读语义，不进写确认
+    assert.equal(RealAiTools.needsConfirm('sync_local_shelf'), false);
+    assert.equal(RealAiTools.toolLabel('sync_local_shelf'), '同步本地书架');
+    toolsState.downloads = [];
+    toolsState.bookDetailAsync = null;
+    toolsState.syncMetaCalls.length = 0;
+  });
+
   test('AiTools：书单全生命周期（list/update 读合并写/delete/remove/非本人拒绝）', async () => {
     const mine = { err: 'ok', booklists: [
       { id: 5, name: '科幻入门', description: 'd1', color: '#1890ff', is_public: true,
@@ -351,7 +392,7 @@ export function register(ctx) {
     assert.equal(deps.state.requests.length, 2);
     const b1 = JSON.parse(deps.state.requests[0].content);
     assert.equal(b1.stream, false);
-    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 34 && b1.tools[0].function.name === 'search_books');
+    assert.ok(Array.isArray(b1.tools) && b1.tools.length === 35 && b1.tools[0].function.name === 'search_books');
     assert.equal(deps.state.requests[0].headers['x-opencode-session'], 'test-uuid-fixed-0001');
     const b2 = JSON.parse(deps.state.requests[1].content);
     const assistant = b2.messages.find((m) => m.role === 'assistant');

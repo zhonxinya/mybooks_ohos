@@ -517,12 +517,12 @@ export function register(ctx) {
     Kit.AiVoiceKit.voiceSwitcher = null;
     // realtimeDefinitions：全集−ask_user+set_voice，set_voice 不占末位（OpenCode 丢末项护栏）
     const defs = RealAiTools.realtimeDefinitions('confirm');
-    assert.equal(defs.length, 34, '34 全集−ask_user（语音无卡片）+set_voice');
+    assert.equal(defs.length, 35, '35 全集−ask_user（语音无卡片）+set_voice');
     assert.equal(defs[defs.length - 1].function.name, 'forget_memory');
     assert.ok(defs.some((d) => d.function.name === 'set_voice'));
     assert.ok(!defs.some((d) => d.function.name === 'ask_user'), 'ask_user 不得暴露给语音');
     const ro = RealAiTools.realtimeDefinitions('readonly');
-    assert.equal(ro.length, 21, 'set_voice 非写工具，只读模式保留（20 只读去 ask_user + set_voice）');
+    assert.equal(ro.length, 22, 'set_voice 非写工具，只读模式保留（21 只读去 ask_user + set_voice）');
     assert.ok(ro[ro.length - 1].function.name !== 'set_voice', '末位护栏：set_voice 不得占尾');
     // 文字回路 dispatch 兜底：误调给出引导而非未知工具
     const guide = await RealAiTools.execute('set_voice', '{"voice":"longanqian"}');
@@ -573,11 +573,11 @@ export function register(ctx) {
   test('语音工具面与文字统一：realtimeDefinitions 并入 MCP 动态工具，mcp_ 调用走统一路由', async () => {
     const mcp = [{ type: 'function', function: { name: 'mcp_es_search', description: '增强搜索', parameters: { type: 'object', properties: {} } } }];
     const defs = RealAiTools.realtimeDefinitions('confirm', mcp);
-    assert.equal(defs.length, 35, '34（含 set_voice）+1 MCP');
+    assert.equal(defs.length, 36, '35（含 set_voice）+1 MCP');
     assert.equal(defs[defs.length - 1].function.name, 'mcp_es_search', 'MCP 并尾；set_voice 护栏位不前移');
     assert.ok(defs.some((d) => d.function.name === 'set_voice'));
     const ro = RealAiTools.realtimeDefinitions('readonly', mcp);
-    assert.equal(ro.length, 22, '21+1 MCP');
+    assert.equal(ro.length, 23, '22+1 MCP');
     // 统一路由：语音 runTool 与文字回路同源 AiService.toolRunFor——mcp_ 前缀进 MCP 容错分支，
     // 不再落 dispatch 的「未知工具」（旧语音链路 mcp 调用必然失败的根因）
     const out = await RealAiService.toolRunFor('mcp_es_search', '{}', 'c1');

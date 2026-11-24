@@ -1,6 +1,7 @@
 /**
  * AI 工具定义区（拆分自 AiTools.ets）：结构化行解析、OpenAI function schema 接口、
- * 34 个工具的 define 常量与 TOOL_DEFS 登记表。本文件无运行时依赖（纯数据 + 小函数）。
+ * 35 个工具的 define 常量与 TOOL_DEFS 登记表（set_voice 不入表，按语音能力动态挂）。
+ * 本文件无运行时依赖（纯数据 + 小函数）。
  */
 /** 工具结果里的一本书（供对话页做结构化列表渲染）。 */
 export interface ToolBookLine {
@@ -117,6 +118,7 @@ export const TOOL_READING_HISTORY: AiToolDefinition = defineTool('reading_histor
 
 export const SONOVEL_LIMIT: number = 8;
 export const TASK_LIST_LIMIT: number = 10;
+export const SHELF_SYNC_LIMIT: number = 50;
 export const BOOKLIST_DEFAULT_COLOR: string = '#1890ff';
 
 export const BOOKLIST_CREATE_PROPS: Record<string, AiToolProperty> = {
@@ -159,9 +161,19 @@ export const ADD_TO_SHELF_PROPS: Record<string, AiToolProperty> = {
 };
 export const TOOL_ADD_TO_SHELF: AiToolDefinition = defineTool('add_to_shelf',
   '把在线书库里的一本书（书籍 id 来自 search_books）下载到本机书架：先查可下载格式，' +
-    '再加入本机下载队列并立即开始，完成后出现在书架。用户说「把某本书加到书架/存到本机」时使用。' +
+    '再加入本机下载队列并立即开始，完成后出现在书架。仅当用户明确要求把某本书下载/存到本机时使用；' +
+    '「更新本地书架」或刷新元数据不是下载请求，不要用本工具（用 sync_local_shelf）。' +
     '与 add_sonovel_task 不同：这本是服务器上已有的成品书。',
   ADD_TO_SHELF_PROPS, ['book_id']);
+export const SYNC_SHELF_PROPS: Record<string, AiToolProperty> = {
+  'book_id': prop('number', '书籍 id（来自 search_books）；留空=同步本地书架里全部已下载的书'),
+};
+export const TOOL_SYNC_LOCAL_SHELF: AiToolDefinition = defineTool('sync_local_shelf',
+  '用服务器数据刷新本机书架里已下载书籍的元数据快照（书名/作者/封面）：只更新本地已有记录的字段，' +
+    '本地不存在的书直接跳过，绝不下载任何文件。用户说「更新本地书架/把书的最新信息同步到本机」时使用。' +
+    '改服务器上的元数据本身用 update_book_meta（其成功后本地自动同步，无需再调本工具）；' +
+    '把服务器已有的新书下载进本机用 add_to_shelf。',
+  SYNC_SHELF_PROPS, []);
 
 export const BOOKLIST_ID_PROP: AiToolProperty = prop('number', '书单 id（来自 list_booklists 返回）');
 export const BOOKLIST_REMOVE_BOOK_PROPS: Record<string, AiToolProperty> = {
@@ -467,6 +479,7 @@ export const TOOL_SET_VOICE: AiToolDefinition = defineTool('set_voice',
 export const TOOL_DEFS: AiToolDefinition[] = [
   TOOL_SEARCH_BOOKS, TOOL_BOOK_DETAIL, TOOL_BOOK_NOTES, TOOL_READING_HISTORY,
   TOOL_SEARCH_SONOVEL, TOOL_ADD_SONOVEL_TASK, TOOL_LIST_DOWNLOAD_TASKS, TOOL_ADD_TO_SHELF,
+  TOOL_SYNC_LOCAL_SHELF,
   TOOL_PUSH_TO_DEVICE, TOOL_READING_STATS, TOOL_SHELF_LIST, TOOL_BOOK_PROGRESS, TOOL_LIST_AI_TOOLS,
   TOOL_PLAN,
   TOOL_CREATE_BOOKLIST, TOOL_ADD_BOOKS_TO_BOOKLIST, TOOL_LIST_BOOKLISTS, TOOL_UPDATE_BOOKLIST,
