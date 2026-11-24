@@ -595,4 +595,32 @@ export function register(ctx) {
     assert.equal(full, '6 本都查完了。');
   });
 
+  test('#1663 百度 SERP 改版兼容：知识卡(result-op)纳入、icon 空标题剔除、organic 行为回归', async () => {
+    const { WebSearchChannels } = await load('RealWebSearchChannels');
+    const icon = String.fromCharCode(0xE600) + String.fromCharCode(0xE6AF); // icon-font 私有区字形
+    const serp = [
+      // 知识卡（百科实体）：无 s-text/h3，标题摘要在 <!--s-data:{...}--> JSON
+      '<div class="result-op c-container new-pmd" srcid="51527" mu="https://baike.baidu.com/item/%E4%B8%89%E4%BD%93/5739303">',
+      '<!--s-data:{"tplname":"sg_kg_entity_san","suiteVideoHeadProps":{"title":{"html":"<em>三体</em> - 百度百科"},',
+      '"abstract":"刘慈欣创作的系列小说"}}-->',
+      '<div class="op-baike-dst">词条</div></div>',
+      // 无有效标题的知识卡（只剩 icon 字符）→ 必须剔除
+      `<div class="result-op c-container" mu="https://baike.baidu.com/item/x/2"><span class="c-icon">${icon}</span></div>`,
+      // 推广榜单：recommend_list 排除
+      '<div class="result c-container" mu="https://www.baidu.com/from=102070i/s?recommend_list=1"><h3><a>t</a></h3></div>',
+      // 普通 organic：s-text 标题 + summary-text_* 摘要（既有行为回归钉）
+      '<div class="result c-container" mu="https://www.douban.com/book/1">',
+      '<!--s-text--><h3><a href="#">三体全集 (<em>豆瓣</em>)</a></h3><!--/s-text-->',
+      '<span class="summary-text_2x9fA">刘慈欣科幻三部曲</span></div>',
+      // 无 mu 的壳卡跳过
+      '<div class="result c-container new-pmd"><h3><a>无直链卡</a></h3></div>',
+    ].join('\n');
+    const hits = WebSearchChannels.parseWebBaidu(serp, 8);
+    assert.equal(hits.length, 2, '知识卡纳入；icon 空标题/榜单/无 mu 全剔除');
+    assert.equal(hits[0].url, 'https://baike.baidu.com/item/%E4%B8%89%E4%BD%93/5739303', '百科直链置前');
+    assert.equal(hits[0].title, '三体 - 百度百科', 's-data html 字段标题（em 剥离）');
+    assert.equal(hits[0].summary, '刘慈欣创作的系列小说', '知识卡摘要取 abstract 字段');
+    assert.equal(hits[1].title, '三体全集 (豆瓣)', 'organic 标题链不变');
+    assert.equal(hits[1].summary, '刘慈欣科幻三部曲');
+  });
 }
