@@ -419,9 +419,13 @@ struct BookListDetailPage {
         fs.mkdirSync(dir, true);
       }
       const dest = `${dir}/booklist-${this.booklistId}.jpg`;
-      const file = fs.openSync(dest, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
-      fs.writeSync(file.fd, data);
-      fs.closeSync(file.fd);
+      // 海报 jpeg 可达 MB 级，写盘走异步 API（批G：#1677 同类补漏）
+      const file = await fs.open(dest, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
+      try {
+        await fs.write(file.fd, data);
+      } finally {
+        await fs.close(file.fd);
+      }
       this.toast(`已保存：${dest}`);
     } catch (error) {
       this.toast(`生成失败：${ErrorFormat.message(error)}`);
