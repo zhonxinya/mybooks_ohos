@@ -1,4 +1,4 @@
-import { PageScaffold, PrimaryButton, SecondaryButton, TextButton } from '../components';
+import { PageScaffold, PrimaryButton, SecondaryButton, TextButton, EmptyState } from '../components';
 import { AiService } from '../services/AiService';
 import { AiBookService, RecommendedBook, ShelfProfile } from '../services/AiBookService';
 import { ShelfApi, BookListResponse } from '../services/ShelfApi';
@@ -261,6 +261,9 @@ struct AiRecommendPage {
           .layoutWeight(1)
           .width('100%')
           .scrollBar(BarState.Off);
+        } else if (!this.loading) {
+          // #1671：生成前/生成后无结果时不再整页空白
+          EmptyState({ message: '暂无推荐', detail: '点上方「生成推荐」让 AI 根据书架偏好算一份' });
         }
       }
       Blank();
