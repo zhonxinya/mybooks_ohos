@@ -45,6 +45,9 @@ node "$ROOT/scripts/check_foreach_key.mjs" --gate
 # 路由注册一致性门禁（批M：'pages/X' 字面量须注册、注册项须有源文件）
 node "$ROOT/scripts/check_routes.mjs" --gate
 
+# 裸 Promise flush 门禁（批N：store.flush() 无 await/.catch/callback=静默丢数据）
+node "$ROOT/scripts/check_flush_promise.mjs" --gate
+
 # 门禁自测（批H 建议 #1836：正则判定灵敏度负向样例，防门禁本身失效）
 node "$ROOT/scripts/gates_selftest.mjs"
 

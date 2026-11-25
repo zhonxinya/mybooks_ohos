@@ -2,7 +2,7 @@
 /**
  * 门禁自测 runner（批H，建议 #1836）
  *
- * 依次跑六个 check_*.mjs 的 --selftest（内嵌负向/豁免样例），证明门禁正则
+ * 依次跑七个 check_*.mjs 的 --selftest（内嵌负向/豁免样例），证明门禁正则
  * 本身仍按设计命中/放行——批G 的状态色门禁首版豁免正则太窄误报 8 处，
  * 全靠手工临时注入才暴露；固化成每次构建前自动跑。
  *
@@ -20,6 +20,7 @@ const GATES = [
   'check_hardcoded_status_color.mjs',
   'check_foreach_key.mjs',
   'check_routes.mjs',
+  'check_flush_promise.mjs',
 ];
 
 let fails = 0;
