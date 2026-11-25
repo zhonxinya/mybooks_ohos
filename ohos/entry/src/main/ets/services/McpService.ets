@@ -2,6 +2,7 @@ import { rcp } from '@kit.RemoteCommunicationKit';
 import { util } from '@kit.ArkTS';
 import { AiToolDefinition, AiToolFunctionBody, AiToolParameters } from './AiToolsDefs';
 import { TalebookService } from './TalebookService';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * MCP 客户端（Streamable HTTP / JSON-RPC 2.0）。
@@ -561,7 +562,7 @@ export class McpService {
         res as Record<string, Object> : null;
       return reply;
     } catch (error) {
-      reply.error = error instanceof Error ? error.message : `${error}`;
+      reply.error = ErrorFormat.message(error);
       return reply;
     } finally {
       session.close();

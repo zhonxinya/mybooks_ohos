@@ -213,7 +213,7 @@ struct ReadingHistoryPage {
       }));
       this.stats = stats;
     } catch (error) {
-      this.onlineError = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
+      this.onlineError = ErrorFormat.message(error);
     } finally {
       this.loadingOnline = false;
     }

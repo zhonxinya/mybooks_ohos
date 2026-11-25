@@ -17,6 +17,7 @@ import { McpService } from './McpService';
 import type { AiMessage, AiConfig, LlmSearchResult } from './AiService';
 import { KEY_SESSION_ID, TIMEOUT_MS, MAX_TOOL_ROUNDS } from './AiServiceConfig';
 import { AiServiceConfig } from './AiServiceConfig';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 export class AiServiceHttp {
   static async fetchModels(providerId: string, baseUrl: string, apiKeyInput: string): Promise<string[]> {
@@ -45,7 +46,7 @@ export class AiServiceHttp {
       statusCode = response.statusCode;
       text = AiServiceHttp.responseBodyText(response.body);
     } catch (error) {
-      throw new Error(AiServiceHttp.friendlyMessage(error instanceof Error ? error.message : String(error)));
+      throw new Error(AiServiceHttp.friendlyMessage(ErrorFormat.message(error)));
     } finally {
       session.close();
     }
@@ -172,7 +173,7 @@ export class AiServiceHttp {
       res.ok = true;
       return res;
     } catch (error) {
-      res.error = error instanceof Error ? error.message : `${error}`;
+      res.error = ErrorFormat.message(error);
       return res;
     }
   }

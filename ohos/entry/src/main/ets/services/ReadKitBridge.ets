@@ -10,6 +10,7 @@ import {
 } from '../common/Models';
 import { ReadKitEventChannel, READKIT_NATIVE_EVENT_ID } from './ReadKitEventChannel';
 import { TalebookCoreService } from './TalebookCoreService';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 export const READKIT_PROTOCOL_VERSION: number = 1;
 
@@ -203,7 +204,7 @@ export class ReadKitBridge {
         ReadKitBridge.listeners[i](payload);
       } catch (e) {
         hilog.error(0x0000, 'ReadKitBridge', 'listener error: %{public}s',
-          e instanceof Error ? e.message : String(e));
+          ErrorFormat.message(e));
       }
     }
   }

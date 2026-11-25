@@ -61,7 +61,7 @@ struct NovelMetaSourcePage {
       this.finish(true, `${task}成功，共 ${count} 条书源`);
       this.toast(`${task}成功`);
     } catch (error) {
-      const message: string = error instanceof Error ? error.message : String(error);
+      const message: string = ErrorFormat.message(error);
       this.finish(false, `${task}失败：${message}`);
     } finally {
       this.busy = false;
@@ -115,7 +115,7 @@ struct NovelMetaSourcePage {
         fs.closeSync(file.fd);
       }
     } catch (error) {
-      const message: string = error instanceof Error ? error.message : String(error);
+      const message: string = ErrorFormat.message(error);
       this.finish(false, `导入失败：读取文件失败（${message}）`);
       return '';
     }

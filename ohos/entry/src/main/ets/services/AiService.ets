@@ -20,6 +20,7 @@ import type { GatewayMessage, GatewayToolCall, GatewayReply, AskPayload } from '
 import type { AiSessionHolder } from './AiServiceHttp';
 import { mergeUsage, parseUsage } from './AiChatModel';
 import type { AiTokenUsage, ToolTraceRound } from './AiChatModel';
+import { ErrorFormat } from '../utils/ErrorFormat';
 export { CONTEXT_LENGTH_OPTIONS } from './AiServiceConfig';
 
 /**
@@ -362,7 +363,7 @@ export class AiService {
         finish(AiServiceHttp.friendlyMessage(error.message));
       });
     } catch (error) {
-      finish(AiServiceHttp.friendlyMessage(error instanceof Error ? error.message : String(error)));
+      finish(AiServiceHttp.friendlyMessage(ErrorFormat.message(error)));
       return handle;
     }
 
@@ -419,7 +420,7 @@ export class AiService {
       statusCode = response.statusCode;
       text = AiServiceHttp.responseText(response.body);
     } catch (error) {
-      throw new Error(AiServiceHttp.friendlyMessage(error instanceof Error ? error.message : String(error)));
+      throw new Error(AiServiceHttp.friendlyMessage(ErrorFormat.message(error)));
     }
     if (statusCode < 200 || statusCode >= 300) {
       throw new Error(AiServiceHttp.httpErrorText(statusCode, text));

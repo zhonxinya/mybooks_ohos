@@ -1,5 +1,6 @@
 import { PageScaffold } from '../components';
 import { AiService, AiProviderPreset } from '../services/AiService';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * 服务商管理（并行形态，参考 zcode_ohos 的供应商清单页）。
@@ -84,7 +85,7 @@ struct AiProvidersPage {
       const ids: string[] = await AiService.fetchModels(id, AiService.baseUrlFor(id), '');
       this.toast(`连接成功，${ids.length} 个模型`);
     } catch (error) {
-      this.toast(error instanceof Error ? error.message : String(error));
+      this.toast(ErrorFormat.message(error));
     } finally {
       this.testingId = '';
       this.all = this.all.slice();
@@ -123,7 +124,7 @@ struct AiProvidersPage {
       this.reload();
       this.toast(`已添加「${preset.name}」`);
     } catch (error) {
-      this.toast(error instanceof Error ? error.message : String(error));
+      this.toast(ErrorFormat.message(error));
     }
   }
 

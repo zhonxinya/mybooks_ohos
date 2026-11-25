@@ -104,7 +104,7 @@ struct BookListPage {
       this.hasMore = PaginationHelper.computeHasMore(fetched.length);
     } catch (error) {
       if (reset) {
-        this.errorMessage = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
+        this.errorMessage = ErrorFormat.message(error);
       }
     } finally {
       this.loading = false;

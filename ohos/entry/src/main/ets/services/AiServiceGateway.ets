@@ -15,6 +15,7 @@ import { AiServiceConfig, MAX_TOOL_ROUNDS, MAX_GATEWAY_ATTEMPTS, MAX_TOOL_SLOTS,
 import { AiServiceHttp } from './AiServiceHttp';
 import { mergeUsage, parseUsage, TRACE_FULL_ROUNDS } from './AiChatModel';
 import type { AiTokenUsage, ToolTraceCall, ToolTraceRound } from './AiChatModel';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 export class AiServiceGateway {
   /**
@@ -133,7 +134,7 @@ export class AiServiceGateway {
           statusCode = response.statusCode;
           text = AiServiceHttp.responseBodyText(response.body);
         } catch (error) {
-          lastError = AiServiceHttp.friendlyMessage(error instanceof Error ? error.message : String(error));
+          lastError = AiServiceHttp.friendlyMessage(ErrorFormat.message(error));
           continue;
         }
         if (statusCode >= 200 && statusCode < 300) {

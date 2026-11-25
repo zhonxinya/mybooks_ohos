@@ -282,7 +282,7 @@ struct AiVoiceCallPage {
     } catch (error) {
       hilog.error(0x0000, TAG, 'realtime connect: %{public}s', `${error}`);
       this.st = ST_IDLE;
-      this.tip = error instanceof Error ? error.message : `连接失败：${ErrorFormat.message(error)}`;
+      this.tip = `连接失败：${ErrorFormat.message(error)}`;
     }
   }
 

@@ -8,6 +8,9 @@
  *  - 块式 `catch (X) { …${X}… }`（花括号深度定界，深度自入口后计）
  *  - 链式 `.catch((X: T) => …${X}…)`（单行体=本行；块体=深度定界）
  *  - hilog/console 行豁免（日志面向开发者，保留原始值）
+ *  - 三元式（#1827 扩展，全目录含 services/utils）：
+ *    `X instanceof Error ? X.message : String(X)|X|`${X}`|`${ErrorFormat.message(X)}``
+ *    ——兜底绕过归一化；自定义文案兜底（: '导入失败'）是有意 UX，放行。
  *
  * 用法：node scripts/check_error_toast.mjs --gate   // 违规 exit 1
  *       node scripts/check_error_toast.mjs          // 只报告
@@ -20,16 +23,21 @@ const ROOT = process.argv.slice(2).find((a) => !a.startsWith('--')) ??
   new URL('..', import.meta.url).pathname;
 const ETS = join(ROOT, 'ohos/entry/src/main/ets');
 const DIRS = ['pages', 'components'];
+const TERNARY_DIRS = ['pages', 'components', 'services', 'utils'];
 
 const RE_BLOCK = /\bcatch\s*\(\s*([A-Za-z_$][\w$]*)\s*(?::[^)]*)?\s*\)\s*\{/;
 const RE_ARROW = /\.catch\s*\(\s*\(\s*([A-Za-z_$][\w$]*)\s*(?::[^)]*)?\s*\)\s*=>/;
+const RE_TERNARY = /\b([A-Za-z_$][\w$]*)\s+instanceof\s+Error\s*\?\s*\1\.message\s*:\s*(?:String\(\1\)|\1(?![.\w$])|`\$\{\1\}`|`\$\{ErrorFormat\.message\(\1\)\}`)/;
 
-function scanFile(path) {
+function scanFile(path, ternary) {
   const lines = readFileSync(path, 'utf8').split('\n');
   const hits = [];
   let varName = null, depth = 0, inline = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (ternary && RE_TERNARY.test(line)) {
+      hits.push(`${posix.relative(ETS, path)}:${i + 1}: ${line.trim().slice(0, 100)}`);
+    }
     let startFrom = 0;
     if (varName === null) {
       const mB = line.match(RE_BLOCK);
@@ -43,7 +51,7 @@ function scanFile(path) {
         else { inline = true; }
       }
     }
-    if (varName !== null && !/hilog\.|console\./.test(line)) {
+    if (!ternary && varName !== null && !/hilog\.|console\./.test(line)) {
       const re = new RegExp('\\$\\{' + varName + '\\}(?!\\.)', 'g');
       if (re.test(line)) hits.push(`${posix.relative(ETS, path)}:${i + 1}: ${line.trim().slice(0, 100)}`);
     }
@@ -64,7 +72,16 @@ for (const d of DIRS) {
   const dir = join(ETS, d);
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
-    if (statSync(p).isFile() && name.endsWith('.ets')) all.push(...scanFile(p));
+    if (statSync(p).isFile() && name.endsWith('.ets')) all.push(...scanFile(p, false));
+  }
+}
+for (const d of TERNARY_DIRS) {
+  const dir = join(ETS, d);
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    if (statSync(p).isFile() && name.endsWith('.ets') && name !== 'ErrorFormat.ets') {
+      all.push(...scanFile(p, true));
+    }
   }
 }
 if (all.length === 0) {

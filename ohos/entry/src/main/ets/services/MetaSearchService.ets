@@ -1,5 +1,6 @@
 import { rcp } from '@kit.RemoteCommunicationKit';
 import { util } from '@kit.ArkTS';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * 客户端直连的书籍元数据搜索（当前唯一站点：豆瓣读书）。
@@ -108,7 +109,7 @@ export class MetaSearchService {
     try {
       html = await MetaSearchService.fetchText(`https://book.douban.com/subject/${id}/`);
     } catch (error) {
-      empty.error = `详情页获取失败：${error instanceof Error ? error.message : String(error)}`;
+      empty.error = `详情页获取失败：${ErrorFormat.message(error)}`;
       return empty;
     }
     const titleMatch = html.match(/property="v:itemreviewed">([^<]+)</);

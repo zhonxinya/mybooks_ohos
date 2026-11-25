@@ -580,6 +580,10 @@ export function stagePage(name) {
     if (path === '../services/AiPersona') {
       return `import { AiPersona } from './RealAiPersona.ts';\n`;
     }
+    // #1827 批E：ErrorFormat 纯模块已 stage 为桩内 ErrorFormat.ts（paths.read 已把路径改写为 './ErrorFormat.ts'）
+    if (path === './ErrorFormat.ts') {
+      return `import { ${clause} } from './ErrorFormat.ts';\n`;
+    }
     if (path === '../services/AiChatStore') {
       return "import { AiChatStore } from './RealAiChatStore.ts';\n" +
         "import type { ChatActivity, ChatBubble } from './RealAiChatStore.ts';\n";

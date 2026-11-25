@@ -20,6 +20,7 @@ import { AiToolsExecShelf } from './AiToolsExecShelf';
 import { TOOL_DEFS, TOOL_SET_VOICE, ToolBookLine, AiToolDefinition, AiToolGroup, AiToolItem,
   formatPlanList } from './AiToolsDefs';
 import { McpService, McpServer } from './McpService';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * AI 助手的本地工具集（OpenAI function calling 协议）。
@@ -178,7 +179,7 @@ export class AiTools {
       return `已新增 MCP 服务「${server.label}」（${server.url}），${keyNote}。` +
         '下一轮对话会自动挂载其工具；若未出现可在设置页 MCP 档点「立即探测挂载状态」查看原因。';
     } catch (error) {
-      return `新增 MCP 服务失败：${error instanceof Error ? error.message : `${error}`}`;
+      return `新增 MCP 服务失败：${ErrorFormat.message(error)}`;
     }
   }
 
@@ -499,7 +500,7 @@ export class AiTools {
       try {
         return await AiTools.dispatch(name, argsJson, callId);
       } catch (error) {
-        const msg: string = error instanceof Error ? error.message : `${error}`;
+        const msg: string = ErrorFormat.message(error);
         const transient: boolean = AiTools.isTransientError(msg);
         if (transient && attempt === 0 && !AiTools.needsConfirm(name)) {
           continue;

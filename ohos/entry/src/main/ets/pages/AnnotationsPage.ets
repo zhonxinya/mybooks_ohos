@@ -76,7 +76,7 @@ struct AnnotationsPage {
       this.visibleCount = PaginationConstants.PAGE_SIZE;
       this.applyFilter();
     } catch (error) {
-      this.loadError = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
+      this.loadError = ErrorFormat.message(error);
     } finally {
       this.loading = false;
       this.lastLoadTime = Date.now();
@@ -170,7 +170,7 @@ struct AnnotationsPage {
       this.exportMeta = `${result.count} 条 · ${result.schema} · ${result.exportedAt}`;
       this.toast(`已导出 ${result.count} 条标注`);
     } catch (error) {
-      this.toast(`导出失败：${error instanceof Error ? error.message : error}`);
+      this.toast(`导出失败：${ErrorFormat.message(error)}`);
     } finally {
       this.exporting = false;
     }

@@ -15,6 +15,7 @@ import { BrowserRenderService } from './BrowserRenderService';
 import { AiService, AiConfig, LlmSearchResult, LlmSearchSource } from './AiService';
 import { AiToolsCore } from './AiToolsCore';
 import { AiToolsExecShelf } from './AiToolsExecShelf';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 export class AiToolsExecMeta {
   /**
@@ -255,7 +256,7 @@ export class AiToolsExecMeta {
           sections.push(`豆瓣没有「${kw}」的匹配。`);
         }
       } catch (error) {
-        sections.push(`豆瓣检索失败：${error instanceof Error ? error.message : String(error)}`);
+        sections.push(`豆瓣检索失败：${ErrorFormat.message(error)}`);
       }
     }
     if (query.length > 0) {

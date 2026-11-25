@@ -4,6 +4,7 @@ import { MarkdownText } from '../components/MarkdownText';
 import { AiService } from '../services/AiService';
 import { AiBookService, BookContext, MetaSuggestion } from '../services/AiBookService';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * 书籍 AI 面板：摘要 / 书评 / 元数据建议。
@@ -75,7 +76,7 @@ struct AiBookPanelPage {
         this.suggestion = await AiBookService.suggestMeta(this.context());
       }
     } catch (error) {
-      this.errorText = error instanceof Error ? error.message : String(error);
+      this.errorText = ErrorFormat.message(error);
     } finally {
       this.loading = false;
     }

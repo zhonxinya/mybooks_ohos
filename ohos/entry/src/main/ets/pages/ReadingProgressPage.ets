@@ -93,7 +93,7 @@ struct ReadingProgressPage {
         await this.loadAttributes();
       }
     } catch (error) {
-      this.loadError = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
+      this.loadError = ErrorFormat.message(error);
     } finally {
       this.loading = false;
     }

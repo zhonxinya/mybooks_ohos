@@ -87,7 +87,7 @@ struct ShelfPage {
       this.total = rsp.total ?? this.shelfBooks.length;
       this.applyPage();
     } catch (error) {
-      this.handleLoadFailure(reset, error instanceof Error ? error.message : `${ErrorFormat.message(error)}`);
+      this.handleLoadFailure(reset, ErrorFormat.message(error));
     } finally {
       this.loading = false;
       this.loadingMore = false;

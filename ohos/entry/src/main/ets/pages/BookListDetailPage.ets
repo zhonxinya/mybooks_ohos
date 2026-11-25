@@ -200,7 +200,7 @@ struct BookListDetailPage {
       this.syncCoverRows();
     } catch (error) {
       if (reset) {
-        this.errorMessage = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
+        this.errorMessage = ErrorFormat.message(error);
       } else {
         this.toast('加载更多失败');
         this.currentPage = Math.max(1, this.currentPage - 1);

@@ -6,6 +6,7 @@ import { TalebookService, ApiEnvelope } from '../services/TalebookService';
 import { AppRouter } from '../utils/AppRouter';
 import { BookItem, parseBookItem } from '../services/BookModels';
 import { hasSameBook } from '../utils/LibraryMatch';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * AI 书单推荐：用书架偏好生成推荐，再拿书名去服务端书库检索。
@@ -124,7 +125,7 @@ struct AiRecommendPage {
       void this.matchAll(result, requestId);
     } catch (error) {
       if (requestId === this.requestId) {
-        this.errorText = error instanceof Error ? error.message : String(error);
+        this.errorText = ErrorFormat.message(error);
       }
     } finally {
       this.loading = false;
