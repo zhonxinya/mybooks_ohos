@@ -651,4 +651,41 @@ export function register(ctx) {
     assert.equal(hits[1].url, 'https://m.sogou.com/card', '协议相对补 https');
     assert.equal(hits[2].url, 'https://baike.sogou.com/v1.htm', '绝对链行为不变');
   });
+
+  // 建议 #1499（批H）：工具登记表全局一致性哨兵。散点 needsConfirm 断言只覆盖逐个工具，
+  // 登记表整体脱节（typo/删工具不删登记/新工具漏分组）必须一把网兜住——
+  // save_memory 漏登记先例即属此类：单点断言全绿，闸门照样裸奔。
+  test('AiTools：登记表一致性哨兵（WRITE_TOOLS/execute 分支/TOOL_GROUPS 三链双向）', () => {
+    const src = read('services/AiTools.ets');
+    const names = RealAiTools.definitions('confirm').map((d) => d.function.name);
+    assert.ok(names.length >= 30, `TOOL_DEFS 仅提取到 ${names.length} 个，登记表疑似破损`);
+    // ① WRITE_TOOLS ⊆ TOOL_DEFS：typo/死登记=needsConfirm 恒 false=写工具绕过确认
+    const wm = src.match(/WRITE_TOOLS: string\[\] =\s*\[([\s\S]*?)\]/);
+    assert.ok(wm !== null, 'WRITE_TOOLS 静态提取失败（字段形态改动需同步本哨兵）');
+    const writes = [...wm[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
+    assert.ok(writes.length >= 13, `WRITE_TOOLS 仅提取到 ${writes.length} 个，疑似截断`);
+    for (const w of writes) {
+      assert.ok(names.includes(w), `WRITE_TOOLS "${w}" 不在 TOOL_DEFS（typo/死登记=确认闸门静默失效）`);
+    }
+    // ② TOOL_DEFS 每项必须有 execute 分支：缺=模型可调「定义存在但永远未知工具」的死定义
+    for (const n of names) {
+      assert.ok(src.includes(`name === '${n}'`), `TOOL_DEFS "${n}" 缺 execute 分支（死定义）`);
+    }
+    // ③ TOOL_GROUPS 与 TOOL_DEFS 双向：缺分组=设置页目录漏展示（catalogGroups 只列分组项），
+    //    分组死项=目录幽灵行
+    const gm = src.match(/TOOL_GROUPS: string\[\]\[\] =\s*\[([\s\S]*?)\n  \];/);
+    assert.ok(gm !== null, 'TOOL_GROUPS 静态提取失败');
+    const grouped = new Set([...gm[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]));
+    for (const n of names) {
+      assert.ok(grouped.has(n), `TOOL_DEFS "${n}" 不在 TOOL_GROUPS（设置页/工具目录缺该工具）`);
+    }
+    for (const g of grouped) {
+      assert.ok(names.includes(g), `TOOL_GROUPS "${g}" 不在 TOOL_DEFS（目录死项）`);
+    }
+    // ④ readonly 模式必须滤净写工具（definitions 过滤链回归）
+    const ro = RealAiTools.definitions('readonly').map((d) => d.function.name);
+    for (const w of writes) {
+      assert.ok(!ro.includes(w), `readonly 模式仍暴露写工具 "${w}"`);
+    }
+  });
 }

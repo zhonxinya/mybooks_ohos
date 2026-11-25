@@ -23,6 +23,27 @@ const RE = /'#(?:E84026|B26A00|64BB5C|007DFF)'/;
 // 系统对话框按钮：同行同时出现 text: 与 color:'状态色' 即按钮数组形态（含三元文案与 push 写法）
 const RE_SYSTEM_BUTTON = /\btext:\s*.*\bcolor:\s*'#(?:E84026|B26A00|64BB5C|007DFF)'/;
 
+// --selftest（批H，建议 #1836）：命中/豁免两正则的形态样例自证
+// （批G 首版豁免正则太窄误报 8 处，即缺这一步）
+if (process.argv.includes('--selftest')) {
+  const samples = [
+    { line: "fontColor: '#E84026',", want: 'hit', desc: '直写 error 色命中' },
+    { line: "return '#64BB5C';", want: 'hit', desc: 'success 色兜底命中' },
+    { line: "{ text: '删除', color: '#E84026' }", want: 'exempt', desc: '系统按钮字面量豁免' },
+    { line: "buttons.push({ text: del ? '确认删除' : '取消', color: '#B26A00' });", want: 'exempt', desc: 'push+三元文案豁免' },
+    { line: "fontColor: '#FF9500',", want: 'pass', desc: '非令牌值（下载中亮橙）放行' },
+    { line: "fontColor: $r('app.color.error'),", want: 'pass', desc: '令牌写法放行' },
+  ];
+  let fails = 0;
+  for (const s of samples) {
+    const got = RE.test(s.line) ? (RE_SYSTEM_BUTTON.test(s.line) ? 'exempt' : 'hit') : 'pass';
+    if (got !== s.want) { fails++; console.log(`  [FAIL] ${s.desc}：期望 ${s.want}，实得 ${got}`); }
+  }
+  console.log(fails === 0 ? `状态色门禁 selftest 通过（${samples.length}/${samples.length}）`
+    : `状态色门禁 selftest 失败 ${fails} 项`);
+  process.exit(fails === 0 ? 0 : 1);
+}
+
 function walk(dir, out) {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);

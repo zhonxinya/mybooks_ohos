@@ -29,14 +29,13 @@ const RE_BLOCK = /\bcatch\s*\(\s*([A-Za-z_$][\w$]*)\s*(?::[^)]*)?\s*\)\s*\{/;
 const RE_ARROW = /\.catch\s*\(\s*\(\s*([A-Za-z_$][\w$]*)\s*(?::[^)]*)?\s*\)\s*=>/;
 const RE_TERNARY = /\b([A-Za-z_$][\w$]*)\s+instanceof\s+Error\s*\?\s*\1\.message\s*:\s*(?:String\(\1\)|\1(?![.\w$])|`\$\{\1\}`|`\$\{ErrorFormat\.message\(\1\)\}`)/;
 
-function scanFile(path, ternary) {
-  const lines = readFileSync(path, 'utf8').split('\n');
+function scanLines(lines, label, ternary) {
   const hits = [];
   let varName = null, depth = 0, inline = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (ternary && RE_TERNARY.test(line)) {
-      hits.push(`${posix.relative(ETS, path)}:${i + 1}: ${line.trim().slice(0, 100)}`);
+      hits.push(`${label}:${i + 1}: ${line.trim().slice(0, 100)}`);
     }
     let startFrom = 0;
     if (varName === null) {
@@ -53,7 +52,7 @@ function scanFile(path, ternary) {
     }
     if (!ternary && varName !== null && !/hilog\.|console\./.test(line)) {
       const re = new RegExp('\\$\\{' + varName + '\\}(?!\\.)', 'g');
-      if (re.test(line)) hits.push(`${posix.relative(ETS, path)}:${i + 1}: ${line.trim().slice(0, 100)}`);
+      if (re.test(line)) hits.push(`${label}:${i + 1}: ${line.trim().slice(0, 100)}`);
     }
     if (varName !== null) {
       if (inline) { varName = null; inline = false; }
@@ -65,6 +64,31 @@ function scanFile(path, ternary) {
     }
   }
   return hits;
+}
+
+function scanFile(path, ternary) {
+  return scanLines(readFileSync(path, 'utf8').split('\n'), posix.relative(ETS, path), ternary);
+}
+
+// --selftest（批H，建议 #1836）：内嵌负向/豁免样例自证判定灵敏度，
+// 替代新增门禁时的一次性手工注入；规则改动后必须重跑。
+if (process.argv.includes('--selftest')) {
+  const samples = [
+    { lines: ['catch (e) {', '  this.errorText = `失败：${e}`;', '}'], ternary: false, want: 1, desc: '块式裸插值命中' },
+    { lines: ['catch (e) {', '  hilog.error(0, TAG, `raw ${e}`);', '}'], ternary: false, want: 0, desc: 'hilog 行豁免' },
+    { lines: ['catch (e) {', '  this.errorText = ErrorFormat.message(e);', '}'], ternary: false, want: 0, desc: '归一化写法放行' },
+    { lines: ['const m = e instanceof Error ? e.message : String(e);'], ternary: true, want: 1, desc: '三元式 String 兜底命中' },
+    { lines: ['return err instanceof Error ? err.message : `${err}`;'], ternary: true, want: 1, desc: '三元式反引号兜底命中' },
+    { lines: ['this.errorText = e instanceof Error ? e.message : \'导入失败\';'], ternary: true, want: 0, desc: '自定义文案兜底放行' },
+  ];
+  let fails = 0;
+  for (const s of samples) {
+    const got = scanLines(s.lines, 'fixture', s.ternary).length;
+    if (got !== s.want) { fails++; console.log(`  [FAIL] ${s.desc}：期望 ${s.want} 命中，实得 ${got}`); }
+  }
+  console.log(fails === 0 ? `错误呈现门禁 selftest 通过（${samples.length}/${samples.length}）`
+    : `错误呈现门禁 selftest 失败 ${fails} 项`);
+  process.exit(fails === 0 ? 0 : 1);
 }
 
 const all = [];
