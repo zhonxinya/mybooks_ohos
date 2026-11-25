@@ -11,6 +11,7 @@ import {
 } from '../services/TalebookApi';
 import { BookUploadService } from '../services/BookUploadService';
 import { TalebookApiBooks } from '../services/TalebookApiBooks';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -156,7 +157,7 @@ struct UserSettingsPage {
       this.confirmPassword = '';
       TalebookService.refreshUserProfile();
     } catch (error) {
-      this.toast(`保存失败：${error}`);
+      this.toast(`保存失败：${ErrorFormat.message(error)}`);
     } finally {
       this.saving = false;
     }
@@ -192,7 +193,7 @@ struct UserSettingsPage {
         this.toast(message);
       }
     } catch (error) {
-      this.toast(`头像上传失败：${error}`);
+      this.toast(`头像上传失败：${ErrorFormat.message(error)}`);
     } finally {
       this.uploadingAvatar = false;
     }

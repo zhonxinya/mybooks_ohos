@@ -14,6 +14,7 @@ import { TalebookService } from '../services/TalebookService';
 import { AudioPlaybackService } from '../services/AudioPlaybackService';
 import { AppRouter } from '../utils/AppRouter';
 import { TalebookApiBooks } from '../services/TalebookApiBooks';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 interface VoiceOption {
   voiceName: string;
@@ -156,7 +157,7 @@ struct AudioFilesPage {
         ? (rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '暂无音频文件')
         : '';
     } catch (e) {
-      this.errorMessage = `${e}`;
+      this.errorMessage = `${ErrorFormat.message(e)}`;
       this.files = [];
     }
   }
@@ -264,7 +265,7 @@ struct AudioFilesPage {
       this.schedulePoll();
       await this.refreshConversion(false);
     } catch (e) {
-      this.toast(`启动转换失败：${e}`);
+      this.toast(`启动转换失败：${ErrorFormat.message(e)}`);
     } finally {
       this.busy = false;
     }
@@ -286,7 +287,7 @@ struct AudioFilesPage {
       this.conversionHint = rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '已取消转换';
       this.toast(this.conversionHint);
     } catch (e) {
-      this.toast(`取消失败：${e}`);
+      this.toast(`取消失败：${ErrorFormat.message(e)}`);
     } finally {
       this.busy = false;
     }
@@ -310,7 +311,7 @@ struct AudioFilesPage {
       this.toast(msg);
       await this.loadFiles();
     } catch (e) {
-      this.toast(`购买失败：${e}`);
+      this.toast(`购买失败：${ErrorFormat.message(e)}`);
     } finally {
       this.busy = false;
     }
@@ -338,7 +339,7 @@ struct AudioFilesPage {
         ? '已生成打包下载链接（见页面提示）'
         : hint);
     } catch (e) {
-      this.toast(`打包失败：${e}`);
+      this.toast(`打包失败：${ErrorFormat.message(e)}`);
     } finally {
       this.busy = false;
     }
@@ -381,7 +382,7 @@ struct AudioFilesPage {
       this.errorMessage = '暂无音频文件';
       this.actionHint = '';
     } catch (e) {
-      this.toast(`删除失败：${e}`);
+      this.toast(`删除失败：${ErrorFormat.message(e)}`);
     } finally {
       this.busy = false;
     }

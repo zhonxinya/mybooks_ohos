@@ -6,6 +6,7 @@ import {
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -80,7 +81,7 @@ struct BookbarnAcceptorToolPage {
       this.applyStatusData(rsp.data);
       this.setMsg(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '状态已刷新', false);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     }
   }
 
@@ -107,7 +108,7 @@ struct BookbarnAcceptorToolPage {
       this.toast(this.message);
     } catch (e) {
       this.enableReceiving = !enabled;
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -131,7 +132,7 @@ struct BookbarnAcceptorToolPage {
       this.toast(this.message);
       await this.loadStatus();
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -161,7 +162,7 @@ struct BookbarnAcceptorToolPage {
       this.setMsg(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : `已设置收取小时为 ${hour}`, false);
       this.toast(this.message);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }

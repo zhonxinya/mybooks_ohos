@@ -8,6 +8,7 @@ import {
 import { BookUploadService, PickedBookFile } from '../services/BookUploadService';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** 状态轮询间隔（与导入管理页保持一致） */
 const POLL_INTERVAL_MS: number = 3000;
@@ -97,7 +98,7 @@ struct AdminBatchAddPage {
         this.schedulePoll();
       }
     } catch (e) {
-      this.setMsg(`初始化失败：${e}`, true);
+      this.setMsg(`初始化失败：${ErrorFormat.message(e)}`, true);
     } finally {
       this.loading = false;
     }
@@ -122,7 +123,7 @@ struct AdminBatchAddPage {
       this.filePath = file.localPath;
       this.setMsg('', false);
     } catch (e) {
-      this.setMsg(`选择文件失败：${e}`, true);
+      this.setMsg(`选择文件失败：${ErrorFormat.message(e)}`, true);
     } finally {
       this.picking = false;
     }
@@ -159,7 +160,7 @@ struct AdminBatchAddPage {
       this.running = true;
       this.schedulePoll();
     } catch (e) {
-      this.setMsg(`启动失败：${e}`, true);
+      this.setMsg(`启动失败：${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -198,7 +199,7 @@ struct AdminBatchAddPage {
         this.statusHint = '';
       }
     } catch (e) {
-      this.statusHint = `状态刷新失败：${e}`;
+      this.statusHint = `状态刷新失败：${ErrorFormat.message(e)}`;
     } finally {
       if (continuePoll) {
         this.schedulePoll();

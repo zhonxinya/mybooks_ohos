@@ -14,6 +14,7 @@ import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper
 import { BookViewMode } from '../utils/BookViewMode';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 interface BookSummary {
   id: number;
@@ -250,7 +251,7 @@ export struct BooksTabPage {
       }
     } catch (error) {
       if (reset) {
-        this.errorMessage = error instanceof Error ? error.message : `${error}`;
+        this.errorMessage = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
         this.emptyActionLabel = TalebookService.hasAuthCredentials() ? '' : '去配置账号';
       }
     } finally {

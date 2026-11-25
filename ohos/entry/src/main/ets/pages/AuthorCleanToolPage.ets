@@ -9,6 +9,7 @@ import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 import { TalebookApiBooks } from '../services/TalebookApiBooks';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -115,7 +116,7 @@ struct AuthorCleanToolPage {
         this.setMsg(`找到 ${this.suggestions.length} 个作者`, false);
       }
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
       this.suggestions = [];
     } finally {
       this.busy = false;
@@ -177,7 +178,7 @@ struct AuthorCleanToolPage {
       }
       this.setMsg(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '操作成功', false);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }

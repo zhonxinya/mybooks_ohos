@@ -13,6 +13,7 @@ import {
 } from '../services/BookSourceApi';
 import { PaginationHelper } from '../utils/PaginationHelper';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** 书源列表每页数量（上游上限 200，默认 50）。 */
 const PAGE_SIZE: number = 50;
@@ -223,10 +224,10 @@ struct BookSourceManagePage {
       this.hasMore = PaginationHelper.computeHasMore(fetched.length, PAGE_SIZE);
     } catch (e) {
       if (reset) {
-        this.loadError = `加载书源失败：${e}`;
+        this.loadError = `加载书源失败：${ErrorFormat.message(e)}`;
       } else {
         this.currentPageRollback();
-        this.toast(`加载更多失败：${e}`);
+        this.toast(`加载更多失败：${ErrorFormat.message(e)}`);
       }
     } finally {
       this.loading = false;
@@ -282,7 +283,7 @@ struct BookSourceManagePage {
       this.sources = next;
       this.toast(enabled ? '已启用' : '已停用');
     } catch (e) {
-      this.toast(`切换失败：${e}`);
+      this.toast(`切换失败：${ErrorFormat.message(e)}`);
       void this.load(true);
     }
   }
@@ -334,7 +335,7 @@ struct BookSourceManagePage {
       this.toast(`已删除 ${rsp.deleted !== undefined ? rsp.deleted : 1} 个书源`);
       void this.load(true);
     } catch (e) {
-      this.toast(`删除失败：${e}`);
+      this.toast(`删除失败：${ErrorFormat.message(e)}`);
     }
   }
 
@@ -374,7 +375,7 @@ struct BookSourceManagePage {
       this.scheduleCheckPoll(1000);
     } catch (e) {
       this.checkText = '';
-      this.toast(`启动体检失败：${e}`);
+      this.toast(`启动体检失败：${ErrorFormat.message(e)}`);
     } finally {
       this.working = false;
     }
@@ -398,7 +399,7 @@ struct BookSourceManagePage {
         return;
       }
     } catch (e) {
-      this.finishCheck(`体检状态查询失败：${e}`);
+      this.finishCheck(`体检状态查询失败：${ErrorFormat.message(e)}`);
       return;
     }
     this.checkPolls += 1;
@@ -464,7 +465,7 @@ struct BookSourceManagePage {
       void this.load(true);
       this.watchImportChecks(stats.checking);
     } catch (e) {
-      this.toast(`导入失败：${e}`);
+      this.toast(`导入失败：${ErrorFormat.message(e)}`);
     } finally {
       this.importing = false;
     }
@@ -501,7 +502,7 @@ struct BookSourceManagePage {
       void this.load(true);
       this.watchImportChecks(stats.checking);
     } catch (e) {
-      this.toast(`种子导入失败：${e}`);
+      this.toast(`种子导入失败：${ErrorFormat.message(e)}`);
     } finally {
       this.working = false;
     }
@@ -529,7 +530,7 @@ struct BookSourceManagePage {
         ? `${this.fullExportJson.substring(0, EXPORT_PREVIEW_MAX)}\n…（预览已截断，复制可获得完整内容）`
         : this.fullExportJson;
     } catch (e) {
-      this.exportError = `导出失败：${e}`;
+      this.exportError = `导出失败：${ErrorFormat.message(e)}`;
     } finally {
       this.exporting = false;
     }
@@ -590,7 +591,7 @@ struct BookSourceManagePage {
       this.createText = '';
       void this.load(true);
     } catch (e) {
-      this.toast(`新增失败：${e}`);
+      this.toast(`新增失败：${ErrorFormat.message(e)}`);
     } finally {
       this.editorBusy = false;
     }
@@ -610,7 +611,7 @@ struct BookSourceManagePage {
       this.showSheet = false;
       void this.load(true);
     } catch (e) {
-      this.toast(`更新失败：${e}`);
+      this.toast(`更新失败：${ErrorFormat.message(e)}`);
     } finally {
       this.editorBusy = false;
     }
@@ -679,7 +680,7 @@ struct BookSourceManagePage {
       void this.load(true);
     }).catch((e: Object) => {
       this.working = false;
-      this.toast(`批量操作失败：${e}`);
+      this.toast(`批量操作失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -721,7 +722,7 @@ struct BookSourceManagePage {
       void this.load(true);
     }).catch((e: Object) => {
       this.working = false;
-      this.toast(`批量删除失败：${e}`);
+      this.toast(`批量删除失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -780,7 +781,7 @@ struct BookSourceManagePage {
       }
       void this.load(true);
     } catch (e) {
-      this.testError = `测试失败：${e}`;
+      this.testError = `测试失败：${ErrorFormat.message(e)}`;
     } finally {
       this.testing = false;
     }
@@ -805,7 +806,7 @@ struct BookSourceManagePage {
       this.importText = text;
       this.toast(`已载入文件（${text.length} 字符）`);
     } catch (e) {
-      this.toast(`选择文件失败：${e}`);
+      this.toast(`选择文件失败：${ErrorFormat.message(e)}`);
     }
   }
 
@@ -826,7 +827,7 @@ struct BookSourceManagePage {
         fs.closeSync(file.fd);
       }
     } catch (e) {
-      this.toast(`读取文件失败：${e}`);
+      this.toast(`读取文件失败：${ErrorFormat.message(e)}`);
       return '';
     }
   }

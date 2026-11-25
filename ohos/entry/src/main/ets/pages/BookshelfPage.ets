@@ -20,6 +20,7 @@ import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper
 import { mapTalebookBook } from '../utils/BookMapper';
 import { AppRouter } from '../utils/AppRouter';
 import { AiEntryHintBanner } from '../components/AiEntryHintBanner';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** 书架页底部面板类型。 */
 const SHEET_NONE: string = 'none';
@@ -270,7 +271,7 @@ export struct BookshelfPage {
       this.audioHasMore = PaginationHelper.computeHasMore(fetched.length);
     } catch (error) {
       if (reset) {
-        this.audioError = error instanceof Error ? error.message : `${error}`;
+        this.audioError = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
       }
     } finally {
       this.audioLoading = false;

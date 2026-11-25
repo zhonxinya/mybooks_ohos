@@ -2,6 +2,7 @@ import { PageScaffold, LoadingState, EmptyState, LazyDataSource } from '../compo
 import { TalebookApi } from '../services/TalebookApi';
 import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { TalebookService } from '../services/TalebookService';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -45,7 +46,7 @@ struct AdminSyslogPage {
         this.lines = rsp.lines ?? [];
       }
     } catch (e) {
-      this.loadError = `加载失败：${e}`;
+      this.loadError = `加载失败：${ErrorFormat.message(e)}`;
     } finally {
       this.loading = false;
       this.refreshing = false;

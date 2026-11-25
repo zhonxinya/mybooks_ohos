@@ -10,6 +10,7 @@ import {
   AuthorMetaApi, AuthorMetaRecord, AUTHOR_AVATAR_SUFFIXES, AUTHOR_BIO_MAX_LENGTH,
   authorMetaMessage, isAuthorMetaOk
 } from '../services/AuthorMetaApi';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * 作者 / 出版商元数据维护（mybooks 专有，门控 ServerFeature.AUTHOR_META_EDIT）。
@@ -110,7 +111,7 @@ struct AuthorMetaPage {
       this.avatarVersion = `${Date.now()}`;
       this.toast(author !== null ? '已加载作者信息' : '服务端暂无该作者记录，保存简介后将创建');
     } catch (error) {
-      this.toast(`查询失败：${error}`);
+      this.toast(`查询失败：${ErrorFormat.message(error)}`);
     } finally {
       this.busyAction = '';
     }
@@ -145,7 +146,7 @@ struct AuthorMetaPage {
       }
       this.toast(authorMetaMessage(rsp, '简介已保存'));
     } catch (error) {
-      this.toast(`保存失败：${error}`);
+      this.toast(`保存失败：${ErrorFormat.message(error)}`);
     } finally {
       this.busyAction = '';
     }
@@ -183,7 +184,7 @@ struct AuthorMetaPage {
       this.avatarVersion = `${Date.now()}`;
       this.toast(authorMetaMessage(rsp, '头像已更新'));
     } catch (error) {
-      this.toast(`头像上传失败：${error}`);
+      this.toast(`头像上传失败：${ErrorFormat.message(error)}`);
     } finally {
       BookUploadService.removeStagedFile(file.localPath);
       this.busyAction = '';
@@ -208,7 +209,7 @@ struct AuthorMetaPage {
       }
       this.toast(authorMetaMessage(rsp, `已提交「${name}」名下书籍的元数据更新`));
     } catch (error) {
-      this.toast(`提交失败：${error}`);
+      this.toast(`提交失败：${ErrorFormat.message(error)}`);
     } finally {
       this.busyAction = '';
     }
@@ -232,7 +233,7 @@ struct AuthorMetaPage {
       }
       this.toast(authorMetaMessage(rsp, `已提交「${name}」名下书籍的元数据更新`));
     } catch (error) {
-      this.toast(`提交失败：${error}`);
+      this.toast(`提交失败：${ErrorFormat.message(error)}`);
     } finally {
       this.busyAction = '';
     }

@@ -18,6 +18,7 @@ import {
   ShelfApi, isShelfApiOk, parseBookAttributes,
 } from '../services/ShelfApi';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -92,7 +93,7 @@ struct ReadingProgressPage {
         await this.loadAttributes();
       }
     } catch (error) {
-      this.loadError = error instanceof Error ? error.message : `${error}`;
+      this.loadError = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
     } finally {
       this.loading = false;
     }
@@ -112,7 +113,7 @@ struct ReadingProgressPage {
       this.selectedMediaType = parsed.mediaType === BookMediaType.COMIC ? 1 :
         (parsed.mediaType === BookMediaType.EBOOK ? 0 : -1);
     } catch (error) {
-      this.attributesError = `读取书籍属性失败：${error}`;
+      this.attributesError = `读取书籍属性失败：${ErrorFormat.message(error)}`;
     }
   }
 
@@ -164,7 +165,7 @@ struct ReadingProgressPage {
           latest.update_time : '';
       }
     } catch (error) {
-      this.toast(`保存失败：${error}`);
+      this.toast(`保存失败：${ErrorFormat.message(error)}`);
     } finally {
       this.saving = false;
     }
@@ -201,7 +202,7 @@ struct ReadingProgressPage {
         latest.update_time !== null ? latest.update_time : '';
       this.toast('已清空服务端阅读进度');
     } catch (error) {
-      this.toast(`清空失败：${error}`);
+      this.toast(`清空失败：${ErrorFormat.message(error)}`);
     } finally {
       this.saving = false;
     }
@@ -222,7 +223,7 @@ struct ReadingProgressPage {
       this.toast('可见范围已切换');
       await this.loadAttributes();
     } catch (error) {
-      this.toast(`设置失败：${error}`);
+      this.toast(`设置失败：${ErrorFormat.message(error)}`);
     } finally {
       this.scopeBusy = false;
     }
@@ -248,7 +249,7 @@ struct ReadingProgressPage {
       this.toast('媒体类型已更新');
       await this.loadAttributes();
     } catch (error) {
-      this.toast(`设置失败：${error}`);
+      this.toast(`设置失败：${ErrorFormat.message(error)}`);
     } finally {
       this.mediaTypeBusy = false;
     }

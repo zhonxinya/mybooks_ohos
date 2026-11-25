@@ -8,6 +8,7 @@ import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper
 import { BookViewMode } from '../utils/BookViewMode';
 import { mapTalebookBook } from '../utils/BookMapper';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -103,7 +104,7 @@ struct BookListPage {
       this.hasMore = PaginationHelper.computeHasMore(fetched.length);
     } catch (error) {
       if (reset) {
-        this.errorMessage = error instanceof Error ? error.message : `${error}`;
+        this.errorMessage = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
       }
     } finally {
       this.loading = false;

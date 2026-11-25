@@ -10,6 +10,7 @@ import { AiService, AiMessage } from '../services/AiService';
 import { AiTools } from '../services/AiTools';
 import { AiVoiceKit, VOICE_SYSTEM_PROMPT, VOICE_TOOL_NOTE } from '../services/AiVoiceKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 const TAG: string = 'AiVoiceCall';
 
@@ -281,7 +282,7 @@ struct AiVoiceCallPage {
     } catch (error) {
       hilog.error(0x0000, TAG, 'realtime connect: %{public}s', `${error}`);
       this.st = ST_IDLE;
-      this.tip = error instanceof Error ? error.message : `连接失败：${error}`;
+      this.tip = error instanceof Error ? error.message : `连接失败：${ErrorFormat.message(error)}`;
     }
   }
 
@@ -303,7 +304,7 @@ struct AiVoiceCallPage {
         return;
       }
       hilog.error(0x0000, TAG, 'startRecording: %{public}s', `${error}`);
-      this.tip = `录音启动失败：${error}`;
+      this.tip = `录音启动失败：${ErrorFormat.message(error)}`;
       this.st = ST_IDLE;
     }
   }
@@ -352,7 +353,7 @@ struct AiVoiceCallPage {
         return;
       }
       hilog.error(0x0000, TAG, 'turn failed: %{public}s', `${error}`);
-      this.tip = `出错了：${error}`;
+      this.tip = `出错了：${ErrorFormat.message(error)}`;
       await this.beginListening();
     }
   }

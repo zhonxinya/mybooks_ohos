@@ -2,6 +2,7 @@ import { PageScaffold, LoadingState, EmptyState, IconCircleButton, PrimaryButton
 import { ThemeApi, ThemeItem } from '../services/ThemeApi';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** 「默认主题」伪条目键（对齐上游 theme.vue 的 `__default__`：激活时提交空 name 以恢复默认外观）。 */
 const THEME_DEFAULT_KEY: string = '__default__';
@@ -78,7 +79,7 @@ struct ThemesPage {
       this.themes = list;
       this.activeName = active !== null ? active.name : activeFromList(list);
     } catch (error) {
-      this.loadError = `加载失败：${error}`;
+      this.loadError = `加载失败：${ErrorFormat.message(error)}`;
     } finally {
       this.loading = false;
     }
@@ -126,7 +127,7 @@ struct ThemesPage {
       this.activeName = result.theme !== null ? result.theme.name : name;
       await this.refreshQuiet();
     } catch (error) {
-      this.toast(`激活失败：${error}`);
+      this.toast(`激活失败：${ErrorFormat.message(error)}`);
     } finally {
       this.busyName = '';
     }

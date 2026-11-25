@@ -5,6 +5,7 @@ import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationHelper } from '../utils/PaginationHelper';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 const IMPORT_PAGE_SIZE: number = 20;
 
@@ -160,7 +161,7 @@ struct AdminImportsPage {
         }
       }
     } catch (e) {
-      this.statusDetail = `状态刷新失败：${e}`;
+      this.statusDetail = `状态刷新失败：${ErrorFormat.message(e)}`;
     }
     if (continuePoll) {
       this.scheduleStatusPoll();
@@ -202,7 +203,7 @@ struct AdminImportsPage {
       this.countTodo = Number(summary['todo'] ?? 0);
       this.scanDir = rsp.scan_dir !== undefined ? rsp.scan_dir : '';
     } catch (e) {
-      this.toast(`加载失败：${e}`);
+      this.toast(`加载失败：${ErrorFormat.message(e)}`);
       if (!reset) {
         this.currentPage = Math.max(1, this.currentPage - 1);
       }
@@ -256,7 +257,7 @@ struct AdminImportsPage {
       })
       .catch((e: Object) => {
         this.working = false;
-        this.toast(`操作失败：${e}`);
+        this.toast(`操作失败：${ErrorFormat.message(e)}`);
       });
   }
 
@@ -276,7 +277,7 @@ struct AdminImportsPage {
       })
       .catch((e: Object) => {
         this.working = false;
-        this.toast(`操作失败：${e}`);
+        this.toast(`操作失败：${ErrorFormat.message(e)}`);
       });
   }
 
@@ -297,7 +298,7 @@ struct AdminImportsPage {
       })
       .catch((e: Object) => {
         this.working = false;
-        this.toast(`操作失败：${e}`);
+        this.toast(`操作失败：${ErrorFormat.message(e)}`);
       });
   }
 
@@ -324,7 +325,7 @@ struct AdminImportsPage {
             })
             .catch((e: Object) => {
               this.working = false;
-              this.toast(`删除失败：${e}`);
+              this.toast(`删除失败：${ErrorFormat.message(e)}`);
             });
         },
       },

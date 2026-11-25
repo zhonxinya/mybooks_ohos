@@ -11,6 +11,7 @@ import {
   NETWORK_SAVE_RUNNING, NETWORK_SAVE_COMPLETED,
 } from '../services/NetworkLibraryApi';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** 保存任务轮询间隔（服务端按章节抓取，进度更新较慢）。 */
 const SAVE_POLL_INTERVAL_MS: number = 3000;
@@ -141,7 +142,7 @@ struct NetworkBookDetailPage {
         this.toast('未解析到章节，可能是书源规则不支持该书');
       }
     } catch (e) {
-      this.loadError = `加载失败：${e}`;
+      this.loadError = `加载失败：${ErrorFormat.message(e)}`;
     } finally {
       this.loading = false;
     }
@@ -201,7 +202,7 @@ struct NetworkBookDetailPage {
         this.contentError = '该书源返回的正文为空';
       }
     } catch (e) {
-      this.contentError = `正文加载失败：${e}`;
+      this.contentError = `正文加载失败：${ErrorFormat.message(e)}`;
     } finally {
       this.loadingContent = false;
     }
@@ -273,7 +274,7 @@ struct NetworkBookDetailPage {
     } catch (e) {
       this.saving = false;
       this.saveText = '';
-      this.toast(`保存失败：${e}`);
+      this.toast(`保存失败：${ErrorFormat.message(e)}`);
     }
   }
 
@@ -317,7 +318,7 @@ struct NetworkBookDetailPage {
         this.saveText = `任务状态：${progress.status}`;
       }
     } catch (e) {
-      this.finishSave(`查询保存进度失败：${e}`);
+      this.finishSave(`查询保存进度失败：${ErrorFormat.message(e)}`);
       return;
     }
     this.savePolls += 1;

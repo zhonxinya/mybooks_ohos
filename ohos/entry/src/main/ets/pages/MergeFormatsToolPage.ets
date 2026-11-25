@@ -5,6 +5,7 @@ import { TalebookApi, ApiMessageResult, apiErrorMessage } from '../services/Tale
 import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 import { TalebookService } from '../services/TalebookService';
 import { BookItem } from '../services/BookModels';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -86,7 +87,7 @@ struct MergeFormatsToolPage {
         this.setMsg(`找到 ${items.length} 本`, false);
       }
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
       if (side === 'left') {
         this.leftResults = [];
       } else {
@@ -161,7 +162,7 @@ struct MergeFormatsToolPage {
       this.rightId = 0;
       this.rightTitle = '';
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }

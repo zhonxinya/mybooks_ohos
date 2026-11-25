@@ -3,6 +3,7 @@ import { BookItem } from '../services/BookModels';
 import { SettingCell } from './SettingCell';
 import { SecondaryButton } from './SecondaryButton';
 import { TextButton } from './TextButton';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * 书籍 ID 选择器：手动填写 ID + 按书名/作者搜索后点选。
@@ -112,7 +113,7 @@ export struct BookIdPicker {
       this.searchHint = items.length === 0 ? '未找到书籍，可换关键词或手动填写 ID' : `找到 ${items.length} 本，点选即可填入`;
     } catch (e) {
       this.results = [];
-      this.searchHint = `搜索失败：${e}`;
+      this.searchHint = `搜索失败：${ErrorFormat.message(e)}`;
     } finally {
       this.searching = false;
     }

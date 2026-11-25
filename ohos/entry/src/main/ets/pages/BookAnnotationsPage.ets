@@ -11,6 +11,7 @@ import {
   ANNOTATION_SCOPE_MINE, annotationTypeLabel,
 } from '../services/AnnotationApi';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 interface ColorPreset {
   label: string;
@@ -100,7 +101,7 @@ struct BookAnnotationsPage {
       await TalebookService.ensureAuthenticated();
       this.items = await AnnotationApi.listBookAnnotations(this.bookId, this.scopeValue());
     } catch (error) {
-      this.loadError = error instanceof Error ? error.message : `${error}`;
+      this.loadError = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
     } finally {
       this.loading = false;
     }

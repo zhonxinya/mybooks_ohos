@@ -7,6 +7,7 @@ import {
 import { TalebookService } from '../services/TalebookService';
 import { AppRouter } from '../utils/AppRouter';
 import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -70,7 +71,7 @@ struct EpubFixerToolPage {
       this.lastResult = `书籍 ${bookId}` + (this.backup ? ' · 含备份' : '') + ` · ${ok}`;
       this.toast(ok);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }

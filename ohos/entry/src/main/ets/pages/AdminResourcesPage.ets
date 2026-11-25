@@ -5,6 +5,7 @@ import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { ExternalLinkOpener } from '../services/ExternalLinkOpener';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -40,7 +41,7 @@ struct AdminResourcesPage {
       }
       this.resources = rsp.resources ?? [];
     } catch (e) {
-      this.loadError = `加载失败：${e}`;
+      this.loadError = `加载失败：${ErrorFormat.message(e)}`;
     } finally {
       this.loading = false;
     }

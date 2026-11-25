@@ -12,6 +12,7 @@ import {
 } from '../utils/SoNovelMerge';
 import { hasSameBook, normalizeName } from '../utils/LibraryMatch';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** 核对书库的在途请求上限：结果可能有几十本，逐个串行太慢，放开太多又会压垮书库。 */
 const LIBRARY_CHECK_CONCURRENCY: number = 3;
@@ -137,7 +138,7 @@ struct SoNovelSearchPage {
       if (token !== this.searchToken) {
         return;
       }
-      this.errorMessage = error instanceof Error ? error.message : `${error}`;
+      this.errorMessage = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
       this.mergedResults = [];
       this.visibleResults = [];
       this.catalogItems = [];

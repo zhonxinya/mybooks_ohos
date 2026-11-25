@@ -30,6 +30,10 @@ jobs:
       - name: Check file lines
         run: node scripts/check_file_lines.mjs --gate
 
+      # 错误呈现门禁（#1670：catch 作用域禁裸异常插值）
+      - name: Check error toast formatting
+        run: node scripts/check_error_toast.mjs --gate
+
       - name: Build HAP
         id: build
         uses: ./.github/actions/build-hap

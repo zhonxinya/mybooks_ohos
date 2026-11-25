@@ -24,6 +24,7 @@ import {
 import { ReaderTtsService, ReaderTtsProgress, ReaderTtsState, ReaderTtsVoice } from '../services/ReaderTtsService';
 import { HtmlTextUtil } from '../utils/HtmlTextUtil';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 interface ReadKitParams {
   filePath: string;
@@ -694,7 +695,7 @@ struct ReadKitReader {
         this.getUIContext().getPromptAction().showToast({ message: '字体已应用' });
       }
     } catch (error) {
-      const message = `${error}`.length > 0 ? `${error}` : '字体下载失败';
+      const message = `${ErrorFormat.message(error)}`.length > 0 ? `${ErrorFormat.message(error)}` : '字体下载失败';
       this.getUIContext().getPromptAction().showToast({ message: message });
     } finally {
       this.fontDownloading = false;

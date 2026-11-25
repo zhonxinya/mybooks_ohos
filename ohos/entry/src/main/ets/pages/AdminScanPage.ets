@@ -13,6 +13,7 @@ import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationHelper } from '../utils/PaginationHelper';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 const SCAN_PAGE_SIZE: number = 20;
 /** 轮询间隔与上限：约 3 分钟后自动停止，避免页面退出前的无界轮询。 */
@@ -338,7 +339,7 @@ struct AdminScanPage {
         this.stopPoll();
       }
     } catch (e) {
-      this.statusLine = `状态刷新失败：${e}`;
+      this.statusLine = `状态刷新失败：${ErrorFormat.message(e)}`;
       this.stopPoll();
     }
   }
@@ -391,9 +392,9 @@ struct AdminScanPage {
       this.hasMore = PaginationHelper.computeHasMore(fetched.length, SCAN_PAGE_SIZE);
     } catch (e) {
       if (reset) {
-        this.loadError = `加载失败：${e}`;
+        this.loadError = `加载失败：${ErrorFormat.message(e)}`;
       } else {
-        this.toast(`加载失败：${e}`);
+        this.toast(`加载失败：${ErrorFormat.message(e)}`);
         this.currentPage = Math.max(1, this.currentPage - 1);
       }
     } finally {
@@ -666,7 +667,7 @@ struct AdminScanPage {
       }
     }).catch((e: Object) => {
       this.working = false;
-      this.toast(`扫描启动失败：${e}`);
+      this.toast(`扫描启动失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -702,7 +703,7 @@ struct AdminScanPage {
       }
     }).catch((e: Object) => {
       this.working = false;
-      this.toast(`导入启动失败：${e}`);
+      this.toast(`导入启动失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -723,7 +724,7 @@ struct AdminScanPage {
       }
     }).catch((e: Object) => {
       this.working = false;
-      this.toast(`导入失败：${e}`);
+      this.toast(`导入失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -749,7 +750,7 @@ struct AdminScanPage {
             }
           }).catch((e: Object) => {
             this.working = false;
-            this.toast(`删除失败：${e}`);
+            this.toast(`删除失败：${ErrorFormat.message(e)}`);
           });
         },
       },
@@ -776,7 +777,7 @@ struct AdminScanPage {
             }
           }).catch((e: Object) => {
             this.working = false;
-            this.toast(`清空失败：${e}`);
+            this.toast(`清空失败：${ErrorFormat.message(e)}`);
           });
         },
       },
@@ -902,7 +903,7 @@ struct AdminScanPage {
       }
     }).catch((e: Object) => {
       this.working = false;
-      this.toast(`导入失败：${e}`);
+      this.toast(`导入失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -930,7 +931,7 @@ struct AdminScanPage {
             }
           }).catch((e: Object) => {
             this.working = false;
-            this.toast(`删除失败：${e}`);
+            this.toast(`删除失败：${ErrorFormat.message(e)}`);
           });
         },
       },
@@ -964,7 +965,7 @@ struct AdminScanPage {
       this.watchStatus = settings.watch_status ?? {};
       this.dirCheck = settings.directory_check;
     } catch (e) {
-      this.toast(`导入设置加载失败：${e}`);
+      this.toast(`导入设置加载失败：${ErrorFormat.message(e)}`);
     }
   }
 
@@ -1008,7 +1009,7 @@ struct AdminScanPage {
         }
       }).catch((e: Object) => {
         this.working = false;
-        this.toast(`保存失败：${e}`);
+        this.toast(`保存失败：${ErrorFormat.message(e)}`);
       });
   }
 
@@ -1026,7 +1027,7 @@ struct AdminScanPage {
       this.toast(detail);
     }).catch((e: Object) => {
       this.working = false;
-      this.toast(`检查失败：${e}`);
+      this.toast(`检查失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -1054,7 +1055,7 @@ struct AdminScanPage {
       this.browseParent = rsp.parent !== undefined ? rsp.parent : '';
       this.browseItems = rsp.items ?? [];
     } catch (e) {
-      this.toast(`目录读取失败：${e}`);
+      this.toast(`目录读取失败：${ErrorFormat.message(e)}`);
     }
   }
 

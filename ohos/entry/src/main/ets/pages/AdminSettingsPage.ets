@@ -7,6 +7,7 @@ import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { TalebookService } from '../services/TalebookService';
 import { BookUploadService } from '../services/BookUploadService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 interface SelectOptionDef {
   text: string;
@@ -381,7 +382,7 @@ struct AdminSettingsPage {
       }
       void this.refreshServerNotes();
     } catch (e) {
-      this.loadError = `加载设置失败：${e}`;
+      this.loadError = `加载设置失败：${ErrorFormat.message(e)}`;
     } finally {
       this.loading = false;
       this.version++;
@@ -496,7 +497,7 @@ struct AdminSettingsPage {
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : String(rsp.err));
       }
     } catch (e) {
-      this.toast(`上传失败：${e}`);
+      this.toast(`上传失败：${ErrorFormat.message(e)}`);
     } finally {
       this.stampBusy = false;
     }
@@ -516,7 +517,7 @@ struct AdminSettingsPage {
       this.adminTokenPreview = rsp.token !== undefined ? rsp.token : '';
       this.toast(this.adminTokenPreview.length > 0 ? 'Token 已生成' : '已生成（空 Token）');
     } catch (e) {
-      this.toast(`生成失败：${e}`);
+      this.toast(`生成失败：${ErrorFormat.message(e)}`);
     } finally {
       this.tokenBusy = false;
     }
@@ -563,7 +564,7 @@ struct AdminSettingsPage {
         this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : String(rsp.err));
       }
     } catch (e) {
-      this.toast(`SSL 上传失败：${e}`);
+      this.toast(`SSL 上传失败：${ErrorFormat.message(e)}`);
     } finally {
       this.sslBusy = false;
     }
@@ -600,7 +601,7 @@ struct AdminSettingsPage {
       }
       this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '书栈 Token 已申请');
     } catch (e) {
-      this.toast(`申请失败：${e}`);
+      this.toast(`申请失败：${ErrorFormat.message(e)}`);
     } finally {
       this.bookbarnBusy = false;
     }
@@ -630,7 +631,7 @@ struct AdminSettingsPage {
       })
       .catch((e: Object) => {
         this.saving = false;
-        this.toast(`保存失败：${e}`);
+        this.toast(`保存失败：${ErrorFormat.message(e)}`);
       });
   }
 
@@ -649,7 +650,7 @@ struct AdminSettingsPage {
               this.toast(rsp.err === 'ok' ? '服务正在重启，请稍后刷新页面' :
                 `重启失败：${rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err}`);
             })
-            .catch((e: Object) => this.toast(`重启失败：${e}`));
+            .catch((e: Object) => this.toast(`重启失败：${ErrorFormat.message(e)}`));
         },
       },
       secondaryButton: { value: '取消', action: () => {} },
@@ -677,7 +678,7 @@ struct AdminSettingsPage {
           this.toast(`测试失败：${rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err}`);
         }
       })
-      .catch((e: Object) => this.toast(`测试失败：${e}`));
+      .catch((e: Object) => this.toast(`测试失败：${ErrorFormat.message(e)}`));
   }
 
   private testAI(): void {
@@ -700,7 +701,7 @@ struct AdminSettingsPage {
           this.toast(`测试失败：${rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err}`);
         }
       })
-      .catch((e: Object) => this.toast(`测试失败：${e}`));
+      .catch((e: Object) => this.toast(`测试失败：${ErrorFormat.message(e)}`));
   }
 
   private str(key: string): string {

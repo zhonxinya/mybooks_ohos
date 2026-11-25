@@ -16,6 +16,7 @@ import { ReaderChrome } from 'reader';
 import { ReaderThemeColors } from '../theme/ReaderThemeColors';
 import { CoverCache } from '../utils/CoverCache';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * talebook 漫画阅读器（竖向连续翻页）。
@@ -160,7 +161,7 @@ struct ComicReaderPage {
       }, 0);
       this.scheduleProgressReport(target, true);
     } catch (error) {
-      this.loadError = `${error}`;
+      this.loadError = `${ErrorFormat.message(error)}`;
       this.pages = [];
       this.pageSource.update(this.pages);
       hilog.warn(0x0000, TAG, 'load failed: %{public}s', `${error}`);

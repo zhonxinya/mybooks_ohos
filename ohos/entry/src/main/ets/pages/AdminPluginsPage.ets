@@ -15,6 +15,7 @@ import {
 } from '../services/AdminPluginsApi';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** 繁简转换方向（上游 zh_converter 支持 8 种，这里列常用 4 种）。 */
 const ZH_DIRECTIONS: string[] = ['t2s', 'tw2s', 's2t', 's2tw'];
@@ -194,7 +195,7 @@ struct AdminPluginsPage {
       await this.loadRuns();
       await this.loadPreferences();
     } catch (e) {
-      this.loadError = `加载失败：${e}`;
+      this.loadError = `加载失败：${ErrorFormat.message(e)}`;
     } finally {
       this.loading = false;
     }
@@ -261,7 +262,7 @@ struct AdminPluginsPage {
       this.toast(this.messageOf(rsp.err, rsp.msg, '偏好已保存'));
     }).catch((e: Object) => {
       this.working = '';
-      this.toast(`保存失败：${e}`);
+      this.toast(`保存失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -281,7 +282,7 @@ struct AdminPluginsPage {
       }
     }).catch((e: Object) => {
       this.working = '';
-      this.toast(`切换失败：${e}`);
+      this.toast(`切换失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -822,7 +823,7 @@ struct AdminPluginsPage {
       }
     }).catch((e: Object) => {
       this.working = '';
-      this.toast(`操作失败：${e}`);
+      this.toast(`操作失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -864,7 +865,7 @@ struct AdminPluginsPage {
         }
       }).catch((e: Object) => {
         this.capBusy = false;
-        this.capError = `能力测试失败：${e}`;
+        this.capError = `能力测试失败：${ErrorFormat.message(e)}`;
       });
       return;
     }
@@ -893,7 +894,7 @@ struct AdminPluginsPage {
         }
       }).catch((e: Object) => {
         this.capBusy = false;
-        this.capError = `能力测试失败：${e}`;
+        this.capError = `能力测试失败：${ErrorFormat.message(e)}`;
       });
       return;
     }
@@ -915,7 +916,7 @@ struct AdminPluginsPage {
       }
     }).catch((e: Object) => {
       this.capBusy = false;
-      this.capError = `能力测试失败：${e}`;
+      this.capError = `能力测试失败：${ErrorFormat.message(e)}`;
     });
   }
 
@@ -1135,7 +1136,7 @@ struct AdminPluginsPage {
       void this.loadConnections();
     }).catch((e: Object) => {
       this.connBusy = false;
-      this.toast(`连接保存失败：${e}`);
+      this.toast(`连接保存失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -1235,7 +1236,7 @@ struct AdminPluginsPage {
       }
       this.devices = list;
     }).catch((e: Object) => {
-      this.deviceError = `设备列表加载失败：${e}`;
+      this.deviceError = `设备列表加载失败：${ErrorFormat.message(e)}`;
     });
   }
 
@@ -1336,7 +1337,7 @@ struct AdminPluginsPage {
       this.showSheet = false;
     }).catch((e: Object) => {
       this.deviceBusy = false;
-      this.deviceError = `保存失败：${e}`;
+      this.deviceError = `保存失败：${ErrorFormat.message(e)}`;
     });
   }
 
@@ -1394,7 +1395,7 @@ struct AdminPluginsPage {
       }
     }).catch((e: Object) => {
       this.working = '';
-      this.toast(`操作失败：${e}`);
+      this.toast(`操作失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -1413,7 +1414,7 @@ struct AdminPluginsPage {
       }
     }).catch((e: Object) => {
       this.working = '';
-      this.toast(`安装失败：${e}`);
+      this.toast(`安装失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -1452,7 +1453,7 @@ struct AdminPluginsPage {
       }
     }).catch((e: Object) => {
       this.working = '';
-      this.toast(`${action} 失败：${e}`);
+      this.toast(`${action} 失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -1486,7 +1487,7 @@ struct AdminPluginsPage {
       }
     }).catch((e: Object) => {
       this.working = '';
-      this.toast(`操作失败：${e}`);
+      this.toast(`操作失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -1551,7 +1552,7 @@ struct AdminPluginsPage {
       this.toolBooks = rsp.books ?? [];
       this.toolResult = this.toolBooks.length === 0 ? '没有可用 EPUB/TXT 的书籍' : '';
     } catch (e) {
-      this.toolResult = `查询失败：${e}`;
+      this.toolResult = `查询失败：${ErrorFormat.message(e)}`;
     } finally {
       this.toolBusy = false;
     }
@@ -1594,7 +1595,7 @@ struct AdminPluginsPage {
         : `格式 ${rsp.format ?? '-'} · 命中 ${rsp.matches ?? 0} 处`
           + `${rsp.truncated === true ? '（仅统计前缀）' : ''}`;
     } catch (e) {
-      this.toolResult = `预览失败：${e}`;
+      this.toolResult = `预览失败：${ErrorFormat.message(e)}`;
     } finally {
       this.toolBusy = false;
     }
@@ -1618,7 +1619,7 @@ struct AdminPluginsPage {
         + `\n检测依据：${reasons.join('、')}`
         + `\n修复预览：${rsp.preview ?? ''}`;
     } catch (e) {
-      this.toolResult = `检测失败：${e}`;
+      this.toolResult = `检测失败：${ErrorFormat.message(e)}`;
     } finally {
       this.toolBusy = false;
     }
@@ -1654,7 +1655,7 @@ struct AdminPluginsPage {
       this.toolResult = this.toolRunSummary(rsp, '替换完成');
       await this.loadRuns();
     } catch (e) {
-      this.toolResult = `替换失败：${e}`;
+      this.toolResult = `替换失败：${ErrorFormat.message(e)}`;
     } finally {
       this.toolBusy = false;
     }
@@ -1687,7 +1688,7 @@ struct AdminPluginsPage {
       this.toolResult = this.toolRunSummary(rsp, '修复完成');
       await this.loadRuns();
     } catch (e) {
-      this.toolResult = `修复失败：${e}`;
+      this.toolResult = `修复失败：${ErrorFormat.message(e)}`;
     } finally {
       this.toolBusy = false;
     }
@@ -1724,7 +1725,7 @@ struct AdminPluginsPage {
       this.toolResult = this.toolRunSummary(rsp, '转换完成');
       await this.loadRuns();
     } catch (e) {
-      this.toolResult = `转换失败：${e}`;
+      this.toolResult = `转换失败：${ErrorFormat.message(e)}`;
     } finally {
       this.toolBusy = false;
     }

@@ -7,6 +7,7 @@ import {
 } from '../services/AdminImportApi';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** 状态轮询间隔 */
 const POLL_INTERVAL_MS: number = 3000;
@@ -93,7 +94,7 @@ struct AdminAudioImportPage {
         this.schedulePoll();
       }
     } catch (e) {
-      this.setMsg(`初始化失败：${e}`, true);
+      this.setMsg(`初始化失败：${ErrorFormat.message(e)}`, true);
     } finally {
       this.loading = false;
     }
@@ -123,7 +124,7 @@ struct AdminAudioImportPage {
       this.running = true;
       this.schedulePoll();
     } catch (e) {
-      this.setMsg(`启动失败：${e}`, true);
+      this.setMsg(`启动失败：${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -161,7 +162,7 @@ struct AdminAudioImportPage {
         this.statusHint = '';
       }
     } catch (e) {
-      this.statusHint = `状态刷新失败：${e}`;
+      this.statusHint = `状态刷新失败：${ErrorFormat.message(e)}`;
     } finally {
       if (continuePoll) {
         this.schedulePoll();
@@ -195,7 +196,7 @@ struct AdminAudioImportPage {
       this.testResult = rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '音频服务连接测试成功';
       this.toast(this.testResult);
     } catch (e) {
-      this.testResult = `测试失败：${e}`;
+      this.testResult = `测试失败：${ErrorFormat.message(e)}`;
     } finally {
       this.testing = false;
     }

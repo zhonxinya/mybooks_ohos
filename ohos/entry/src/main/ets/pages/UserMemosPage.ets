@@ -6,6 +6,7 @@ import { TalebookApi, ApiMessageResult } from '../services/TalebookApi';
 import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { UserMemoItem, memoStageLabel, memoTypeLabel } from '../models/UserModels';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -62,7 +63,7 @@ struct UserMemosPage {
       await TalebookService.ensureAuthenticated();
       this.memos = await TalebookApiBooks.getUserMemos(1, 50);
     } catch (error) {
-      this.loadError = `加载失败：${error}`;
+      this.loadError = `加载失败：${ErrorFormat.message(error)}`;
     } finally {
       this.loading = false;
     }
@@ -92,7 +93,7 @@ struct UserMemosPage {
       this.newMemoContent = '';
       await this.load();
     } catch (error) {
-      this.toast(`提交失败：${error}`);
+      this.toast(`提交失败：${ErrorFormat.message(error)}`);
     } finally {
       this.submitting = false;
     }

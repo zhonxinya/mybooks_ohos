@@ -10,6 +10,7 @@ import {
 import { TalebookService } from '../services/TalebookService';
 import { BookUploadService } from '../services/BookUploadService';
 import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 const TAB_RUN: number = 0;
 const TAB_BG: number = 1;
@@ -191,7 +192,7 @@ struct EpubBeautifyToolPage {
       this.setMsg(hint, false);
       this.toast(hint);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -218,7 +219,7 @@ struct EpubBeautifyToolPage {
       this.schedulePoll();
       await this.refreshProgress(false);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -287,7 +288,7 @@ struct EpubBeautifyToolPage {
         this.bgHas = false;
       }
     } catch (e) {
-      this.bgMetaHint = `查询背景失败：${e}`;
+      this.bgMetaHint = `查询背景失败：${ErrorFormat.message(e)}`;
       this.bgHas = false;
     }
   }
@@ -314,7 +315,7 @@ struct EpubBeautifyToolPage {
       this.bgImage = true;
       await this.loadBgMeta();
     } catch (e) {
-      this.toast(`上传失败：${e}`);
+      this.toast(`上传失败：${ErrorFormat.message(e)}`);
     } finally {
       this.busy = false;
     }
@@ -340,7 +341,7 @@ struct EpubBeautifyToolPage {
       this.bgImage = true;
       await this.loadBgMeta();
     } catch (e) {
-      this.toast(`应用失败：${e}`);
+      this.toast(`应用失败：${ErrorFormat.message(e)}`);
     } finally {
       this.busy = false;
     }
@@ -361,7 +362,7 @@ struct EpubBeautifyToolPage {
       this.bgImage = false;
       await this.loadBgMeta();
     } catch (e) {
-      this.toast(`删除失败：${e}`);
+      this.toast(`删除失败：${ErrorFormat.message(e)}`);
     } finally {
       this.busy = false;
     }

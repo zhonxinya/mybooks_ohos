@@ -11,6 +11,7 @@ import { BookItem as ApiBookItem } from '../services/BookModels';
 import { ReadingStatsSummary } from '../models/HomeModels';
 import { DateFormat } from '../utils/DateFormat';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 interface OnlineBook {
   id: number;
@@ -212,7 +213,7 @@ struct ReadingHistoryPage {
       }));
       this.stats = stats;
     } catch (error) {
-      this.onlineError = error instanceof Error ? error.message : `${error}`;
+      this.onlineError = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
     } finally {
       this.loadingOnline = false;
     }
@@ -241,7 +242,7 @@ struct ReadingHistoryPage {
               }
             })
             .catch((e: Object) => {
-              this.getUIContext().getPromptAction().showToast({ message: `清空失败：${e}` });
+              this.getUIContext().getPromptAction().showToast({ message: `清空失败：${ErrorFormat.message(e)}` });
             });
         },
       },

@@ -7,6 +7,7 @@ import {
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -134,7 +135,7 @@ struct EpubSplitToolPage {
     } catch (e) {
       this.chapters = [];
       this.selectedNums = [];
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -177,7 +178,7 @@ struct EpubSplitToolPage {
       this.setMsg(hint, false);
       this.toast(hint);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }

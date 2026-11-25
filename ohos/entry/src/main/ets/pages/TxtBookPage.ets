@@ -9,6 +9,7 @@ import {
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * 单次读取的字节窗口上限。
@@ -99,7 +100,7 @@ struct TxtBookPage {
       }
       await TalebookService.ensureAuthenticated();
     } catch (e) {
-      this.setMsg(`初始化失败：${e}`, true);
+      this.setMsg(`初始化失败：${ErrorFormat.message(e)}`, true);
     } finally {
       this.loading = false;
     }
@@ -136,7 +137,7 @@ struct TxtBookPage {
       this.contentHint = `字节区间 ${start} - ${end} · ${this.content.length} 字符`;
       this.setMsg('内容读取成功', false);
     } catch (e) {
-      this.setMsg(`读取失败：${e}`, true);
+      this.setMsg(`读取失败：${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -191,7 +192,7 @@ struct TxtBookPage {
         this.setMsg('该书籍尚未解析目录', true);
       }
     } catch (e) {
-      this.setMsg(`解析失败：${e}`, true);
+      this.setMsg(`解析失败：${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -219,7 +220,7 @@ struct TxtBookPage {
       this.filePathLabel = path.length > 0 ? `${format.toUpperCase()}：${path}` : '服务端未返回路径';
       this.setMsg('路径查询成功', false);
     } catch (e) {
-      this.setMsg(`查询失败：${e}`, true);
+      this.setMsg(`查询失败：${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -250,7 +251,7 @@ struct TxtBookPage {
       this.setMsg(msg, false);
       this.toast(msg);
     } catch (e) {
-      this.setMsg(`写入失败：${e}`, true);
+      this.setMsg(`写入失败：${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }

@@ -15,6 +15,7 @@ import { BookViewMode } from '../utils/BookViewMode';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { mapTalebookBook } from '../utils/BookMapper';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -88,7 +89,7 @@ struct AdminBookListPage {
       this.totalCount = rsp.total !== undefined ? rsp.total : this.books.length;
       this.hasMore = PaginationHelper.computeHasMore(fetched.length);
     } catch (e) {
-      this.toast(`加载失败：${e}`);
+      this.toast(`加载失败：${ErrorFormat.message(e)}`);
       if (!reset) {
         this.currentPage = Math.max(1, this.currentPage - 1);
       }
@@ -238,7 +239,7 @@ struct AdminBookListPage {
               this.exitSelection();
               void this.loadBooks(true);
             })
-            .catch((e: Object) => this.toast(`删除失败：${e}`));
+            .catch((e: Object) => this.toast(`删除失败：${ErrorFormat.message(e)}`));
         },
       },
       secondaryButton: { value: '取消', action: () => {} },
@@ -290,21 +291,21 @@ struct AdminBookListPage {
             this.handleOpResult(rsp, '已启动刷新元数据任务');
             this.exitSelection();
           })
-          .catch((e: Object) => this.toast(`操作失败：${e}`));
+          .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
       } else if (action === 'ai') {
         TalebookApiAdmin.aiFillAdminBooks(ids)
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '已启动 AI 更新任务');
             this.exitSelection();
           })
-          .catch((e: Object) => this.toast(`操作失败：${e}`));
+          .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
       } else if (action === 'epub') {
         TalebookApiAdmin.epubConvertAdminBooks(ids)
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '已启动 EPUB 转换任务');
             this.exitSelection();
           })
-          .catch((e: Object) => this.toast(`操作失败：${e}`));
+          .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
       } else if (action === 'exchange') {
         TalebookApi.exchangeBookType(ids)
           .then((rsp: ApiMessageResult) => {
@@ -312,7 +313,7 @@ struct AdminBookListPage {
             this.exitSelection();
             void this.loadBooks(true);
           })
-          .catch((e: Object) => this.toast(`操作失败：${e}`));
+          .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
       } else if (action === 'more') {
         this.showMoreSelectionActions(ids);
       }
@@ -339,7 +340,7 @@ struct AdminBookListPage {
             this.handleOpResult(rsp, '元数据已写入书籍文件');
             this.exitSelection();
           })
-          .catch((e: Object) => this.toast(`操作失败：${e}`));
+          .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
       } else if (result.index === 1) {
         TalebookApiAdmin.updateAdminTitleSort(ids)
           .then((rsp: ApiMessageResult) => {
@@ -347,7 +348,7 @@ struct AdminBookListPage {
             this.exitSelection();
             void this.loadBooks(true);
           })
-          .catch((e: Object) => this.toast(`操作失败：${e}`));
+          .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
       } else if (result.index === 2) {
         if (!ServerRegistry.supports(ServerFeature.BOOK_CROP_COVER)) {
           this.toast(`${ServerRegistry.profile().displayName} 服务端不支持批量裁剪封面`);
@@ -360,7 +361,7 @@ struct AdminBookListPage {
             this.exitSelection();
             void this.loadBooks(true);
           })
-          .catch((e: Object) => this.toast(`操作失败：${e}`));
+          .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
       }
     }).catch(() => {});
   }
@@ -401,36 +402,36 @@ struct AdminBookListPage {
       if (action === 'fill-all') {
         TalebookApiAdmin.fillAdminBooks('all')
           .then((rsp: ApiMessageResult) => this.handleOpResult(rsp, '已启动刷新元数据任务'))
-          .catch((e: Object) => this.toast(`操作失败：${e}`));
+          .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
       } else if (action === 'update-all-meta') {
         TalebookApiAdmin.updateAllAdminMeta()
           .then((rsp: ApiMessageResult) => this.handleOpResult(rsp, '已启动更新全部元数据任务'))
-          .catch((e: Object) => this.toast(`操作失败：${e}`));
+          .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
       } else if (action === 'update-title-sort') {
         TalebookApiAdmin.updateAdminTitleSort()
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '标题排序已更新');
             void this.loadBooks(true);
           })
-          .catch((e: Object) => this.toast(`操作失败：${e}`));
+          .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
       } else if (action === 'update-dynamic-cover') {
         TalebookApiAdmin.updateAdminDynamicCover('all')
           .then((rsp: ApiMessageResult) => this.handleOpResult(rsp, '已启动动态封面更新任务'))
-          .catch((e: Object) => this.toast(`操作失败：${e}`));
+          .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
       } else if (action === 'reset-cover') {
         TalebookApiAdmin.resetAdminCover('all')
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '封面已重置');
             void this.loadBooks(true);
           })
-          .catch((e: Object) => this.toast(`操作失败：${e}`));
+          .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
       } else if (action === 'clear-invalid') {
         TalebookApiAdmin.clearAdminInvalidItems()
           .then((rsp: ApiMessageResult) => {
             this.handleOpResult(rsp, '已清理无效条目');
             void this.loadBooks(true);
           })
-          .catch((e: Object) => this.toast(`操作失败：${e}`));
+          .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
       }
     }).catch(() => {});
   }
