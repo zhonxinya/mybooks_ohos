@@ -3,6 +3,7 @@ import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { PageScaffold, PrimaryButton, SecondaryButton, SectionTitle } from '../components';
 import { Reader3Native } from '../services/Reader3Native';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * 导入文件最大读取字节数。Legado 整包导出（数千条、带注释与图标 url）常超 2MB，
@@ -77,7 +78,7 @@ struct NovelMetaSourcePage {
       const viewPicker = new picker.DocumentViewPicker(context);
       uris = await viewPicker.select(options);
     } catch (error) {
-      this.toast(`选择文件失败：${error}`);
+      this.toast(`选择文件失败：${ErrorFormat.message(error)}`);
       return;
     }
     if (uris.length === 0) {

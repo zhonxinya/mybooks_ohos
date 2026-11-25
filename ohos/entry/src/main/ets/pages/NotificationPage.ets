@@ -5,6 +5,7 @@ import { NotificationService } from '../services/NotificationService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** 逐个标记已读时的单页大小（talebook 无「清空」端点，只能逐条打）。 */
 const CLEAR_PAGE_SIZE: number = 100;
@@ -85,7 +86,7 @@ struct NotificationPage {
       this.syncUnreadCount();
       this.hasMore = PaginationHelper.computeHasMore(fetched.length);
     } catch (error) {
-      const message = `${error}`;
+      const message = `${ErrorFormat.message(error)}`;
       if (reset) {
         this.errorMessage = message;
       } else {
@@ -234,7 +235,7 @@ struct NotificationPage {
         this.toast('通知已全部清除');
       }
     } catch (error) {
-      this.toast(`清除失败：${error}`);
+      this.toast(`清除失败：${ErrorFormat.message(error)}`);
     } finally {
       this.clearing = false;
     }

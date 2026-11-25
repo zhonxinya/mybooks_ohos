@@ -5,6 +5,7 @@ import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 interface SelectOptionDef {
   text: string;
@@ -106,7 +107,7 @@ struct AdminUsersPage {
       const settings = rsp.settings ?? {};
       this.quotaEnabled = Boolean(settings['enable_download_quota']);
     } catch (e) {
-      this.toast(`加载失败：${e}`);
+      this.toast(`加载失败：${ErrorFormat.message(e)}`);
       if (!reset) {
         this.currentPage = Math.max(1, this.currentPage - 1);
       }
@@ -179,7 +180,7 @@ struct AdminUsersPage {
           this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
         }
       })
-      .catch((e: Object) => this.toast(`操作失败：${e}`));
+      .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
   }
 
   private confirmDeleteUser(user: Record<string, Object>): void {
@@ -251,7 +252,7 @@ struct AdminUsersPage {
       })
       .catch((e: Object) => {
         this.saving = false;
-        this.toast(`保存失败：${e}`);
+        this.toast(`保存失败：${ErrorFormat.message(e)}`);
       });
   }
 
@@ -303,7 +304,7 @@ struct AdminUsersPage {
       })
       .catch((e: Object) => {
         this.saving = false;
-        this.toast(`添加失败：${e}`);
+        this.toast(`添加失败：${ErrorFormat.message(e)}`);
       });
   }
 

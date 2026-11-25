@@ -3,6 +3,7 @@ import { TalebookApi, ApiMessageResult } from '../services/TalebookApi';
 import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -53,7 +54,7 @@ struct AdminMemosPage {
       const data = rsp.data ?? {};
       this.memos = (data['items'] as Record<string, Object>[] | undefined) ?? [];
     } catch (e) {
-      this.loadError = `加载失败：${e}`;
+      this.loadError = `加载失败：${ErrorFormat.message(e)}`;
     } finally {
       this.loading = false;
     }
@@ -118,7 +119,7 @@ struct AdminMemosPage {
       })
       .catch((e: Object) => {
         this.saving = false;
-        this.toast(`操作失败：${e}`);
+        this.toast(`操作失败：${ErrorFormat.message(e)}`);
       });
   }
 
@@ -138,7 +139,7 @@ struct AdminMemosPage {
                 this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
               }
             })
-            .catch((e: Object) => this.toast(`删除失败：${e}`));
+            .catch((e: Object) => this.toast(`删除失败：${ErrorFormat.message(e)}`));
         },
       },
       secondaryButton: { value: '取消', action: () => {} },

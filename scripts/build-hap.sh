@@ -30,6 +30,9 @@ fi
 # 行数门禁（800 有效行，口径见脚本头；UI 贴线页临时豁免列表在 check_file_lines.mjs）
 node "$ROOT/scripts/check_file_lines.mjs" --gate
 
+# 错误呈现门禁（#1670：catch 作用域禁裸异常插值，统一 ErrorFormat.message）
+node "$ROOT/scripts/check_error_toast.mjs" --gate
+
 command -v ace >/dev/null 2>&1 || {
 
   echo "错误：未找到 ace 命令（ACE Tools）。请检查 scripts/android-env.sh 中的 ARKUI_X_SDK。" >&2

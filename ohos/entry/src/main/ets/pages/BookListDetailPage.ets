@@ -17,6 +17,7 @@ import {
 } from '../models/BookListModels';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 interface SheetBookItem {
   bookId: number;
@@ -199,7 +200,7 @@ struct BookListDetailPage {
       this.syncCoverRows();
     } catch (error) {
       if (reset) {
-        this.errorMessage = error instanceof Error ? error.message : `${error}`;
+        this.errorMessage = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
       } else {
         this.toast('加载更多失败');
         this.currentPage = Math.max(1, this.currentPage - 1);
@@ -252,7 +253,7 @@ struct BookListDetailPage {
         booksTotal: this.detail.booksTotal, page: this.detail.page, pageSize: this.detail.pageSize,
       };
     } catch (error) {
-      this.toast(`操作失败：${error}`);
+      this.toast(`操作失败：${ErrorFormat.message(error)}`);
     }
   }
 
@@ -294,7 +295,7 @@ struct BookListDetailPage {
       this.showSheet = false;
       await this.loadDetail(true);
     } catch (error) {
-      this.toast(`保存失败：${error}`);
+      this.toast(`保存失败：${ErrorFormat.message(error)}`);
     } finally {
       this.saving = false;
     }
@@ -320,7 +321,7 @@ struct BookListDetailPage {
                 this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
               }
             })
-            .catch((e: Object) => this.toast(`删除失败：${e}`));
+            .catch((e: Object) => this.toast(`删除失败：${ErrorFormat.message(e)}`));
         },
       },
       secondaryButton: { value: '取消', action: () => {} },
@@ -383,7 +384,7 @@ struct BookListDetailPage {
       this.toast(next ? '已置顶' : '已取消置顶');
       await this.loadDetail(true);
     } catch (error) {
-      this.toast(`操作失败：${error}`);
+      this.toast(`操作失败：${ErrorFormat.message(error)}`);
     }
   }
 
@@ -423,7 +424,7 @@ struct BookListDetailPage {
       fs.closeSync(file.fd);
       this.toast(`已保存：${dest}`);
     } catch (error) {
-      this.toast(`生成失败：${error}`);
+      this.toast(`生成失败：${ErrorFormat.message(error)}`);
     } finally {
       this.shareSaving = false;
     }
@@ -443,7 +444,7 @@ struct BookListDetailPage {
       this.toast(this.detail.isPublic ? '已设为私有' : '已设为公开');
       await this.loadDetail(true);
     } catch (error) {
-      this.toast(`操作失败：${error}`);
+      this.toast(`操作失败：${ErrorFormat.message(error)}`);
     }
   }
 
@@ -495,7 +496,7 @@ struct BookListDetailPage {
       }
       this.addResults = page === 1 ? mapped : this.addResults.concat(mapped);
     } catch (error) {
-      this.toast(`搜索失败：${error}`);
+      this.toast(`搜索失败：${ErrorFormat.message(error)}`);
     } finally {
       this.addSearching = false;
       this.addSearchingMore = false;
@@ -544,7 +545,7 @@ struct BookListDetailPage {
       });
       await this.loadDetail(true);
     } catch (error) {
-      this.toast(`操作失败：${error}`);
+      this.toast(`操作失败：${ErrorFormat.message(error)}`);
     }
   }
 
@@ -585,7 +586,7 @@ struct BookListDetailPage {
                 this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
               }
             })
-            .catch((e: Object) => this.toast(`移出失败：${e}`));
+            .catch((e: Object) => this.toast(`移出失败：${ErrorFormat.message(e)}`));
         },
       },
       secondaryButton: { value: '取消', action: () => {} },

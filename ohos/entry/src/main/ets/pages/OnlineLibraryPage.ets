@@ -23,6 +23,7 @@ import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper
 import { BookViewMode } from '../utils/BookViewMode';
 import { mapTalebookBook } from '../utils/BookMapper';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -114,7 +115,7 @@ struct OnlineLibraryPage {
       this.total = rsp.total ?? this.catalogItems.length;
       this.hasMore = PaginationHelper.computeHasMore(fetched.length);
     } catch (error) {
-      this.handleLoadFailure(reset, error instanceof Error ? error.message : `${error}`);
+      this.handleLoadFailure(reset, error instanceof Error ? error.message : `${ErrorFormat.message(error)}`);
     } finally {
       this.loading = false;
       this.loadingMore = false;
@@ -219,7 +220,7 @@ struct OnlineLibraryPage {
       // 服务端按状态过滤，改完必须重拉才能看到分桶变化
       void this.loadBooks(true);
     }).catch((e: Object) => {
-      this.toast(`保存失败：${e}`);
+      this.toast(`保存失败：${ErrorFormat.message(e)}`);
     });
   }
 

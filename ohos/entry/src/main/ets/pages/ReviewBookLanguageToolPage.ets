@@ -4,6 +4,7 @@ import {
 import { TalebookApi, ApiMessageResult, apiErrorMessage } from '../services/TalebookApi';
 import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 import { TalebookService } from '../services/TalebookService';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -70,7 +71,7 @@ struct ReviewBookLanguageToolPage {
         ? rsp.msg
         : '已启动书名语言检测（可在运行任务中查看进度）', false);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }

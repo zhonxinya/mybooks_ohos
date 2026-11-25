@@ -7,6 +7,7 @@ import {
 } from '../services/AdminOpdsApi';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** OPDS 导入进度轮询：3 秒一次，最多约 5 分钟。 */
 const OPDS_POLL_INTERVAL_MS: number = 3000;
@@ -181,7 +182,7 @@ struct AdminOpdsPage {
         }
       }
     } catch (e) {
-      this.statusLine = `进度读取失败：${e}`;
+      this.statusLine = `进度读取失败：${ErrorFormat.message(e)}`;
       this.stopPoll();
     }
   }
@@ -200,7 +201,7 @@ struct AdminOpdsPage {
       }
       this.sources = rsp.items ?? [];
     } catch (e) {
-      this.loadError = `OPDS 源加载失败：${e}`;
+      this.loadError = `OPDS 源加载失败：${ErrorFormat.message(e)}`;
     } finally {
       this.loading = false;
     }
@@ -216,7 +217,7 @@ struct AdminOpdsPage {
       this.failedItems = rsp.items ?? [];
       this.failedLoaded = true;
     } catch (e) {
-      this.toast(`失败记录加载失败：${e}`);
+      this.toast(`失败记录加载失败：${ErrorFormat.message(e)}`);
     }
   }
 
@@ -240,7 +241,7 @@ struct AdminOpdsPage {
       this.browseItems = rsp.items ?? [];
       this.selectedHrefs = [];
     } catch (e) {
-      this.toast(`浏览失败：${e}`);
+      this.toast(`浏览失败：${ErrorFormat.message(e)}`);
     } finally {
       this.working = false;
     }
@@ -351,7 +352,7 @@ struct AdminOpdsPage {
       }
     }).catch((e: Object) => {
       this.working = false;
-      this.toast(`导入失败：${e}`);
+      this.toast(`导入失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -373,7 +374,7 @@ struct AdminOpdsPage {
       }
     }).catch((e: Object) => {
       this.working = false;
-      this.toast(`重试失败：${e}`);
+      this.toast(`重试失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -476,7 +477,7 @@ struct AdminOpdsPage {
         this.afterSourceWrite(rsp, 'OPDS 源已保存');
       }).catch((e: Object) => {
         this.formBusy = false;
-        this.toast(`保存失败：${e}`);
+        this.toast(`保存失败：${ErrorFormat.message(e)}`);
       });
       return;
     }
@@ -493,7 +494,7 @@ struct AdminOpdsPage {
       this.afterSourceWrite(rsp, 'OPDS 源已更新');
     }).catch((e: Object) => {
       this.formBusy = false;
-      this.toast(`更新失败：${e}`);
+      this.toast(`更新失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -523,7 +524,7 @@ struct AdminOpdsPage {
       void this.loadSources();
     }).catch((e: Object) => {
       this.working = false;
-      this.toast(`切换失败：${e}`);
+      this.toast(`切换失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -561,7 +562,7 @@ struct AdminOpdsPage {
       void this.loadSources();
     }).catch((e: Object) => {
       this.working = false;
-      this.toast(`删除失败：${e}`);
+      this.toast(`删除失败：${ErrorFormat.message(e)}`);
     });
   }
 

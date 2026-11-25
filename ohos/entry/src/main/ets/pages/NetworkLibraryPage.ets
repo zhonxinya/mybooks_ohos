@@ -14,6 +14,7 @@ import {
 } from '../services/NetworkLibraryApi';
 import { PaginationHelper } from '../utils/PaginationHelper';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** 分组列表扁平行：书源标题或书目，供 LazyForEach 按需创建。 */
 interface GroupedListEntry {
@@ -216,7 +217,7 @@ struct NetworkLibraryPage {
       this.sources = NetworkLibraryApi.parseSources(rsp.items);
       this.availability = NetworkLibraryApi.parseAvailability(rsp.availability);
     } catch (e) {
-      this.loadError = `加载书源失败：${e}`;
+      this.loadError = `加载书源失败：${ErrorFormat.message(e)}`;
     } finally {
       this.loading = false;
     }
@@ -405,7 +406,7 @@ struct NetworkLibraryPage {
       this.schedulePoll(600);
     } catch (e) {
       if (token === this.searchToken) {
-        this.settleSearch(`搜索失败：${e}`);
+        this.settleSearch(`搜索失败：${ErrorFormat.message(e)}`);
       }
     }
   }
@@ -480,7 +481,7 @@ struct NetworkLibraryPage {
       }
     } catch (e) {
       if (token === this.searchToken) {
-        this.settleSearch(`搜索状态查询失败：${e}`);
+        this.settleSearch(`搜索状态查询失败：${ErrorFormat.message(e)}`);
       }
       return;
     }
@@ -522,7 +523,7 @@ struct NetworkLibraryPage {
         this.progressText = `发现 · ${this.exploreScope} · 共 ${this.committed.length} 本`;
       }
     } catch (e) {
-      this.toast(`发现页加载失败：${e}`);
+      this.toast(`发现页加载失败：${ErrorFormat.message(e)}`);
       this.progressText = '';
     } finally {
       this.loadingMore = false;
@@ -580,7 +581,7 @@ struct NetworkLibraryPage {
       }
       this.categories = NetworkLibraryApi.parseNetworkCategories(rsp.items);
     } catch (e) {
-      this.categoryError = `分类加载失败：${e}`;
+      this.categoryError = `分类加载失败：${ErrorFormat.message(e)}`;
     } finally {
       this.loadingCategories = false;
     }

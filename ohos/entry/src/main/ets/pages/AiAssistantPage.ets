@@ -19,6 +19,7 @@ import { QwenAudioService } from '../services/QwenAudioService';
 import { AppRouter } from '../utils/AppRouter';
 import { webview } from '@kit.ArkWeb';
 import { BrowserRenderService } from '../services/BrowserRenderService';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** 技能卡片/芯片点击：把现成提示词填入输入框，用户可先补书名再发送。 */
 
@@ -663,7 +664,7 @@ struct AiAssistantPage {
     try {
       await SpeakService.speak(this.messages[index].content);
     } catch (error) {
-      this.toast(`播报失败：${error}`);
+      this.toast(`播报失败：${ErrorFormat.message(error)}`);
     } finally {
       if (this.speakingIndex === index) {
         this.speakingIndex = -1;
@@ -916,7 +917,7 @@ struct AiAssistantPage {
       }
       this.toast('已导出 Markdown');
     } catch (e) {
-      this.toast(`导出失败：${e}`);
+      this.toast(`导出失败：${ErrorFormat.message(e)}`);
     }
   }
 

@@ -9,6 +9,7 @@ import { BookUploadService, PickedBookFile } from '../services/BookUploadService
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { ExternalLinkOpener } from '../services/ExternalLinkOpener';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** 审计日志只渲染最近 N 条，避免长列表进入 Scroll。 */
 const AUDIT_RENDER_LIMIT: number = 30;
@@ -111,7 +112,7 @@ struct AdminMaintenancePage {
       await this.loadAudits();
       await this.loadTrashSizes();
     } catch (e) {
-      this.loadError = `加载失败：${e}`;
+      this.loadError = `加载失败：${ErrorFormat.message(e)}`;
     } finally {
       this.loading = false;
     }
@@ -154,7 +155,7 @@ struct AdminMaintenancePage {
       this.trashSizes = rsp.sizes ?? {};
       this.trashLoaded = true;
     } catch (e) {
-      this.toast(`回收站占用加载失败：${e}`);
+      this.toast(`回收站占用加载失败：${ErrorFormat.message(e)}`);
       this.trashLoaded = true;
     }
   }
@@ -278,7 +279,7 @@ struct AdminMaintenancePage {
     }).catch((e: Object) => {
       this.working = '';
       this.hint = '';
-      this.toast(`检查失败：${e}`);
+      this.toast(`检查失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -309,7 +310,7 @@ struct AdminMaintenancePage {
       BookUploadService.removeStagedFile(key.localPath);
       this.toast(this.messageOf(rsp.err, rsp.msg, 'SSL 证书已上传'));
     } catch (e) {
-      this.toast(`SSL 上传失败：${e}`);
+      this.toast(`SSL 上传失败：${ErrorFormat.message(e)}`);
     } finally {
       this.working = '';
     }
@@ -330,7 +331,7 @@ struct AdminMaintenancePage {
       this.toast(this.messageOf(rsp.err, rsp.msg, '连接成功'));
     }).catch((e: Object) => {
       this.working = '';
-      this.toast(`测试失败：${e}`);
+      this.toast(`测试失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -381,7 +382,7 @@ struct AdminMaintenancePage {
       this.toast(this.messageOf(rsp.err, rsp.msg, '迁移失败'));
     }).catch((e: Object) => {
       this.working = '';
-      this.toast(`迁移失败：${e}`);
+      this.toast(`迁移失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -414,7 +415,7 @@ struct AdminMaintenancePage {
       }
     }).catch((e: Object) => {
       this.working = '';
-      this.toast(`启动失败：${e}`);
+      this.toast(`启动失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -449,7 +450,7 @@ struct AdminMaintenancePage {
               }
             }).catch((e: Object) => {
               this.working = '';
-              this.toast(`操作失败：${e}`);
+              this.toast(`操作失败：${ErrorFormat.message(e)}`);
             });
         },
       },
@@ -485,7 +486,7 @@ struct AdminMaintenancePage {
       void this.loadTrashSizes();
     }).catch((e: Object) => {
       this.working = '';
-      this.toast(`清理失败：${e}`);
+      this.toast(`清理失败：${ErrorFormat.message(e)}`);
     });
   }
 

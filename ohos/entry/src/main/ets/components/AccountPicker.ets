@@ -4,6 +4,7 @@ import { AccountStore } from '../services/AccountStore';
 import { AccountRecord } from '../models/AccountModels';
 import { ServerKind, ServerRegistry } from '../services/ServerProfile';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * 账号快速切换面板。
@@ -70,7 +71,7 @@ export struct AccountPicker {
         ? `已切换到 ${name}（服务端类型识别为 ${ServerRegistry.profile().displayName}）`
         : `已切换到 ${name}`);
     } catch (error) {
-      this.toast(`切换失败：${error}`);
+      this.toast(`切换失败：${ErrorFormat.message(error)}`);
     } finally {
       this.switching = false;
     }

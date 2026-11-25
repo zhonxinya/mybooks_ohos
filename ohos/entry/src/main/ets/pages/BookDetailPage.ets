@@ -15,6 +15,7 @@ import { BookUploadService } from '../services/BookUploadService';
 import { DownloadTaskService, DOWNLOAD_STATUS_TICK_KEY } from '../services/DownloadTaskService';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 interface BookFileFormat {
   format: string;
@@ -231,7 +232,7 @@ struct BookDetailPage {
       }
     } catch (error) {
       if (!silent) {
-        this.errorMessage = `${error}`;
+        this.errorMessage = `${ErrorFormat.message(error)}`;
       }
     } finally {
       if (!silent) {
@@ -409,7 +410,7 @@ struct BookDetailPage {
         this.toast(apiErrorMessage(rsp).length > 0 ? apiErrorMessage(rsp) : '上传失败');
       }
     } catch (e) {
-      this.toast(`上传失败：${e}`);
+      this.toast(`上传失败：${ErrorFormat.message(e)}`);
     }
   }
 
@@ -586,7 +587,7 @@ struct BookDetailPage {
       this.toast(next ? '已加入想读' : '已取消想读');
       this.loadSocialData();
     } catch (error) {
-      this.toast(`操作失败：${error}`);
+      this.toast(`操作失败：${ErrorFormat.message(error)}`);
     }
   }
 
@@ -608,7 +609,7 @@ struct BookDetailPage {
       // #1638：AI 补全可能改标题/作者/封面，重取 detail 同步本地书架快照（免重新下载）
       await TalebookService.syncLocalBookMeta(this.bookId);
     } catch (error) {
-      this.toast(`AI 补全失败：${error}`);
+      this.toast(`AI 补全失败：${ErrorFormat.message(error)}`);
     } finally {
       this.aiFilling = false;
     }
@@ -673,7 +674,7 @@ struct BookDetailPage {
       this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '推送成功');
       this.closeSheet();
     } catch (error) {
-      this.toast(`推送失败：${error}`);
+      this.toast(`推送失败：${ErrorFormat.message(error)}`);
     } finally {
       this.pushing = false;
     }
@@ -704,7 +705,7 @@ struct BookDetailPage {
       this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '发送成功');
       this.closeSheet();
     } catch (error) {
-      this.toast(`发送失败：${error}`);
+      this.toast(`发送失败：${ErrorFormat.message(error)}`);
     } finally {
       this.sendingMail = false;
     }
@@ -728,7 +729,7 @@ struct BookDetailPage {
       this.closeSheet();
       await this.loadDetail();
     } catch (error) {
-      this.toast(`操作失败：${error}`);
+      this.toast(`操作失败：${ErrorFormat.message(error)}`);
     } finally {
       this.formatBusy = false;
     }
@@ -790,7 +791,7 @@ struct BookDetailPage {
       this.notifyLibraryChanged();
       AppRouter.back(this.getUIContext());
     } catch (error) {
-      this.toast(`删除失败：${error}`);
+      this.toast(`删除失败：${ErrorFormat.message(error)}`);
     } finally {
       this.deleteBusy = false;
     }
@@ -832,7 +833,7 @@ struct BookDetailPage {
       this.closeSheet();
       await this.loadDetail();
     } catch (error) {
-      this.toast(`封面上传失败：${error}`);
+      this.toast(`封面上传失败：${ErrorFormat.message(error)}`);
     } finally {
       this.coverBusy = false;
     }
@@ -855,7 +856,7 @@ struct BookDetailPage {
       this.closeSheet();
       await this.loadDetail();
     } catch (error) {
-      this.toast(`操作失败：${error}`);
+      this.toast(`操作失败：${ErrorFormat.message(error)}`);
     } finally {
       this.coverBusy = false;
     }
@@ -876,7 +877,7 @@ struct BookDetailPage {
       this.isSole = !this.isSole;
       this.toast(this.isSole ? '已设为私藏' : '已取消私藏');
     } catch (error) {
-      this.toast(`操作失败：${error}`);
+      this.toast(`操作失败：${ErrorFormat.message(error)}`);
     }
   }
 
@@ -896,7 +897,7 @@ struct BookDetailPage {
         await this.loadDetail();
       }
     } catch (error) {
-      this.toast(`更新失败：${error}`);
+      this.toast(`更新失败：${ErrorFormat.message(error)}`);
     } finally {
       this.formatBusy = false;
     }
@@ -917,7 +918,7 @@ struct BookDetailPage {
       }
       this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '元数据已写入文件');
     } catch (error) {
-      this.toast(`保存失败：${error}`);
+      this.toast(`保存失败：${ErrorFormat.message(error)}`);
     } finally {
       this.formatBusy = false;
     }
@@ -948,7 +949,7 @@ struct BookDetailPage {
       this.toast(`已标记为：${this.readStateLabel(next)}`);
       this.loadSocialData();
     } catch (error) {
-      this.toast(`操作失败：${error}`);
+      this.toast(`操作失败：${ErrorFormat.message(error)}`);
     }
   }
 
@@ -992,7 +993,7 @@ struct BookDetailPage {
       this.closeSheet();
       this.loadSocialData();
     } catch (error) {
-      this.toast(`提交失败：${error}`);
+      this.toast(`提交失败：${ErrorFormat.message(error)}`);
     } finally {
       this.submittingReview = false;
     }
@@ -1018,7 +1019,7 @@ struct BookDetailPage {
                 this.toast(apiErrorMessage(rsp));
               }
             })
-            .catch((e: Object) => this.toast(`删除失败：${e}`));
+            .catch((e: Object) => this.toast(`删除失败：${ErrorFormat.message(e)}`));
         },
       },
       secondaryButton: { value: '取消', action: () => {} },
@@ -1060,7 +1061,7 @@ struct BookDetailPage {
       }
       this.booklistItems = parseBookListQuickItems(rsp.booklists);
     } catch (error) {
-      this.getUIContext().getPromptAction().showToast({ message: `加载失败：${error}` });
+      this.getUIContext().getPromptAction().showToast({ message: `加载失败：${ErrorFormat.message(error)}` });
       this.closeSheet();
     } finally {
       this.booklistLoading = false;
@@ -1095,7 +1096,7 @@ struct BookDetailPage {
         };
       });
     } catch (error) {
-      this.toast(`操作失败：${error}`);
+      this.toast(`操作失败：${ErrorFormat.message(error)}`);
     }
   }
 
@@ -1126,7 +1127,7 @@ struct BookDetailPage {
       this.toast('已创建并加入书单');
       await this.openBooklistSheet();
     } catch (error) {
-      this.toast(`创建失败：${error}`);
+      this.toast(`创建失败：${ErrorFormat.message(error)}`);
     }
   }
 

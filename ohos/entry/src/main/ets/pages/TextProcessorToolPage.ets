@@ -4,6 +4,7 @@ import {
 import { TalebookApi } from '../services/TalebookApi';
 import { TalebookService, ApiEnvelope } from '../services/TalebookService';
 import { BookItem, BookDetail } from '../services/BookModels';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 class TpRule {
   keyword: string = '';
@@ -265,7 +266,7 @@ struct TextProcessorToolPage {
         this.setMsg(`找到 ${items.length} 本`, false);
       }
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
       this.bookResults = [];
     } finally {
       this.busy = false;
@@ -287,7 +288,7 @@ struct TextProcessorToolPage {
       this.processText();
       this.setMsg(`已载入「${book.title}」简介`, false);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -317,7 +318,7 @@ struct TextProcessorToolPage {
         this.setMsg(envelope.error.length > 0 ? envelope.error : '写回失败', true);
       }
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }

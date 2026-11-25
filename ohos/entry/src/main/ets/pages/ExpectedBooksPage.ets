@@ -7,6 +7,7 @@ import { TalebookApi, ApiMessageResult } from '../services/TalebookApi';
 import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { ExpectedItemModel } from '../models/UserModels';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -60,7 +61,7 @@ struct ExpectedBooksPage {
       await TalebookService.ensureAuthenticated();
       this.items = await TalebookApiBooks.getExpectedItems();
     } catch (error) {
-      this.loadError = `加载失败：${error}`;
+      this.loadError = `加载失败：${ErrorFormat.message(error)}`;
     } finally {
       this.loading = false;
     }
@@ -93,7 +94,7 @@ struct ExpectedBooksPage {
       this.newPublisher = '';
       await this.load();
     } catch (error) {
-      this.toast(`添加失败：${error}`);
+      this.toast(`添加失败：${ErrorFormat.message(error)}`);
     } finally {
       this.submitting = false;
     }
@@ -115,7 +116,7 @@ struct ExpectedBooksPage {
                 this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
               }
             })
-            .catch((e: Object) => this.toast(`删除失败：${e}`));
+            .catch((e: Object) => this.toast(`删除失败：${ErrorFormat.message(e)}`));
         },
       },
       secondaryButton: { value: '取消', action: () => {} },

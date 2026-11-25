@@ -7,6 +7,7 @@ import {
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -128,7 +129,7 @@ struct TextReplaceToolPage {
       this.previewHint = hint;
       this.setMsg('预览完成', false);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -161,7 +162,7 @@ struct TextReplaceToolPage {
       this.schedulePoll();
       await this.refreshProgress(false);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }

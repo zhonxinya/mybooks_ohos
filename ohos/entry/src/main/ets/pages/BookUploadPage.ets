@@ -10,6 +10,7 @@ import { BookUploadService, PickedBookFile } from '../services/BookUploadService
 import { AppRouter } from '../utils/AppRouter';
 import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { TalebookApiBooks } from '../services/TalebookApiBooks';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 interface UploadItem {
   id: number;
@@ -47,11 +48,9 @@ const USE_BATCH_UPLOAD = false;
  */
 const BATCH_UNAVAILABLE_KEY = 'talebookUploadBatchUnavailable';
 
-/** 把异常转成可读文本：优先取 message，避免界面上出现 "Error: xxx" 前缀。 */
+/** 把异常转成可读文本（#1670：委托统一归一化，私有实现退役）。 */
 function errorText(e: Object): string {
-  const err = e as Error;
-  const message = err.message;
-  return message !== undefined && message.length > 0 ? message : `${e}`;
+  return ErrorFormat.message(e);
 }
 
 @Entry
@@ -142,7 +141,7 @@ struct BookUploadPage {
         AppRouter.pushUrl(this.getUIContext(), { url: 'pages/BookDetailPage', params: { bookId: bookId } });
       }
     } catch (e) {
-      this.isbnError = `添加失败：${e}`;
+      this.isbnError = `添加失败：${ErrorFormat.message(e)}`;
     } finally {
       this.addingBook = false;
     }
@@ -179,7 +178,7 @@ struct BookUploadPage {
       this.isbnInput = isbn;
       this.toast(`已识别 ISBN：${isbn}`);
     } catch (e) {
-      this.isbnError = `识别失败：${e}`;
+      this.isbnError = `识别失败：${ErrorFormat.message(e)}`;
     } finally {
       this.scanningBarcode = false;
       if (localPath.length > 0) {
@@ -412,7 +411,7 @@ struct BookUploadPage {
         this.batchImportId = 0;
         return;
       } catch (e) {
-        this.batchHint = `状态刷新失败：${e}`;
+        this.batchHint = `状态刷新失败：${ErrorFormat.message(e)}`;
         if (this.batchImportId <= 0) {
           return;
         }
@@ -440,7 +439,7 @@ struct BookUploadPage {
           }
         }
       })
-      .catch((e: Object) => this.toast(`取消失败：${e}`));
+      .catch((e: Object) => this.toast(`取消失败：${ErrorFormat.message(e)}`));
   }
 
   private pendingCount(): number {
@@ -478,8 +477,8 @@ struct BookUploadPage {
         this.toast('未选择文件');
       }
     } catch (e) {
-      if (`${e}`.indexOf('cancel') < 0) {
-        this.toast(`选择文件失败：${e}`);
+      if (`${ErrorFormat.message(e)}`.indexOf('cancel') < 0) {
+        this.toast(`选择文件失败：${ErrorFormat.message(e)}`);
       }
     }
   }
@@ -875,7 +874,7 @@ struct BookUploadPage {
         return;
       }
       this.addFiles().catch((e: Object) => {
-        this.toast(`选择文件失败：${e}`);
+        this.toast(`选择文件失败：${ErrorFormat.message(e)}`);
       });
     });
   }
@@ -1043,7 +1042,7 @@ struct BookUploadPage {
             this.startUpload().catch((e: Object) => {
               // 未捕获的话异常会被静默吞掉：表现为无流量、无报错、无进度
               this.uploading = false;
-              this.toast(`上传启动失败：${e}`);
+              this.toast(`上传启动失败：${ErrorFormat.message(e)}`);
             });
           },
         });
@@ -1090,7 +1089,7 @@ struct BookUploadPage {
           buttonEnabled: !this.scanningBarcode && !this.addingBook,
           onTap: () => {
             this.scanBarcode().catch((e: Object) => {
-              this.toast(`扫码失败：${e}`);
+              this.toast(`扫码失败：${ErrorFormat.message(e)}`);
             });
           },
         });
@@ -1100,7 +1099,7 @@ struct BookUploadPage {
         buttonEnabled: !this.addingBook && !this.scanningBarcode,
         onTap: () => {
           this.addByIsbn().catch((e: Object) => {
-            this.toast(`添加失败：${e}`);
+            this.toast(`添加失败：${ErrorFormat.message(e)}`);
           });
         },
       });

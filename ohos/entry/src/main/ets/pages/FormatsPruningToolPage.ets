@@ -6,6 +6,7 @@ import {
 } from '../services/TalebookApi';
 import { TalebookService } from '../services/TalebookService';
 import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -133,7 +134,7 @@ struct FormatsPruningToolPage {
       this.schedulePoll();
       await this.refreshProgress(false);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }

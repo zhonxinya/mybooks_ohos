@@ -5,6 +5,7 @@ import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -63,7 +64,7 @@ struct AdminToolboxPage {
       }
       this.tools = rsp.tools ?? [];
     } catch (e) {
-      this.loadError = `加载失败：${e}`;
+      this.loadError = `加载失败：${ErrorFormat.message(e)}`;
     } finally {
       this.loading = false;
     }
@@ -92,7 +93,7 @@ struct AdminToolboxPage {
         this.storeHint = '暂无可安装工具';
       }
     } catch (e) {
-      this.loadError = `商店加载失败：${e}`;
+      this.loadError = `商店加载失败：${ErrorFormat.message(e)}`;
     } finally {
       this.loading = false;
     }
@@ -124,7 +125,7 @@ struct AdminToolboxPage {
       }
     }).catch((e: Object) => {
       this.workingId = '';
-      this.toast(`操作失败：${e}`);
+      this.toast(`操作失败：${ErrorFormat.message(e)}`);
     });
   }
 
@@ -153,7 +154,7 @@ struct AdminToolboxPage {
             })
             .catch((e: Object) => {
               this.workingId = '';
-              this.toast(`卸载失败：${e}`);
+              this.toast(`卸载失败：${ErrorFormat.message(e)}`);
             });
         },
       },
@@ -181,7 +182,7 @@ struct AdminToolboxPage {
       })
       .catch((e: Object) => {
         this.workingId = '';
-        this.toast(`安装失败：${e}`);
+        this.toast(`安装失败：${ErrorFormat.message(e)}`);
       });
   }
 

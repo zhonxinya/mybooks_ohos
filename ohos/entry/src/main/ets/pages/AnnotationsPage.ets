@@ -11,6 +11,7 @@ import {
 } from '../services/AnnotationApi';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 const TYPE_ALL: number = 0;
 
@@ -75,7 +76,7 @@ struct AnnotationsPage {
       this.visibleCount = PaginationConstants.PAGE_SIZE;
       this.applyFilter();
     } catch (error) {
-      this.loadError = error instanceof Error ? error.message : `${error}`;
+      this.loadError = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
     } finally {
       this.loading = false;
       this.lastLoadTime = Date.now();

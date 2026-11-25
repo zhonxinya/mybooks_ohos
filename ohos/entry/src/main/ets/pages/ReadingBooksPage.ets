@@ -10,6 +10,7 @@ import { BookItem as ApiBookItem } from '../services/BookModels';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { BookViewMode } from '../utils/BookViewMode';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 interface BookItem {
   id: number;
@@ -115,7 +116,7 @@ struct ReadingBooksPage {
       this.hasMore = PaginationHelper.computeHasMore(fetched.length);
     } catch (error) {
       if (reset) {
-        this.loadError = error instanceof Error ? error.message : `${error}`;
+        this.loadError = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
       }
     } finally {
       this.loading = false;
@@ -257,7 +258,7 @@ struct ReadingBooksPage {
       this.manageMode = false;
       await this.loadBooks(true);
     } catch (error) {
-      this.getUIContext().getPromptAction().showToast({ message: `移除失败：${error}` });
+      this.getUIContext().getPromptAction().showToast({ message: `移除失败：${ErrorFormat.message(error)}` });
     } finally {
       this.removing = false;
     }

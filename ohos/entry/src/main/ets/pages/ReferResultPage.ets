@@ -8,6 +8,7 @@ import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { ReferBook } from '../common/ApiTypes';
 import { BookshelfRefresh } from '../utils/BookshelfRefresh';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -101,7 +102,7 @@ struct ReferResultPage {
       }
     } catch (error) {
       this.entries = [];
-      this.errorMessage = error instanceof Error ? error.message : `${error}`;
+      this.errorMessage = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
     } finally {
       this.loading = false;
     }
@@ -143,7 +144,7 @@ struct ReferResultPage {
       BookshelfRefresh.notifyBooksTab();
       AppRouter.back(this.getUIContext());
     } catch (error) {
-      this.toast(`应用失败：${error}`);
+      this.toast(`应用失败：${ErrorFormat.message(error)}`);
     } finally {
       this.applying = false;
     }
@@ -175,7 +176,7 @@ struct ReferResultPage {
       BookshelfRefresh.notifyBooksTab();
       AppRouter.back(this.getUIContext());
     } catch (error) {
-      this.toast(`重置失败：${error}`);
+      this.toast(`重置失败：${ErrorFormat.message(error)}`);
     }
   }
 

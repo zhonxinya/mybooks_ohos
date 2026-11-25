@@ -15,6 +15,7 @@ import {
 } from '../models/BookListModels';
 import { PaginationConstants, PaginationHelper } from '../utils/PaginationHelper';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 const TAB_PUBLIC: number = 0;
 const TAB_LIKED: number = 1;
@@ -171,7 +172,7 @@ struct BookListsPage {
         return;
       }
       if (reset) {
-        this.errorMessage = error instanceof Error ? error.message : `${error}`;
+        this.errorMessage = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
       } else {
         this.toast('加载更多失败');
         this.currentPage = Math.max(1, this.currentPage - 1);
@@ -273,7 +274,7 @@ struct BookListsPage {
         void this.loadLists(true);
       }
     } catch (error) {
-      this.toast(`操作失败：${error}`);
+      this.toast(`操作失败：${ErrorFormat.message(error)}`);
     }
   }
 
@@ -326,7 +327,7 @@ struct BookListsPage {
       this.showEditSheet = false;
       void this.loadLists(true);
     } catch (error) {
-      this.toast(`保存失败：${error}`);
+      this.toast(`保存失败：${ErrorFormat.message(error)}`);
     } finally {
       this.saving = false;
     }
@@ -348,7 +349,7 @@ struct BookListsPage {
                 this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
               }
             })
-            .catch((e: Object) => this.toast(`删除失败：${e}`));
+            .catch((e: Object) => this.toast(`删除失败：${ErrorFormat.message(e)}`));
         },
       },
       secondaryButton: { value: '取消', action: () => {} },
@@ -397,7 +398,7 @@ struct BookListsPage {
       this.toast(item.isSticky ? '已取消置顶' : '已置顶');
       void this.loadLists(true);
     } catch (error) {
-      this.toast(`操作失败：${error}`);
+      this.toast(`操作失败：${ErrorFormat.message(error)}`);
     }
   }
 
@@ -411,7 +412,7 @@ struct BookListsPage {
       this.toast(item.isPublic ? '已设为私有' : '已设为公开');
       void this.loadLists(true);
     } catch (error) {
-      this.toast(`操作失败：${error}`);
+      this.toast(`操作失败：${ErrorFormat.message(error)}`);
     }
   }
 

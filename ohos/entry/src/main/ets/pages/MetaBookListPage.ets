@@ -5,6 +5,7 @@ import { TalebookApiBooks } from '../services/TalebookApiBooks';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationConstants } from '../utils/PaginationHelper';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 interface MetaItem {
   name: string;
@@ -240,7 +241,7 @@ struct MetaBookListPage {
       this.total = Number(body['total'] ?? fetched.length);
     } catch (error) {
       if (!silent) {
-        this.errorMessage = error instanceof Error ? error.message : `${error}`;
+        this.errorMessage = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
       }
     } finally {
       if (!silent) {
@@ -303,7 +304,7 @@ struct MetaBookListPage {
       });
       await this.loadMeta();
     } catch (error) {
-      this.getUIContext().getPromptAction().showToast({ message: `操作失败：${error}` });
+      this.getUIContext().getPromptAction().showToast({ message: `操作失败：${ErrorFormat.message(error)}` });
     }
   }
 

@@ -3,6 +3,7 @@ import { TalebookApi } from '../services/TalebookApi';
 import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { TalebookService } from '../services/TalebookService';
 import { ApiMessageResult } from '../services/TalebookApi';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 const KB: number = 1024;
 const MB: number = 1024 * 1024;
@@ -47,7 +48,7 @@ struct AdminTrashPage {
         this.uploadSize = Number(sizes['upload'] ?? 0);
       }
     } catch (e) {
-      this.toast(`加载失败：${e}`);
+      this.toast(`加载失败：${ErrorFormat.message(e)}`);
     } finally {
       this.loading = false;
     }
@@ -98,7 +99,7 @@ struct AdminTrashPage {
       })
       .catch((e: Object) => {
         this.working = false;
-        this.toast(`恢复失败：${e}`);
+        this.toast(`恢复失败：${ErrorFormat.message(e)}`);
       });
   }
 
@@ -122,7 +123,7 @@ struct AdminTrashPage {
             })
             .catch((e: Object) => {
               this.working = false;
-              this.toast(`删除失败：${e}`);
+              this.toast(`删除失败：${ErrorFormat.message(e)}`);
             });
         },
       },
@@ -149,7 +150,7 @@ struct AdminTrashPage {
             })
             .catch((e: Object) => {
               this.working = false;
-              this.toast(`清理失败：${e}`);
+              this.toast(`清理失败：${ErrorFormat.message(e)}`);
             });
         },
       },

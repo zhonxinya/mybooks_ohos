@@ -17,6 +17,7 @@ import { BookViewMode } from '../utils/BookViewMode';
 import { mapTalebookBook } from '../utils/BookMapper';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -86,7 +87,7 @@ struct ShelfPage {
       this.total = rsp.total ?? this.shelfBooks.length;
       this.applyPage();
     } catch (error) {
-      this.handleLoadFailure(reset, error instanceof Error ? error.message : `${error}`);
+      this.handleLoadFailure(reset, error instanceof Error ? error.message : `${ErrorFormat.message(error)}`);
     } finally {
       this.loading = false;
       this.loadingMore = false;
@@ -182,7 +183,7 @@ struct ShelfPage {
       this.total = Math.max(0, this.total - 1);
       this.applyPage();
     } catch (error) {
-      this.toast(`操作失败：${error}`);
+      this.toast(`操作失败：${ErrorFormat.message(error)}`);
     }
   }
 

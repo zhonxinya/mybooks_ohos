@@ -11,6 +11,7 @@ import {
 import { TalebookService } from '../services/TalebookService';
 import { BookUploadService, PickedBookFile } from '../services/BookUploadService';
 import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 const TAB_CONVERT: number = 0;
 const TAB_CLONES: number = 1;
@@ -138,7 +139,7 @@ struct MimoTtsToolPage {
       this.cloneVoice = this.cfgStr(cfg, 'clone_voice', '');
       this.configHint = '已载入服务器保存的配置';
     } catch (e) {
-      this.configHint = `载入配置失败：${e}`;
+      this.configHint = `载入配置失败：${ErrorFormat.message(e)}`;
     }
   }
 
@@ -157,7 +158,7 @@ struct MimoTtsToolPage {
       this.configHint = rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '已清除保存的配置';
       this.toast(this.configHint);
     } catch (e) {
-      this.toast(`删除配置失败：${e}`);
+      this.toast(`删除配置失败：${ErrorFormat.message(e)}`);
     } finally {
       this.busy = false;
     }
@@ -209,7 +210,7 @@ struct MimoTtsToolPage {
       this.setMsg(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '测试成功', false);
       this.toast(this.message);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -265,7 +266,7 @@ struct MimoTtsToolPage {
       this.schedulePoll();
       await this.refreshProgress(false);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -345,7 +346,7 @@ struct MimoTtsToolPage {
       }
       await this.loadClones();
     } catch (e) {
-      this.toast(`删除失败：${e}`);
+      this.toast(`删除失败：${ErrorFormat.message(e)}`);
     } finally {
       this.busy = false;
     }
@@ -385,7 +386,7 @@ struct MimoTtsToolPage {
       this.voiceDesc = desc;
       await this.loadPrompts();
     } catch (e) {
-      this.toast(`保存失败：${e}`);
+      this.toast(`保存失败：${ErrorFormat.message(e)}`);
     } finally {
       this.busy = false;
     }
@@ -405,7 +406,7 @@ struct MimoTtsToolPage {
       this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : '已删除提示词');
       await this.loadPrompts();
     } catch (e) {
-      this.toast(`删除失败：${e}`);
+      this.toast(`删除失败：${ErrorFormat.message(e)}`);
     } finally {
       this.busy = false;
     }
@@ -447,7 +448,7 @@ struct MimoTtsToolPage {
         this.cloneUploadName = dot > 0 ? base.substring(0, dot) : base;
       }
     } catch (e) {
-      this.toast(`选择文件失败：${e}`);
+      this.toast(`选择文件失败：${ErrorFormat.message(e)}`);
     }
   }
 
@@ -479,7 +480,7 @@ struct MimoTtsToolPage {
       this.clonePickedHint = '';
       await this.loadClones();
     } catch (e) {
-      this.toast(`上传失败：${e}`);
+      this.toast(`上传失败：${ErrorFormat.message(e)}`);
     } finally {
       this.busy = false;
     }

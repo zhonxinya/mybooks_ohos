@@ -9,6 +9,7 @@ import {
 import { TalebookService } from '../services/TalebookService';
 import { BookUploadService } from '../services/BookUploadService';
 import { TalebookApiToolbox } from '../services/TalebookApiToolbox';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 @Entry
 @Component
@@ -176,7 +177,7 @@ struct MinifyPdfToolPage {
       this.setMsg(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : `已上传 ${filename}`, false);
       this.toast(this.message);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }
@@ -203,7 +204,7 @@ struct MinifyPdfToolPage {
       this.schedulePoll();
       await this.refreshProgress(false);
     } catch (e) {
-      this.setMsg(`${e}`, true);
+      this.setMsg(`${ErrorFormat.message(e)}`, true);
     } finally {
       this.busy = false;
     }

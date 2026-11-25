@@ -4,6 +4,7 @@ import { TalebookApiAdmin } from '../services/TalebookApiAdmin';
 import { TalebookService } from '../services/TalebookService';
 import { ServerFeature, ServerRegistry } from '../services/ServerProfile';
 import { PaginationHelper } from '../utils/PaginationHelper';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 interface StatusOption {
   label: string;
@@ -117,7 +118,7 @@ struct AdminBookReviewsPage {
       this.totalCount = rsp.total !== undefined ? rsp.total : this.reviews.length;
       this.hasMore = PaginationHelper.computeHasMore(fetched.length, REVIEW_PAGE_SIZE);
     } catch (e) {
-      this.toast(`加载失败：${e}`);
+      this.toast(`加载失败：${ErrorFormat.message(e)}`);
       if (!reset) {
         this.currentPage = Math.max(1, this.currentPage - 1);
       }
@@ -154,7 +155,7 @@ struct AdminBookReviewsPage {
           this.toast(rsp.msg !== undefined && rsp.msg.length > 0 ? rsp.msg : rsp.err);
         }
       })
-      .catch((e: Object) => this.toast(`操作失败：${e}`));
+      .catch((e: Object) => this.toast(`操作失败：${ErrorFormat.message(e)}`));
   }
 
   private showReviewActions(review: Record<string, Object>): void {
