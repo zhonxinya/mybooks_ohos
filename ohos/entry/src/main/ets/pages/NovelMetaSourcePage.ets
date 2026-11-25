@@ -84,7 +84,7 @@ struct NovelMetaSourcePage {
     if (uris.length === 0) {
       return;
     }
-    const text: string = this.readTextFile(uris[0]);
+    const text: string = await this.readTextFile(uris[0]);
     if (text.length === 0) {
       if (this.statusText.length === 0) {
         this.finish(false, '导入失败：文件为空或无法读取');
@@ -94,11 +94,11 @@ struct NovelMetaSourcePage {
     await this.runImport('文件导入', async (): Promise<number> => Reader3Native.importFromText(text));
   }
 
-  private readTextFile(uri: string): string {
+  private async readTextFile(uri: string): Promise<string> {
     try {
-      const file = fs.openSync(uri, fs.OpenMode.READ_ONLY);
+      const file = await fs.open(uri, fs.OpenMode.READ_ONLY);
       try {
-        const stat = fs.statSync(file.fd);
+        const stat = await fs.stat(file.fd);
         const size: number = Number(stat.size);
         if (size <= 0) {
           return '';
@@ -108,11 +108,11 @@ struct NovelMetaSourcePage {
           throw new Error(`文件约 ${Math.round(size / 1048576)}MB，超过 ${IMPORT_FILE_MAX_BYTES / 1048576}MB 上限`);
         }
         const buffer = new ArrayBuffer(size);
-        const readLength: number = fs.readSync(file.fd, buffer, { offset: 0, length: size });
+        const readLength: number = await fs.read(file.fd, buffer, { offset: 0, length: size });
         const decoder = util.TextDecoder.create('utf-8', { ignoreBOM: true });
         return decoder.decodeToString(new Uint8Array(buffer, 0, readLength));
       } finally {
-        fs.closeSync(file.fd);
+        await fs.close(file.fd);
       }
     } catch (error) {
       const message: string = ErrorFormat.message(error);

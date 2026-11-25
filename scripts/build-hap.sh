@@ -33,6 +33,12 @@ node "$ROOT/scripts/check_file_lines.mjs" --gate
 # 错误呈现门禁（#1670：catch 作用域禁裸异常插值，统一 ErrorFormat.message）
 node "$ROOT/scripts/check_error_toast.mjs" --gate
 
+# 同步大文件 I/O 门禁（批G #1677：UI 层禁 readSync/writeSync/copyFileSync）
+node "$ROOT/scripts/check_sync_io.mjs" --gate
+
+# 状态色硬编码门禁（批G #1674：状态色令牌值禁直写，系统对话框按钮豁免）
+node "$ROOT/scripts/check_hardcoded_status_color.mjs" --gate
+
 command -v ace >/dev/null 2>&1 || {
 
   echo "错误：未找到 ace 命令（ACE Tools）。请检查 scripts/android-env.sh 中的 ARKUI_X_SDK。" >&2
