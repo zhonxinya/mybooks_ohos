@@ -42,6 +42,10 @@ jobs:
       - name: Check hardcoded status colors
         run: node scripts/check_hardcoded_status_color.mjs --gate
 
+      # ForEach keyGenerator 门禁（批K 建议 #1502：两参 @State ForEach 拦截）
+      - name: Check ForEach keyGenerator
+        run: node scripts/check_foreach_key.mjs --gate
+
       # 门禁自测（批H 建议 #1836：四门禁负向/豁免样例，防门禁正则本身失效）
       - name: Gate selftests
         run: node scripts/gates_selftest.mjs

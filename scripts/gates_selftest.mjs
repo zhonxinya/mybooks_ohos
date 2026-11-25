@@ -18,6 +18,7 @@ const GATES = [
   'check_error_toast.mjs',
   'check_sync_io.mjs',
   'check_hardcoded_status_color.mjs',
+  'check_foreach_key.mjs',
 ];
 
 let fails = 0;

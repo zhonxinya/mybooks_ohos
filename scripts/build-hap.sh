@@ -39,6 +39,9 @@ node "$ROOT/scripts/check_sync_io.mjs" --gate
 # 状态色硬编码门禁（批G #1674：状态色令牌值禁直写，系统对话框按钮豁免）
 node "$ROOT/scripts/check_hardcoded_status_color.mjs" --gate
 
+# ForEach keyGenerator 门禁（批K 建议 #1502：两参 @State ForEach=复用不刷新根因类）
+node "$ROOT/scripts/check_foreach_key.mjs" --gate
+
 # 门禁自测（批H 建议 #1836：正则判定灵敏度负向样例，防门禁本身失效）
 node "$ROOT/scripts/gates_selftest.mjs"
 
