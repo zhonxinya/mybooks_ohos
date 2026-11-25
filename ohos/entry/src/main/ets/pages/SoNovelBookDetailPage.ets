@@ -146,7 +146,7 @@ struct SoNovelBookDetailPage {
       if (SoNovelMerge.isUnstableSource(this.payload.sourceId)) {
         Text('该书源（顶点小说）近期不稳定，下载失败时可尝试搜索同名书并选择其他书源')
           .fontSize(12)
-          .fontColor('#E84026')
+          .fontColor($r('app.color.error'))
           .width('100%');
       }
 
