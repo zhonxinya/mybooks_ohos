@@ -89,6 +89,25 @@ function effectiveLines(text) {
   return count;
 }
 
+// --selftest（批H，建议 #1836）：有效行口径样例自证（空行/整行注释/块注释跨行/尾随代码）
+if (process.argv.includes('--selftest')) {
+  const samples = [
+    { text: ['', '// c', '/* a', 'b */', 'code'].join('\n'), want: 1, desc: '空行+行注释+块注释全跳过' },
+    { text: '/* x */ code', want: 1, desc: '块注释后尾随代码计数' },
+    { text: ['a', ' ', '  // b', 'c'].join('\n'), want: 2, desc: '有效代码行计数' },
+    { text: ['/* a', 'b', 'c'].join('\n'), want: 0, desc: '未闭合块注释全跳过' },
+    { text: 'const s = `// 反引号内 // 不算注释行`;', want: 1, desc: '行尾非注释不误跳' },
+  ];
+  let fails = 0;
+  for (const s of samples) {
+    const got = effectiveLines(s.text);
+    if (got !== s.want) { fails++; console.log(`  [FAIL] ${s.desc}：期望 ${s.want}，实得 ${got}`); }
+  }
+  console.log(fails === 0 ? `行数门禁 selftest 通过（${samples.length}/${samples.length}）`
+    : `行数门禁 selftest 失败 ${fails} 项`);
+  process.exit(fails === 0 ? 0 : 1);
+}
+
 const args = new Set(process.argv.slice(2));
 const rows = [];
 for (const t of TARGETS) {

@@ -23,6 +23,25 @@ const DIRS = ['pages', 'components'];
 const ALLOW = new Set(['ReadKitReader.ets']);
 const RE = /fs\.(readSync|writeSync|copyFileSync)\s*\(/;
 
+// --selftest（批H，建议 #1836）：负向/放行样例自证正则灵敏度
+if (process.argv.includes('--selftest')) {
+  const samples = [
+    { line: 'const n = fs.readSync(file.fd, buf, 0, buf.byteLength);', want: true, desc: 'readSync 命中' },
+    { line: 'fs.writeSync(file.fd, data);', want: true, desc: 'writeSync 命中' },
+    { line: 'fs.copyFileSync(uri, dest);', want: true, desc: 'copyFileSync 命中' },
+    { line: 'await fs.read(fd, buf, { length: n });', want: false, desc: '异步 read 放行' },
+    { line: 'fs.statSync(dir);', want: false, desc: '元数据 statSync 放行' },
+    { line: 'fs.mkdirSync(dir, { recursive: true });', want: false, desc: '元数据 mkdirSync 放行' },
+  ];
+  let fails = 0;
+  for (const s of samples) {
+    if (RE.test(s.line) !== s.want) { fails++; console.log(`  [FAIL] ${s.desc}（期望${s.want ? '命中' : '放行'}）`); }
+  }
+  console.log(fails === 0 ? `同步 I/O 门禁 selftest 通过（${samples.length}/${samples.length}）`
+    : `同步 I/O 门禁 selftest 失败 ${fails} 项`);
+  process.exit(fails === 0 ? 0 : 1);
+}
+
 const hits = [];
 for (const d of DIRS) {
   const dir = join(ETS, d);

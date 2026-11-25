@@ -90,7 +90,7 @@ export class AiTools {
 
   /** 工具目录分组：按用途归类，供 list_ai_tools 输出与设置页展示。 */
   private static readonly TOOL_GROUPS: string[][] = [
-    ['书架检索', 'search_books', 'book_detail', 'shelf_list', 'book_progress', 'reading_history', 'reading_stats'],
+    ['书架检索', 'search_books', 'book_detail', 'book_notes', 'shelf_list', 'book_progress', 'reading_history', 'reading_stats'],
     ['书单管理', 'list_booklists', 'create_booklist', 'add_books_to_booklist', 'update_booklist',
       'delete_booklist', 'remove_book_from_booklist'],
     ['书籍入库', 'search_sonovel', 'add_sonovel_task', 'list_download_tasks', 'add_to_shelf',

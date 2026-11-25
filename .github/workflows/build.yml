@@ -42,6 +42,10 @@ jobs:
       - name: Check hardcoded status colors
         run: node scripts/check_hardcoded_status_color.mjs --gate
 
+      # 门禁自测（批H 建议 #1836：四门禁负向/豁免样例，防门禁正则本身失效）
+      - name: Gate selftests
+        run: node scripts/gates_selftest.mjs
+
       - name: Build HAP
         id: build
         uses: ./.github/actions/build-hap
