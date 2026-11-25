@@ -46,7 +46,11 @@ jobs:
       - name: Check ForEach keyGenerator
         run: node scripts/check_foreach_key.mjs --gate
 
-      # 门禁自测（批H 建议 #1836：四门禁负向/豁免样例，防门禁正则本身失效）
+      # 路由注册一致性门禁（批M：'pages/X' 字面量须注册、注册项须有源文件）
+      - name: Check route consistency
+        run: node scripts/check_routes.mjs --gate
+
+      # 门禁自测（批H 建议 #1836：六门禁负向/豁免样例，防门禁正则本身失效）
       - name: Gate selftests
         run: node scripts/gates_selftest.mjs
 
