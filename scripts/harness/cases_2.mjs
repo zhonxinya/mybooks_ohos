@@ -94,6 +94,11 @@ export function register(ctx) {
     toolsState.tasks[0].message = '章节进度 42/100';
     const l = await RealAiTools.execute('list_download_tasks', '{}');
     assert.ok(l.includes('[下载中] 《夜的命名术》') && l.includes('42%'));
+    // 建议 #1500（批L）：失败行必须回显入队书源 URL——书源站改版时这是唯一的对账凭据
+    toolsState.tasks[0].status = 'failed';
+    toolsState.tasks[0].error = '解析失败：未找到目录页';
+    const lf = await RealAiTools.execute('list_download_tasks', '{}');
+    assert.ok(lf.includes('[失败]') && lf.includes('解析失败') && lf.includes('http://x/book/1/'), lf);
     const c = await RealAiTools.execute('create_booklist', '{"name":"赛博朋克","description":"d"}');
     assert.ok(c.includes('已创建书单「赛博朋克」（id=77）'));
     assert.deepEqual(toolsState.booklistCreateCalls[0],

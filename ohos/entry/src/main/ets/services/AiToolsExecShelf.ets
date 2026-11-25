@@ -288,6 +288,10 @@ export class AiToolsExecShelf {
       }
       if (t.status === 'failed' && t.error.length > 0) {
         line += ` 错误：${AiToolsCore.clip(t.error, 40)}`;
+        // 建议 #1500：书源站改版导致下载失败时，回显入队 URL 方便对账是哪条链接失效
+        if (t.payload !== undefined && t.payload.url.length > 0) {
+          line += `（书源链接：${AiToolsCore.clip(t.payload.url, 50)}）`;
+        }
       }
       if (t.status === 'completed' && t.filePath.length > 0) {
         line += '，已存入本地书架';
