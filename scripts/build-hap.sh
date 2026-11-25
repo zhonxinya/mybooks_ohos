@@ -42,6 +42,9 @@ node "$ROOT/scripts/check_hardcoded_status_color.mjs" --gate
 # ForEach keyGenerator 门禁（批K 建议 #1502：两参 @State ForEach=复用不刷新根因类）
 node "$ROOT/scripts/check_foreach_key.mjs" --gate
 
+# 路由注册一致性门禁（批M：'pages/X' 字面量须注册、注册项须有源文件）
+node "$ROOT/scripts/check_routes.mjs" --gate
+
 # 门禁自测（批H 建议 #1836：正则判定灵敏度负向样例，防门禁本身失效）
 node "$ROOT/scripts/gates_selftest.mjs"
 
