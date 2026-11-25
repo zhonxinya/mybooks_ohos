@@ -4,6 +4,7 @@ import { PageScaffold, LoadingState, EmptyState, AuthImage, LazyDataSource } fro
 import { AudioFileInfo } from '../common/ApiTypes';
 import { AudioPlaybackListener, AudioPlaybackService, AudioPlaybackState } from '../services/AudioPlaybackService';
 import { AppRouter } from '../utils/AppRouter';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 const SPEEDS: number[] = [0.75, 1, 1.25, 1.5, 2];
 
@@ -58,7 +59,7 @@ struct AudioPlayerPage {
     service.openBook(context, this.bookId, title, author, cover, startIndex, resume)
       .catch((e: Object): void => {
         hilog.error(0x0000, 'AudioPlayerPage', 'openBook rejected: %{public}s',
-          e instanceof Error ? e.message : String(e));
+          ErrorFormat.message(e));
       });
   }
 

@@ -10,6 +10,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AiService } from './AiService';
 import { TalebookService } from './TalebookService';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 const TAG: string = 'QwenAudio';
 const SAMPLE_RATE: number = 16000;
@@ -50,7 +51,7 @@ export class QwenAudioService {
         }
       } catch (e) {
         hilog.error(0x0000, TAG, 'readData handler error: %{public}s',
-          e instanceof Error ? e.message : String(e));
+          ErrorFormat.message(e));
       }
     });
     QwenAudioService.capturer = capturer;
@@ -331,7 +332,7 @@ export class QwenAudioService {
         }
       } catch (e) {
         hilog.error(0x0000, TAG, 'stateChange handler error: %{public}s',
-          e instanceof Error ? e.message : String(e));
+          ErrorFormat.message(e));
         QwenAudioService.finishPlay(false);
       }
     });

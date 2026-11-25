@@ -9,6 +9,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AiService } from './AiService';
 import type { AiMessage } from './AiService';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 const TAG: string = 'RealtimeCall';
 const REALTIME_MODEL: string = 'qwen-audio-3.0-realtime-plus';
@@ -140,7 +141,7 @@ export class RealtimeCallService {
         RealtimeCallService.handleEvent(text);
       } catch (e) {
         hilog.error(0x0000, TAG, 'ws message handler error: %{public}s',
-          e instanceof Error ? e.message : String(e));
+          ErrorFormat.message(e));
       }
     });
     ws.on('close', (): void => {
@@ -151,7 +152,7 @@ export class RealtimeCallService {
         }
       } catch (e) {
         hilog.error(0x0000, TAG, 'ws close handler error: %{public}s',
-          e instanceof Error ? e.message : String(e));
+          ErrorFormat.message(e));
       }
     });
     ws.on('error', (err: BusinessError): void => {

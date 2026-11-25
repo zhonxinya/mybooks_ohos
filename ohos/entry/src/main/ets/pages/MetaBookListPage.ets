@@ -241,7 +241,7 @@ struct MetaBookListPage {
       this.total = Number(body['total'] ?? fetched.length);
     } catch (error) {
       if (!silent) {
-        this.errorMessage = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
+        this.errorMessage = ErrorFormat.message(error);
       }
     } finally {
       if (!silent) {

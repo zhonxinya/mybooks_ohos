@@ -11,6 +11,7 @@ import { CoverCache } from '../utils/CoverCache';
 import { AudioPlatformOhos } from './AudioPlatformOhos';
 import { AudioPlatformAndroid } from './AudioPlatformAndroid';
 import { PlatformTarget } from '../common/PlatformTarget';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 const TAG: string = 'AudioPlayback';
 /** 进度上报节流：1s 一次，避免高频 IPC */
@@ -379,7 +380,7 @@ export class AudioPlaybackService {
         }
       } catch (e) {
         hilog.error(0x0000, TAG, 'stateChange handler error: %{public}s',
-          e instanceof Error ? e.message : String(e));
+          ErrorFormat.message(e));
       }
     });
     player.on('timeUpdate', (time: number) => {

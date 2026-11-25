@@ -138,7 +138,7 @@ struct SoNovelSearchPage {
       if (token !== this.searchToken) {
         return;
       }
-      this.errorMessage = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
+      this.errorMessage = ErrorFormat.message(error);
       this.mergedResults = [];
       this.visibleResults = [];
       this.catalogItems = [];

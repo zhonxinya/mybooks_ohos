@@ -271,7 +271,7 @@ export struct BookshelfPage {
       this.audioHasMore = PaginationHelper.computeHasMore(fetched.length);
     } catch (error) {
       if (reset) {
-        this.audioError = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
+        this.audioError = ErrorFormat.message(error);
       }
     } finally {
       this.audioLoading = false;

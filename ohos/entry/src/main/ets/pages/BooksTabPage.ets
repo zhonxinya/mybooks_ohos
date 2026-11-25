@@ -251,7 +251,7 @@ export struct BooksTabPage {
       }
     } catch (error) {
       if (reset) {
-        this.errorMessage = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
+        this.errorMessage = ErrorFormat.message(error);
         this.emptyActionLabel = TalebookService.hasAuthCredentials() ? '' : '去配置账号';
       }
     } finally {

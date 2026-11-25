@@ -1,6 +1,7 @@
 import { AiService } from '../services/AiService';
 import { McpServer } from '../services/McpService';
 import { AiToolDefinition } from '../services/AiToolsDefs';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * MCP 设置区（AiSettingsPage「MCP」档）。
@@ -98,7 +99,7 @@ export struct AiMcpSection {
       this.editTag = '';
       this.reload();
     } catch (error) {
-      this.toast(error instanceof Error ? error.message : String(error));
+      this.toast(ErrorFormat.message(error));
     }
   }
 

@@ -1,6 +1,7 @@
 import { rcp } from '@kit.RemoteCommunicationKit';
 import { util } from '@kit.ArkTS';
 import { Reader3Meta, Reader3Native } from './Reader3Native';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * 网文详情页元数据补全：输入书源站详情页 url（来自 so-novel 聚合搜索的 url 字段），
@@ -138,7 +139,7 @@ export class NovelMetaService {
     try {
       html = await NovelMetaService.fetchText(trimmed);
     } catch (error) {
-      empty.error = `详情页获取失败：${error instanceof Error ? error.message : String(error)}`;
+      empty.error = `详情页获取失败：${ErrorFormat.message(error)}`;
       return empty;
     }
     // WAF/JS 壳识别：拿回来的是挑战页时给出明确原因，避免报「解析不出」误导排查

@@ -102,7 +102,7 @@ struct ReferResultPage {
       }
     } catch (error) {
       this.entries = [];
-      this.errorMessage = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
+      this.errorMessage = ErrorFormat.message(error);
     } finally {
       this.loading = false;
     }

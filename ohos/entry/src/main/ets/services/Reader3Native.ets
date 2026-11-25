@@ -3,6 +3,7 @@ import { rcp } from '@kit.RemoteCommunicationKit';
 import { util } from '@kit.ArkTS';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * reader_core 书源引擎桥（预编译 libreader3_native.so，见 cpp/reader3_meta.cpp）。
@@ -171,7 +172,7 @@ export class Reader3Native {
       valid = Reader3Native.parseSources(jsonText);
     } catch (error) {
       // 失败必须留痕：页面上的红字一闪而过，事后无从排查（本次 bug 就吃了没日志的亏）
-      const message: string = error instanceof Error ? error.message : String(error);
+      const message: string = ErrorFormat.message(error);
       hilog.warn(0x0000, 'Reader3Native', 'import rejected: %{public}s', message);
       throw new Error(message);
     }
@@ -352,7 +353,7 @@ export class Reader3Native {
         `"headers":${Reader3Native.headerJson(response.headers)},` +
         `"body_b64":${JSON.stringify(b64)}}`;
     } catch (error) {
-      const message: string = error instanceof Error ? error.message : String(error);
+      const message: string = ErrorFormat.message(error);
       return `{"status_code":0,"headers":{},"body_b64":"","transport_error":${JSON.stringify(message)}}`;
     } finally {
       session.close();

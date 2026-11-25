@@ -1,4 +1,5 @@
 import { TalebookCoreService } from './TalebookCoreService';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * 人机验证（captcha）API —— talebook 上游专有，mybooks 无对应端点。
@@ -130,7 +131,7 @@ function sceneEnabled(scenes: CaptchaScenes, scene: string): boolean {
 
 /** 错误对象 → 提示文案（与页面既有写法一致）。 */
 export function captchaErrorMessage(error: Object): string {
-  return error instanceof Error ? error.message : `${error}`;
+  return ErrorFormat.message(error);
 }
 
 export class CaptchaApi {

@@ -1,6 +1,7 @@
 import { TalebookService } from './TalebookService';
 import { AiServiceConfig } from './AiServiceConfig';
 import { WebSearchChannels, WebSearchHit, BAIDU_UA, ABSTRACT_MAX } from './WebSearchChannels';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** 百科单通道检索结果。ok=false 时 error 说明原因（供工具层如实回传）。 */
 export interface EncyclopediaHit {
@@ -111,7 +112,7 @@ export class EncyclopediaService {
       }
       return hit;
     } catch (error) {
-      hit.error = error instanceof Error ? error.message : `${error}`;
+      hit.error = ErrorFormat.message(error);
       return hit;
     }
   }
@@ -146,7 +147,7 @@ export class EncyclopediaService {
       hit.url = `https://zh.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`;
       return hit;
     } catch (error) {
-      hit.error = error instanceof Error ? error.message : `${error}`;
+      hit.error = ErrorFormat.message(error);
       return hit;
     }
   }

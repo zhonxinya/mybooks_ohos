@@ -1,5 +1,6 @@
 import { PageScaffold } from '../components';
 import { AiService, AiModelEntry, AiProviderPreset } from '../services/AiService';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /**
  * 模型库：模型条目 = 名称 + 服务商 + 模型 id 的自由组合。
@@ -90,7 +91,7 @@ struct AiModelLibraryPage {
         this.toast(`获取到 ${ids.length} 个模型`);
       }
     } catch (error) {
-      this.toast(error instanceof Error ? error.message : String(error));
+      this.toast(ErrorFormat.message(error));
     } finally {
       this.fetching = false;
     }
@@ -125,7 +126,7 @@ struct AiModelLibraryPage {
       this.editId = '';
       this.reload();
     } catch (error) {
-      this.toast(error instanceof Error ? error.message : String(error));
+      this.toast(ErrorFormat.message(error));
     }
   }
 

@@ -101,7 +101,7 @@ struct BookAnnotationsPage {
       await TalebookService.ensureAuthenticated();
       this.items = await AnnotationApi.listBookAnnotations(this.bookId, this.scopeValue());
     } catch (error) {
-      this.loadError = error instanceof Error ? error.message : `${ErrorFormat.message(error)}`;
+      this.loadError = ErrorFormat.message(error);
     } finally {
       this.loading = false;
     }
@@ -211,7 +211,7 @@ struct BookAnnotationsPage {
       this.editorOpen = false;
       await this.load();
     } catch (error) {
-      this.toast(`保存失败：${error instanceof Error ? error.message : error}`);
+      this.toast(`保存失败：${ErrorFormat.message(error)}`);
     } finally {
       this.saving = false;
     }
@@ -237,7 +237,7 @@ struct BookAnnotationsPage {
       this.toast(`已删除 ${result.deleted} 条`);
       await this.load();
     } catch (error) {
-      this.toast(`删除失败：${error instanceof Error ? error.message : error}`);
+      this.toast(`删除失败：${ErrorFormat.message(error)}`);
     }
   }
 

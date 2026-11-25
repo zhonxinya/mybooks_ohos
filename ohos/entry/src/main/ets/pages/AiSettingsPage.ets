@@ -4,6 +4,7 @@ import { AiService, AiConfig, AiProviderPreset, AiMessage, CONTEXT_LENGTH_OPTION
 import { SpeakService } from '../services/SpeakService';
 import { AppRouter } from '../utils/AppRouter';
 import { REALTIME_TIMBRES, TTS_TIMBRES, timbreLabel, AiVoiceTimbre } from '../services/AiVoiceKit';
+import { ErrorFormat } from '../utils/ErrorFormat';
 
 /** 思考强度档位：值即 reasoning_effort 透传内容，default 不发字段。 */
 const REASONING_EFFORT_OPTIONS: string[] = ['default', 'low', 'medium', 'high'];
@@ -188,7 +189,7 @@ struct AiSettingsPage {
       }
     } catch (error) {
       this.testOk = false;
-      this.testResult = error instanceof Error ? error.message : String(error);
+      this.testResult = ErrorFormat.message(error);
     } finally {
       this.fetchingModels = false;
     }
@@ -295,7 +296,7 @@ struct AiSettingsPage {
       this.toast('已保存');
       return true;
     } catch (error) {
-      this.toast(error instanceof Error ? error.message : String(error));
+      this.toast(ErrorFormat.message(error));
       return false;
     }
   }
@@ -317,7 +318,7 @@ struct AiSettingsPage {
       this.testResult = this.testOk ? `连接正常，模型回复：${reply.substring(0, 40)}` : '连接成功但返回为空';
     } catch (error) {
       this.testOk = false;
-      this.testResult = error instanceof Error ? error.message : String(error);
+      this.testResult = ErrorFormat.message(error);
     } finally {
       this.testing = false;
     }
@@ -337,7 +338,7 @@ struct AiSettingsPage {
       this.testResult = completed ? `${engineName}链路正常（播放完成）` : `${engineName}链路结束（被打断或提前停止）`;
     } catch (error) {
       this.testOk = false;
-      this.testResult = `${engineName}链路失败：${error instanceof Error ? error.message : String(error)}`;
+      this.testResult = `${engineName}链路失败：${ErrorFormat.message(error)}`;
     } finally {
       this.probingVoice = false;
     }
