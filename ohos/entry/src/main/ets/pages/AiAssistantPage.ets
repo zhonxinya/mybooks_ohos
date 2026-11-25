@@ -1472,9 +1472,10 @@ struct AiAssistantPage {
 
         // realtime 语音会话入口：内容实时进消息流，不跳通话页
         Stack() {
-          SymbolGlyph($r('sys.symbol.phone'))
-            .fontSize(20)
-            .fontColor([Color.Black]);
+        // #1671：黑图标配 page_background 深色模式下黑底黑图不可见，改自适应文本令牌
+        SymbolGlyph($r('sys.symbol.phone'))
+          .fontSize(22)
+          .fontColor([$r('app.color.text_primary')]);
         }
         .width(44)
         .height(44)
