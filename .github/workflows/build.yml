@@ -26,37 +26,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 行数门禁（800 有效行；UI 贴线页临时豁免见 check_file_lines.mjs UI_ALLOWLIST）
-      - name: Check file lines
-        run: node scripts/check_file_lines.mjs --gate
-
-      # 错误呈现门禁（#1670：catch 作用域禁裸异常插值）
-      - name: Check error toast formatting
-        run: node scripts/check_error_toast.mjs --gate
-
-      # 同步大文件 I/O 门禁（批G #1677：UI 层禁 readSync/writeSync/copyFileSync）
-      - name: Check sync file I/O in UI layer
-        run: node scripts/check_sync_io.mjs --gate
-
-      # 状态色硬编码门禁（批G #1674：状态色令牌值禁直写，系统对话框按钮豁免）
-      - name: Check hardcoded status colors
-        run: node scripts/check_hardcoded_status_color.mjs --gate
-
-      # ForEach keyGenerator 门禁（批K 建议 #1502：两参 @State ForEach 拦截）
-      - name: Check ForEach keyGenerator
-        run: node scripts/check_foreach_key.mjs --gate
-
-      # 路由注册一致性门禁（批M：'pages/X' 字面量须注册、注册项须有源文件）
-      - name: Check route consistency
-        run: node scripts/check_routes.mjs --gate
-
-      # 裸 Promise flush 门禁（批N：store.flush() 无 await/.catch/callback=静默丢数据）
-      - name: Check bare flush promise
-        run: node scripts/check_flush_promise.mjs --gate
-
-      # 门禁自测（批H 建议 #1836：七门禁负向/豁免样例，防门禁正则本身失效）
-      - name: Gate selftests
-        run: node scripts/gates_selftest.mjs
+      # 全部门禁 + 自测（批P 建议 #1854 后续：清单以 gates_selftest.mjs 的 GATES
+      # 数组为唯一来源，新增门禁只改该数组即自动进 CI，逐项 [OK]/[FAIL] 输出；
+      # 原八步硬编码清单有「新门禁漏加 CI 静默不跑」漂移风险）
+      - name: Gate checks + selftests
+        run: bash scripts/run-gates.sh
 
       - name: Build HAP
         id: build
