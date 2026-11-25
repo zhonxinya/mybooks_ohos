@@ -50,7 +50,11 @@ jobs:
       - name: Check route consistency
         run: node scripts/check_routes.mjs --gate
 
-      # 门禁自测（批H 建议 #1836：六门禁负向/豁免样例，防门禁正则本身失效）
+      # 裸 Promise flush 门禁（批N：store.flush() 无 await/.catch/callback=静默丢数据）
+      - name: Check bare flush promise
+        run: node scripts/check_flush_promise.mjs --gate
+
+      # 门禁自测（批H 建议 #1836：七门禁负向/豁免样例，防门禁正则本身失效）
       - name: Gate selftests
         run: node scripts/gates_selftest.mjs
 

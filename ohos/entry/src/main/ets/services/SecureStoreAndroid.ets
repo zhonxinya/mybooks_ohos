@@ -46,7 +46,13 @@ export class SecureStoreAndroid {
       }
       const store: preferences.Preferences = SecureStoreAndroid.openStore(context);
       store.putSync(SecureStoreAndroid.encodeKey(key), sealed);
-      store.flush();
+      // flush 失败=数据未落盘而 put 已"成功"返回；callback 形态保留同步契约、
+      // 失败必须可见（批N：裸 Promise 无 catch 是静默数据丢失通道）
+      store.flush((err: BusinessError) => {
+        if (err) {
+          hilog.error(0x0000, TAG, 'flush after put failed, code: %{public}d, message: %{public}s', err.code, err.message);
+        }
+      });
     } catch (error) {
       const err = error as BusinessError;
       hilog.error(0x0000, TAG, 'put failed, code: %{public}d, message: %{public}s', err.code, err.message);
@@ -79,7 +85,11 @@ export class SecureStoreAndroid {
     try {
       const store: preferences.Preferences = SecureStoreAndroid.openStore(context);
       store.deleteSync(SecureStoreAndroid.encodeKey(key));
-      store.flush();
+      store.flush((err: BusinessError) => {
+        if (err) {
+          hilog.error(0x0000, TAG, 'flush after delete failed, code: %{public}d, message: %{public}s', err.code, err.message);
+        }
+      });
     } catch (error) {
       const err = error as BusinessError;
       hilog.error(0x0000, TAG, 'delete failed, code: %{public}d, message: %{public}s', err.code, err.message);
