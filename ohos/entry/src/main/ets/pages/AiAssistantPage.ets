@@ -519,14 +519,8 @@ struct AiAssistantPage {
         return;
       }
       const dest = `${this.aiImagesDir()}/img_${Date.now()}.jpg`;
-      const srcFile = fs.openSync(result.photoUris[0], fs.OpenMode.READ_ONLY);
-      const dstFile = fs.openSync(dest, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
-      try {
-        fs.copyFileSync(srcFile.fd, dstFile.fd);
-      } finally {
-        fs.closeSync(srcFile);
-        fs.closeSync(dstFile);
-      }
+      // 相册原图可达数 MB：copyFileSync 在 UI 线程整文件拷贝，改异步 API
+      await fs.copyFile(result.photoUris[0], dest);
       this.pendingImages = this.pendingImages.concat([dest]);
     } catch (_error) {
       // 取消选择/复制失败：静默
@@ -909,11 +903,12 @@ struct AiAssistantPage {
       if (uris.length === 0) {
         return;
       }
-      const file = fs.openSync(uris[0], fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      // 长对话导出的 md 可达数百 KB，写入走异步 API
+      const file = await fs.open(uris[0], fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
       try {
-        fs.writeSync(file.fd, md);
+        await fs.write(file.fd, md);
       } finally {
-        fs.closeSync(file);
+        await fs.close(file);
       }
       this.toast('已导出 Markdown');
     } catch (e) {
