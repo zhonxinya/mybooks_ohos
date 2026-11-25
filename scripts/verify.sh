@@ -13,6 +13,8 @@
 
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# harness 跑 .ts 夹具需 strip-types（批P 分级判据：run-gates.sh 不加此标记）
+export MYBOOKS_NODE_NEED_TS=1
 # shellcheck source=/dev/null
 source "$ROOT/scripts/ensure-node.sh"
 
