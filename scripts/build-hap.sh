@@ -72,6 +72,9 @@ if [ "$ACE_STATUS" -ne 0 ] || grep -q 'COMPILE RESULT:FAIL' "$ACE_LOG"; then
 fi
 rm -f "$ACE_LOG"
 
+# host 头守卫（批J 建议 #1287）：拦截 curl 依赖探测泄漏的 -I/usr/include
+"$ROOT/scripts/check_native_host_include.sh" "$ROOT"
+
 echo
 echo "构建完成，产物目录：$OUT"
 find "$OUT" -name '*.hap' -print 2>/dev/null || echo "（未找到 HAP，请检查上方构建日志）"

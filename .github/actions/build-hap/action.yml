@@ -94,6 +94,10 @@ runs:
           ace build hap --debug
         fi
 
+        # host 头守卫（批J 建议 #1287）：curl 依赖探测泄漏 -I/usr/include 时 fail fast，
+        # 报错直接指向 ohos/cmake/BuildCurlMbedTLS.cmake 的显式开关清单
+        bash ../scripts/check_native_host_include.sh "$(cd .. && pwd)"
+
         HAP=$(find . -path '*/outputs/*' -name '*.hap' -type f | head -n 1)
         if [ -z "$HAP" ]; then
           echo "::error::未找到构建产物 HAP"
