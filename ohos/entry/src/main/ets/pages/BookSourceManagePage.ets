@@ -798,7 +798,7 @@ struct BookSourceManagePage {
       if (uris.length === 0) {
         return;
       }
-      const text = this.readTextFile(uris[0]);
+      const text = await this.readTextFile(uris[0]);
       if (text.length === 0) {
         this.toast('文件为空或无法读取');
         return;
@@ -810,21 +810,21 @@ struct BookSourceManagePage {
     }
   }
 
-  private readTextFile(uri: string): string {
+  private async readTextFile(uri: string): Promise<string> {
     try {
-      const file = fs.openSync(uri, fs.OpenMode.READ_ONLY);
+      const file = await fs.open(uri, fs.OpenMode.READ_ONLY);
       try {
-        const stat = fs.statSync(file.fd);
+        const stat = await fs.stat(file.fd);
         const size = Math.min(stat.size, IMPORT_FILE_MAX_BYTES);
         if (size <= 0) {
           return '';
         }
         const buffer = new ArrayBuffer(size);
-        const readLength = fs.readSync(file.fd, buffer, { offset: 0, length: size });
+        const readLength = await fs.read(file.fd, buffer, { offset: 0, length: size });
         const decoder = util.TextDecoder.create('utf-8', { ignoreBOM: true });
         return decoder.decodeToString(new Uint8Array(buffer, 0, readLength));
       } finally {
-        fs.closeSync(file.fd);
+        await fs.close(file.fd);
       }
     } catch (e) {
       this.toast(`读取文件失败：${ErrorFormat.message(e)}`);

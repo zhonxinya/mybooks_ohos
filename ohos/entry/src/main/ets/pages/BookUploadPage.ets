@@ -222,20 +222,21 @@ struct BookUploadPage {
     }
     const totalChunks = Math.ceil(item.size / CHUNK_SIZE);
     const hash = this.fileHash(item.name, item.size);
-    const src = fs.openSync(item.localPath, fs.OpenMode.READ_ONLY);
+    // 4MB 分块的读写走异步 API：同步 readSync/writeSync 在大文件上传时每块都会卡 UI 线程
+    const src = await fs.open(item.localPath, fs.OpenMode.READ_ONLY);
     try {
       for (let i = 0; i < totalChunks; i++) {
         const chunkPath = `${chunkDir}/${hash}_${i}`;
         const start = i * CHUNK_SIZE;
         const length = Math.min(CHUNK_SIZE, item.size - start);
         const buf = new ArrayBuffer(length);
-        const readLen = fs.readSync(src.fd, buf, { offset: start, length: length });
-        const dst = fs.openSync(chunkPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE |
+        const readLen = await fs.read(src.fd, buf, { offset: start, length: length });
+        const dst = await fs.open(chunkPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE |
           fs.OpenMode.TRUNC);
         try {
-          fs.writeSync(dst.fd, buf, { length: readLen });
+          await fs.write(dst.fd, buf, { length: readLen });
         } finally {
-          fs.closeSync(dst.fd);
+          await fs.close(dst.fd);
         }
         this.patchItem(item.id, ITEM_UPLOADING, '', 0, `分块 ${i + 1}/${totalChunks}`,
           Math.round(((i + 1) / totalChunks) * 100));
@@ -272,7 +273,7 @@ struct BookUploadPage {
       this.patchItem(item.id, ITEM_FAILED, '服务端未完成合并，请重试', 0, '');
       return false;
     } finally {
-      fs.closeSync(src.fd);
+      await fs.close(src.fd);
     }
   }
 
