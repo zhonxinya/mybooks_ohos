@@ -27,29 +27,8 @@ else
   exit 1
 fi
 
-# 行数门禁（800 有效行，口径见脚本头；UI 贴线页临时豁免列表在 check_file_lines.mjs）
-node "$ROOT/scripts/check_file_lines.mjs" --gate
-
-# 错误呈现门禁（#1670：catch 作用域禁裸异常插值，统一 ErrorFormat.message）
-node "$ROOT/scripts/check_error_toast.mjs" --gate
-
-# 同步大文件 I/O 门禁（批G #1677：UI 层禁 readSync/writeSync/copyFileSync）
-node "$ROOT/scripts/check_sync_io.mjs" --gate
-
-# 状态色硬编码门禁（批G #1674：状态色令牌值禁直写，系统对话框按钮豁免）
-node "$ROOT/scripts/check_hardcoded_status_color.mjs" --gate
-
-# ForEach keyGenerator 门禁（批K 建议 #1502：两参 @State ForEach=复用不刷新根因类）
-node "$ROOT/scripts/check_foreach_key.mjs" --gate
-
-# 路由注册一致性门禁（批M：'pages/X' 字面量须注册、注册项须有源文件）
-node "$ROOT/scripts/check_routes.mjs" --gate
-
-# 裸 Promise flush 门禁（批N：store.flush() 无 await/.catch/callback=静默丢数据）
-node "$ROOT/scripts/check_flush_promise.mjs" --gate
-
-# 门禁自测（批H 建议 #1836：正则判定灵敏度负向样例，防门禁本身失效）
-node "$ROOT/scripts/gates_selftest.mjs"
+# 全部门禁 + 自测（清单唯一来源见 gates_selftest.mjs GATES，批O 建议 #1854 收敛）
+"$ROOT/scripts/run-gates.sh"
 
 command -v ace >/dev/null 2>&1 || {
 
