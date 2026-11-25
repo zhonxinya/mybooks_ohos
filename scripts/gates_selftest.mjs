@@ -7,6 +7,7 @@
  * 全靠手工临时注入才暴露；固化成每次构建前自动跑。
  *
  * 用法：node scripts/gates_selftest.mjs   // 任一失败 exit 1
+ *       node scripts/gates_selftest.mjs --list   // 导出门禁清单（run-gates.sh 用）
  */
 import { spawnSync } from 'child_process';
 import { dirname, join } from 'path';
@@ -22,6 +23,12 @@ const GATES = [
   'check_routes.mjs',
   'check_flush_promise.mjs',
 ];
+
+// 批O（建议 #1854）：GATES 是门禁清单唯一来源，run-gates.sh 经 --list 消费
+if (process.argv.includes('--list')) {
+  console.log(GATES.join('\n'));
+  process.exit(0);
+}
 
 let fails = 0;
 for (const g of GATES) {
