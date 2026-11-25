@@ -232,7 +232,8 @@ struct DownloadManagerPage {
       return $r('app.color.brand_primary');
     }
     if (status === 'failed') {
-      return '#E84026';
+      // 深色下 #E84026 对比不足，走自适应 error 令牌（#FF9500 下载中为亮橙、深底可读，保留）
+      return $r('app.color.error');
     }
     if (status === 'downloading') {
       return '#FF9500';
@@ -273,7 +274,7 @@ struct DownloadManagerPage {
         if (task.error.length > 0 && task.status === 'failed') {
           Text(task.error)
             .fontSize(12)
-            .fontColor('#E84026')
+            .fontColor($r('app.color.error'))
             .maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis });
         }

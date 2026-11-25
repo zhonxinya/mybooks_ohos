@@ -243,13 +243,14 @@ export class AiChatStore {
   /** 沙箱图片压缩成长边 1024 的 jpeg data URL；失败返回空串（该图不发送）。 */
   private async encodeImage(path: string): Promise<string> {
     try {
-      const stat = fs.statSync(path);
+      // 读文件走异步 API：几 MB 图片的同步 readSync 会卡 UI 线程
+      const stat = await fs.stat(path);
       const buf = new ArrayBuffer(Number(stat.size));
-      const file = fs.openSync(path, fs.OpenMode.READ_ONLY);
+      const file = await fs.open(path, fs.OpenMode.READ_ONLY);
       try {
-        fs.readSync(file.fd, buf);
+        await fs.read(file.fd, buf);
       } finally {
-        fs.closeSync(file);
+        await fs.close(file);
       }
       const source = image.createImageSource(buf);
       let pixelMap: image.PixelMap;
@@ -273,7 +274,7 @@ export class AiChatStore {
         packer.release();
         pixelMap.release();
       }
-      const b64: string = new util.Base64Helper().encodeToStringSync(new Uint8Array(packed));
+      const b64: string = await new util.Base64Helper().encodeToString(new Uint8Array(packed));
       return `data:image/jpeg;base64,${b64}`;
     } catch (_error) {
       return '';
