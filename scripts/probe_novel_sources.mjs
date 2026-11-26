@@ -46,8 +46,14 @@ const SOURCES = [
   { rule: '悠久书城', url: 'https://www.ujxsw.org/book/90293/',
     expect: 'http://www.ujxsw.org/book/90293/',
     anchor: /class="d_title"[\s\S]{0,120}?<h1>/ },
-  // 2026-11-26 宿主实测：mianhuaks(Cloudflare IPv6-only DNS)/quanben/yeudusk 均 000——
-  // 疑宿主出口不通，板上 rcp 出口不同可能仍活；FAIL 保留为待板上复核信号
+  // 2026-11-26 轮14 宿主+板上复核修正病因（推翻早前「宿主出口受限」笼统定性）：
+  // - mianhuaks：www 仅 AAAA 记录，宿主 IPv6 TLS 被重置、apex IPv4 pin 无效；
+  //   板上模拟器无 IPv6 栈（ping6 System error）→ 应用侧结构不可达；
+  // - quanben：宿主 TCP connect 超时（Vultr 段疑屏蔽国内出口），板上同出口，推断不可达；
+  // - yeudusk：站点活着但 CDN 证书已过期（宿主 curl -k 得 200）——任何严校验 TLS
+  //   客户端（含 rcp）必挂，等站方续证，非我方问题。
+  // 样本保留 FAIL 不删（AGENTS 定性：改版/死域信号要可见）；板上 ICMP 全被虚拟网阻断，
+  // ping 结论不可作数，勿据此翻案
   { rule: '棉花书吧', url: 'https://www.mianhuaks.com/book/94801/',
     anchor: /flex items-start[\s\S]{0,900}?<\/section>/ },
   { rule: '起点→移动(重写+og)', url: 'https://www.qidian.com/book/1050742867/',
