@@ -49,7 +49,8 @@ const SOURCES = [
   // 2026-11-26 轮14 宿主+板上复核修正病因（推翻早前「宿主出口受限」笼统定性）：
   // - mianhuaks：www 仅 AAAA 记录，宿主 IPv6 TLS 被重置、apex IPv4 pin 无效；
   //   板上模拟器无 IPv6 栈（ping6 System error）→ 应用侧结构不可达；
-  // - quanben：宿主 TCP connect 超时（Vultr 段疑屏蔽国内出口），板上同出口，推断不可达；
+  // - quanben：轮16 复测宿主 TCP 已通（早前超时是 Vultr 段临时抖动，非持续屏蔽），
+  //   但旧样本 /n/gmzz/list.html 已 404（书下架），换 /n/aoshidanshen/list.html（<h1 命中）；
   // - yeudusk：站点活着但 CDN 证书已过期（宿主 curl -k 得 200）——任何严校验 TLS
   //   客户端（含 rcp）必挂，等站方续证，非我方问题。
   // 样本保留 FAIL 不删（AGENTS 定性：改版/死域信号要可见）；板上 ICMP 全被虚拟网阻断，
@@ -69,7 +70,7 @@ const SOURCES = [
   // 变成 /<a>_<b>/；旧域样本失效，用新域样本（og:novel 全量仍供通用规则命中）
   { rule: '通用og· mcxs', url: 'http://www.mcxs.la/189_189516/',
     anchor: /og:novel:book_name/ },
-  { rule: '通用og· quanben', url: 'https://www.quanben.io/n/gmzz/list.html',
+  { rule: '通用og· quanben', url: 'https://www.quanben.io/n/aoshidanshen/list.html',
     anchor: /og:description|<h1/ },
   { rule: '书海阁(域名活性)', url: 'https://www.shuhaige.net/',
     anchor: /<html/i, liveness: true },
